@@ -340,6 +340,58 @@ Rules the shapes must obey:
 - Scores are `RRF × ring weight`, are **not** comparable across queries, and are displayed
   relative to the top hit of the same result set.
 
+### 8.2 Composition
+
+Six crates, none of which knows about more than one layer below it. The binary is the only
+place that knows about all of them, and it is where every seam is tied. This section is the
+wiring contract; a crate that reaches around it is a bug regardless of what it achieves.
+
+```
+                       cyberbrain (binary)
+                              │  owns every seam below
+        ┌────────────┬────────┴───────┬─────────────┬────────────┐
+        │            │                │             │            │
+     policy        index            embed          llm         (ui, embedded)
+        │            │                │             │
+        └────────────┴────────────────┴─────────────┘
+                              core
+                    types, traits, errors, config
+```
+
+Startup order, and why it is this order:
+
+1. **Config** is loaded first; everything else is parameterised by it.
+2. **`AuditStore`** (`audit.db`) opens before anything that could produce a record. An
+   action taken before the log is open is an action that cannot be recorded.
+3. **`AuditLog`** (policy) wraps that store and is the *only* audit writer. The binary
+   implements policy's `AuditSink` over the index's `AuditStore`; nothing else appends.
+4. **`Egress`** (policy) is built from the config and the log, and is handed out as
+   `Arc<dyn EgressGate>`. Anything capable of a request receives it here or receives
+   `DenyAllEgress` and fails closed.
+5. **`Index`** (`cyberbrain.db`) opens, migrating if needed.
+6. **`Embedder`** is loaded **lazily**: never on a hot-path hook (§6.5), and never at all
+   unless the command actually needs vectors. The index's profile guard is consulted the
+   moment one exists.
+7. **`LlmClient`** is optional, lazy and last. Absence is normal and is reported as a
+   caveat, never as an error.
+
+Rules that fall out of this and are not negotiable per command:
+
+- **One hash function** decides whether a note changed, and it lives in core. The scanner
+  and the index call the same one. Two implementations drift, and a drifting change
+  detector either re-embeds everything or misses edits, both silently.
+- **`--dry-run` swaps the writers, not the path.** The real scan, the real policy checks,
+  the real erasure logic run; only the sinks are no-ops. A separate dry-run implementation
+  is a second implementation and it will disagree with the first exactly when it matters.
+- **Erasure is one path.** `forget`, the retention sweep and the API's `DELETE` all go
+  through the same function. Three call sites, one implementation, one audit shape.
+- **A hook never fails the harness.** Any error inside `hook` is recorded and the process
+  exits 0 with empty output. A memory tool that can break the agent it serves will be
+  uninstalled, and rightly.
+- **`serve` binds loopback only.** Not configurable. There is no authentication because
+  there is no remote access to authenticate, and those two facts have to stay tied
+  together.
+
 ## 9. Agent integration
 
 ### 9.1 Hooks
