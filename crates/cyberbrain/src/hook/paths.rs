@@ -13,7 +13,7 @@
 //! or a `deny` the operator can see, an under-match lets a raw edit through — so the
 //! Windows rules err towards matching.
 
-use cyberbrain_core::Ring;
+use cyberbrain_core::{Ring, slash};
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -229,6 +229,6 @@ pub fn display_inside(store_root: &Path, cwd: &Path, path: &Path) -> String {
             target.parts[root.parts.len()..].join("/")
         )
     } else {
-        path.display().to_string()
+        slash(path)
     }
 }

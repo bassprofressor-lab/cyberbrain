@@ -30,7 +30,7 @@
 //! pattern with `/` against the whole path relative to `root`.
 
 use cyberbrain_core::frontmatter::validate_retention;
-use cyberbrain_core::{Error, NoteKind, Result, Ring};
+use cyberbrain_core::{Error, NoteKind, Result, Ring, slash};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -273,7 +273,7 @@ pub fn load_plan(path: &Path) -> Result<ImportPlan> {
         path: path.to_path_buf(),
         source: e,
     })?;
-    let mut plan = ImportPlan::parse(&text, &path.display().to_string())?;
+    let mut plan = ImportPlan::parse(&text, &slash(path))?;
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())

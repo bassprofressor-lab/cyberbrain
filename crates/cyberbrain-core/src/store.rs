@@ -23,6 +23,7 @@ use crate::blocks::approx_tokens;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::frontmatter;
+use crate::path::{Slash, slash};
 use crate::types::{Note, NoteId, Ring};
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -160,10 +161,7 @@ impl Store {
                 path: first.clone(),
                 reason: format!(
                     "name `{name}` also exists at {}; a name is unique within the store",
-                    rest.iter()
-                        .map(|p| p.display().to_string())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    rest.iter().map(|p| slash(p)).collect::<Vec<_>>().join(", ")
                 ),
             }),
         }
@@ -186,7 +184,7 @@ impl Store {
         if root_ignore.is_file()
             && let Some(err) = builder.add_ignore(&root_ignore)
         {
-            return Err(Error::Config(format!("{}: {err}", root_ignore.display())));
+            return Err(Error::Config(format!("{}: {err}", Slash(&root_ignore))));
         }
 
         let mut listing = Listing::default();
@@ -277,7 +275,7 @@ impl Store {
                     "frontmatter says name `{}` in ring {}, which belongs at {}",
                     parsed.front.name,
                     parsed.front.ring,
-                    expected.display()
+                    Slash(&expected)
                 ),
             });
         }
@@ -308,7 +306,7 @@ impl Store {
                     path: note.path.clone(),
                     reason: format!(
                         "id {id} is also used by {}; ids are unique",
-                        first.path.display()
+                        Slash(&first.path)
                     ),
                 });
             }
@@ -342,7 +340,7 @@ impl Store {
                     reason: format!(
                         "name `{name}` already exists in ring {other} at {}; remove it first \
                          to move the note",
-                        p.display()
+                        Slash(&p)
                     ),
                 });
             }
@@ -748,15 +746,10 @@ mod tests {
             .skipped
             .iter()
             .map(|s| {
-                // Separators normalised for the comparison only. `Skipped.path` is a
-                // `PathBuf` and stays native, which is right for a path a caller may want
-                // to open; it is this assertion's hardcoded forward slashes that are
-                // platform-specific, not the value.
-                s.path
-                    .strip_prefix(store.notes_dir())
-                    .unwrap()
-                    .to_string_lossy()
-                    .replace('\\', "/")
+                // `Skipped.path` is a `PathBuf` and stays native, which is right for a
+                // path a caller may want to open; the comparison renders it the way a
+                // report would.
+                slash(s.path.strip_prefix(store.notes_dir()).unwrap())
             })
             .collect();
         assert_eq!(

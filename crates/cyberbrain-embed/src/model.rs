@@ -4,7 +4,7 @@ use crate::POOLING;
 use crate::artefact::{ArtefactManifest, ModelPaths, read_verified};
 use crate::pool;
 use crate::weights::{Matrix, load_matrix};
-use cyberbrain_core::{Embedder, Error, Result};
+use cyberbrain_core::{Embedder, Error, Result, Slash};
 use rayon::prelude::*;
 use serde::Serialize;
 use tokenizers::Tokenizer;
@@ -105,7 +105,7 @@ impl StaticEmbedder {
         let mut tokenizer = Tokenizer::from_bytes(&tok_bytes).map_err(|e| {
             Error::Embed(format!(
                 "tokenizer {} is not a valid tokenizers file: {e}",
-                paths.tokenizer.display()
+                Slash(&paths.tokenizer)
             ))
         })?;
         // The artefact may carry the source model's padding/truncation. Neither belongs in

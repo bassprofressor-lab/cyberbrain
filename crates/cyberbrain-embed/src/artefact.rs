@@ -3,7 +3,7 @@
 //!
 //! Nothing in this module can reach the network. It takes paths and returns bytes.
 
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -94,7 +94,7 @@ pub(crate) fn read_verified(path: &Path, expected_hex: &str, what: &str) -> Resu
         return Err(Error::Embed(format!(
             "{what} artefact {} does not match its manifest: expected blake3 {expected_hex}, \
              file has {actual}; refusing to load (SPEC §6: a hash mismatch is a hard failure)",
-            path.display()
+            Slash(path)
         )));
     }
     Ok(bytes)

@@ -5,7 +5,7 @@ use crate::app::{
     ConsentReport, DoctorReport, EmbedderSummary, Expanded, FindReport, InitReport, NoteView,
     RetentionReport, ScanReport, StatusReport, WrittenNote,
 };
-use cyberbrain_core::RecallResult;
+use cyberbrain_core::{RecallResult, Slash};
 use cyberbrain_policy::{EgressEntry, ModelCard};
 use std::fmt::Write as _;
 
@@ -20,10 +20,10 @@ fn plural(n: usize, one: &str, many: &str) -> String {
 pub fn init(r: &InitReport) -> String {
     let mut s = format!(
         "Created a store at {}\n  config: {}\n  audit record: {}\n  index cache: {}\n\nNext steps:\n",
-        r.store.display(),
-        r.config.display(),
-        r.audit_db.display(),
-        r.index_db.display()
+        Slash(&r.store),
+        Slash(&r.config),
+        Slash(&r.audit_db),
+        Slash(&r.index_db)
     );
     for step in &r.next_steps {
         let _ = writeln!(s, "  - {step}");
@@ -96,7 +96,7 @@ pub fn scan(r: &ScanReport) -> String {
         parts.join(", ")
     );
     for sk in &r.skipped {
-        let _ = writeln!(s, "  skipped {}: {}", sk.path.display(), sk.reason);
+        let _ = writeln!(s, "  skipped {}: {}", Slash(&sk.path), sk.reason);
     }
     if r.links_written_back > 0 {
         let _ = writeln!(
@@ -187,7 +187,7 @@ pub fn recall(r: &RecallResult) -> String {
 
 pub fn note(n: &NoteView) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "{}", n.path.display());
+    let _ = writeln!(s, "{}", Slash(&n.path));
     let _ = writeln!(
         s,
         "id: {}  name: {}  ring: {}  kind: {}  pii: {:?}",
@@ -232,7 +232,7 @@ pub fn written(w: &WrittenNote) -> String {
         },
         w.name,
         w.ring,
-        w.path.display(),
+        Slash(&w.path),
         w.bytes,
         w.blocks,
         w.vectors,
@@ -280,7 +280,7 @@ pub fn doctor(r: &DoctorReport) -> String {
 
 pub fn status(r: &StatusReport) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "store: {}", r.store.display());
+    let _ = writeln!(s, "store: {}", Slash(&r.store));
     let _ = writeln!(
         s,
         "notes on disk: {} (r0 {}, r1 {}, r2 {}, r3 {}, r4 {}); {} files skipped",
@@ -316,14 +316,14 @@ pub fn status(r: &StatusReport) -> String {
         s,
         "audit: {} rows in {}, chain {}",
         r.audit.rows,
-        r.audit.path.display(),
+        Slash(&r.audit.path),
         match &r.audit.chain {
             Ok(n) => format!("verified over {n} rows"),
             Err(e) => format!("BROKEN: {e}"),
         }
     );
     let _ = writeln!(s, "embedding: {}", embedder_line(&r.embedding.embedder));
-    let _ = writeln!(s, "  model dir: {}", r.embedding.model_dir.display());
+    let _ = writeln!(s, "  model dir: {}", Slash(&r.embedding.model_dir));
     match (&r.embedding.index_profile, r.embedding.matches_index) {
         (Some(p), Some(true)) => {
             let _ = writeln!(
@@ -442,7 +442,7 @@ pub fn consent(r: &ConsentReport) -> String {
     let mut s = format!(
         "model_download_consent = {} written to {}\n",
         r.consent,
-        r.path.display()
+        Slash(&r.path)
     );
     for w in &r.warnings {
         let _ = writeln!(s, "  note: {w}");
@@ -509,14 +509,68 @@ pub fn find(r: &FindReport) -> String {
         o.push_str(&format!("not entered: {}\n", listed.join(", ")));
     }
     for u in &s.unreadable {
-        o.push_str(&format!(
-            "unreadable: {} ({})\n",
-            u.path.display(),
-            u.reason
-        ));
+        o.push_str(&format!("unreadable: {} ({})\n", Slash(&u.path), u.reason));
     }
     for c in &r.caveats {
         o.push_str(&format!("caveat: {c}\n"));
     }
     o
+}
+
+#[cfg(test)]
+mod tests {
+    //! The one property every renderer shares: a path reaches the reader with forward
+    //! slashes, whatever separator the platform built it with (`cyberbrain_core::path`).
+    //! Paths are built from components so the separator logic runs on every OS, and the
+    //! assertions are on whole reports rather than one per call site.
+    use super::*;
+    use std::path::PathBuf;
+
+    fn p(parts: &[&str]) -> PathBuf {
+        parts.iter().collect()
+    }
+
+    fn init_report() -> InitReport {
+        InitReport {
+            store: p(&["proj", ".cyberbrain"]),
+            config: p(&["proj", ".cyberbrain", "config.toml"]),
+            audit_db: p(&["proj", ".cyberbrain", "audit.db"]),
+            index_db: p(&["proj", ".cyberbrain", "index.db"]),
+            next_steps: vec![],
+        }
+    }
+
+    #[test]
+    fn a_rendered_report_spells_its_paths_with_forward_slashes() {
+        let text = init(&init_report());
+        assert!(!text.contains('\\'), "{text}");
+        assert!(
+            text.contains("Created a store at proj/.cyberbrain\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains("config: proj/.cyberbrain/config.toml\n"),
+            "{text}"
+        );
+
+        let c = consent(&ConsentReport {
+            path: p(&["proj", ".cyberbrain", "config.toml"]),
+            consent: true,
+            model_source: None,
+            warnings: vec![],
+        });
+        assert!(
+            c.contains("written to proj/.cyberbrain/config.toml\n"),
+            "{c}"
+        );
+    }
+
+    /// `--json` and the MCP `structuredContent` are the same serialisation; a `PathBuf`
+    /// field must not reach either with the platform separator.
+    #[test]
+    fn a_json_report_spells_its_paths_with_forward_slashes() {
+        let v = serde_json::to_value(init_report()).unwrap();
+        assert_eq!(v["store"], "proj/.cyberbrain");
+        assert_eq!(v["index_db"], "proj/.cyberbrain/index.db");
+    }
 }

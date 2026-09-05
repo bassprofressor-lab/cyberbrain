@@ -326,6 +326,15 @@ fn without_an_ignore_file_the_copy_is_listed_and_the_caveat_says_so() {
         "{:?}",
         r.caveats
     );
+    // The caveat names the root the way the hits name their files: forward slashes.
+    let expected = format!("at {}", cyberbrain_core::slash(&r.root));
+    assert!(
+        r.caveats
+            .iter()
+            .any(|c| c.contains(&expected) && !c.contains('\\')),
+        "{:?}",
+        r.caveats
+    );
     assert!(
         r.caveats
             .iter()

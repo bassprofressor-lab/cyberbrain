@@ -16,7 +16,7 @@
 
 use super::session::ResidentMark;
 use cyberbrain_core::blocks::{MAX_BLOCK_TOKENS, approx_tokens, blocks_of};
-use cyberbrain_core::{Block, Fingerprint, Note, Ring, Store};
+use cyberbrain_core::{Block, Fingerprint, Note, Ring, Slash, Store, slash};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -34,7 +34,7 @@ impl ResidentNote {
     pub fn mark(&self) -> ResidentMark {
         ResidentMark {
             ring: self.note.front.ring.as_u8(),
-            path: self.note.path.display().to_string(),
+            path: slash(&self.note.path),
             hash: self.fingerprint.hash_hex(),
             size: self.fingerprint.size,
             updated: self.note.front.updated.to_string(),
@@ -229,7 +229,7 @@ pub fn render_rings(r: &Resident, out: &mut String) {
              is not in your context; tell the operator.\n\n",
         );
         for (p, why) in &r.unreadable {
-            out.push_str(&format!("- {}: {why}\n", p.display()));
+            out.push_str(&format!("- {}: {why}\n", Slash(p)));
         }
         out.push('\n');
     }

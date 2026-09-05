@@ -26,7 +26,7 @@
 
 use crate::app::{App, discover_store};
 use crate::cli::HookEvent;
-use cyberbrain_core::Error;
+use cyberbrain_core::{Error, Slash};
 use cyberbrain_policy::Actor;
 use serde_json::json;
 use std::io::Write;
@@ -191,7 +191,7 @@ fn why_no_app(open_error: Option<&Error>) -> StandDown {
         Ok(p) => StandDown::Unreadable(format!(
             "{} exists but the caller could not open it (the reason was not passed to the \
              hook; wire `run_with` to see it)",
-            p.display()
+            Slash(&p)
         )),
     }
 }

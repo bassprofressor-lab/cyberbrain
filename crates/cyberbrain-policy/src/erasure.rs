@@ -53,6 +53,7 @@ pub struct EraseRequest {
     pub note_id: NoteId,
     pub name: String,
     pub ring: Ring,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub reason: EraseReason,
     /// SPEC §8: the real path with a no-op writer. An eraser given `dry_run` reports what

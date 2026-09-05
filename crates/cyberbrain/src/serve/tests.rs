@@ -201,6 +201,8 @@ async fn status_reports_the_store_and_says_what_it_cannot_measure() {
         .await;
     let s = fx.ok("/api/v1/status").await;
     assert_eq!(s["version"], env!("CARGO_PKG_VERSION"));
+    // A JSON field compared across machines: forward slashes whatever the platform.
+    assert_eq!(s["store"]["path"], cyberbrain_core::slash(fx.app.root()));
     assert_eq!(s["store"]["notes"], 2);
     assert_eq!(s["store"]["rings"].as_array().unwrap().len(), 5);
     assert_eq!(s["store"]["rings"][0]["notes"], 1);

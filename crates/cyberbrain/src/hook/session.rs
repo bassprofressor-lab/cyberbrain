@@ -15,7 +15,7 @@
 //! Not part of the layout in SPEC §4; `Store::list` only walks `notes/`, so it is invisible
 //! to scan, doctor and the cap. See the report.
 
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -115,7 +115,7 @@ pub fn load(root: &Path, id: &str) -> Result<Option<SessionState>> {
     serde_json::from_str(&text).map(Some).map_err(|e| {
         Error::Config(format!(
             "{}: session state does not parse: {e}",
-            path.display()
+            Slash(&path)
         ))
     })
 }

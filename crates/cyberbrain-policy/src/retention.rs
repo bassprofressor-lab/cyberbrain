@@ -72,6 +72,7 @@ pub struct RetentionItem {
     pub note_id: NoteId,
     pub name: String,
     pub ring: Ring,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub created: Timestamp,
     pub retention: String,

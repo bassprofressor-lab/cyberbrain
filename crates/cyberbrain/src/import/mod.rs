@@ -23,7 +23,7 @@ mod tests;
 
 use crate::app::{App, WriteOutcome, WriteRequest};
 use cyberbrain_core::blocks::approx_tokens;
-use cyberbrain_core::{Error, NoteKind, Result, Ring};
+use cyberbrain_core::{Error, NoteKind, Result, Ring, Slash};
 use cyberbrain_policy::{Finding, OperatorChoice};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -48,7 +48,7 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
     if !root.is_dir() {
         return Err(Error::Config(format!(
             "import root {} is not a directory",
-            root.display()
+            Slash(&root)
         )));
     }
 
@@ -208,7 +208,7 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
         app.policy().audit().record_raw(
             &app.actor().to_string(),
             "import.completed",
-            format!("import:{}", root.display()),
+            format!("import:{}", Slash(&root)),
             summary,
         )?;
     }

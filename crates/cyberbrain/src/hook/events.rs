@@ -44,7 +44,7 @@ use super::session::{self, SessionState};
 use super::{HookOutput, StandDown, event_name, harness_event_name};
 use crate::app::App;
 use crate::cli::HookEvent;
-use cyberbrain_core::{Result, Ring};
+use cyberbrain_core::{Result, Ring, Slash, slash};
 use cyberbrain_policy::{Actor, AuditAction};
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -202,7 +202,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
             s.source = Some(source.to_string());
         }
         if s.cwd.is_none() {
-            s.cwd = ctx.payload.cwd.as_ref().map(|p| p.display().to_string());
+            s.cwd = ctx.payload.cwd.as_deref().map(slash);
         }
         s.injections += 1;
         s.last_injection_at = Some(ctx.now.clone());
@@ -215,7 +215,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         "Store: `{}`. Rings 0 and 1 below are resident: they apply to everything you do in \
          this project. Every block is prefixed with its citation; quote it when you rely on \
          it, and expand one with `cyberbrain recall --id <citation>`.\n\n",
-        ctx.root().display()
+        Slash(ctx.root())
     ));
     match source {
         "compact" => {
@@ -258,7 +258,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         subject,
         json!({
             "source": source,
-            "cwd": ctx.payload.cwd.as_ref().map(|p| p.display().to_string()),
+            "cwd": ctx.payload.cwd.as_deref().map(slash),
             "resident_notes": res.notes.iter().map(resident::ResidentNote::key).collect::<Vec<_>>(),
             "blocks": res.notes.iter().map(|n| n.blocks.len()).sum::<usize>(),
             "approx_tokens": res.tokens,
@@ -360,7 +360,7 @@ fn digest(
     text.push_str(&format!(
         "- semantic search: model artefact {} at {}{}\n",
         if model_present { "present" } else { "absent" },
-        model_dir.display(),
+        Slash(&model_dir),
         if model_present {
             " (not loaded by this hook; `recall` loads it)"
         } else {
@@ -422,7 +422,7 @@ fn user_prompt_submit(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
             out.stdout = text;
             let mut s = SessionState::new(&id, &ctx.now);
             s.source = Some("user-prompt-submit (no session-start record)".into());
-            s.cwd = ctx.payload.cwd.as_ref().map(|p| p.display().to_string());
+            s.cwd = ctx.payload.cwd.as_deref().map(slash);
             s.injections = 1;
             s.last_injection_at = Some(ctx.now.clone());
             s.resident = resident::marks(&res);
@@ -475,7 +475,7 @@ fn user_prompt_submit(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
             if !res.unreadable.is_empty() {
                 text.push_str("## Resident files that could not be read\n\n");
                 for (p, why) in &res.unreadable {
-                    text.push_str(&format!("- {}: {why}\n", p.display()));
+                    text.push_str(&format!("- {}: {why}\n", Slash(p)));
                 }
                 text.push('\n');
             }
@@ -508,7 +508,7 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
         out.note(format!(
             "{}: {} is outside the store; nothing to check",
             event_name(ctx.event),
-            file.display()
+            Slash(&file)
         ));
         return None;
     };
@@ -673,7 +673,7 @@ fn stop(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     out.note(format!(
         "stop: turn {} recorded in {}{}",
         s.turns,
-        session::state_path(ctx.root(), &id).display(),
+        Slash(&session::state_path(ctx.root(), &id)),
         if ctx.payload.stop_hook_active {
             "; stop_hook_active is set, and this hook never blocks a stop anyway"
         } else {

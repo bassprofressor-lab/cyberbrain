@@ -10,6 +10,7 @@
 //! and a test pins that equivalence, so the comments in it cannot drift from the code.
 
 use crate::error::{Error, Result};
+use crate::path::Slash;
 use crate::types::Ring;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -291,7 +292,7 @@ impl Config {
         let cfg: Config = toml::from_str(text).map_err(|e| {
             Error::Config(format!(
                 "{}: {}{}",
-                path.display(),
+                Slash(path),
                 key_at(text, e.span())
                     .map(|k| format!("key `{k}`: "))
                     .unwrap_or_default(),
@@ -304,9 +305,8 @@ impl Config {
 
     /// Semantic checks that a type system cannot express. Each failure names its key.
     pub fn validate(&self, path: &Path) -> Result<()> {
-        let bad = |key: &str, why: String| {
-            Error::Config(format!("{}: key `{key}`: {why}", path.display()))
-        };
+        let bad =
+            |key: &str, why: String| Error::Config(format!("{}: key `{key}`: {why}", Slash(path)));
         if self.rings.resident_cap_tokens == 0 {
             return Err(bad(
                 "rings.resident_cap_tokens",

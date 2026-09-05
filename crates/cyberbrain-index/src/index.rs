@@ -47,6 +47,7 @@ pub struct NoteStamp {
 #[derive(Debug, Clone, Serialize)]
 pub struct NoteRecord {
     pub front: Frontmatter,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     /// `content_hash()` of the note at upsert time.
     pub hash: String,
@@ -84,6 +85,7 @@ pub struct Erasure {
     pub id: NoteId,
     pub name: String,
     pub ring: Ring,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub counts: Erased,
 }

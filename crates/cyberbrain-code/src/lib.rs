@@ -36,7 +36,7 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -402,7 +402,7 @@ pub fn find(root: &Path, symbol: &str, limit: usize, opts: &FindOptions) -> Resu
     if !root_ignore {
         caveats.push(format!(
             "no {IGNORE_FILE} at {}; every tree not hidden or gitignored was scanned, so a vendored or archived copy of the project would be listed alongside the live one",
-            scan.root.display()
+            Slash(&scan.root)
         ));
     }
     let files: std::collections::BTreeSet<&str> = hits

@@ -10,6 +10,7 @@
 //! visible, the guess is a claim. The card also does not classify Cyberbrain under the AI
 //! Act; the spec's "minimal-risk" reading is the deployer's call and is printed as such.
 
+use cyberbrain_core::slash;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -51,6 +52,7 @@ pub struct ModelCard {
     /// e.g. `model2vec safetensors + tokenizer.json`, or `OpenAI-compatible HTTP`.
     pub format: Option<String>,
     pub size_bytes: Option<u64>,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash_opt")]
     pub artefact_path: Option<PathBuf>,
     pub intended_use: String,
     /// Known limitations, in words.
@@ -150,7 +152,7 @@ pub fn render_markdown(cards: &[ModelCard]) -> String {
             ));
             s.push_str(&format!(
                 "- Artefact: {}\n",
-                opt(&c.artefact_path.as_ref().map(|p| p.display().to_string()))
+                opt(&c.artefact_path.as_deref().map(slash))
             ));
         }
         s.push_str(&format!("- Intended use: {}\n", c.intended_use));
@@ -198,6 +200,19 @@ mod tests {
             c.gaps(),
             ["licence", "hash", "hash verification", "dimension"]
         );
+    }
+
+    #[test]
+    fn the_artefact_path_renders_with_forward_slashes() {
+        let mut c = ModelCard::new(ModelRole::Embedding, "m", "https://x", "y");
+        c.artefact_path = Some(["models", "potion", "model.safetensors"].iter().collect());
+        let md = render_markdown(std::slice::from_ref(&c));
+        assert!(
+            md.contains("- Artefact: models/potion/model.safetensors\n"),
+            "{md}"
+        );
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v["artefact_path"], "models/potion/model.safetensors");
     }
 
     #[test]

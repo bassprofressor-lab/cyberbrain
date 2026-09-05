@@ -4,14 +4,14 @@ use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("io error at {path}: {source}")]
+    #[error("io error at {}: {source}", crate::Slash(path))]
     Io {
         path: PathBuf,
         #[source]
         source: std::io::Error,
     },
 
-    #[error("{path}: frontmatter is malformed: {reason}")]
+    #[error("{}: frontmatter is malformed: {reason}", crate::Slash(path))]
     Frontmatter { path: PathBuf, reason: String },
 
     #[error("{0} is not a valid citation; expected the form r2-a91f2c33e1")]
@@ -108,5 +108,30 @@ impl Error {
             | Error::Config(_) => 1,
             _ => 2,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The message is read by a person, and on `--json` it is the `error.message` field;
+    /// nothing opens the path from it, so it is rendered like every other path.
+    #[test]
+    fn an_error_names_its_path_with_forward_slashes() {
+        let path: PathBuf = ["notes", "r2", "x.md"].iter().collect();
+        let e = Error::Io {
+            path: path.clone(),
+            source: std::io::Error::other("boom"),
+        };
+        assert_eq!(e.to_string(), "io error at notes/r2/x.md: boom");
+        let e = Error::Frontmatter {
+            path,
+            reason: "no name".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "notes/r2/x.md: frontmatter is malformed: no name"
+        );
     }
 }

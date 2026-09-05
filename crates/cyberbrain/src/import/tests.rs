@@ -328,6 +328,18 @@ fn reimport_recognises_items_and_never_clobbers_an_edit() {
         fx.app.store().read("m-s1").unwrap().body,
         "## S1\none changed\n"
     );
+    // The ledger is pasted and diffed between runs: its paths are forward-slash on every
+    // platform, both the source root and the note an update landed in.
+    let text = r.render();
+    assert!(!text.contains('\\'), "{text}");
+    assert!(
+        text.contains(&format!("source: {}", cyberbrain_core::slash(&fx.src))),
+        "{text}"
+    );
+    let updated = fx.app.store().read("m-s1").unwrap().path;
+    assert!(text.contains(&cyberbrain_core::slash(&updated)), "{text}");
+    let v = serde_json::to_value(&r).unwrap();
+    assert_eq!(v["root"], cyberbrain_core::slash(&fx.src));
 
     // A note that was not imported from this file is never overwritten, even with `overwrite`.
     let mut n = fx.app.store().read("m-s2").unwrap();

@@ -164,6 +164,18 @@ fn session_start_injects_rings_0_and_1_with_citations_and_a_digest() {
     assert!(st.resident.contains_key("r0/never-copy-config"));
 }
 
+/// What the hook injects is read by an agent and quoted back by it; the store path in it
+/// is spelt with forward slashes on every platform, like every other rendered path.
+#[test]
+fn session_start_names_the_store_with_forward_slashes() {
+    let f = fixture();
+    let out = session_start(&f, "startup");
+    assert_eq!(out.exit_code, 0);
+    let line = format!("Store: `{}`.", cyberbrain_core::slash(f.open().root()));
+    assert!(out.stdout.contains(&line), "{}", out.stdout);
+    assert!(!out.stdout.contains('\\'), "{}", out.stdout);
+}
+
 #[test]
 fn session_start_on_an_empty_store_says_the_rings_are_empty() {
     let f = fixture();

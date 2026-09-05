@@ -22,7 +22,7 @@ mod tests;
 mod tools;
 
 use crate::app::App;
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use jsonrpc::{Frame, Framing, Message, RpcError};
 use serde_json::{Value, json};
 use std::io;
@@ -61,7 +61,7 @@ and you must choose (see the write tool).";
 pub async fn serve_stdio(app: Arc<App>) -> Result<()> {
     diag!(
         "serving on stdio; store {}; protocol {} (also {})",
-        app.root().display(),
+        Slash(app.root()),
         LATEST_PROTOCOL,
         SUPPORTED_PROTOCOLS[1..].join(", ")
     );

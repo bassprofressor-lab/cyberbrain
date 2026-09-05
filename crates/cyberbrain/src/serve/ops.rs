@@ -13,8 +13,8 @@ use super::{ServeState, blocking};
 use crate::app::{RecallRequest, ScanOptions};
 use axum::Json;
 use axum::extract::State;
-use cyberbrain_core::Ring;
 use cyberbrain_core::store::{DB_FILE, NOTES_DIR};
+use cyberbrain_core::{Ring, slash};
 use cyberbrain_llm::Backend;
 use cyberbrain_policy::{AuditFilter, ModelRole};
 use std::path::Path;
@@ -329,7 +329,7 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
         Ok(Json(StatusReport {
             version: env!("CARGO_PKG_VERSION"),
             store: StoreStatus {
-                path: root.display().to_string(),
+                path: slash(&root),
                 bytes: notes_bytes + db_bytes,
                 notes_bytes,
                 db_bytes,
@@ -356,7 +356,7 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
                 profile_id,
                 model: embed_card
                     .map(|c| c.name.clone())
-                    .unwrap_or_else(|| e.model_dir.display().to_string()),
+                    .unwrap_or_else(|| slash(&e.model_dir)),
                 dim,
                 pooling: embed_card
                     .and_then(|c| c.pooling.clone())

@@ -8,7 +8,7 @@
 //! Every item that did not become a note is listed by name with its reason. A total is
 //! never printed as the difference of two other totals (SPEC §14.3, §14.4).
 
-use cyberbrain_core::PiiState;
+use cyberbrain_core::{PiiState, Slash};
 use serde::Serialize;
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -16,6 +16,7 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize)]
 pub struct ImportReport {
     pub dry_run: bool,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub root: PathBuf,
     pub plan: String,
     pub accept_pii: bool,
@@ -135,6 +136,7 @@ pub enum Outcome {
     Unchanged,
     /// Replaced an earlier import of the same item.
     Updated {
+        #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
         path: PathBuf,
     },
     /// The PII gate held it (SPEC §12.4). `findings` summarises what was found.
@@ -196,7 +198,7 @@ impl ImportReport {
                 "[dry run] nothing was written; every number below is what a real run would do\n",
             );
         }
-        let _ = writeln!(s, "source: {}  (plan: {})", self.root.display(), self.plan);
+        let _ = writeln!(s, "source: {}  (plan: {})", Slash(&self.root), self.plan);
 
         // ---- files
         let f = &self.files;
@@ -330,7 +332,7 @@ impl ImportReport {
             _ => None,
         });
         section("updated", &|r| match &r.outcome {
-            Outcome::Updated { path } => Some(path.display().to_string()),
+            Outcome::Updated { path } => Some(cyberbrain_core::slash(path)),
             _ => None,
         });
         let noted: Vec<&ItemRecord> = self

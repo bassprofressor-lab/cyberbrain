@@ -20,6 +20,7 @@ use crate::writers::{
     FsNoteWriter, IndexWriter, NoopIndexWriter, NoopNoteWriter, NoteWriter, SqliteIndexWriter,
     StoreEraser, lock_index,
 };
+use cyberbrain_core::Slash;
 use cyberbrain_core::blocks::{MAX_BLOCK_TOKENS, OversizedReason, blocks_of};
 use cyberbrain_core::config::DEFAULT_STORE_DIR;
 use cyberbrain_core::frontmatter;
@@ -70,8 +71,8 @@ pub fn discover_store(explicit: Option<&Path>) -> Result<PathBuf> {
         return Err(Error::Config(format!(
             "{} is not a cyberbrain store (no notes/ directory inside it); create one with \
              `cyberbrain init --path {}`",
-            p.display(),
-            p.display()
+            Slash(p),
+            Slash(p)
         )));
     }
     let cwd = std::env::current_dir().map_err(|e| Error::Io {
@@ -88,7 +89,7 @@ pub fn discover_store(explicit: Option<&Path>) -> Result<PathBuf> {
         "no {DEFAULT_STORE_DIR} store found in {} or any directory above it; run \
          `cyberbrain init` in the project root, or point at one with --store or \
          CYBERBRAIN_STORE",
-        cwd.display()
+        Slash(&cwd)
     )))
 }
 
@@ -97,15 +98,20 @@ pub fn discover_store(explicit: Option<&Path>) -> Result<PathBuf> {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct InitReport {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub store: PathBuf,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub config: PathBuf,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub audit_db: PathBuf,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub index_db: PathBuf,
     pub next_steps: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SkippedFile {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub reason: String,
 }
@@ -168,6 +174,7 @@ pub struct NoteView {
     pub front: Frontmatter,
     pub kind: String,
     pub body: String,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     /// Citations of its blocks as the index has them; empty when not indexed.
     pub blocks: Vec<String>,
@@ -217,6 +224,7 @@ pub struct WrittenNote {
     pub name: String,
     pub ring: Ring,
     pub kind: String,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub bytes: usize,
     /// `true` for a new note, `false` for an update of an existing one.
@@ -267,6 +275,7 @@ pub struct DoctorReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditSummary {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub rows: usize,
     pub schema_version: u32,
@@ -276,6 +285,7 @@ pub struct AuditSummary {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EmbeddingStatus {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub model_dir: PathBuf,
     pub manifest_present: bool,
     pub embedder: EmbedderSummary,
@@ -294,7 +304,9 @@ pub struct InferenceStatus {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StatusReport {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub store: PathBuf,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub config: PathBuf,
     pub notes_on_disk: usize,
     pub notes_per_ring: [usize; 5],
@@ -341,6 +353,7 @@ pub struct ModelCardReport {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ConsentReport {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub path: PathBuf,
     pub consent: bool,
     pub model_source: Option<String>,
@@ -410,6 +423,7 @@ pub struct FindReport {
     /// The scope part, when the symbol carried one and it selected something.
     pub scope: Option<String>,
     /// The tree that was scanned.
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub root: PathBuf,
     /// Best first, at most `limit`.
     pub hits: Vec<FindHit>,
@@ -626,7 +640,7 @@ impl App {
         if Config::path_in(path).exists() || is_store(path) {
             return Err(Error::Config(format!(
                 "{} is already a cyberbrain store; nothing was changed",
-                path.display()
+                Slash(path)
             )));
         }
         let cap = Config::default().rings.resident_cap_tokens;
@@ -641,7 +655,7 @@ impl App {
         policy.audit().record_raw(
             &actor.to_string(),
             "store.init",
-            format!("store:{}", path.display()),
+            format!("store:{}", Slash(path)),
             json!({ "profile": cfg.policy.profile }),
         )?;
         Ok(InitReport {
@@ -656,7 +670,7 @@ impl App {
                 "search it:      cyberbrain recall 'what you learned'".into(),
                 format!(
                     "for semantic search, place model.safetensors, tokenizer.json and {MANIFEST_FILE} under {}",
-                    cfg.model_dir().display()
+                    Slash(&cfg.model_dir())
                 ),
                 "read the compliance profile: cyberbrain policy egress".into(),
             ],
@@ -740,7 +754,7 @@ impl App {
                 reason: format!(
                     "no model artefact at {} (expected model.safetensors and tokenizer.json); \
                      search is lexical only",
-                    dir.display()
+                    Slash(&dir)
                 ),
             };
         }
@@ -749,7 +763,7 @@ impl App {
                 Ok(m) => m,
                 Err(e) => {
                     return EmbedderState::Absent {
-                        reason: format!("{} is not a manifest: {e}", manifest_path.display()),
+                        reason: format!("{} is not a manifest: {e}", Slash(&manifest_path)),
                     };
                 }
             },
@@ -758,7 +772,7 @@ impl App {
                     reason: format!(
                         "model files are present but {} is missing; refusing to load \
                          unverified weights (SPEC §6.1)",
-                        manifest_path.display()
+                        Slash(&manifest_path)
                     ),
                 };
             }
@@ -1397,7 +1411,7 @@ impl App {
             push(
                 "warning",
                 "notes tree",
-                format!("{}: {}", s.path.display(), s.reason),
+                format!("{}: {}", Slash(&s.path), s.reason),
             );
         }
 
@@ -1407,7 +1421,7 @@ impl App {
             push(
                 "error",
                 "unreadable note",
-                format!("{}: {}", u.path.display(), u.reason),
+                format!("{}: {}", Slash(&u.path), u.reason),
             );
         }
         if not_indexed + changed + gone > 0 {
@@ -1730,7 +1744,7 @@ impl App {
         for e in &listing.entries {
             match self.store.read_path(&e.path) {
                 Ok(n) => notes.push((n.front, n.path)),
-                Err(err) => unreadable.push(format!("{}: {err}", e.path.display())),
+                Err(err) => unreadable.push(format!("{}: {err}", Slash(&e.path))),
             }
         }
         let queue = self
@@ -2052,5 +2066,38 @@ mod find_tests {
 
         let e = app.find("", 10).unwrap_err();
         assert_eq!(e.exit_code(), 1);
+    }
+}
+
+#[cfg(test)]
+mod path_rendering_tests {
+    use super::*;
+    use cyberbrain_core::slash;
+
+    /// A doctor finding names the file it is about, and the name is spelt with forward
+    /// slashes on every platform: the report is pasted and diffed, not opened.
+    #[test]
+    fn doctor_findings_spell_paths_with_forward_slashes() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let stray = store.join("notes").join("r2").join("stray.txt");
+        std::fs::write(&stray, "not a note").unwrap();
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        let r = app.doctor().unwrap();
+        let f = r
+            .findings
+            .iter()
+            .find(|f| f.check == "notes tree")
+            .unwrap_or_else(|| panic!("{r:?}"));
+        assert!(!f.detail.contains('\\'), "{}", f.detail);
+        assert!(f.detail.contains(&slash(&stray)), "{}", f.detail);
+
+        // The JSON form says the same thing as the human form.
+        let v = serde_json::to_value(&r).unwrap();
+        for finding in v["findings"].as_array().unwrap() {
+            let detail = finding["detail"].as_str().unwrap();
+            assert!(!detail.contains('\\'), "{detail}");
+        }
     }
 }

@@ -7,7 +7,7 @@
 //! then shows up as a mismatch instead of a report that balances over fewer files.
 
 use super::plan::ImportPlan;
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use std::path::{Path, PathBuf};
 
 /// A file under the source root.
@@ -43,11 +43,7 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Found>) -> Result<()> {
             let rel = path
                 .strip_prefix(root)
                 .map_err(|_| {
-                    Error::Config(format!(
-                        "{} is not under {}",
-                        path.display(),
-                        root.display()
-                    ))
+                    Error::Config(format!("{} is not under {}", Slash(&path), Slash(root)))
                 })?
                 .components()
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())

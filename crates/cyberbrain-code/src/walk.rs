@@ -22,7 +22,7 @@
 //! report them. Entries are visited in sorted order so results are stable across runs.
 
 use crate::{FindOptions, IGNORE_FILE, Language, Skipped};
-use cyberbrain_core::{Error, Result};
+use cyberbrain_core::{Error, Result, Slash};
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -88,7 +88,7 @@ impl<'o> Walk<'o> {
         if !md.is_dir() {
             return Err(Error::Config(format!(
                 "{} is not a directory; find scans a project tree",
-                root.display()
+                Slash(&root)
             )));
         }
         let excludes = opts
@@ -141,11 +141,11 @@ impl<'o> Walk<'o> {
             if let Some(e) = b.add(&path) {
                 return Err(Error::Config(format!(
                     "{}: cannot be read as an ignore file: {e}",
-                    path.display()
+                    Slash(&path)
                 )));
             }
             let gi = b.build().map_err(|e| {
-                Error::Config(format!("{}: invalid ignore pattern: {e}", path.display()))
+                Error::Config(format!("{}: invalid ignore pattern: {e}", Slash(&path)))
             })?;
             matchers.push(Matcher { gi, source });
             added += 1;
