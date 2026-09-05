@@ -612,12 +612,22 @@ fn the_default_plan_maps_a_tree_of_the_expected_shape_with_nothing_unmapped() {
     let r = import(&fx.app, &p, false).unwrap();
     assert!(r.is_balanced());
     assert!(r.files.unmapped.is_empty(), "{}", r.render());
-    assert_eq!(r.files.mapped, 14, "{}", r.render());
-    assert_eq!(r.files.skipped.len(), 9, "{}", r.render());
+    assert_eq!(r.files.mapped, 13, "{}", r.render());
+    assert_eq!(r.files.skipped.len(), 10, "{}", r.render());
     assert_eq!(r.exit_code(), 0, "{}", r.render());
     let on_disk = notes_on_disk(&fx.app);
     assert!(on_disk.contains(&(Ring::Invariant, "identity".into())));
-    assert!(on_disk.contains(&(Ring::Protocol, "openwolf".into())));
+    // The previous tool's operating protocol is skipped, not imported into ring 1. Ring 1
+    // is injected into every session as protocol to follow, and that file instructs an
+    // agent to write into a tree we are leaving. An instruction pointing at nothing is
+    // worse there than anywhere else, because it arrives before there is any reason to
+    // doubt it. Asserted as an absence so that re-adding it fails here rather than
+    // silently showing up in every future session.
+    assert!(
+        !on_disk.iter().any(|(_, n)| n == "openwolf"),
+        "OPENWOLF.md must not be imported at all: {}",
+        r.render()
+    );
     assert!(on_disk.contains(&(Ring::Knowledge, "prereg-va-2026-08-25".into())));
     assert!(on_disk.contains(&(Ring::Knowledge, "prereg-hashes".into())));
     assert!(on_disk.contains(&(Ring::Session, "memory-session-2026-04-16-15-53".into())));

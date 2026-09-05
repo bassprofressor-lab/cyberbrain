@@ -23,6 +23,10 @@ reason = "tool code, runtime state, logs, images: not notes"
 paths = ["*.json"]
 reason = "JSON state of the previous tool (bug log, config, cron state, symbol graphs); not Markdown, imported separately if at all"
 
+[[skip]]
+paths = ["OPENWOLF.md"]
+reason = "the previous tool's operating protocol: it instructs an agent to write into .wolf/STATUS.md, which would be a standing instruction pointing at nothing"
+
 # ---- ring 0: invariants ------------------------------------------------------------------
 
 [[group]]
@@ -36,10 +40,15 @@ tags = ["identity"]
 # Rings 0 and 1 share an 8k-token cap and are injected into every session; only short
 # protocol files belong here. STATUS.md (a 200 KB retired handoff log) does not fit and
 # goes to ring 3 below.
+#
+# OPENWOLF.md is skipped above rather than landing here. A file in ring 1 is injected into
+# every session as protocol to follow, and that one tells an agent to write into a tree we
+# are leaving. An instruction that points at nothing is worse in the resident ring than
+# anywhere else, because it arrives before the agent has any reason to doubt it.
 
 [[group]]
 name = "protocol"
-paths = ["OPENWOLF.md", "ENGINE.md"]
+paths = ["ENGINE.md"]
 ring = 1
 kind = "reference"
 tags = ["protocol"]
