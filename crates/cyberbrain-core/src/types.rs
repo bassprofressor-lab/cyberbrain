@@ -42,13 +42,22 @@ impl Ring {
     }
 
     /// Retrieval weight applied after rank fusion (SPEC §7 step 4).
+    ///
+    /// These are deliberately close to 1. Fused RRF scores live in a narrow band around
+    /// `1/61`, so a factor of 2 would not nudge the ranking, it would sort by ring and use
+    /// relevance only to break ties — a highly relevant ring-2 block would lose to a barely
+    /// related ring-0 one. Trust decides who wins a *contradiction* (§3.2); it does not
+    /// decide what the query was about.
+    ///
+    /// The resident rings get the smallest boost of all, because they are injected into
+    /// every session regardless (§3.2). Weighting them up here would count them twice.
     pub fn weight(self) -> f32 {
         match self {
-            Ring::Invariant => 2.0,
-            Ring::Protocol => 1.6,
-            Ring::Knowledge => 1.0,
-            Ring::Session => 0.8,
-            Ring::External => 0.5,
+            Ring::Invariant => 1.15,
+            Ring::Protocol => 1.10,
+            Ring::Knowledge => 1.00,
+            Ring::Session => 0.92,
+            Ring::External => 0.80,
         }
     }
 
@@ -104,11 +113,18 @@ pub enum NoteKind {
 }
 
 /// Result of the write-time PII scan (SPEC §12.4).
+///
+/// The default is [`PiiState::Unscanned`], not [`PiiState::None`], and the difference is the
+/// whole point of the type. An absent `pii:` key means nobody looked; letting that read as
+/// "looked, found nothing" would hand the compliance layer a clean bill of health that no
+/// scan ever issued. A hand-written note is unscanned until a scan says otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PiiState {
-    /// Scanned, nothing found.
+    /// No scan has run over this note. The default for anything not written by us.
     #[default]
+    Unscanned,
+    /// Scanned, nothing found.
     None,
     /// Findings were shown to the operator and accepted.
     Reviewed,
@@ -116,10 +132,18 @@ pub enum PiiState {
     Flagged,
 }
 
+impl PiiState {
+    /// True only when a scan actually ran. Callers that gate on "is this note clean" must
+    /// use this rather than `!= Flagged`, which would wave through everything unscanned.
+    pub fn was_scanned(self) -> bool {
+        !matches!(self, PiiState::Unscanned)
+    }
+}
+
 pub type NoteId = ulid::Ulid;
 
 /// The YAML block at the head of every note (SPEC §3.1).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Frontmatter {
     /// Immutable. Assigned once at creation and never rewritten, so citations survive renames.
     pub id: NoteId,
@@ -142,7 +166,7 @@ pub struct Frontmatter {
 }
 
 /// A note as it exists on disk. The file is authoritative; the index is a cache.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Note {
     pub front: Frontmatter,
     pub body: String,
@@ -150,7 +174,7 @@ pub struct Note {
 }
 
 /// A retrievable slice of a note, at most 512 tokens (SPEC §3.3).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Block {
     pub citation: crate::citation::Citation,
     pub note_id: NoteId,
@@ -209,6 +233,44 @@ impl EgressPurpose {
                 "sends note text to the configured inference endpoint on your own network"
             }
         }
+    }
+}
+
+/// The gate every outbound request passes through (SPEC §12.1).
+///
+/// The rule is that all network I/O goes through one checked wrapper. That wrapper cannot
+/// live in `cyberbrain-policy`, because the crates that actually make requests must not
+/// depend on it — so the *seam* lives here and the policy crate implements it, the same
+/// inversion used for [`Embedder`]. A crate that wants to make a request must hold one of
+/// these and call [`EgressGate::permit`] first; there is no other supported way to build an
+/// HTTP client, and CI enforces that by whitelisting only call sites that take a gate.
+///
+/// `permit` both decides and records. Separating the two would allow a call that was
+/// permitted and never audited, which is the shape of the failure the register exists to
+/// prevent.
+pub trait EgressGate: Send + Sync {
+    /// Returns `Ok(())` only if the active profile permits `purpose` towards `destination`.
+    /// The attempt is recorded either way — a refusal is the most interesting audit row
+    /// there is. `destination` is the full URL or host:port about to be contacted, already
+    /// resolved where resolution applies, so the record names what was really reached and
+    /// not what the config string claimed.
+    fn permit(&self, purpose: EgressPurpose, destination: &str) -> Result<()>;
+}
+
+/// A gate that permits nothing. The correct default for any code path that has not been
+/// given a real one: failing closed means a forgotten wiring shows up as a refusal in the
+/// log rather than as a silent, unaudited request.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DenyAllEgress;
+
+impl EgressGate for DenyAllEgress {
+    fn permit(&self, purpose: EgressPurpose, destination: &str) -> Result<()> {
+        Err(crate::Error::PolicyRefusal {
+            profile: "no-gate".into(),
+            reason: format!(
+                "{purpose:?} towards {destination} was refused because no egress gate is                  wired in; this is a wiring bug, not a configuration choice"
+            ),
+        })
     }
 }
 

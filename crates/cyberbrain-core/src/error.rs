@@ -26,8 +26,20 @@ pub enum Error {
     /// Rings 0 and 1 are size-capped so they can be injected unconditionally (SPEC §3.2).
     /// This is raised at write time on purpose: discovering it at read time would mean
     /// silently truncating the invariants an agent is meant to obey.
-    #[error("ring {ring} holds {actual} tokens but is capped at {cap}; shorten or move a note")]
+    /// `ring` names the note being written; the cap itself is over rings 0 and 1 combined,
+    /// and `actual` is that combined figure. Counted with the cheap approximation in
+    /// `blocks::approx_tokens`, because this is enforced at write time where no tokenizer
+    /// exists — so the cap is a guard rail, not an exact accounting.
+    #[error(
+        "writing to ring {ring} would put the resident rings at ~{actual} tokens, over the          cap of {cap}; shorten a note or move one to ring 2"
+    )]
     RingCapExceeded { ring: u8, actual: usize, cap: usize },
+
+    /// The notes tree contradicts itself: two notes with one name, a file whose frontmatter
+    /// disagrees with its location, a duplicate id. Distinct from a parse error, because the
+    /// individual file is fine and the store as a whole is not.
+    #[error("store integrity: {0}")]
+    StoreIntegrity(String),
 
     #[error("index: {0}")]
     Index(String),

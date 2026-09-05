@@ -107,9 +107,14 @@ surfaced at write time, not a silent truncation at read time.
 ### 3.3 Block and citation
 
 A note is split into **blocks** at heading and paragraph boundaries, each block ≤ 512 tokens.
-A citation is `r{ring}-{first 10 hex of blake3(note_id || block_index || block_text)}`,
-e.g. `r2-a91f2c33e1`. It is stable across reindexing as long as the block text is unchanged,
-and it resolves via `cyberbrain recall --id`.
+A citation is `r{ring}-{first 12 hex of blake3(note_id || block_index || block_text)}`,
+e.g. `r2-a91f2c33e1bd`. It is stable across reindexing as long as the block text is
+unchanged, and it resolves via `cyberbrain recall --id`.
+
+48 bits, not 40. At 100k blocks the birthday collision probability drops from about 5e-3 to
+2e-5 — the difference between a thing that happens to somebody and one that does not. A
+collision is caught loudly as a uniqueness violation at index time rather than producing
+wrong data, but two extra characters are a cheap way to avoid a baffling scan failure.
 
 ---
 
@@ -119,13 +124,23 @@ and it resolves via `cyberbrain recall --id`.
 <store>/                     # default: .cyberbrain/ at project root
   notes/
     r0/ r1/ r2/ r3/ r4/      # one directory per ring, flat inside
-  cyberbrain.db              # SQLite: index, vectors, audit log
+  cyberbrain.db              # SQLite: index and vectors. A CACHE. Disposable.
+  audit.db                   # SQLite: the audit log. A RECORD. Not disposable.
   cyberbrain.toml            # configuration
-  models/                    # downloaded model artefacts, content-addressed
+  models/                    # model artefacts, content-addressed
 ```
 
 The `notes/` tree contains only Markdown. Deleting `cyberbrain.db` must be non-destructive:
 `cyberbrain scan` rebuilds it completely.
+
+**The audit log lives in its own file, and that is why.** In the first draft it shared
+`cyberbrain.db`, which made the sentence above false: everything in that file is rebuildable
+from the Markdown except the audit log, which is the one thing that is a record of events
+rather than a derived view of state. One file cannot be both disposable and evidence. The
+split makes the rule true again and makes each file's nature obvious from its name.
+
+`audit.db` carries `BEFORE UPDATE` and `BEFORE DELETE` triggers that abort, so append-only is
+enforced by the database and not by convention.
 
 ---
 
@@ -136,7 +151,10 @@ platform. FTS5 for lexical search.
 
 Tables (indicative, implementer may refine):
 
-- `notes(id, name, ring, kind, path, created, updated, mtime, size, hash)`
+- `notes(id, name, ring, kind, path, created, updated, mtime, size, hash)` — `hash` and the
+  stamp are computed by **one function in `cyberbrain-core`**, called by both the scanner and
+  the index. Two implementations of the same hash silently drift apart and the incremental
+  compare then reports changes that are not there, or worse, misses ones that are.
 - `blocks(citation, note_id, idx, text, token_count)`
 - `blocks_fts` — FTS5 virtual table over `blocks.text`
 - `vectors(citation, dim, data BLOB)` — f32 little-endian
@@ -231,7 +249,13 @@ tool whose best mode is opt-in will be used in its worst mode.
 1. Lexical candidates from FTS5 (BM25), top `k_lex` (default 50).
 2. Semantic candidates by cosine over stored vectors, top `k_sem` (default 50).
 3. Fuse with Reciprocal Rank Fusion, `score = Σ 1/(60 + rank_i)`.
-4. Apply ring weighting: multiply by `w[ring]`, default `[2.0, 1.6, 1.0, 0.8, 0.5]`.
+4. Apply ring weighting: multiply by `w[ring]`, default `[1.15, 1.10, 1.00, 0.92, 0.80]`.
+   Ranks are **1-based**. The weights sit close to 1 on purpose: fused RRF scores occupy a
+   narrow band around `1/61`, so a factor of 2 would not nudge the order, it would sort by
+   ring and let relevance break ties. Trust settles a contradiction (§3.2); it does not
+   decide what the query was about. The resident rings get the smallest boost of all,
+   because they are injected into every session anyway and weighting them here counts them
+   twice.
 5. Return top `n` (default 8) with citation, ring, note name, and the block text.
 
 **Vector search is a linear SIMD scan.** At the expected corpus size (tens of thousands of
@@ -344,7 +368,18 @@ Requirements:
 - The base URL must resolve to a loopback or private-range address unless the operator
   explicitly sets `allow_public_endpoint = true`. A memory tool that quietly posts project
   notes to a public API is the single worst bug this project can ship, and it has precedent.
-- Model, endpoint and token counts of every call are recorded in the audit log.
+- Model, endpoint and token counts of every call are recorded in the audit log. Many local
+  servers omit `usage`; the log then records that it was absent and **never estimates one**.
+  An invented number in an audit log is worse than a gap, because a gap is visibly a gap.
+- **No hook calls this layer synchronously.** Completion timeouts are measured in tens of
+  seconds and the hot-path hook budget in §9.1 is 15 ms; the two cannot meet. This follows
+  the same rule as §6.5 and for the same reason.
+- The model may never propose ring 0 or ring 1 for a note. Those rings are operator
+  invariants and protocol; a suggestion engine that can write into them defeats the purpose
+  of having a trust hierarchy at all. A suggestion of 0 or 1 is demoted to 2 and marked.
+- Contradiction detection is defined across rings (§3.2). Two contradictory blocks **in the
+  same ring** have no precedence rule, so no winner is invented: both are reported as an
+  unresolved disagreement for a human to settle.
 - A refused or unreachable endpoint degrades the feature and says so. It never blocks a core
   operation and never falls back to a remote provider.
 
@@ -370,18 +405,67 @@ Every code path capable of sending bytes off the machine is registered at compil
 module. `cyberbrain policy egress` prints the complete list: purpose, destination, what data,
 which profile permits it, and whether it is currently enabled.
 
-A network call from a path not in the register must be structurally impossible: all outbound
-I/O goes through a single wrapper that takes a registered `EgressPurpose`, and CI greps for
-direct HTTP client construction outside that module.
+A network call from a path not in the register must be structurally impossible. The wrapper
+cannot live in this crate, because the crates that actually make requests (`llm`, and model
+download) must not depend on the policy crate — so the **seam is the `EgressGate` trait in
+`cyberbrain-core`**, the policy crate implements it, and the binary wires it in. Any code
+path wanting a request holds a gate and calls `permit(purpose, destination)` first.
+
+`permit` decides **and** records in one call. Two separate calls would permit a request that
+was never audited, which is precisely the failure the register exists to prevent.
+`destination` is what will really be contacted, after name resolution where that applies, not
+what the configuration string claimed.
+
+`DenyAllEgress` is the default for any path not yet wired, so a forgotten wiring surfaces as
+a refusal in the log rather than as a silent unaudited request.
+
+CI whitelists HTTP-client construction only at call sites that take an `EgressGate`.
+
+### 12.1.1 What the transport itself may do behind your back
+
+Naming the destination is not enough if the HTTP stack rewrites it. Both of these are
+disabled and covered by tests, and both would defeat the register while the config string
+still innocently read `127.0.0.1`:
+
+- **Proxy environment variables.** `HTTP_PROXY` / `HTTPS_PROXY` are read by default by most
+  clients, and a proxy sends every byte to a host nobody validated.
+- **Redirects.** A local endpoint answering `307` to a public URL exfiltrates on the second
+  hop.
+
+Additionally, the validated addresses are **pinned** for the connection, so a name that
+resolves differently between validation and connection cannot be used to slip past the check.
 
 Registered purposes for v0.1: `ModelDownload` (once, on consent), `LocalInference` (loopback
 or private range only). That is the entire list. Telemetry does not exist.
 
+**"Private range" means** loopback, RFC1918, RFC4193 unique-local, and link-local. It
+deliberately does **not** include `100.64.0.0/10`: that range is carrier-grade NAT, where an
+address is usually somebody else's machine, but it is also what overlay networks such as
+Tailscale hand out — which is a completely reasonable way to reach your own GPU box. Those
+two cases are indistinguishable from the address alone, so they get their own switch,
+`allow_overlay_network`, rather than being folded into `allow_public_endpoint`. A setting
+whose name misdescribes what the operator is agreeing to is a consent failure, not a
+convenience.
+
+**HTTPS to a local endpoint is off by default.** No root certificate store is compiled in, so
+`https://` fails closed unless the operator supplies a CA. Local inference is plain HTTP over
+loopback or a private network, and shipping a root store to serve an unusual case would put
+a trust anchor in the binary for no benefit.
+
 ### 12.2 Erasure (GDPR Art. 17)
 
 `cyberbrain forget` removes the note file, its blocks, its vectors, its FTS entries, its
-inbound and outbound link rows, and any cached derivative, in one transaction, and prints
-what it removed per store. Deleting a Markdown file while its vector stays in the index is the
+outbound link rows, and any cached derivative, in one transaction, and prints what it removed
+per store.
+
+**Inbound links are unresolved, not deleted.** Other notes still contain `[[name]]` on disk,
+so deleting those rows would put the index at odds with the files and the next scan would
+recreate them. They become dangling links, which `doctor` reports and the UI renders as
+intent (§13).
+
+**Audit rows are exempt from erasure.** An erasure record naming what was erased is itself a
+trace, and it is kept deliberately: evidence that the erasure happened is what makes the
+erasure demonstrable. This is stated here so that nobody later "fixes" it. Deleting a Markdown file while its vector stays in the index is the
 obvious silent failure of this design and must be covered by a test that asserts the vector
 is gone, not merely that the file is.
 

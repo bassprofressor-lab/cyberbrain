@@ -10,7 +10,12 @@ description = "Cyberbrain: llm"
 
 [dependencies]
 cyberbrain-core.workspace = true
+jiff = { version = "0.2.35", features = ["serde"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "json", "charset", "http2"] }
 rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time"] }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "time", "io-util"] }

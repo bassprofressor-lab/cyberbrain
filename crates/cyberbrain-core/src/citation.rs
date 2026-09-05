@@ -1,24 +1,30 @@
 //! Citations. Every retrieved statement carries one and it resolves back to the exact
 //! block that produced it (SPEC §3.3).
 //!
-//! Form: `r{ring}-{10 hex}`, e.g. `r2-a91f2c33e1`. The hash covers note id, block index
+//! Form: `r{ring}-{12 hex}`, e.g. `r2-a91f2c33e1bd`. The hash covers note id, block index
 //! and block text, so it is stable across reindexing while the text is unchanged, and it
 //! changes when the text does — which is the point. A citation that silently keeps
 //! pointing at edited text is worse than one that stops resolving.
+//!
+//! **Width.** 48 bits, not the 40 this started with. At 100k blocks the birthday collision
+//! probability falls from roughly 5e-3 to 2e-5, which is the difference between "will happen
+//! to somebody" and "will not". A collision surfaces loudly as a uniqueness violation at
+//! index time rather than as wrong data, but a baffling scan failure is still a bad day, and
+//! two extra characters in something people paste around is a cheap way to buy it off.
 
 use crate::error::{Error, Result};
 use crate::types::{NoteId, Ring};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-const HEX_LEN: usize = 10;
+const HEX_LEN: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct Citation {
     pub ring: Ring,
-    /// 5 bytes rendered as 10 hex characters.
-    bytes: [u8; 5],
+    /// 6 bytes rendered as 12 hex characters.
+    bytes: [u8; 6],
 }
 
 impl Citation {
@@ -28,8 +34,8 @@ impl Citation {
         h.update(&block_idx.to_le_bytes());
         h.update(block_text.as_bytes());
         let digest = h.finalize();
-        let mut bytes = [0u8; 5];
-        bytes.copy_from_slice(&digest.as_bytes()[..5]);
+        let mut bytes = [0u8; 6];
+        bytes.copy_from_slice(&digest.as_bytes()[..6]);
         Self { ring, bytes }
     }
 
@@ -55,7 +61,7 @@ impl std::str::FromStr for Citation {
         if hex_part.len() != HEX_LEN || !hex_part.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(bad());
         }
-        let mut bytes = [0u8; 5];
+        let mut bytes = [0u8; 6];
         for (i, b) in bytes.iter_mut().enumerate() {
             *b = u8::from_str_radix(&hex_part[i * 2..i * 2 + 2], 16).map_err(|_| bad())?;
         }
@@ -119,11 +125,11 @@ mod tests {
     fn rejects_malformed() {
         for s in [
             "r2a91f2c33e1",   // no separator
-            "x2-a91f2c33e1",  // no r
-            "r9-a91f2c33e1",  // ring out of range
-            "r2-a91f2c33",    // too short
-            "r2-a91f2c33e1f", // too long
-            "r2-zzzzzzzzzz",  // not hex
+            "x2-a91f2c33e1bd", // no r
+            "r9-a91f2c33e1bd", // ring out of range
+            "r2-a91f2c33e1",   // too short
+            "r2-a91f2c33e1bde",// too long
+            "r2-zzzzzzzzzzzz", // not hex
             "",
         ] {
             assert!(Citation::from_str(s).is_err(), "{s} should not parse");
