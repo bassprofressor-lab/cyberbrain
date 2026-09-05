@@ -486,6 +486,20 @@ mod tests {
         .to_string()
     }
 
+    /// Permits everything; the real gate lives in `cyberbrain-policy`, off-limits here.
+    #[derive(Debug)]
+    struct OpenGate;
+
+    impl cyberbrain_core::EgressGate for OpenGate {
+        fn permit(&self, _p: cyberbrain_core::EgressPurpose, _d: &str) -> cyberbrain_core::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn open_gate() -> std::sync::Arc<dyn cyberbrain_core::EgressGate> {
+        std::sync::Arc::new(OpenGate)
+    }
+
     async fn client_for(server: &MockServer) -> LlmClient {
         LlmClient::connect(
             LlmConfig {
@@ -495,6 +509,8 @@ mod tests {
                 ..Default::default()
             },
             MemoryAuditSink::new(),
+        
+            open_gate(),
         )
         .await
         .unwrap()
@@ -688,6 +704,8 @@ mod tests {
                 ..Default::default()
             },
             MemoryAuditSink::new(),
+        
+            open_gate(),
         )
         .await
         .unwrap();

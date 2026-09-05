@@ -5,7 +5,7 @@
 //! and it is pinned to the addresses that passed. Environment proxies are ignored and
 //! redirects are refused: both would let bytes reach a host that was never validated.
 
-use cyberbrain_core::{EgressPurpose, Error, Result};
+use cyberbrain_core::{EgressGate, EgressPurpose, Error, Result};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -63,10 +63,18 @@ impl LlmConfig {
     }
 }
 
-/// The one place in this crate that constructs an HTTP client. Takes the egress purpose
-/// by value so the call site reads as what it is (SPEC §12.1); only `LocalInference` is
-/// accepted here.
+/// The one place in this crate that constructs an HTTP client.
+///
+/// It takes the [`EgressGate`] rather than a bare purpose, and that is the whole point:
+/// holding a purpose only lets the call site *describe* itself, while holding a gate is the
+/// only way to actually ask permission. The first version took a purpose, read as if it were
+/// checked, and never called anything — every inference request left the machine without an
+/// entry in the register. The signature now makes that shape impossible to write.
+///
+/// Permission is asked again before each request (see [`LlmClient::authorise`]); this call
+/// authorises the channel, not the traffic.
 pub fn build_http_client(
+    gate: &dyn EgressGate,
     purpose: EgressPurpose,
     endpoint: &ValidatedEndpoint,
     cfg: &LlmConfig,
@@ -80,6 +88,8 @@ pub fn build_http_client(
             ),
         });
     }
+
+    gate.permit(purpose, &endpoint.summary())?;
 
     // reqwest with `rustls-no-provider` panics at build time without a provider. Ring was
     // chosen for the tree (no cmake, no aws-lc-sys); installing twice is harmless.
@@ -120,6 +130,7 @@ pub struct LlmClient {
     endpoint: ValidatedEndpoint,
     http: reqwest::Client,
     audit: Arc<dyn AuditSink>,
+    gate: Arc<dyn EgressGate>,
 }
 
 impl std::fmt::Debug for LlmClient {
@@ -134,14 +145,29 @@ impl std::fmt::Debug for LlmClient {
 impl LlmClient {
     /// Validate the configured endpoint with the system resolver and build a client.
     /// A refusal is `Error::PolicyRefusal` and is audited before being returned.
-    pub async fn connect(cfg: LlmConfig, audit: Arc<dyn AuditSink>) -> Result<Self> {
-        Self::connect_with_resolver(cfg, audit, &SystemResolver).await
+    pub async fn connect(
+        cfg: LlmConfig,
+        audit: Arc<dyn AuditSink>,
+        gate: Arc<dyn EgressGate>,
+    ) -> Result<Self> {
+        Self::connect_with_resolver(cfg, audit, gate, &SystemResolver).await
+    }
+
+    /// Ask the register before every request, not once per client.
+    ///
+    /// SPEC §12.1 says all outbound I/O passes the wrapper. A single check at construction
+    /// would authorise a channel and then let an unbounded number of requests ride it
+    /// unrecorded, which is exactly the accounting the register exists to provide.
+    fn authorise(&self) -> Result<()> {
+        self.gate
+            .permit(EgressPurpose::LocalInference, &self.endpoint.summary())
     }
 
     /// As [`connect`](Self::connect), with an injected resolver.
     pub async fn connect_with_resolver(
         cfg: LlmConfig,
         audit: Arc<dyn AuditSink>,
+        gate: Arc<dyn EgressGate>,
         resolver: &dyn Resolver,
     ) -> Result<Self> {
         let started = Instant::now();
@@ -170,7 +196,7 @@ impl LlmClient {
                     return Err(e);
                 }
             };
-        let http = build_http_client(EgressPurpose::LocalInference, &endpoint, &cfg)?;
+        let http = build_http_client(gate.as_ref(), EgressPurpose::LocalInference, &endpoint, &cfg)?;
         audit.record_inference(InferenceEvent {
             at: jiff::Timestamp::now(),
             purpose: EgressPurpose::LocalInference,
@@ -189,6 +215,7 @@ impl LlmClient {
             endpoint,
             http,
             audit,
+            gate,
         })
     }
 
@@ -270,6 +297,7 @@ impl LlmClient {
             stream_options: None,
         };
 
+        self.authorise()?;
         let resp = self.http.post(&url).json(&body).send().await;
         let resp = match resp {
             Ok(r) => r,
@@ -404,6 +432,7 @@ impl LlmClient {
         };
         let kind = CallKind::ChatCompletionStream;
 
+        self.authorise()?;
         let mut resp = match self.http.post(&url).json(&body).send().await {
             Ok(r) => r,
             Err(e) => {
@@ -527,6 +556,7 @@ impl LlmClient {
     async fn models_with_headers(&self) -> Result<(Vec<ModelInfo>, Vec<(String, String)>)> {
         let url = self.url("models");
         let started = Instant::now();
+        self.authorise()?;
         let resp = self
             .http
             .get(&url)
@@ -706,6 +736,36 @@ mod tests {
     use crate::audit::MemoryAuditSink;
     use crate::mock::{MockResponse, MockServer};
     use crate::types::ChatMessage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// A gate that permits and counts. The real one lives in `cyberbrain-policy`, which
+    /// this crate must not depend on.
+    #[derive(Debug, Default)]
+    struct CountingGate(AtomicUsize);
+
+    impl EgressGate for CountingGate {
+        fn permit(&self, _p: EgressPurpose, _d: &str) -> Result<()> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    /// A gate that refuses everything, standing in for a profile that forbids the call.
+    #[derive(Debug)]
+    struct ClosedGate;
+
+    impl EgressGate for ClosedGate {
+        fn permit(&self, _p: EgressPurpose, d: &str) -> Result<()> {
+            Err(Error::PolicyRefusal {
+                profile: "test".into(),
+                reason: format!("{d} refused by test gate"),
+            })
+        }
+    }
+
+    fn open_gate() -> Arc<dyn EgressGate> {
+        Arc::new(CountingGate::default())
+    }
 
     fn cfg(base: &str) -> LlmConfig {
         LlmConfig {
@@ -739,7 +799,7 @@ mod tests {
         })
         .await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
 
@@ -779,7 +839,7 @@ mod tests {
         })
         .await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let out = client
@@ -795,7 +855,7 @@ mod tests {
         let server = MockServer::start(|_| panic!("no request may be sent")).await;
         let mut c = cfg(&server.base_url("/v1"));
         c.model.clear();
-        let client = LlmClient::connect(c, MemoryAuditSink::new()).await.unwrap();
+        let client = LlmClient::connect(c, MemoryAuditSink::new(), open_gate()).await.unwrap();
         let err = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
             .await
@@ -813,7 +873,7 @@ mod tests {
         })
         .await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let err = client
@@ -829,7 +889,7 @@ mod tests {
     async fn garbage_body_is_a_bad_response() {
         let server = MockServer::start(|_| MockResponse::json(200, "<html>not json</html>")).await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let err = client
@@ -850,7 +910,7 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&format!("http://127.0.0.1:{port}/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&format!("http://127.0.0.1:{port}/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let err = client
@@ -874,7 +934,7 @@ mod tests {
         let mut c = cfg(&server.base_url("/v1"));
         c.timeout = Duration::from_millis(300);
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(c, audit.clone()).await.unwrap();
+        let client = LlmClient::connect(c, audit.clone(), open_gate()).await.unwrap();
         let started = Instant::now();
         let err = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
@@ -892,7 +952,7 @@ mod tests {
         })
         .await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let err = client
@@ -914,7 +974,7 @@ mod tests {
     #[tokio::test]
     async fn refused_endpoint_never_builds_a_client_and_is_audited() {
         let audit = MemoryAuditSink::new();
-        let err = LlmClient::connect(cfg("http://203.0.113.7:11434/v1"), audit.clone())
+        let err = LlmClient::connect(cfg("http://203.0.113.7:11434/v1"), audit.clone(), open_gate())
             .await
             .unwrap_err();
         assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
@@ -964,7 +1024,7 @@ mod tests {
         let mut table = HashMap::new();
         table.insert("inference.local".to_string(), vec![server.addr.ip()]);
         let c = cfg(&format!("http://inference.local:{}/v1", server.addr.port()));
-        let client = LlmClient::connect_with_resolver(c, MemoryAuditSink::new(), &Static(table))
+        let client = LlmClient::connect_with_resolver(c, MemoryAuditSink::new(), open_gate(), &Static(table))
             .await
             .unwrap();
         assert_eq!(client.endpoint().host, "inference.local");
@@ -988,7 +1048,7 @@ mod tests {
         }
         let server =
             MockServer::start(|_| MockResponse::json(200, &completion_json("direct"))).await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
             .await
             .unwrap();
         let out = client
@@ -1011,7 +1071,7 @@ mod tests {
             )
         })
         .await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
             .await
             .unwrap();
         let models = client.models().await.unwrap();
@@ -1025,6 +1085,60 @@ mod tests {
         assert_eq!(probe.caveat, None);
     }
 
+    /// The register only means anything if a refusal actually stops the bytes. Written
+    /// against the broken state first: before `authorise()` existed the client held a
+    /// purpose and never asked anything, so the request reached the server and the mock's
+    /// panic fired.
+    #[tokio::test]
+    async fn a_refusing_gate_stops_the_request_before_it_is_sent() {
+        let server = MockServer::start(|_| panic!("a refused call must never reach the endpoint"))
+            .await;
+        let err = LlmClient::connect(
+            cfg(&server.base_url("/v1")),
+            MemoryAuditSink::new(),
+            Arc::new(ClosedGate),
+        )
+        .await
+        .expect_err("a closed gate must not yield a client");
+        assert!(matches!(err, Error::PolicyRefusal { .. }), "{err:?}");
+    }
+
+    /// Permission is asked per request, not once per client. A single check at construction
+    /// would authorise a channel and then let unlimited traffic ride it unrecorded.
+    #[tokio::test]
+    async fn every_request_asks_the_gate_again() {
+        let server = MockServer::start(|_| {
+            MockResponse::json(
+                200,
+                r#"{"choices":[{"message":{"role":"assistant","content":"ok"}}]}"#,
+            )
+        })
+        .await;
+        let gate = Arc::new(CountingGate::default());
+        let client = LlmClient::connect(
+            cfg(&server.base_url("/v1")),
+            MemoryAuditSink::new(),
+            gate.clone(),
+        )
+        .await
+        .unwrap();
+
+        let after_connect = gate.0.load(Ordering::SeqCst);
+        assert_eq!(after_connect, 1, "the channel itself is authorised once");
+
+        for _ in 0..3 {
+            client
+                .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
+                .await
+                .unwrap();
+        }
+        assert_eq!(
+            gate.0.load(Ordering::SeqCst),
+            after_connect + 3,
+            "each request must ask again"
+        );
+    }
+
     #[tokio::test]
     async fn probe_of_dead_endpoint_never_fails() {
         let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1033,6 +1147,7 @@ mod tests {
         let client = LlmClient::connect(
             cfg(&format!("http://127.0.0.1:{port}/v1")),
             MemoryAuditSink::new(),
+        open_gate(),
         )
         .await
         .unwrap();
@@ -1051,7 +1166,7 @@ mod tests {
             )
         })
         .await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
             .await
             .unwrap();
         let probe = client.probe().await;
@@ -1078,7 +1193,7 @@ mod tests {
         })
         .await;
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone())
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
             .await
             .unwrap();
         let mut deltas = Vec::new();
@@ -1106,7 +1221,7 @@ mod tests {
             classes: vec![crate::address::AddressClass::Loopback],
             public_waived: false,
         };
-        let err = build_http_client(EgressPurpose::ModelDownload, &ep, &LlmConfig::default())
+        let err = build_http_client(&CountingGate::default(), EgressPurpose::ModelDownload, &ep, &LlmConfig::default())
             .unwrap_err();
         assert!(matches!(err, Error::PolicyRefusal { .. }));
     }

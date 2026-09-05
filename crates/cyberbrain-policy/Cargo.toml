@@ -6,9 +6,31 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: policy"
+description = "Cyberbrain: compliance layer (egress register, profiles, PII, retention, erasure, audit)"
+
+[features]
+default = ["http"]
+# The model-download transport (SPEC §6: "every fetch goes through our own registered
+# egress path"). Disabling it leaves the gate, the register and the audit trail in place
+# and removes this crate's ability to fetch anything.
+http = ["dep:reqwest", "dep:rustls"]
+# `impl cyberbrain_llm::AuditSink for AuditLog`, so the binary can hand the inference
+# layer the audit log directly. Off by default so the policy crate's own build and tests
+# do not pull in the inference stack.
+llm = ["dep:cyberbrain-llm"]
 
 [dependencies]
 cyberbrain-core.workspace = true
+cyberbrain-llm = { workspace = true, optional = true }
+blake3 = "1.8.7"
+jiff = { version = "0.2.35", features = ["serde"] }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+ulid = { version = "3.0.0", features = ["serde"] }
+url = "2.5.8"
+reqwest = { version = "0.13.4", default-features = false, features = ["rustls-no-provider", "charset", "http2"], optional = true }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
