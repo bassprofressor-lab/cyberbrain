@@ -1,0 +1,14 @@
+[package]
+name = "cyberbrain-embed"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cyberbrain: embed"
+
+[dependencies]
+cyberbrain-core.workspace = true
+safetensors = "0.8.0"
+tokenizers = { version = "0.23.2", default-features = false, features = ["fancy-regex"] }

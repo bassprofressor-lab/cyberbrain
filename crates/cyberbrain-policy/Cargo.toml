@@ -1,0 +1,14 @@
+[package]
+name = "cyberbrain-policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cyberbrain: policy"
+
+[dependencies]
+cyberbrain-core.workspace = true
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }

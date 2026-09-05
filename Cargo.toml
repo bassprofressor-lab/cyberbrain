@@ -1,0 +1,33 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "FSL-1.1-ALv2"
+authors = ["Krynex Labs <info@krynexlabs.de>"]
+repository = "https://github.com/krynexlabs/cyberbrain"
+homepage = "https://krynexlabs.de"
+description = "Cited, trust-tiered, local-first memory for AI coding agents"
+keywords = ["ai-agents", "memory", "retrieval", "mcp", "markdown"]
+categories = ["command-line-utilities", "development-tools"]
+
+[workspace.dependencies]
+cyberbrain-core   = { path = "crates/cyberbrain-core",   version = "0.1.0" }
+cyberbrain-embed  = { path = "crates/cyberbrain-embed",  version = "0.1.0" }
+cyberbrain-index  = { path = "crates/cyberbrain-index",  version = "0.1.0" }
+cyberbrain-policy = { path = "crates/cyberbrain-policy", version = "0.1.0" }
+cyberbrain-llm    = { path = "crates/cyberbrain-llm",    version = "0.1.0" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.bench]
+inherits = "release"
+panic = "unwind"
