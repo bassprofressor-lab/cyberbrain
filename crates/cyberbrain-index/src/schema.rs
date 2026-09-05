@@ -73,22 +73,8 @@ const MIGRATIONS: &[&str] = &[
     CREATE INDEX links_to_name  ON links(to_name);
     CREATE INDEX links_resolved ON links(resolved_note_id);
 
-    -- Append-only. UPDATE and DELETE are refused by trigger (SPEC §12.6).
-    CREATE TABLE audit (
-        seq     INTEGER PRIMARY KEY AUTOINCREMENT,
-        ts      TEXT NOT NULL,                           -- 'YYYY-MM-DDTHH:MM:SS.sssZ', UTC
-        actor   TEXT NOT NULL,
-        action  TEXT NOT NULL,
-        subject TEXT,
-        detail  TEXT                                     -- JSON or NULL
-    );
-    CREATE INDEX audit_ts      ON audit(ts);
-    CREATE INDEX audit_action  ON audit(action);
-    CREATE INDEX audit_subject ON audit(subject);
-    CREATE TRIGGER audit_no_update BEFORE UPDATE ON audit
-        BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
-    CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
-        BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;
+    -- No audit table here: the audit record lives in audit.db (see audit.rs), because
+    -- this file is a cache that may be deleted and the record may not.
 
     INSERT INTO meta (key, value) VALUES ('generation', '0');
     "#,

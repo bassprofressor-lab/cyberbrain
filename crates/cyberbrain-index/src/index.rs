@@ -1,7 +1,6 @@
 //! The index handle: open, upsert, delete, lookups and the embedding-profile guard
 //! (SPEC §5, §12.2).
 
-use crate::audit::{INDEX_ACTOR, actions};
 use crate::vectors::{VectorCache, encode, normalize};
 use crate::{SqlResultExt, schema};
 use cyberbrain_core::{
@@ -78,6 +77,28 @@ pub struct Erased {
     pub links_in_unresolved: usize,
 }
 
+/// What `delete_note` removed and whose it was, so the caller can log the erasure with
+/// the same facts the index knew (SPEC §12.2). The index writes no audit row itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Erasure {
+    pub id: NoteId,
+    pub name: String,
+    pub ring: Ring,
+    pub path: PathBuf,
+    pub counts: Erased,
+}
+
+/// What `set_embedding_profile` did. `changed == false` means the same profile was
+/// already recorded and nothing happened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProfileChange {
+    pub previous: Option<EmbeddingProfile>,
+    pub current: EmbeddingProfile,
+    pub changed: bool,
+    /// Vectors deleted because they came from `previous`. The caller should log this.
+    pub vectors_wiped: usize,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct UpsertOutcome {
     /// `true` when a note with this id already existed and was replaced.
@@ -97,7 +118,6 @@ pub struct IndexStats {
     pub vectors: usize,
     pub links: usize,
     pub dangling_links: usize,
-    pub audit_rows: usize,
     pub embedding: Option<EmbeddingProfile>,
 }
 
@@ -256,38 +276,36 @@ impl Index {
     /// `upsert_note` is given any vectors.
     ///
     /// If a *different* profile was recorded, every stored vector is deleted in the same
-    /// transaction and an audit row says so: vectors from two models must never coexist.
-    /// Returns how many vectors were wiped (0 when the profile is unchanged).
-    pub fn set_embedding_profile(&mut self, profile: &EmbeddingProfile) -> Result<usize> {
+    /// transaction: vectors from two models must never coexist. The returned
+    /// [`ProfileChange`] carries the previous profile and the number of vectors wiped so
+    /// the caller can put that on the audit record; the index does not write one.
+    pub fn set_embedding_profile(&mut self, profile: &EmbeddingProfile) -> Result<ProfileChange> {
         if profile.dim == 0 {
             return Err(Error::Index("embedding profile dim must be > 0".into()));
         }
         let previous = self.embedding_profile()?;
         if previous.as_ref() == Some(profile) {
-            return Ok(0);
+            return Ok(ProfileChange {
+                previous,
+                current: profile.clone(),
+                changed: false,
+                vectors_wiped: 0,
+            });
         }
         let tx = self.conn.transaction().ix()?;
-        let wiped = tx.execute("DELETE FROM vectors", []).ix()?;
+        let vectors_wiped = tx.execute("DELETE FROM vectors", []).ix()?;
         Self::meta_set(&tx, "embedding_profile_id", &profile.id)?;
         Self::meta_set(&tx, "embedding_dim", &profile.dim.to_string())?;
         Self::meta_set(&tx, "embedding_model_hash", &profile.model_hash)?;
         Self::bump_generation(&tx)?;
-        if previous.is_some() || wiped > 0 {
-            crate::audit::append(
-                &tx,
-                INDEX_ACTOR,
-                actions::EMBEDDING_PROFILE_CHANGED,
-                Some(&profile.id),
-                Some(&serde_json::json!({
-                    "previous": previous,
-                    "current": profile,
-                    "vectors_wiped": wiped,
-                })),
-            )?;
-        }
         tx.commit().ix()?;
         *self.cache.get_mut() = None;
-        Ok(wiped)
+        Ok(ProfileChange {
+            previous,
+            current: profile.clone(),
+            changed: true,
+            vectors_wiped,
+        })
     }
 
     /// The guard (SPEC §5). `Err(EmbeddingProfileMismatch)` when the stored vectors were
@@ -578,15 +596,18 @@ impl Index {
         })
     }
 
-    /// Remove every trace of a note from the index, in one transaction, and record the
-    /// erasure in the audit log (SPEC §12.2). The file on disk is the caller's business.
-    pub fn delete_note(&mut self, id: &NoteId) -> Result<Erased> {
+    /// Remove every trace of a note from the index, in one transaction (SPEC §12.2). The
+    /// file on disk is the caller's business, and so is the audit row: the returned
+    /// [`Erasure`] names the note and counts what went, the caller logs it.
+    pub fn delete_note(&mut self, id: &NoteId) -> Result<Erasure> {
         let id_s = id.to_string();
         let tx = self.conn.transaction().ix()?;
-        let name: String = tx
-            .query_row("SELECT name FROM notes WHERE id = ?1", [&id_s], |r| {
-                r.get(0)
-            })
+        let (name, ring, path): (String, i64, String) = tx
+            .query_row(
+                "SELECT name, ring, path FROM notes WHERE id = ?1",
+                [&id_s],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
             .optional()
             .ix()?
             .ok_or_else(|| Error::NoSuchNote(id_s.clone()))?;
@@ -601,21 +622,20 @@ impl Index {
             .execute("DELETE FROM notes WHERE id = ?1", [&id_s])
             .ix()?;
         Self::bump_generation(&tx)?;
-        crate::audit::append(
-            &tx,
-            INDEX_ACTOR,
-            actions::NOTE_ERASED,
-            Some(&id_s),
-            Some(&serde_json::json!({ "name": name, "erased": erased })),
-        )?;
         tx.commit().ix()?;
         *self.cache.get_mut() = None;
-        Ok(erased)
+        Ok(Erasure {
+            id: *id,
+            name,
+            ring: Ring::try_from(ring as u8)?,
+            path: PathBuf::from(path),
+            counts: erased,
+        })
     }
 
-    /// Drop every note, block, FTS row, vector and link. Keeps `meta` (including the
-    /// embedding profile) and the audit log. This is what `scan --full` should call
-    /// instead of deleting the file, because the audit log lives in the same file.
+    /// Drop every note, block, FTS row, vector and link. Keeps `meta`, including the
+    /// embedding profile. Cheaper than deleting the file for `scan --full`; either is
+    /// safe now that the audit record lives elsewhere. Not audited here.
     pub fn clear(&mut self) -> Result<Erased> {
         let tx = self.conn.transaction().ix()?;
         let vectors = tx.execute("DELETE FROM vectors", []).ix()?;
@@ -637,13 +657,6 @@ impl Index {
             links_in_unresolved: 0,
         };
         Self::bump_generation(&tx)?;
-        crate::audit::append(
-            &tx,
-            INDEX_ACTOR,
-            actions::INDEX_CLEARED,
-            None,
-            Some(&serde_json::json!({ "erased": e })),
-        )?;
         tx.commit().ix()?;
         *self.cache.get_mut() = None;
         Ok(e)
@@ -944,7 +957,6 @@ impl Index {
             links: self.count("SELECT count(*) FROM links")?,
             dangling_links: self
                 .count("SELECT count(*) FROM links WHERE resolved_note_id IS NULL")?,
-            audit_rows: self.count("SELECT count(*) FROM audit")?,
             embedding: self.embedding_profile()?,
         })
     }
@@ -989,6 +1001,18 @@ impl Index {
             if n > 0 {
                 problems.push(format!("{n} {what}"));
             }
+        }
+        // A cache written before the audit record moved to audit.db still carries the
+        // old table. Its rows are not part of the record; say so before anyone deletes
+        // the file believing it holds nothing of value.
+        let legacy = self
+            .count("SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'audit'")?;
+        if legacy > 0 {
+            let rows = self.count("SELECT count(*) FROM audit")?;
+            problems.push(format!(
+                "cache holds a legacy audit table with {rows} rows; the audit record now \
+                 lives in audit.db, export these before discarding the cache"
+            ));
         }
         if let Some(p) = self.embedding_profile()? {
             let n = self.count(&format!(

@@ -9,11 +9,13 @@
 //! - [`Index`]: open, upsert, delete, lookups, the embedding-profile guard,
 //! - hybrid recall: FTS5 BM25 + flat cosine scan, fused with reciprocal rank fusion and
 //!   weighted by ring ([`recall`]),
-//! - the append-only audit table that `cyberbrain-policy` writes to ([`audit`]).
+//! - [`AuditStore`]: the append-only audit record in its own file, `audit.db`, written
+//!   by `cyberbrain-policy` and never by the index ([`audit`]).
 //!
-//! The index is a cache. Every row except the audit log is derivable from the Markdown
-//! files, and `tests::rebuild_is_lossless` proves that deleting the database and
-//! reindexing gives byte-identical recall output.
+//! `cyberbrain.db` is a cache: every row in it is derivable from the Markdown files, and
+//! `tests::rebuild_is_lossless` proves that deleting it and reindexing gives byte-identical
+//! recall output. `audit.db` is a record and is not disposable, which is why it is a
+//! separate file; `tests::audit_survives_cache_deletion` holds that line.
 
 #![forbid(unsafe_code)]
 
@@ -26,10 +28,10 @@ pub mod vectors;
 #[cfg(test)]
 mod tests;
 
-pub use audit::{AuditEntry, AuditFilter};
+pub use audit::{AUDIT_SCHEMA_VERSION, AuditEntry, AuditFilter, AuditStore, NewAuditEntry};
 pub use index::{
-    EmbeddingProfile, Erased, Index, IndexStats, Link, NoteRecord, NoteStamp, UpsertOutcome,
-    content_hash,
+    EmbeddingProfile, Erased, Erasure, Index, IndexStats, Link, NoteRecord, NoteStamp,
+    ProfileChange, UpsertOutcome, content_hash,
 };
 pub use recall::{RRF_K, RecallOptions};
 pub use schema::SCHEMA_VERSION;

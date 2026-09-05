@@ -2,7 +2,7 @@
 //! state it covers (SPEC §14.2); `erasure_assertions_have_teeth` keeps that demonstration
 //! in-tree for the one failure the design is most prone to.
 
-use crate::audit::{AuditFilter, actions};
+use crate::{AuditFilter, AuditStore, NewAuditEntry};
 use crate::{EmbeddingProfile, Index, RecallOptions, content_hash, vectors};
 use cyberbrain_core::{
     Block, Citation, Embedder, Error, Frontmatter, Note, NoteId, NoteKind, PiiState, Result, Ring,
@@ -191,20 +191,16 @@ fn schema_migrates_and_is_idempotent() {
             .map(|r| r.unwrap())
             .collect()
     };
-    for t in [
-        "notes",
-        "blocks",
-        "blocks_fts",
-        "vectors",
-        "links",
-        "audit",
-        "meta",
-    ] {
+    for t in ["notes", "blocks", "blocks_fts", "vectors", "links", "meta"] {
         assert!(
             tables.contains(&t.to_string()),
             "missing table {t}: {tables:?}"
         );
     }
+    assert!(
+        !tables.contains(&"audit".to_string()),
+        "the audit record must not live in the cache: {tables:?}"
+    );
 }
 
 #[test]
@@ -628,7 +624,12 @@ fn erasure_removes_every_trace() {
         .unwrap();
     assert_eq!(r.hits[0].note_id, id);
 
-    let erased = ix.delete_note(&id).unwrap();
+    let erasure = ix.delete_note(&id).unwrap();
+    assert_eq!(erasure.id, id);
+    assert_eq!(erasure.name, "pg18-moves-pgdata");
+    assert_eq!(erasure.ring, Ring::Knowledge);
+    assert!(erasure.path.ends_with("pg18-moves-pgdata.md"));
+    let erased = erasure.counts;
     assert_eq!(erased.notes, 1);
     assert_eq!(erased.blocks, 2);
     assert_eq!(erased.fts_rows, 2);
@@ -667,12 +668,6 @@ fn erasure_removes_every_trace() {
         assert!(ix.resolve(&b.citation).unwrap().is_none());
     }
     assert!(ix.integrity().unwrap().is_empty(), "{:?}", ix.integrity());
-
-    // And the erasure is on record.
-    let last = ix.last_audit().unwrap().unwrap();
-    assert_eq!(last.action, actions::NOTE_ERASED);
-    assert_eq!(last.subject.as_deref(), Some(id.to_string().as_str()));
-    assert_eq!(last.detail.unwrap()["erased"]["vectors"], 2);
 
     // Deleting again is an error, not a silent no-op.
     assert!(matches!(ix.delete_note(&id), Err(Error::NoSuchNote(_))));
@@ -747,19 +742,18 @@ fn erasure_assertions_have_teeth() {
 }
 
 #[test]
-fn clear_keeps_audit_and_profile() {
+fn clear_keeps_profile() {
     let e = HashEmbedder::new("test-v1", 256);
     let mut ix = seeded(&e);
     ix.delete_note(&id_for("session-2026-09-05")).unwrap();
-    let audit_before = ix.stats().unwrap().audit_rows;
     let e2 = ix.clear().unwrap();
     assert_eq!(e2.notes, 3);
+    assert_eq!(e2.blocks, 5);
     let st = ix.stats().unwrap();
     assert_eq!(
         (st.notes, st.blocks, st.fts_rows, st.vectors, st.links),
         (0, 0, 0, 0, 0)
     );
-    assert_eq!(st.audit_rows, audit_before + 1);
     assert_eq!(st.embedding, Some(profile_of(&e)));
 }
 
@@ -820,21 +814,22 @@ fn profile_guard_disables_semantic_and_says_so() {
 }
 
 #[test]
-fn profile_change_wipes_vectors_and_audits() {
+fn profile_change_wipes_vectors_and_reports_it() {
     let e1 = HashEmbedder::new("model-a", 256);
     let mut ix = seeded(&e1);
-    assert_eq!(
-        ix.set_embedding_profile(&profile_of(&e1)).unwrap(),
-        0,
-        "unchanged: no-op"
-    );
+    let same = ix.set_embedding_profile(&profile_of(&e1)).unwrap();
+    assert!(!same.changed, "unchanged: no-op");
+    assert_eq!(same.vectors_wiped, 0);
     let e2 = HashEmbedder::new("model-b", 256);
-    let wiped = ix.set_embedding_profile(&profile_of(&e2)).unwrap();
-    assert_eq!(wiped, 7);
+    let change = ix.set_embedding_profile(&profile_of(&e2)).unwrap();
+    assert!(change.changed);
+    assert_eq!(
+        change.vectors_wiped, 7,
+        "the caller needs this for the audit row"
+    );
+    assert_eq!(change.previous, Some(profile_of(&e1)));
+    assert_eq!(change.current, profile_of(&e2));
     assert_eq!(ix.stats().unwrap().vectors, 0);
-    let last = ix.last_audit().unwrap().unwrap();
-    assert_eq!(last.action, actions::EMBEDDING_PROFILE_CHANGED);
-    assert_eq!(last.detail.unwrap()["vectors_wiped"], 7);
     // Blocks without vectors are reported, not hidden.
     let r = ix
         .recall("bind mount", Some(&e2), &RecallOptions::default())
@@ -940,22 +935,31 @@ fn rebuild_is_lossless() {
 
 #[test]
 fn audit_is_append_only_and_filterable() {
-    let mut ix = Index::open_in_memory().unwrap();
-    let seq = ix
-        .append_audit(
-            "cyberbrain-policy",
-            "write",
-            Some("01ARZ3NDEKTSV4RRFFQ69G5FAV"),
-            Some(&serde_json::json!({ "ring": 2, "name": "pg18-moves-pgdata" })),
-        )
+    let mut store = AuditStore::open_in_memory().unwrap();
+    assert_eq!(store.schema_version().unwrap(), crate::AUDIT_SCHEMA_VERSION);
+    assert_eq!(store.count().unwrap(), 0);
+    assert!(store.last().unwrap().is_none());
+
+    let first = store
+        .append(&NewAuditEntry {
+            actor: "cyberbrain-policy".into(),
+            action: "write".into(),
+            subject: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".into()),
+            detail: Some(r#"{"ring": 2, "name": "pg18-moves-pgdata"}"#.into()),
+        })
         .unwrap();
-    ix.append_audit("cyberbrain-policy", "policy.refusal", None, None)
+    store
+        .append(&NewAuditEntry {
+            actor: "cyberbrain-policy".into(),
+            action: "policy.refusal".into(),
+            ..Default::default()
+        })
         .unwrap();
-    let rows = ix.audit(&AuditFilter::default()).unwrap();
+    let rows = store.read(&AuditFilter::default()).unwrap();
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].seq, seq);
+    assert_eq!(rows[0], first);
+    assert_eq!(rows[0].seq, 1);
     assert_eq!(rows[0].actor, "cyberbrain-policy");
-    assert_eq!(rows[0].detail.as_ref().unwrap()["ring"], 2);
     assert_eq!(
         rows[0].ts.len(),
         "2026-09-05T09:12:03.123Z".len(),
@@ -963,34 +967,176 @@ fn audit_is_append_only_and_filterable() {
         rows[0].ts
     );
     assert!(rows[0].ts.ends_with('Z'));
+    assert_eq!(store.count().unwrap(), 2);
+    assert_eq!(store.last().unwrap().unwrap().seq, 2);
+    assert_eq!(store.get(1).unwrap().unwrap(), first);
+    assert!(store.get(3).unwrap().is_none());
+    assert_eq!(store.after(1).unwrap().len(), 1);
 
-    let by_action = ix
-        .audit(&AuditFilter {
+    let by_action = store
+        .read(&AuditFilter {
             action: Some("policy.refusal".into()),
             ..Default::default()
         })
         .unwrap();
     assert_eq!(by_action.len(), 1);
-    let by_text = ix
-        .audit(&AuditFilter {
+    let by_text = store
+        .read(&AuditFilter {
             contains: Some("PGDATA".into()),
             ..Default::default()
         })
         .unwrap();
     assert_eq!(by_text.len(), 1, "case-insensitive substring over detail");
-    let since = ix
-        .audit(&AuditFilter {
+    let since = store
+        .read(&AuditFilter {
             since: Some("2999-01-01T00:00:00.000Z".into()),
             ..Default::default()
         })
         .unwrap();
     assert!(since.is_empty());
+    let limited = store
+        .read(&AuditFilter {
+            limit: Some(1),
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(limited.len(), 1);
 
     for sql in ["UPDATE audit SET actor = 'x'", "DELETE FROM audit"] {
-        let err = ix.conn.execute(sql, []).unwrap_err();
+        let err = store.conn.execute(sql, []).unwrap_err();
         assert!(err.to_string().contains("append-only"), "{sql}: {err}");
     }
-    assert_eq!(ix.audit(&AuditFilter::default()).unwrap().len(), 2);
+    assert_eq!(store.count().unwrap(), 2);
+
+    // Rejected rows leave nothing behind.
+    for bad in [
+        NewAuditEntry {
+            actor: "".into(),
+            action: "x".into(),
+            ..Default::default()
+        },
+        NewAuditEntry {
+            actor: "a".into(),
+            action: " ".into(),
+            ..Default::default()
+        },
+        NewAuditEntry {
+            actor: "a".into(),
+            action: "x".into(),
+            detail: Some("{not json".into()),
+            ..Default::default()
+        },
+    ] {
+        assert!(store.append(&bad).is_err(), "{bad:?}");
+    }
+    assert_eq!(store.count().unwrap(), 2);
+}
+
+/// `detail` carries the hash chain. It must come back byte for byte: key order, spacing,
+/// number formatting, everything.
+#[test]
+fn audit_detail_is_stored_verbatim() {
+    let mut store = AuditStore::open_in_memory().unwrap();
+    let ugly =
+        "{\"z\":1.0,  \"_chain\":\"abc\",\n\"a\": [1,2 ,3],\"b\":{\"y\":null,\"x\":\"\\u00e9\"}}";
+    let stored = store
+        .append(&NewAuditEntry {
+            actor: "policy".into(),
+            action: "write".into(),
+            subject: None,
+            detail: Some(ugly.into()),
+        })
+        .unwrap();
+    assert_eq!(stored.detail.as_deref(), Some(ugly));
+    assert_eq!(store.last().unwrap().unwrap().detail.as_deref(), Some(ugly));
+    assert_eq!(
+        store.read(&AuditFilter::default()).unwrap()[0]
+            .detail
+            .as_deref(),
+        Some(ugly)
+    );
+    // Sanity: a normalising store would have failed the assertions above.
+    let normalised =
+        serde_json::to_string(&serde_json::from_str::<serde_json::Value>(ugly).unwrap()).unwrap();
+    assert_ne!(normalised, ugly);
+}
+
+/// Two writers, one chain: `append_after` reads the predecessor and appends under one
+/// write lock, so a second process cannot slip in between and fork the chain.
+#[test]
+fn audit_append_after_holds_the_write_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.db");
+    let mut a = AuditStore::open(&path).unwrap();
+    let mut b = AuditStore::open(&path).unwrap();
+    b.set_busy_timeout(std::time::Duration::from_millis(50))
+        .unwrap();
+
+    a.append(&NewAuditEntry {
+        actor: "p".into(),
+        action: "first".into(),
+        ..Default::default()
+    })
+    .unwrap();
+
+    let mut b_result = None;
+    let stored = a
+        .append_after(|last| {
+            let last = last.expect("sees the first row");
+            assert_eq!(last.action, "first");
+            // While the lock is held, the other writer must wait and then fail, never
+            // interleave.
+            b_result = Some(b.append(&NewAuditEntry {
+                actor: "q".into(),
+                action: "intruder".into(),
+                ..Default::default()
+            }));
+            Ok(NewAuditEntry {
+                actor: "p".into(),
+                action: "second".into(),
+                subject: None,
+                detail: Some(format!("{{\"_chain\":\"after-{}\"}}", last.seq)),
+            })
+        })
+        .unwrap();
+    assert_eq!(stored.seq, 2);
+    assert_eq!(stored.detail.as_deref(), Some("{\"_chain\":\"after-1\"}"));
+    let b_result = b_result.unwrap();
+    assert!(b_result.is_err(), "the other writer got in: {b_result:?}");
+    assert!(b_result.unwrap_err().to_string().contains("write lock"));
+
+    // After the lock is released, the other writer continues from the real tail.
+    let third = b
+        .append_after(|last| {
+            assert_eq!(last.unwrap().seq, 2);
+            Ok(NewAuditEntry {
+                actor: "q".into(),
+                action: "third".into(),
+                ..Default::default()
+            })
+        })
+        .unwrap();
+    assert_eq!(third.seq, 3);
+    let actions: Vec<String> = a
+        .read(&AuditFilter::default())
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert_eq!(actions, ["first", "second", "third"]);
+
+    // A failing builder writes nothing and releases the lock.
+    let err = a
+        .append_after(|_| Err(Error::Index("no".into())))
+        .unwrap_err();
+    assert!(err.to_string().contains("no"));
+    assert_eq!(a.count().unwrap(), 3);
+    b.append(&NewAuditEntry {
+        actor: "q".into(),
+        action: "fourth".into(),
+        ..Default::default()
+    })
+    .unwrap();
 }
 
 #[test]
@@ -1125,4 +1271,75 @@ fn recall_over_25k_blocks_within_budget() {
         max < std::time::Duration::from_millis(50),
         "recall budget is 50 ms, worst observed {max:?}"
     );
+}
+
+// ----- the split (SPEC §4): the cache is disposable, the record is not -------------------
+
+#[test]
+fn audit_survives_cache_deletion() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let dir = tempfile::tempdir().unwrap();
+    let cache = dir.path().join("cyberbrain.db");
+    let record = dir.path().join("audit.db");
+    let mut audit = AuditStore::open(&record).unwrap();
+    let row = |action: &str| NewAuditEntry {
+        actor: "cyberbrain-policy".into(),
+        action: action.into(),
+        subject: Some("x".into()),
+        detail: Some(r#"{"_chain":"00"}"#.into()),
+    };
+
+    let before = {
+        let mut ix = Index::open(&cache).unwrap();
+        audit.append(&row("write")).unwrap();
+        // Every index operation that used to write an audit row now writes none: the
+        // record has exactly one writer, and it is not the cache.
+        let n = audit.count().unwrap();
+        ix.set_embedding_profile(&profile_of(&e)).unwrap();
+        for n in corpus() {
+            put(&mut ix, &e, &n);
+        }
+        let erasure = ix.delete_note(&id_for("session-2026-09-05")).unwrap();
+        let change = ix
+            .set_embedding_profile(&EmbeddingProfile {
+                id: "other".into(),
+                dim: 256,
+                model_hash: "h".into(),
+            })
+            .unwrap();
+        ix.clear().unwrap();
+        assert_eq!(
+            audit.count().unwrap(),
+            n,
+            "the index wrote to the audit record"
+        );
+        // The facts are still there for the caller to log.
+        assert_eq!(erasure.counts.vectors, 2);
+        assert_eq!(change.vectors_wiped, 5);
+        audit.append(&row("forget")).unwrap();
+        audit.read(&AuditFilter::default()).unwrap()
+    };
+    assert_eq!(before.len(), 2);
+
+    // The cache is disposable.
+    std::fs::remove_file(&cache).unwrap();
+    for suffix in ["-wal", "-shm"] {
+        let _ = std::fs::remove_file(dir.path().join(format!("cyberbrain.db{suffix}")));
+    }
+    let mut ix = Index::open(&cache).unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    for n in corpus() {
+        put(&mut ix, &e, &n);
+    }
+    assert_eq!(ix.stats().unwrap().notes, 4);
+    assert!(ix.integrity().unwrap().is_empty());
+
+    // The record is not.
+    assert!(record.exists());
+    let after = audit.read(&AuditFilter::default()).unwrap();
+    assert_eq!(after, before, "deleting the cache touched the audit record");
+    drop(audit);
+    let reopened = AuditStore::open(&record).unwrap();
+    assert_eq!(reopened.read(&AuditFilter::default()).unwrap(), before);
+    assert_eq!(reopened.count().unwrap(), 2);
 }
