@@ -9,8 +9,11 @@
 mod app;
 mod audit_bridge;
 mod cli;
+mod hook;
+mod import;
 mod mcp;
 mod render;
+mod serve;
 mod writers;
 
 use app::{App, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};
@@ -124,26 +127,34 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         // audibly on stderr and exits 0 with empty output, which is also what the Windows
         // CI job invoking it through cmd.exe requires.
         Command::Hook { event } => {
-            eprintln!("cyberbrain: hook {event:?} is not wired yet; standing down");
-            return Ok(0);
+            hook::install_never_fail_guard();
+            // Not `read_stdin()`: that returns an error on invalid UTF-8, and a hook that
+            // errors on a malformed payload is a hook that failed the harness (SPEC §9.1).
+            let mut raw = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut raw);
+            let stdin = String::from_utf8_lossy(&raw);
+            let opened = App::open(
+                cli.store.as_deref(),
+                Actor::Hook(hook::event_name(event).into()),
+            );
+            let out = hook::run_with(opened.as_ref().ok(), opened.as_ref().err(), event, &stdin);
+            out.emit();
+            // Always 0. An unreachable store, a malformed payload and an internal error are
+            // all reported through stdout, never through the exit code.
+            return Ok(out.exit_code);
         }
-        Command::Serve { .. } => {
-            return Err(Error::Index(
-                "`serve` is not wired yet; the HTTP API and web UI arrive with the next step"
-                    .into(),
-            ));
+
+        Command::Serve { port, .. } => {
+            let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Operator)?);
+            runtime()?.block_on(serve::serve(app, port))?;
+            return Ok(0);
         }
         Command::Mcp => {
             let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Mcp)?);
             runtime()?.block_on(mcp::serve_stdio(app))?;
             return Ok(0);
         }
-        Command::Import { .. } => {
-            return Err(Error::Index(
-                "`import` is not wired yet; the Markdown importer arrives with the next step"
-                    .into(),
-            ));
-        }
+
         _ => {}
     }
 
@@ -167,11 +178,9 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 out.emit(&r, render::recall)?;
             }
         }
-        Command::Find { symbol, .. } => {
-            return Err(Error::Index(format!(
-                "`find {symbol}` is not available: no crate implements the code index of \
-                 SPEC §10 yet"
-            )));
+        Command::Find { symbol, limit } => {
+            let r = app.find(&symbol, limit)?;
+            out.emit(&r, render::find)?;
         }
         Command::Write {
             ring,
@@ -223,6 +232,22 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         Command::Forget { target, dry_run } => {
             let r = app.forget(&target, dry_run)?;
             out.emit(&r, cyberbrain_policy::erasure::render)?;
+        }
+        Command::Import {
+            plan,
+            accept_pii,
+            dry_run,
+        } => {
+            let mut plan = import::load_plan(&plan)?;
+            if accept_pii {
+                plan.accept_pii = true;
+            }
+            let r = import::import(&app, &plan, dry_run)?;
+            out.emit(&r, import::render)?;
+            // 0 clean, 1 something did not make it, 2 the ledger does not close,
+            // 3 only PII holds remain. The ledger failing is an internal error on purpose:
+            // it means the importer cannot account for the corpus it just read.
+            return Ok(import::exit_code(&r));
         }
         Command::Doctor => {
             let r = app.doctor()?;

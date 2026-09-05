@@ -41,13 +41,19 @@ impl NoteWriter for FsNoteWriter {
 }
 
 /// Validates exactly what the real writer validates before it writes, then writes nothing.
+///
+/// "Exactly" is load-bearing and was not true: this used to compute a path and return it,
+/// skipping the cross-ring name check, the resident cap and the frontmatter rendering. A
+/// dry run therefore reported success for a write the real run would refuse, which is the
+/// worst thing a preview can do — it does not merely fail to warn, it reassures.
+/// [`Store::validate_write`] is now the one implementation both callers use.
 pub struct NoopNoteWriter {
     pub store: Store,
 }
 
 impl NoteWriter for NoopNoteWriter {
     fn write(&self, note: &Note) -> Result<PathBuf> {
-        self.store.note_path(note.front.ring, &note.front.name)
+        self.store.validate_write(note).map(|(path, _)| path)
     }
 
     fn remove(&self, path: &Path) -> Result<bool> {

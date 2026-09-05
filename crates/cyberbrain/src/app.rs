@@ -347,6 +347,147 @@ pub struct ConsentReport {
     pub warnings: Vec<String>,
 }
 
+/// One definition found by `find` (SPEC §10). Line numbers are 1-based and
+/// `start_line..=end_line` is inclusive; `line` names the symbol and lies inside it.
+#[derive(Debug, Clone, Serialize)]
+pub struct FindHit {
+    /// Relative to `FindReport::root`, forward slashes.
+    pub path: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    /// The line that names the symbol; `start_line` may be earlier when doc comments,
+    /// attributes or decorators precede it.
+    pub line: u32,
+    /// `function`, `method`, `class`, `struct`, `enum`, `trait`, `interface`, `type`,
+    /// `impl`, `module`, `namespace`, `macro`, `const`, `static`, `variable`, `table`,
+    /// `view`, `index`, `trigger`, `schema`, `section`, `key`, `heading`.
+    pub kind: &'static str,
+    pub language: &'static str,
+    /// The symbol as found.
+    pub name: String,
+    /// The enclosing named thing (impl target, class, TOML table, parent key path).
+    pub scope: Option<String>,
+    /// `exact`, `case-insensitive`, `contains`.
+    pub matched: &'static str,
+    /// The defining line, trimmed, at most 160 characters.
+    pub snippet: String,
+}
+
+/// What `find` declined to read, by reason (SPEC §14.3: every count names the side of
+/// the boundary it counts). A directory kept out by an ignore rule counts once as an
+/// entry that was not entered; nothing claims to know how many files were inside it.
+#[derive(Debug, Clone, Serialize)]
+pub struct FindSkipped {
+    /// Entries matched by a `.cyberbrainignore` rule, not entered.
+    pub ignored_entries: usize,
+    /// Entries matched by a `.gitignore` rule, not entered.
+    pub gitignored_entries: usize,
+    /// Dot-files and dot-directories, not entered.
+    pub hidden_entries: usize,
+    /// The store directory itself, not entered.
+    pub store_entries: usize,
+    /// Symbolic links, never followed.
+    pub symlinks: usize,
+    /// Lockfiles by name, not read.
+    pub lockfiles: usize,
+    /// Over the size cap, not read.
+    pub too_large: usize,
+    /// A NUL byte in the first 8 KiB, not parsed.
+    pub binary: usize,
+    /// No extractor for the extension, not read.
+    pub unsupported: usize,
+    pub unsupported_by_extension: std::collections::BTreeMap<String, usize>,
+    /// Entries the filesystem refused, with the error.
+    pub unreadable: Vec<SkippedFile>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FindReport {
+    /// The symbol as given.
+    pub symbol: String,
+    /// The name part after scope splitting (`find` for `App::find`).
+    pub name: String,
+    /// The scope part, when the symbol carried one and it selected something.
+    pub scope: Option<String>,
+    /// The tree that was scanned.
+    pub root: PathBuf,
+    /// Best first, at most `limit`.
+    pub hits: Vec<FindHit>,
+    /// Matches before truncation.
+    pub matched_total: usize,
+    pub truncated: bool,
+    pub limit: usize,
+    /// Files whose text reached an extractor.
+    pub files_scanned: usize,
+    pub bytes_scanned: u64,
+    /// Definitions extracted across those files, matched or not.
+    pub definitions_indexed: usize,
+    pub skipped: FindSkipped,
+    /// Root-relative paths of the ignore files honoured, in walk order.
+    pub ignore_files: Vec<String>,
+    /// What the counts cannot say: no ignore file at the root, a symbol defined in
+    /// several files, a scope that matched nothing, a truncated list.
+    pub caveats: Vec<String>,
+    pub elapsed_ms: u128,
+}
+
+impl From<cyberbrain_code::FindResult> for FindReport {
+    fn from(r: cyberbrain_code::FindResult) -> Self {
+        FindReport {
+            symbol: r.symbol,
+            name: r.name,
+            scope: r.scope,
+            root: r.root,
+            hits: r
+                .hits
+                .into_iter()
+                .map(|h| FindHit {
+                    path: h.def.path,
+                    start_line: h.def.start_line,
+                    end_line: h.def.end_line,
+                    line: h.def.line,
+                    kind: h.def.kind.as_str(),
+                    language: h.def.language.as_str(),
+                    name: h.def.name,
+                    scope: h.def.scope,
+                    matched: h.matched.as_str(),
+                    snippet: h.def.snippet,
+                })
+                .collect(),
+            matched_total: r.matched_total,
+            truncated: r.truncated,
+            limit: r.limit,
+            files_scanned: r.files_scanned,
+            bytes_scanned: r.bytes_scanned,
+            definitions_indexed: r.definitions_indexed,
+            skipped: FindSkipped {
+                ignored_entries: r.skipped.ignored_entries,
+                gitignored_entries: r.skipped.gitignored_entries,
+                hidden_entries: r.skipped.hidden_entries,
+                store_entries: r.skipped.excluded_entries,
+                symlinks: r.skipped.symlinks,
+                lockfiles: r.skipped.lockfiles,
+                too_large: r.skipped.too_large,
+                binary: r.skipped.binary,
+                unsupported: r.skipped.unsupported,
+                unsupported_by_extension: r.skipped.unsupported_by_extension,
+                unreadable: r
+                    .skipped
+                    .unreadable
+                    .into_iter()
+                    .map(|(path, reason)| SkippedFile {
+                        path: PathBuf::from(path),
+                        reason,
+                    })
+                    .collect(),
+            },
+            ignore_files: r.ignore_files,
+            caveats: r.caveats,
+            elapsed_ms: r.elapsed.as_millis(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Lazy pieces
 
@@ -1456,6 +1597,43 @@ impl App {
         })
     }
 
+    // ----- find --------------------------------------------------------------------------
+
+    /// The tree `find` scans. The store lives at `<project>/.cyberbrain` by default
+    /// (SPEC §4), so the project is the store's parent. A store placed elsewhere with
+    /// `--store` says nothing about where the code is; the working directory is the
+    /// only other candidate and it is what an agent's hooks run in. The report names
+    /// the root it used either way, so the caller can see which tree answered.
+    fn code_root(&self) -> PathBuf {
+        let is_default_store = self
+            .root
+            .file_name()
+            .is_some_and(|n| n == DEFAULT_STORE_DIR);
+        match (is_default_store, self.root.parent()) {
+            (true, Some(parent)) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            (true, Some(_)) => PathBuf::from("."),
+            _ => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        }
+    }
+
+    /// `find <symbol>` (SPEC §10): line ranges of the definitions of `symbol` in the
+    /// project tree, so the agent reads a slice instead of a file.
+    ///
+    /// Synchronous and index-free: hooks and MCP call it and neither has a runtime to
+    /// spare, and a scan of the tree as it is now cannot hand back a stale range. The
+    /// store itself is excluded from the walk; its notes belong to `recall`. Nothing in
+    /// `cyberbrain.toml` configures the code index yet (see the report), so the crate's
+    /// defaults apply: `.cyberbrainignore` and `.gitignore` honoured, hidden entries
+    /// skipped, files over 1 MiB not read.
+    pub fn find(&self, symbol: &str, limit: usize) -> Result<FindReport> {
+        let opts = cyberbrain_code::FindOptions {
+            exclude: vec![self.root.clone()],
+            ..cyberbrain_code::FindOptions::default()
+        };
+        let result = cyberbrain_code::find(&self.code_root(), symbol, limit, &opts)?;
+        Ok(FindReport::from(result))
+    }
+
     // ----- policy ------------------------------------------------------------------------
 
     pub fn policy_egress(&self) -> Vec<EgressEntry> {
@@ -1739,5 +1917,96 @@ impl SubjectSource for IndexSubjectSource<'_> {
                 text,
             })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod find_tests {
+    use super::*;
+
+    /// The seam `find` ties: the tree scanned is the store's parent, the store itself is
+    /// kept out of it, and the report serialises with the field names the CLI, HTTP and
+    /// MCP surfaces all print.
+    #[test]
+    fn find_scans_the_project_and_not_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("proj");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::write(
+            project.join("src/lib.rs"),
+            "/// Greets.\npub fn greet() -> &'static str {\n    \"hi\"\n}\n\nfn main() {\n    greet();\n}\n",
+        )
+        .unwrap();
+        let store = project.join(DEFAULT_STORE_DIR);
+        App::init(&store, &Actor::Cli).unwrap();
+        // A note whose heading is the same word must not come back from `find`.
+        std::fs::write(store.join("notes/r2/greet.md"), "# greet\n\nnot code\n").unwrap();
+
+        let app = App::open(Some(&store), Actor::Cli).unwrap();
+        let r = app.find("greet", 10).unwrap();
+        assert_eq!(r.root, std::path::absolute(&project).unwrap());
+        assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+        let h = &r.hits[0];
+        assert_eq!(
+            (
+                h.path.as_str(),
+                h.kind,
+                h.language,
+                h.start_line,
+                h.line,
+                h.end_line,
+                h.matched
+            ),
+            ("src/lib.rs", "function", "rust", 1, 2, 4, "exact")
+        );
+        assert_eq!(
+            r.skipped.store_entries, 1,
+            "the store is excluded, not merely hidden"
+        );
+        assert_eq!(r.files_scanned, 1);
+        assert!(!r.truncated);
+        assert!(
+            r.caveats.iter().any(|c| c.contains(".cyberbrainignore")),
+            "no ignore file in the project: the report must say so: {:?}",
+            r.caveats
+        );
+
+        let v = serde_json::to_value(&r).unwrap();
+        for key in [
+            "symbol",
+            "name",
+            "scope",
+            "root",
+            "hits",
+            "matched_total",
+            "truncated",
+            "limit",
+            "files_scanned",
+            "bytes_scanned",
+            "definitions_indexed",
+            "skipped",
+            "ignore_files",
+            "caveats",
+            "elapsed_ms",
+        ] {
+            assert!(v.get(key).is_some(), "FindReport lacks `{key}`");
+        }
+        for key in [
+            "path",
+            "start_line",
+            "end_line",
+            "line",
+            "kind",
+            "language",
+            "name",
+            "scope",
+            "matched",
+            "snippet",
+        ] {
+            assert!(v["hits"][0].get(key).is_some(), "FindHit lacks `{key}`");
+        }
+
+        let e = app.find("", 10).unwrap_err();
+        assert_eq!(e.exit_code(), 1);
     }
 }

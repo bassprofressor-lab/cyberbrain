@@ -7,10 +7,11 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && vite build",
+    "build": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json && vite build && node scripts/stamp-transport.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
-    "licenses": "node scripts/check-licenses.mjs"
+    "licenses": "node scripts/check-licenses.mjs",
+    "build:mock": "VITE_API=mock npm run build"
   },
   "dependencies": {
     "react": "^19.2.8",

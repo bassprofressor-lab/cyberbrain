@@ -128,7 +128,14 @@ wrong data, but two extra characters are a cheap way to avoid a baffling scan fa
   audit.db                   # SQLite: the audit log. A RECORD. Not disposable.
   cyberbrain.toml            # configuration
   models/                    # model artefacts, content-addressed
+  sessions/                  # per-session hook state. Neither notes nor cache.
 ```
+
+`sessions/` holds what a hook must remember between the events of one session: which
+invariants were injected, how many turns and compactions have happened. It sits outside
+`notes/` deliberately, so it is invisible to `scan`, to `doctor` and to the resident cap.
+It is bookkeeping about a session, not knowledge about the project, and letting it into the
+notes tree would put the tool's own noise into the operator's memory.
 
 The `notes/` tree contains only Markdown. Deleting `cyberbrain.db` must be non-destructive:
 `cyberbrain scan` rebuilds it completely.
@@ -338,6 +345,16 @@ API did not exist. It does now, and these are its rules:
 single source of truth for them. Restating the shapes here would create a second one, and
 this specification has already been bitten by that three times in one day.
 
+**With one precedence rule, because that authority was over-granted.** Where a shape is
+already fixed by a `serde` derive in a Rust crate, **the Rust type wins and `types.ts` is
+wrong**. `types.ts` was written against an assumed contract before the server existed, and
+it guessed at several things the crates had already decided: it lists three `PiiState`
+values where core serialises four (`unscanned` is the default and the compliance layer turns
+on the difference), and it invents an audit vocabulary that the log does not speak. A
+front end cannot define the wire form of a type it does not own. `types.ts` remains
+authoritative for everything the crates do not define — request shapes, view models,
+anything assembled purely for the screen.
+
 Rules the shapes must obey:
 
 - Loopback socket, same origin, JSON, no cookies, no auth. Binding anywhere but loopback is
@@ -364,20 +381,21 @@ Rules the shapes must obey:
 
 ### 8.2 Composition
 
-Six crates, none of which knows about more than one layer below it. The binary is the only
-place that knows about all of them, and it is where every seam is tied. This section is the
-wiring contract; a crate that reaches around it is a bug regardless of what it achieves.
+Seven crates, none of which knows about more than one layer below it. The binary is the
+only place that knows about all of them, and it is where every seam is tied. This section
+is the wiring contract; a crate that reaches around it is a bug regardless of what it
+achieves.
 
 ```
-                       cyberbrain (binary)
-                              │  owns every seam below
-        ┌────────────┬────────┴───────┬─────────────┬────────────┐
-        │            │                │             │            │
-     policy        index            embed          llm         (ui, embedded)
-        │            │                │             │
-        └────────────┴────────────────┴─────────────┘
-                              core
-                    types, traits, errors, config
+                        cyberbrain (binary)
+                               │  owns every seam below
+   ┌──────────┬──────────┬─────┴────┬──────────┬──────────────┐
+   │          │          │          │          │              │
+ policy     index      embed       llm       code      (ui, embedded)
+   │          │          │          │          │
+   └──────────┴──────────┴──────────┴──────────┘
+                        core
+              types, traits, errors, config
 ```
 
 Startup order, and why it is this order:
@@ -430,8 +448,24 @@ Hard requirements:
 - **A hook must never fail the harness.** Any internal error is caught, logged to the store,
   and the hook exits 0 with empty output.
 - **Standing down must be announced.** If Cyberbrain is installed but disabled for a session,
-  `session-start` says so. Silent inaction is indistinguishable from a broken hook, and the
-  agent has no way to know which protocol applies.
+  `session-start` says so, and says what would change it. Silent inaction is
+  indistinguishable from a broken hook, and the agent has no way to know which protocol
+  applies. The switch is the environment variable `CYBERBRAIN_DISABLED`, read fresh on each
+  invocation: a stored setting drifts from what is installed, and two sessions in one
+  project would fight over it.
+
+- **`pre-compact` cannot inject anything, and this specification was wrong to say it could.**
+  The harness gives that event no context channel; nothing written there survives into the
+  compacted conversation. What actually carries knowledge across a compaction is the
+  `session-start` that follows, which arrives marked as coming from one. The event is still
+  worth handling — it counts, and it can address the human — but the promise of injection
+  described something the interface does not offer.
+
+- **The release profile must not abort on panic.** The never-fail rule is implemented by
+  catching a panic and exiting 0, and `panic = "abort"` leaves nothing to catch. A binary
+  built that way takes down the agent it serves, in release builds only, which is the worst
+  possible place for that difference to live. Unwinding costs a little size and speed; the
+  guarantee is worth more.
 - **Windows: the installed hook command must work when invoked through `cmd.exe`.** Paths with
   spaces, no POSIX shell syntax, no assumption of a login shell. Verified by a Windows CI job
   that actually invokes the installed hook, not one that only builds.
@@ -696,6 +730,24 @@ Dark by default, light available, honouring `prefers-color-scheme`. Keyboard-fir
 focus, result navigation and citation copy must all work without a mouse.
 
 The UI is a client of the same API the CLI uses. No logic lives only in the frontend.
+
+**The embedded bundle must be a real one.** `rust-embed` bakes `ui/dist` into the release
+binary, and a mock bundle renders fabricated compliance figures — "nothing has left this
+machine", audit rows, egress counts — in the one screen whose whole purpose is to be
+believed. The MOCK DATA badge guards a developer looking at the page and guards nothing
+about a binary handed to somebody else.
+
+So the production build defaults to the real transport and mock has to be asked for; the
+build stamps `dist/transport.txt` with which one it was; and the crate's build script
+**refuses a release build** that would embed anything else, or no UI at all. A comment in
+the source does not survive into `dist/`, and grepping a minified bundle for a marker is
+guesswork, which is why the stamp is a file.
+
+The CSP header `serve` sends is **derived from the built page's own `<meta>`** rather than
+written out by hand, so the inline-script hash cannot drift from the bundle it authorises.
+That derivation immediately caught a real bug: the bundler HTML-escapes the meta content,
+so a hand-copied header would have carried `&#39;` where `'` belonged and blocked every
+script on the page.
 
 ---
 

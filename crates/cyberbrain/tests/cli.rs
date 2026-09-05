@@ -888,10 +888,8 @@ fn export_gives_the_file_back_or_a_json_view() {
     // --quiet prints nothing and still exits by the outcome.
     let out = cb.run(&["--quiet", "status"]);
     assert!(out.stdout.is_empty() && out.status.success());
-    // Unwired commands are honest about it; a hook still never fails the harness.
-    let out = cb.run(&["serve"]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(String::from_utf8_lossy(&out.stderr).contains("not wired yet"));
+    // A hook never fails the harness, whatever it is handed (SPEC §9.1). `serve` is not
+    // exercised here: it binds and blocks by design, and it has its own tests.
     let out = cb.run(&["hook", "pre-tool-use"]);
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());

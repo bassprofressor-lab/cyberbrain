@@ -1,0 +1,126 @@
+# Default import plan for a tree of operator notes (the `.wolf/` shape found on this
+# machine). Copy it next to the tree, adjust, and run `cyberbrain import --plan <file>`.
+#
+# Rules: [[skip]] rules are evaluated first, then [[group]] rules in order; the first
+# match wins. A file that matches nothing is reported as UNMAPPED and fails the run.
+# A skipped file is counted and listed under its rule; it is never silently dropped.
+
+version = 1
+root = "."
+tags = ["imported"]
+
+# ---- what is not a note ----------------------------------------------------------------
+
+[[skip]]
+paths = ["backups/**", "*.bak", "*.bak-*", "*.bak.*", "*.bak-pre-*"]
+reason = "backups and .bak copies of files that are imported from their live version"
+
+[[skip]]
+paths = ["hooks/**", "*.js", "*.mjs", "*.pid", "*.log", "*.vec", "dashboard-token", "remote-token", ".gitignore", "*.jpg", "*.png", "designqc-captures/**"]
+reason = "tool code, runtime state, logs, images: not notes"
+
+[[skip]]
+paths = ["*.json"]
+reason = "JSON state of the previous tool (bug log, config, cron state, symbol graphs); not Markdown, imported separately if at all"
+
+# ---- ring 0: invariants ------------------------------------------------------------------
+
+[[group]]
+name = "invariants"
+paths = ["identity.md"]
+ring = 0
+kind = "knowledge"
+tags = ["identity"]
+
+# ---- ring 1: operating protocol -----------------------------------------------------------
+# Rings 0 and 1 share an 8k-token cap and are injected into every session; only short
+# protocol files belong here. STATUS.md (a 200 KB retired handoff log) does not fit and
+# goes to ring 3 below.
+
+[[group]]
+name = "protocol"
+paths = ["OPENWOLF.md", "ENGINE.md"]
+ring = 1
+kind = "reference"
+tags = ["protocol"]
+
+# ---- ring 2: curated knowledge -----------------------------------------------------------
+
+[[group]]
+name = "curated"
+paths = ["cerebrum.md"]
+ring = 2
+kind = "knowledge"
+split = "heading"
+heading_level = 3
+note_name = "{stem}-{heading}"
+collisions = "hash"   # the same heading recurs (appended batches); content-hash suffix, each one reported
+tags = ["cerebrum"]
+
+[[group]]
+name = "do-not-repeat"
+paths = ["DO-NOT-REPEAT.md"]
+ring = 2
+kind = "lesson"
+split = "heading"
+heading_level = 3
+note_name = "{stem}-{heading}"
+tags = ["do-not-repeat"]
+
+# Pre-registered evidence: the hashes file rides along so the chain can be re-checked.
+[[group]]
+name = "prereg"
+paths = ["PREREG_*.md", "PREREG_hashes.txt"]
+ring = 2
+kind = "reference"
+tags = ["prereg", "evidence"]
+
+[[group]]
+name = "notes"
+paths = ["cfetch-AGENT.draft.md", "cfetch-umzug-checkliste.md"]
+ring = 2
+kind = "knowledge"
+
+# ---- ring 3: session records ---------------------------------------------------------------
+
+[[group]]
+name = "sessions"
+paths = ["memory.md"]
+ring = 3
+kind = "session"
+split = "heading"
+heading_level = 2
+note_name = "{stem}-{heading}"
+collisions = "hash"   # the same heading recurs (appended batches); content-hash suffix, each one reported
+tags = ["memory"]
+
+[[group]]
+name = "status-log"
+paths = ["STATUS.md"]
+ring = 3
+kind = "session"
+split = "heading"
+heading_level = 2
+note_name = "{stem}-{heading}"
+collisions = "hash"   # the same heading recurs (appended batches); content-hash suffix, each one reported
+tags = ["status"]
+
+# ---- ring 4: imported, unverified ------------------------------------------------------------
+
+[[group]]
+name = "proposals"
+paths = ["proposals/*.md"]
+ring = 4
+kind = "reference"
+note_name = "{dir}-{stem}"
+tags = ["proposal", "unverified"]
+
+[[group]]
+name = "generated"
+paths = ["anatomy.md", "reframe-frameworks.md"]
+ring = 4
+kind = "reference"
+tags = ["generated"]
+
+# Anything else that is Markdown or text and matched no rule above is still UNMAPPED and
+# fails the run. Add it to a group or to a skip rule with a reason.

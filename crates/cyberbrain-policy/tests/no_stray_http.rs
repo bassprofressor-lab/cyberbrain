@@ -139,10 +139,33 @@ fn http_clients_are_built_only_where_an_egress_gate_is_held() {
         root.display()
     );
 
+    // Test-only code is out of scope, and the reason is narrow: this rule protects the
+    // paths that exist in the shipped binary, and nothing under `#[cfg(test)]` is in it. A
+    // test connecting to its own loopback server is not an egress path.
+    //
+    // The exclusion is counted and printed rather than applied quietly. A check that
+    // silently stops looking at part of the tree still reports "ok", which is exactly the
+    // shape of failure this whole file exists to prevent.
+    let is_test_only = |f: &std::path::PathBuf| {
+        let p = slash(f);
+        p.ends_with("/tests.rs") || p.contains("/tests/") || p.ends_with("/benches.rs")
+    };
+    let skipped: Vec<String> = files
+        .iter()
+        .filter(|f| is_test_only(f))
+        .map(|f| slash(f))
+        .collect();
+    println!(
+        "scanned {} file(s); {} skipped as test-only: {}",
+        files.len() - skipped.len(),
+        skipped.len(),
+        skipped.join(", ")
+    );
+
     let mut offences = Vec::new();
     for f in files
         .iter()
-        .filter(|f| !slash(f).ends_with(TRANSPORT) && !slash(f).ends_with("tests/no_stray_http.rs"))
+        .filter(|f| !slash(f).ends_with(TRANSPORT) && !is_test_only(f))
     {
         let src = fs::read_to_string(f).unwrap();
         let lines: Vec<&str> = src.lines().collect();

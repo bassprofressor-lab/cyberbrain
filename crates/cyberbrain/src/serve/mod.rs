@@ -1,0 +1,156 @@
+//! `cyberbrain serve`: the HTTP API at `/api/v1` and the embedded web UI (SPEC §8.1, §13).
+//!
+//! A thin adapter over [`App`], like every other front end (SPEC §8.2). Nothing here
+//! reaches around it: every route is one or two `App` calls plus the reshaping that
+//! `ui/src/api/types.ts` asks for.
+//!
+//! The rules this module holds, and where:
+//!
+//! - **Loopback only, not configurable** ([`serve`]). There is no authentication because
+//!   there is no remote access to authenticate; the two facts are tied together by the
+//!   absence of any bind-address parameter.
+//! - **One failure taxonomy** ([`error`]): `exit_code` on the wire is
+//!   `cyberbrain_core::Error::exit_code()`.
+//! - **The two typed outcomes are not errors** ([`notes`]): a held write and a stale
+//!   `expected_updated` are 409s carrying the findings and the hold id, so the UI can offer
+//!   the operator their choices.
+//! - **`?dry_run=true` swaps the writers, not the path**: every mutating route passes it
+//!   straight into `App`, which is where the no-op writers live.
+//! - **CSP as a header** ([`assets`]), including `frame-ancestors 'none'`, on every
+//!   response — API and asset alike.
+
+mod assets;
+mod error;
+mod extract;
+mod holds;
+mod notes;
+mod ops;
+mod policy;
+mod wire;
+
+#[cfg(test)]
+mod tests;
+
+use crate::app::App;
+use axum::Router;
+use axum::http::{HeaderValue, header};
+use axum::routing::{get, post};
+use cyberbrain_core::{Error, Result};
+use error::{ApiError, ApiResult};
+use holds::Holds;
+use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use tower_http::set_header::SetResponseHeaderLayer;
+
+/// When the last scans ran through this process. `App` keeps no such timestamp; this is
+/// the honest scope of what `status.index.last_scan` can say.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ScanTimes {
+    pub last_scan: Option<jiff::Timestamp>,
+    pub last_full_scan: Option<jiff::Timestamp>,
+}
+
+pub struct ServeState {
+    pub app: Arc<App>,
+    pub holds: Holds,
+    pub scans: Mutex<ScanTimes>,
+}
+
+/// Run a synchronous `App` call off the async runtime's threads.
+pub(crate) async fn blocking<T, F>(f: F) -> ApiResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> ApiResult<T> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| ApiError::internal(format!("request worker failed: {e}")))?
+}
+
+async fn no_store(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut resp = next.run(req).await;
+    resp.headers_mut()
+        .entry(header::CACHE_CONTROL)
+        .or_insert(HeaderValue::from_static("no-store"));
+    resp
+}
+
+/// The router, for [`serve`] and for in-process tests.
+pub fn router(app: Arc<App>) -> Router {
+    let state = Arc::new(ServeState {
+        app,
+        holds: Holds::new(),
+        scans: Mutex::new(ScanTimes::default()),
+    });
+    let api = Router::new()
+        .route("/status", get(ops::status))
+        .route("/recall", get(ops::recall))
+        .route("/recall/{citation}", get(ops::expand))
+        .route("/notes", get(notes::list_notes).post(notes::post_note))
+        .route(
+            "/notes/{target}",
+            get(notes::get_note)
+                .put(notes::put_note)
+                .delete(notes::delete_note),
+        )
+        .route("/holds/{id}", post(notes::resolve_hold))
+        .route("/graph", get(notes::graph))
+        .route("/policy/egress", get(policy::egress))
+        .route("/policy/audit", get(policy::audit))
+        .route("/policy/pii", get(policy::pii))
+        .route("/policy/retention", get(policy::retention))
+        .route("/policy/retention/apply", post(policy::retention_apply))
+        .route("/policy/model-card", get(policy::model_cards))
+        .route("/policy/subject", get(policy::subject))
+        .route("/doctor", get(ops::doctor))
+        .route("/scan", post(ops::scan))
+        .layer(axum::middleware::from_fn(no_store))
+        .with_state(state);
+    Router::new()
+        .nest("/api/v1", api)
+        .fallback(assets::fallback)
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            assets::csp_header(),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+}
+
+/// Bind `127.0.0.1:port` and serve until the process ends. The address is not a
+/// parameter on purpose (SPEC §8.2): opening the bind without adding authentication is
+/// the accident this signature prevents.
+pub async fn serve(app: Arc<App>, port: u16) -> Result<()> {
+    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| Error::Config(format!("cannot bind {addr}: {e}")))?;
+    let bound = listener
+        .local_addr()
+        .map_err(|e| Error::Config(format!("cannot read the bound address: {e}")))?;
+    if !assets::bundle_present() {
+        eprintln!(
+            "cyberbrain serve: the web UI bundle is not embedded (ui/dist was missing at build time); the API works, the page will 404"
+        );
+    }
+    if assets::meta_csp().is_none() {
+        eprintln!(
+            "cyberbrain serve: the built page carries no CSP <meta>; sending a strict fallback header, the inline theme bootstrap will be blocked"
+        );
+    }
+    println!(
+        "cyberbrain serve: http://{bound}/  (loopback only, no authentication; API at /api/v1)"
+    );
+    axum::serve(listener, router(app))
+        .await
+        .map_err(|e| Error::Config(format!("serve: {e}")))
+}

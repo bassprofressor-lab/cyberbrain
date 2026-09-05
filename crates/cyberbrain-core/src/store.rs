@@ -322,7 +322,14 @@ impl Store {
     /// Refuses when the same name exists in a different ring (that is a move, and a move
     /// must be explicit: use [`Store::remove`] first). Enforces the resident cap for
     /// rings 0 and 1 before any byte is written.
-    pub fn write(&self, note: &Note) -> Result<PathBuf> {
+    /// Everything [`Store::write`] checks before it touches the disk, and the rendered
+    /// text it would have written.
+    ///
+    /// It is a separate function so that a dry run can call exactly this and nothing else.
+    /// The alternative — a no-op writer that skips the checks — passes a dry run and then
+    /// fails the real one halfway through, which is the worst possible outcome for a
+    /// preview: it told you it was fine.
+    pub fn validate_write(&self, note: &Note) -> Result<(PathBuf, String)> {
         let ring = note.front.ring;
         let name = &note.front.name;
         let target = self.note_path(ring, name)?;
@@ -354,6 +361,11 @@ impl Store {
         }
 
         let text = frontmatter::render(&note.front, &note.body)?;
+        Ok((target, text))
+    }
+
+    pub fn write(&self, note: &Note) -> Result<PathBuf> {
+        let (target, text) = self.validate_write(note)?;
         write_atomic(&target, text.as_bytes())?;
         Ok(target)
     }

@@ -27,8 +27,15 @@ opt-level = 3
 lto = "fat"
 codegen-units = 1
 strip = true
-panic = "abort"
+
+# `panic = "abort"` was here and it quietly defeated SPEC §9.1. A hook must never fail the
+# harness, which is implemented by catching a panic and exiting 0 — and `abort` means there
+# is nothing to catch. The binary would have taken down the agent it serves, in release
+# builds only, which is the worst place for a difference like that to live.
+#
+# Unwinding costs some binary size and a little speed. The guarantee is worth more: a memory
+# tool that can kill the session it is remembering for gets uninstalled the first time.
+panic = "unwind"
 
 [profile.bench]
 inherits = "release"
-panic = "unwind"

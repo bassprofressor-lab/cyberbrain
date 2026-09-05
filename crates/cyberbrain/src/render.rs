@@ -2,8 +2,8 @@
 //! entirely so the two cannot disagree about the numbers, only about the prose.
 
 use crate::app::{
-    ConsentReport, DoctorReport, EmbedderSummary, Expanded, InitReport, NoteView, RetentionReport,
-    ScanReport, StatusReport, WrittenNote,
+    ConsentReport, DoctorReport, EmbedderSummary, Expanded, FindReport, InitReport, NoteView,
+    RetentionReport, ScanReport, StatusReport, WrittenNote,
 };
 use cyberbrain_core::RecallResult;
 use cyberbrain_policy::{EgressEntry, ModelCard};
@@ -448,4 +448,75 @@ pub fn consent(r: &ConsentReport) -> String {
         let _ = writeln!(s, "  note: {w}");
     }
     s
+}
+
+/// `find` (SPEC §10). The path and line range come first on every line, because the whole
+/// point of this command is that the caller reads a slice instead of a file, and the slice
+/// coordinates are what they need to paste into a reader.
+pub fn find(r: &FindReport) -> String {
+    let mut o = String::new();
+    if r.hits.is_empty() {
+        o.push_str(&format!("no definition of `{}` found\n", r.symbol));
+    }
+    for h in &r.hits {
+        o.push_str(&format!(
+            "{}:{}-{}  {} {}{}\n",
+            h.path,
+            h.start_line,
+            h.end_line,
+            h.kind,
+            h.scope
+                .as_ref()
+                .map(|s| format!("{s}::"))
+                .unwrap_or_default(),
+            h.name,
+        ));
+        for line in h.snippet.lines().take(3) {
+            o.push_str(&format!("     {line}\n"));
+        }
+    }
+
+    // Named by the side of the boundary they count (SPEC §14.3): what was read, and then
+    // what was passed over and why. A bare total would hide the skips entirely, and the
+    // skips are the interesting half — a vendored copy silently outranking live source is
+    // the failure §10 exists to prevent.
+    o.push_str(&format!(
+        "{} of {} match(es) shown; {} files scanned, {} definitions indexed; {} ms\n",
+        r.hits.len(),
+        r.matched_total,
+        r.files_scanned,
+        r.definitions_indexed,
+        r.elapsed_ms,
+    ));
+
+    let s = &r.skipped;
+    let skips = [
+        (s.ignored_entries, "by .cyberbrainignore"),
+        (s.gitignored_entries, "by .gitignore"),
+        (s.hidden_entries, "hidden"),
+        (s.store_entries, "the store itself"),
+        (s.symlinks, "symlinks, never followed"),
+        (s.lockfiles, "lockfiles"),
+        (s.too_large, "over the size cap"),
+        (s.binary, "binary"),
+    ];
+    let listed: Vec<String> = skips
+        .iter()
+        .filter(|(n, _)| *n > 0)
+        .map(|(n, why)| format!("{n} {why}"))
+        .collect();
+    if !listed.is_empty() {
+        o.push_str(&format!("not entered: {}\n", listed.join(", ")));
+    }
+    for u in &s.unreadable {
+        o.push_str(&format!(
+            "unreadable: {} ({})\n",
+            u.path.display(),
+            u.reason
+        ));
+    }
+    for c in &r.caveats {
+        o.push_str(&format!("caveat: {c}\n"));
+    }
+    o
 }
