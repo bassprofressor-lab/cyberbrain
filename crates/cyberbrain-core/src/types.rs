@@ -223,5 +223,12 @@ pub trait Embedder: Send + Sync {
     fn profile_id(&self) -> &str;
 
     /// L2-normalised vectors, one per input, in input order.
+    ///
+    /// Degenerate input is the one exception to normalisation (SPEC §6.3): an empty string,
+    /// or one whose every token is unknown, yields the **all-zero vector**. Not an error,
+    /// because a single empty block must not abort a batch of thousands, and not a NaN,
+    /// because a NaN reaching cosine similarity silently poisons every ranking it touches.
+    /// A caller scoring vectors must treat an all-zero vector as "no semantic signal" and
+    /// skip it rather than divide by its norm.
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
 }

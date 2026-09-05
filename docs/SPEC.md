@@ -148,8 +148,8 @@ Tables (indicative, implementer may refine):
 sufficient: bind mounts and archive extraction produce identical mtimes for changed content.
 Changed notes have their blocks, vectors and links replaced transactionally.
 
-**Embedding profile.** `meta` records the model identity, dimension and pooling used to
-produce the stored vectors. If the configured model no longer matches, semantic search is
+**Embedding profile.** `meta` records the single opaque `profile_id` (§6.4) that produced the
+stored vectors, and nothing derived from it. If the configured model no longer matches, semantic search is
 **disabled with a loud message** until reindexed. Silently comparing vectors from two
 different models is the worst possible failure: it degrades quality without any error.
 
@@ -178,8 +178,48 @@ model (BGE / E5 class). Still pure Rust, still cross-compiles, optional CUDA/Met
 CPU but introduces a C++ library that breaks the single-static-binary property and complicates
 the Windows build. If a user needs it, they use the `candle` feature or an external service.
 
-Model artefacts are content-addressed by hash, fetched once on explicit consent (§12), and
-verified on every load. A hash mismatch is a hard failure, not a warning.
+### 6.1 Artefact identity
+
+A model is two files: `model.safetensors` holding a 2-D `[vocab, dim]` tensor named
+`embeddings` (F32, F16, BF16 or I8), and `tokenizer.json`. An **artefact manifest** carries a
+blake3 digest of each. Both are hashed before parsing and the bytes that were hashed are the
+bytes that get parsed. A mismatch is a hard failure, never a warning.
+
+The tokenizer is hashed alongside the weights because a different vocabulary maps the same
+text onto different rows of the same matrix: it changes what a vector means exactly as much
+as changed weights do.
+
+### 6.2 Fixed inference settings
+
+These four settings change the resulting vector, so they are part of the format contract and
+not configuration: **no special tokens**, **unknown tokens dropped rather than pooled**,
+**mean pooling**, **L2 normalisation**. Any deviation is a different embedding profile.
+
+### 6.3 Degenerate input
+
+Empty input, or input whose every token is unknown, yields the **all-zero vector**, never
+NaN and never an error. An error would abort a whole batch over one empty block, and a NaN
+reaching cosine similarity silently poisons every ranking it touches. The vector carries a
+"no semantic signal" marker and the index skips semantic scoring for it.
+
+### 6.4 Profile identity
+
+`profile_id` is a single opaque string folding together weights hash, tokenizer hash,
+dimension and pooling. It is the **only** identity the index stores (§5); storing model name
+and dimension separately alongside it would create two sources of truth that can disagree.
+
+### 6.5 Load cost on the hot path
+
+Hashing and parsing a real artefact costs tens of milliseconds, which does not fit the hook
+budget in §9.1. Two rules follow, and they are requirements, not optimisations:
+
+- **No hook on the hot path loads the embedder.** `pre-tool-use`, `post-tool-use`,
+  `user-prompt-submit` and `stop` perform no semantic work at all. Only explicit `recall`
+  and `scan` do.
+- Verification is **staleness-checked, not repeated blindly**: size and mtime are recorded
+  next to the digest, a load re-hashes only when either changed, and the weights are mapped
+  rather than copied. The guarantee is unchanged — any actual change to the file triggers a
+  full re-hash — while the steady-state cost falls to near zero.
 
 ---
 
@@ -446,10 +486,13 @@ requirements on Cyberbrain, derived from observed failures, and contain no third
 - **The shipped binary has no runtime dependencies.** No system SQLite, no OpenSSL, no model
   server, no node runtime. This is the property that matters to a user and it is verified in
   CI by running the release binary on a bare image.
-- Build-time C/C++ is permitted but stays enumerated and justified. Current footprint:
-  `cc` and `esaxx-rs` (C++, an unconditional dependency of `tokenizers`, used only by a
-  trainer we never call) and `cc` for bundled SQLite. `cmake`, `aws-lc-sys`, `openssl-sys`
-  and `native-tls` are banned outright in `deny.toml`.
+- Build-time C is permitted but stays enumerated and justified. Current footprint: **`cc`,
+  for bundled SQLite, and nothing else.** `tokenizers` declares `esaxx-rs` with
+  `default-features = false`, so its `cpp` feature is off and that dependency is pure Rust;
+  a C++ archive appearing in a target directory means a stale artefact from an earlier
+  feature resolution, not a live dependency. `cmake`, `aws-lc-sys`, `openssl-sys` and
+  `native-tls` are banned outright in `deny.toml`. Any addition to this list is a decision,
+  not an accident: CI fails on an unlisted `cc`/`cmake` build script.
 - Every dependency that performs network I/O of its own is disqualified, because it defeats
   the egress register (§12.1). `hf-hub` was removed for exactly this reason, which is why
   static embedding inference is implemented in-tree (§6) rather than taken from a crate.
