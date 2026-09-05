@@ -268,11 +268,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             }
         }
         Command::Policy { command } => return run_policy(&app, command, out),
-        Command::Init { .. }
-        | Command::Hook { .. }
-        | Command::Serve { .. }
-        | Command::Mcp
-        | Command::Import { .. } => {
+        Command::Init { .. } | Command::Hook { .. } | Command::Serve { .. } | Command::Mcp => {
             unreachable!("handled before the store was opened")
         }
     }
