@@ -1,0 +1,15 @@
+[package]
+name = "cyberbrain-code"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Cyberbrain: the code index behind `find`"
+
+[dependencies]
+cyberbrain-core.workspace = true
+ignore = "0.4.33"
+memchr = "2.8.3"
+regex = "1.13.1"
