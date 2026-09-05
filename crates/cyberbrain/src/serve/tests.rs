@@ -772,6 +772,26 @@ async fn csp_is_a_header_with_frame_ancestors_on_api_and_asset_responses() {
     assert_eq!(h.get(header::CACHE_CONTROL).unwrap(), "no-store");
     assert_eq!(h.get(header::X_CONTENT_TYPE_OPTIONS).unwrap(), "nosniff");
 
+    // The API half above holds in every build. The rest needs a page to serve, and
+    // without the `ui` feature there is none — that is the configuration a published
+    // crate installs under, and it is what CI runs.
+    #[cfg(feature = "ui")]
+    csp_on_the_page(&fx, &csp).await;
+    #[cfg(not(feature = "ui"))]
+    {
+        let _ = &csp;
+        let (s, ..) = fx.raw(Method::GET, "/", None, &[]).await;
+        assert_eq!(
+            s,
+            StatusCode::NOT_FOUND,
+            "without the ui feature there is no page, and the route must say so plainly"
+        );
+    }
+}
+
+/// The page half of the CSP check. Only meaningful when a page is embedded.
+#[cfg(feature = "ui")]
+async fn csp_on_the_page(fx: &Fx, csp: &str) {
     let (s, h, body) = fx.raw(Method::GET, "/", None, &[]).await;
     assert_eq!(s, StatusCode::OK);
     let page = String::from_utf8_lossy(&body);

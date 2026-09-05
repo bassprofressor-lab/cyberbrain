@@ -77,9 +77,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      # The action runs in its own container without our pinned toolchain, and
+      # `rust-toolchain.toml` would make it try to fetch one it does not need: cargo-deny
+      # reads manifests and the lockfile, it does not compile anything.
+      - name: keep the toolchain pin out of the deny container
+        run: mv rust-toolchain.toml rust-toolchain.toml.off
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
+      - run: mv rust-toolchain.toml.off rust-toolchain.toml
       - uses: actions/setup-node@v4
         with:
           node-version: 22
