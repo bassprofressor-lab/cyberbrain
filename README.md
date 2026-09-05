@@ -42,7 +42,17 @@ box, a DGX Spark and an Apple M4 Mac.
 Prebuilt binaries are on the releases page. From source:
 
 ```console
-$ cargo install --path crates/cyberbrain
+$ cargo install cyberbrain                      # CLI, hooks, MCP, HTTP API
+$ cargo install cyberbrain --features ui        # ...and the embedded web page
+```
+
+The `ui` feature compiles the web page into the binary, which means building it needs a
+node toolchain. That is deliberately not the price of installing: without it the CLI, the
+hooks, the MCP server and the HTTP API are all unaffected, and `serve` answers the API
+while saying the page was not built in. From a source checkout, build the page first:
+
+```console
+$ cd ui && npm ci && npm run build
 ```
 
 Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no

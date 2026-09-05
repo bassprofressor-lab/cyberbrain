@@ -9,9 +9,12 @@
 //! drift from the one the header allows; `frame-ancestors 'none'` is appended.
 
 use super::error::ApiError;
-use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header};
+#[cfg(feature = "ui")]
+use axum::http::header;
+use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 
+#[cfg(feature = "ui")]
 #[derive(rust_embed::RustEmbed)]
 #[folder = "../../ui/dist"]
 pub struct Ui;
@@ -24,6 +27,13 @@ const FALLBACK_CSP: &str = "default-src 'none'; script-src 'self'; style-src 'se
      object-src 'none'; base-uri 'none'; form-action 'none'";
 
 /// The policy the built page declares in its `<meta http-equiv="Content-Security-Policy">`.
+#[cfg(not(feature = "ui"))]
+pub fn meta_csp() -> Option<String> {
+    None
+}
+
+/// The policy the built page declares in its `<meta http-equiv="Content-Security-Policy">`.
+#[cfg(feature = "ui")]
 pub fn meta_csp() -> Option<String> {
     let index = Ui::get("index.html")?;
     let html = String::from_utf8_lossy(&index.data);
@@ -36,6 +46,7 @@ pub fn meta_csp() -> Option<String> {
 
 /// The bundler writes the attribute HTML-escaped (`'` as `&#39;`); the header wants the
 /// characters back.
+#[cfg(feature = "ui")]
 fn unescape_attr(s: &str) -> String {
     s.replace("&#39;", "'")
         .replace("&#x27;", "'")
@@ -59,6 +70,7 @@ pub fn csp_header() -> HeaderValue {
         .unwrap_or_else(|_| HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"))
 }
 
+#[cfg(feature = "ui")]
 fn etag_of(file: &rust_embed::EmbeddedFile) -> String {
     let h = file.metadata.sha256_hash();
     let hex: String = h.iter().take(8).map(|b| format!("{b:02x}")).collect();
@@ -78,6 +90,7 @@ fn clean_path(uri: &Uri) -> Option<String> {
     Some(parts.join("/"))
 }
 
+#[cfg(feature = "ui")]
 fn serve_file(path: &str, file: rust_embed::EmbeddedFile, headers: &HeaderMap) -> Response {
     let etag = etag_of(&file);
     let mime = mime_guess::from_path(path).first_or_octet_stream();
@@ -135,19 +148,40 @@ pub async fn fallback(method: Method, uri: Uri, headers: HeaderMap) -> Response 
     } else {
         path
     };
-    if let Some(f) = Ui::get(&path) {
-        return serve_file(&path, f, &headers);
-    }
-    let last = path.rsplit('/').next().unwrap_or("");
-    if !last.contains('.')
-        && let Some(index) = Ui::get("index.html")
+    #[cfg(feature = "ui")]
     {
-        return serve_file("index.html", index, &headers);
+        if let Some(f) = Ui::get(&path) {
+            return serve_file(&path, f, &headers);
+        }
+        let last = path.rsplit('/').next().unwrap_or("");
+        if !last.contains('.')
+            && let Some(index) = Ui::get("index.html")
+        {
+            return serve_file("index.html", index, &headers);
+        }
+        ApiError::not_found(format!("/{path} is not part of the embedded UI")).into_response()
     }
-    ApiError::not_found(format!("/{path} is not part of the embedded UI")).into_response()
+    // Built without the `ui` feature: the API is fully there, the page is not. Say which,
+    // because "404" alone would send someone looking for a routing bug.
+    #[cfg(not(feature = "ui"))]
+    {
+        let _ = &headers;
+        ApiError::not_found(format!(
+            "/{path}: this binary was built without the `ui` feature, so no web page is \
+             embedded. The HTTP API under /api/v1 is unaffected."
+        ))
+        .into_response()
+    }
 }
 
 /// True when the bundle is actually embedded, for the startup message.
 pub fn bundle_present() -> bool {
-    Ui::get("index.html").is_some()
+    #[cfg(feature = "ui")]
+    {
+        Ui::get("index.html").is_some()
+    }
+    #[cfg(not(feature = "ui"))]
+    {
+        false
+    }
 }

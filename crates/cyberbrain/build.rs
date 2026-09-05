@@ -11,6 +11,13 @@
 use std::path::Path;
 
 fn main() {
+    // Without the `ui` feature nothing is embedded, so there is nothing to guard. That is
+    // the configuration a published crate installs under, where `ui/dist` does not exist
+    // at all and this check would otherwise fail every `cargo install`.
+    if std::env::var_os("CARGO_FEATURE_UI").is_none() {
+        return;
+    }
+
     let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ui/dist");
     println!("cargo:rerun-if-changed={}", ui.display());
     println!("cargo:rerun-if-env-changed=CYBERBRAIN_ALLOW_MOCK_UI");
