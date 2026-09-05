@@ -1,0 +1,66 @@
+/**
+ * Hash router. The page is served from inside a binary; a hash route needs no server-side
+ * fallback and survives `file://` if someone opens dist/index.html directly.
+ *
+ *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/compliance#audit
+ *   #/status
+ */
+import { useEffect, useState } from "react";
+
+export type Screen = "search" | "notes" | "note" | "graph" | "compliance" | "status";
+
+export interface Route {
+  screen: Screen;
+  /** Path segment after the screen, e.g. the note name. */
+  param: string | null;
+  query: URLSearchParams;
+  /** In-screen anchor, e.g. compliance section. */
+  anchor: string | null;
+}
+
+export const SCREENS: Array<{ screen: Screen; label: string; key: string }> = [
+  { screen: "search", label: "Search", key: "s" },
+  { screen: "notes", label: "Notes", key: "n" },
+  { screen: "graph", label: "Graph", key: "g" },
+  { screen: "compliance", label: "Compliance", key: "c" },
+  { screen: "status", label: "Status", key: "t" },
+];
+
+export function parseRoute(hash: string): Route {
+  const raw = hash.replace(/^#\/?/, "");
+  const [pathAndQuery, anchor = null] = raw.split("#") as [string, string | undefined];
+  const [path = "", query = ""] = pathAndQuery.split("?") as [string, string | undefined];
+  const [seg = "search", ...rest] = path.split("/");
+  const screen = (["search", "notes", "note", "graph", "compliance", "status"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "search";
+  const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
+  return { screen, param, query: new URLSearchParams(query), anchor };
+}
+
+export function href(screen: Screen, param?: string | null, query?: Record<string, string | number | undefined | null>, anchor?: string): string {
+  let h = `#/${screen}`;
+  if (param) h += `/${encodeURIComponent(param)}`;
+  if (query) {
+    const p = new URLSearchParams();
+    for (const [k, v] of Object.entries(query)) if (v !== undefined && v !== null && v !== "") p.set(k, String(v));
+    const s = p.toString();
+    if (s) h += `?${s}`;
+  }
+  if (anchor) h += `#${anchor}`;
+  return h;
+}
+
+export function navigate(to: string, replace = false) {
+  if (replace) history.replaceState(null, "", to);
+  else location.hash = to.startsWith("#") ? to.slice(1) : to;
+  if (replace) window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
+export function useRoute(): Route {
+  const [route, setRoute] = useState(() => parseRoute(location.hash));
+  useEffect(() => {
+    const on = () => setRoute(parseRoute(location.hash));
+    window.addEventListener("hashchange", on);
+    return () => window.removeEventListener("hashchange", on);
+  }, []);
+  return route;
+}

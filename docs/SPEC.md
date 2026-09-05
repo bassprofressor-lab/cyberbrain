@@ -298,6 +298,40 @@ implementation, and it drifts.
 
 ---
 
+### 8.1 The HTTP API
+
+`cyberbrain serve` exposes the operations above over HTTP at `/api/v1` for the web UI. §13
+called the UI "a client of the same API the CLI uses" while §8 described only a CLI, so the
+API did not exist. It does now, and these are its rules:
+
+**The exact request and response shapes are defined by `ui/src/api/types.ts`,** which is the
+single source of truth for them. Restating the shapes here would create a second one, and
+this specification has already been bitten by that three times in one day.
+
+Rules the shapes must obey:
+
+- Loopback socket, same origin, JSON, no cookies, no auth. Binding anywhere but loopback is
+  refused; there is no authentication because there is no remote access to authenticate.
+- Errors carry `{ error: { code, message, exit_code } }` where `exit_code` is the same value
+  §8 gives the CLI. One failure taxonomy, two front ends.
+- Every mutating route accepts `?dry_run=true`, and per §8 it runs the real path with a no-op
+  writer. Both destructive UI actions — forget and retention-apply — are dry-run-first.
+- Writes carry `expected_updated` and get `409` on a mismatch. An agent hook and a human in
+  the UI can edit the same note at the same time, and last-writer-wins would silently drop
+  one of them.
+- A write held by the PII scan (§12.4) returns `409` with the findings and a hold id. The UI
+  must offer the operator's four choices; a hold that only appears in a log is not a decision
+  point, it is an obstacle.
+- A write reindexes the note in the same request. A UI that leaves the index stale until the
+  next hook makes the search lie about content the user just typed.
+- `serve` sends a `Content-Security-Policy` **header** including `frame-ancestors 'none'`.
+  The embedded page also carries a CSP `<meta>`, but `frame-ancestors` is ignored there, so
+  the header is the only thing that actually prevents framing.
+- `caveats` are rendered on every result, always. A result set with no conflicts panel and no
+  caveat is precisely the silent case §7 exists to prevent.
+- Scores are `RRF × ring weight`, are **not** comparable across queries, and are displayed
+  relative to the top hit of the same result set.
+
 ## 9. Agent integration
 
 ### 9.1 Hooks
