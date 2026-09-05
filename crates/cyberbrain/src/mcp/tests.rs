@@ -478,9 +478,13 @@ async fn status_answers_with_the_cli_report() {
         c.init().await;
         let r = c.call("status", json!({})).await;
         assert_eq!(r["isError"], false, "{r}");
+        // The report renders paths with forward slashes on every platform, so the
+        // expectation is the slashed form and not the native one. Comparing against
+        // `root.to_str()` passes on Linux, where the two are identical, and fails on
+        // Windows — which is the whole reason the rendering was made consistent.
         assert_eq!(
             r["structuredContent"]["store"].as_str().unwrap(),
-            root.to_str().unwrap()
+            cyberbrain_core::slash(&root)
         );
         assert!(r["structuredContent"]["policy"]["profile"].is_string());
         assert!(text_of(&r).starts_with("store: "));
@@ -493,18 +497,21 @@ async fn status_answers_with_the_cli_report() {
 }
 
 #[tokio::test]
-async fn find_answers_or_says_it_is_not_in_this_build() {
+/// Accepting either answer was right while `App::find` did not exist. It does now, so the
+/// test pins the working behaviour — otherwise a refusal that outlives the missing feature
+/// keeps passing, which is exactly how `find` stayed stubbed over MCP for hours after the
+/// code index landed and worked from the CLI.
+async fn find_answers_with_a_report() {
     let (_d, _root, app) = temp_app();
     session(app, |mut c| async move {
         c.init().await;
         let r = c.call("find", json!({ "symbol": "serve_stdio" })).await;
-        // Either the code index answered, or the result says clearly that it cannot.
-        if r["isError"] == true {
-            let msg = r["structuredContent"]["error"]["message"].as_str().unwrap();
-            assert!(msg.contains("find"), "{r}");
-        } else {
-            assert!(r["structuredContent"].is_object(), "{r}");
-        }
+        assert_eq!(r["isError"], false, "find must answer, not refuse: {r}");
+        let sc = &r["structuredContent"];
+        assert!(sc["hits"].is_array(), "{r}");
+        assert!(sc["files_scanned"].is_number(), "{r}");
+        // The counts name which side of the boundary they count (SPEC §14.3).
+        assert!(sc["skipped"].is_object(), "{r}");
         c
     })
     .await;

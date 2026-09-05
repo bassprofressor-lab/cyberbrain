@@ -5,7 +5,10 @@
 //! `--json`, the HTTP API and MCP `structuredContent`, where it is compared across
 //! machines. So the field stays a `PathBuf` and only its serialisation changes:
 //!
-//! ```ignore
+//! `--ignored` runs doc tests marked `ignore`, and the benchmark job passes exactly that,
+//! so a snippet that cannot compile has to be `text` rather than `ignore`:
+//!
+//! ```text
 //! #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
 //! pub store: PathBuf,
 //! #[serde(serialize_with = "cyberbrain_core::path_serde::slash_opt")]

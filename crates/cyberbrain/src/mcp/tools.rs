@@ -454,23 +454,15 @@ fn find(app: &App, raw: &Value) -> Result<Value, RpcError> {
 
 /// The one place `find` touches `App`, so the seam is a single line.
 ///
-/// `App::find(&self, symbol: &str, limit: usize) -> Result<FindReport>` (SPEC §10) was not
-/// in `app.rs` when this was built. Until it is, the tool answers with a clear refusal
-/// rather than a fabricated report. When it lands, the body becomes:
-///
-/// ```ignore
-/// let report = app.find(symbol, limit)?;
-/// serde_json::to_value(&report)
-///     .map_err(|e| Error::Index(format!("find report does not serialise: {e}")))
-/// ```
+/// It was a refusal while `App::find` did not exist yet. It does now, and the refusal
+/// outlived it: `cyberbrain find` worked from the CLI while the same operation over MCP
+/// still answered "not available in this build". A stub that survives the thing it stood
+/// in for is worse than no stub, because it reports a missing feature that is present.
 fn find_report(app: &App, symbol: &str, limit: usize) -> cyberbrain_core::Result<Value> {
-    let _ = (app, limit);
-    Err(Error::Index(format!(
-        "`find {symbol}` is not available in this build: App::find (SPEC §10) is not \
-         present yet; the code index is wired separately"
-    )))
+    let report = app.find(symbol, limit)?;
+    serde_json::to_value(&report)
+        .map_err(|e| Error::Index(format!("find report does not serialise: {e}")))
 }
-
 fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
     let a = Args::new(
         "write",
