@@ -536,7 +536,6 @@ impl Fingerprint {
 mod tests {
     use super::*;
     use crate::types::{Frontmatter, NoteKind, PiiState};
-    use std::io::Read;
 
     fn ts() -> jiff::Timestamp {
         "2026-09-05T09:12:03Z".parse().unwrap()
@@ -906,6 +905,10 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn concurrent_reader_never_observes_a_partial_file() {
+        // Scoped to this test: it is the only user, and the test is unix-only, so at
+        // module level the import is dead code on Windows and `-D warnings` fails the
+        // build there. Cheap to get wrong and invisible until a Windows job runs.
+        use std::io::Read;
         use std::sync::Arc;
         use std::sync::atomic::{AtomicBool, Ordering};
 

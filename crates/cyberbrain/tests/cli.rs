@@ -215,7 +215,15 @@ fn init_creates_a_store_once_and_commands_outside_one_say_so() {
         String::from_utf8_lossy(&out.stderr)
     );
     let v: Value = serde_json::from_slice(&out.stdout).unwrap();
-    assert_eq!(v["store"].as_str().unwrap(), store.to_str().unwrap());
+    // Both sides canonicalised. The tool resolves the store path, which is right — it is
+    // what makes a store's identity stable — and on macOS `/var` is a symlink to
+    // `/private/var`, so a temporary directory comes back under a different prefix than
+    // the one `tempfile` handed out. Comparing the raw strings passes on Linux and fails
+    // on macOS for a difference that is not a difference.
+    assert_eq!(
+        std::fs::canonicalize(v["store"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(&store).unwrap()
+    );
 }
 
 #[test]
