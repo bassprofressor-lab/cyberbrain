@@ -18,14 +18,28 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
-clap = { version = "4.6.6", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive", "env"] }
 cyberbrain-core.workspace = true
 cyberbrain-embed.workspace = true
 cyberbrain-index.workspace = true
 cyberbrain-llm.workspace = true
-cyberbrain-policy.workspace = true
+cyberbrain-policy = { workspace = true, features = ["llm"] }
+jiff = { version = "0.2.35", features = ["serde"] }
 rust-embed = "8.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros"] }
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+ulid = { version = "3.0.0", features = ["serde"] }
+
+[dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tempfile = "3.27.0"
+
+# Tests build a tiny synthetic model2vec artefact so the vector path is exercised end to
+# end without a real model or a network. The feature is dev-only: the shipped binary never
+# has a way to fabricate weights.
+[dev-dependencies.cyberbrain-embed]
+workspace = true
+features = ["synthetic"]

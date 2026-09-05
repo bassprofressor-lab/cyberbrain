@@ -124,12 +124,12 @@ mod tests {
     #[test]
     fn rejects_malformed() {
         for s in [
-            "r2a91f2c33e1",   // no separator
-            "x2-a91f2c33e1bd", // no r
-            "r9-a91f2c33e1bd", // ring out of range
-            "r2-a91f2c33e1",   // too short
-            "r2-a91f2c33e1bde",// too long
-            "r2-zzzzzzzzzzzz", // not hex
+            "r2a91f2c33e1",     // no separator
+            "x2-a91f2c33e1bd",  // no r
+            "r9-a91f2c33e1bd",  // ring out of range
+            "r2-a91f2c33e1",    // too short
+            "r2-a91f2c33e1bde", // too long
+            "r2-zzzzzzzzzzzz",  // not hex
             "",
         ] {
             assert!(Citation::from_str(s).is_err(), "{s} should not parse");

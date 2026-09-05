@@ -190,6 +190,16 @@ pub struct EndpointPolicy {
     /// `allow_public_endpoint` from the config. Default false. Setting it is the operator's
     /// explicit act; nothing in this crate sets it.
     pub allow_public_endpoint: bool,
+    /// `allow_overlay_network` from the config. Default false. Permits `100.64.0.0/10`
+    /// and nothing else.
+    ///
+    /// It is a separate switch rather than part of `allow_public_endpoint` because the two
+    /// agreements are not the same. That range is carrier-grade NAT, where an address is
+    /// usually somebody else's machine, and it is also what Tailscale and similar overlays
+    /// hand out for your own GPU box. Asking an operator to tick "allow public endpoints"
+    /// in order to reach their own laptop would be asking them to agree to something the
+    /// setting's name misdescribes.
+    pub allow_overlay_network: bool,
     /// Bound on name resolution. A resolver that hangs must not hang the caller.
     pub dns_timeout: Duration,
 }
@@ -198,6 +208,7 @@ impl Default for EndpointPolicy {
     fn default() -> Self {
         Self {
             allow_public_endpoint: false,
+            allow_overlay_network: false,
             dns_timeout: Duration::from_secs(3),
         }
     }
@@ -219,6 +230,10 @@ pub struct ValidatedEndpoint {
     /// True when at least one address is not local and the operator waived the rule.
     /// Callers surface this as a caveat: a waiver is not the same as a local endpoint.
     pub public_waived: bool,
+    /// True when an address in `100.64.0.0/10` was accepted because the operator set
+    /// `allow_overlay_network`. Recorded separately from `public_waived` so the status
+    /// screen and the audit log can say which agreement was actually relied on.
+    pub overlay_waived: bool,
 }
 
 impl ValidatedEndpoint {
@@ -311,12 +326,39 @@ pub async fn validate_endpoint(
     }
 
     let classes: Vec<AddressClass> = ips.iter().map(|ip| classify(*ip)).collect();
+
+    // Anything not permitted outright. Overlay addresses are counted separately, because
+    // the switch that unlocks them is a different one and naming the wrong switch in a
+    // refusal pushes the operator into granting far more than they needed to.
     let offenders: Vec<String> = ips
         .iter()
         .zip(&classes)
-        .filter(|(_, c)| !c.is_local())
+        .filter(|(_, c)| !c.is_local() && **c != AddressClass::SharedAddressSpace)
         .map(|(ip, c)| format!("{ip} is {c}"))
         .collect();
+    let overlay: Vec<String> = ips
+        .iter()
+        .zip(&classes)
+        .filter(|(_, c)| **c == AddressClass::SharedAddressSpace)
+        .map(|(ip, c)| format!("{ip} is {c}"))
+        .collect();
+
+    let overlay_waived = if overlay.is_empty() {
+        false
+    } else if policy.allow_overlay_network || policy.allow_public_endpoint {
+        true
+    } else {
+        return Err(Error::PolicyRefusal {
+            profile: POLICY_NAME.into(),
+            reason: format!(
+                "llm.base_url {base_url} resolves into the shared address space ({}). That \
+                 range is carrier-grade NAT, where the address is usually somebody else's \
+                 machine, but it is also what Tailscale and similar overlays hand out for \
+                 your own. Set allow_overlay_network = true if this endpoint is yours",
+                overlay.join(", ")
+            ),
+        });
+    };
 
     let public_waived = if offenders.is_empty() {
         false
@@ -342,6 +384,7 @@ pub async fn validate_endpoint(
         addrs,
         classes,
         public_waived,
+        overlay_waived,
     })
 }
 
@@ -490,7 +533,6 @@ mod tests {
             "https://203.0.113.7:443/v1",
             "http://[2001:4860:4860::8888]:11434/v1",
             "http://[::ffff:8.8.8.8]:11434/v1",
-            "http://100.100.1.1:11434/v1", // CGNAT / Tailscale: refused, named in the reason
             "http://0.0.0.0:11434/v1",
             "http://224.0.0.1:11434/v1",
         ] {
@@ -502,6 +544,59 @@ mod tests {
                 other => panic!("{u}: expected PolicyRefusal, got {other:?}"),
             }
         }
+    }
+
+    /// `100.64/10` is refused by default like anything else non-local, but the refusal must
+    /// name `allow_overlay_network` and not `allow_public_endpoint`. Naming the wider switch
+    /// would push an operator into granting far more than the case needs, which is a consent
+    /// failure even though the bytes would have gone to the same machine either way.
+    #[tokio::test]
+    async fn shared_address_space_is_refused_by_the_switch_that_actually_covers_it() {
+        let p = EndpointPolicy::default();
+        let r = StaticResolver(HashMap::new());
+        for u in [
+            "http://100.64.0.1:11434/v1",
+            "http://100.100.1.1:11434/v1",
+            "http://100.127.255.254:11434/v1",
+        ] {
+            match validate_endpoint(u, &p, &r).await {
+                Err(Error::PolicyRefusal { reason, .. }) => {
+                    assert!(
+                        reason.contains("allow_overlay_network"),
+                        "{u} must name the switch that covers it: {reason}"
+                    );
+                    assert!(
+                        !reason.contains("allow_public_endpoint"),
+                        "{u} must not push the operator at the wider switch: {reason}"
+                    );
+                }
+                other => panic!("{u}: expected PolicyRefusal, got {other:?}"),
+            }
+        }
+    }
+
+    /// The narrow switch opens the narrow door and nothing else. A Tailscale endpoint works;
+    /// a genuinely public one still does not.
+    #[tokio::test]
+    async fn allow_overlay_network_permits_cgnat_and_nothing_more() {
+        let p = EndpointPolicy {
+            allow_overlay_network: true,
+            ..Default::default()
+        };
+        let r = StaticResolver(HashMap::new());
+
+        let ok = validate_endpoint("http://100.100.1.1:11434/v1", &p, &r)
+            .await
+            .expect("an overlay address the operator allowed");
+        assert!(ok.overlay_waived, "the waiver must be recorded, not silent");
+        assert!(!ok.public_waived, "this is not a public waiver");
+
+        assert!(
+            validate_endpoint("http://8.8.8.8:11434/v1", &p, &r)
+                .await
+                .is_err(),
+            "allow_overlay_network must not open the public door"
+        );
     }
 
     #[tokio::test]
@@ -580,6 +675,7 @@ mod tests {
     async fn hanging_resolver_is_bounded() {
         let p = EndpointPolicy {
             allow_public_endpoint: false,
+            allow_overlay_network: false,
             dns_timeout: Duration::from_millis(50),
         };
         let started = std::time::Instant::now();

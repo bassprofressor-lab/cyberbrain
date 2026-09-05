@@ -492,9 +492,16 @@ mod tests {
         assert_eq!(c.retrieval.ring_weights, [1.15, 1.10, 1.00, 0.92, 0.80]);
         // Pinned against Ring::weight() rather than a literal: the config derives its
         // defaults from there, and a second literal is a second source of truth that drifts.
-        assert_eq!(c.retrieval.weight(Ring::Invariant), Ring::Invariant.weight());
+        assert_eq!(
+            c.retrieval.weight(Ring::Invariant),
+            Ring::Invariant.weight()
+        );
         for r in Ring::ALL {
-            assert_eq!(c.retrieval.weight(r), r.weight(), "{r} drifted from Ring::weight()");
+            assert_eq!(
+                c.retrieval.weight(r),
+                r.weight(),
+                "{r} drifted from Ring::weight()"
+            );
         }
         assert_eq!(c.inference.base_url, "http://127.0.0.1:11434/v1");
         assert!(!c.inference.allow_public_endpoint);
@@ -640,8 +647,14 @@ mod tests {
         // `::` and `0.0.0.0` are bind addresses, not destinations. The egress gate refuses
         // them as non-unicast, and core has to agree: two components with different ideas
         // of "local" is how a hole opens between them.
-        assert!(!host_is_local("::"), "the unspecified address is not a destination");
-        assert!(!host_is_local("0.0.0.0"), "the unspecified address is not a destination");
+        assert!(
+            !host_is_local("::"),
+            "the unspecified address is not a destination"
+        );
+        assert!(
+            !host_is_local("0.0.0.0"),
+            "the unspecified address is not a destination"
+        );
         assert!(host_is_local("::1"));
         assert!(host_is_local("fd00::1"));
         assert!(host_is_local("192.168.1.10"));

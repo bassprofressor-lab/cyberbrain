@@ -34,6 +34,8 @@ pub struct LlmConfig {
     pub temperature: f32,
     /// The operator's explicit waiver of the local-only rule. Default false.
     pub allow_public_endpoint: bool,
+    /// `inference.allow_overlay_network`. Permits `100.64.0.0/10` and nothing else.
+    pub allow_overlay_network: bool,
     /// PEM root certificate(s) to trust for an `https://` endpoint. Without this, no root
     /// store is compiled in and TLS to any host fails closed.
     pub tls_root_ca_pem: Option<String>,
@@ -49,6 +51,7 @@ impl Default for LlmConfig {
             max_tokens: 1024,
             temperature: 0.0,
             allow_public_endpoint: false,
+            allow_overlay_network: false,
             tls_root_ca_pem: None,
         }
     }
@@ -58,6 +61,7 @@ impl LlmConfig {
     pub fn policy(&self) -> EndpointPolicy {
         EndpointPolicy {
             allow_public_endpoint: self.allow_public_endpoint,
+            allow_overlay_network: self.allow_overlay_network,
             ..Default::default()
         }
     }
@@ -196,7 +200,12 @@ impl LlmClient {
                     return Err(e);
                 }
             };
-        let http = build_http_client(gate.as_ref(), EgressPurpose::LocalInference, &endpoint, &cfg)?;
+        let http = build_http_client(
+            gate.as_ref(),
+            EgressPurpose::LocalInference,
+            &endpoint,
+            &cfg,
+        )?;
         audit.record_inference(InferenceEvent {
             at: jiff::Timestamp::now(),
             purpose: EgressPurpose::LocalInference,
@@ -855,7 +864,9 @@ mod tests {
         let server = MockServer::start(|_| panic!("no request may be sent")).await;
         let mut c = cfg(&server.base_url("/v1"));
         c.model.clear();
-        let client = LlmClient::connect(c, MemoryAuditSink::new(), open_gate()).await.unwrap();
+        let client = LlmClient::connect(c, MemoryAuditSink::new(), open_gate())
+            .await
+            .unwrap();
         let err = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
             .await
@@ -910,9 +921,13 @@ mod tests {
         let port = l.local_addr().unwrap().port();
         drop(l);
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(cfg(&format!("http://127.0.0.1:{port}/v1")), audit.clone(), open_gate())
-            .await
-            .unwrap();
+        let client = LlmClient::connect(
+            cfg(&format!("http://127.0.0.1:{port}/v1")),
+            audit.clone(),
+            open_gate(),
+        )
+        .await
+        .unwrap();
         let err = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
             .await
@@ -934,7 +949,9 @@ mod tests {
         let mut c = cfg(&server.base_url("/v1"));
         c.timeout = Duration::from_millis(300);
         let audit = MemoryAuditSink::new();
-        let client = LlmClient::connect(c, audit.clone(), open_gate()).await.unwrap();
+        let client = LlmClient::connect(c, audit.clone(), open_gate())
+            .await
+            .unwrap();
         let started = Instant::now();
         let err = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
@@ -974,9 +991,13 @@ mod tests {
     #[tokio::test]
     async fn refused_endpoint_never_builds_a_client_and_is_audited() {
         let audit = MemoryAuditSink::new();
-        let err = LlmClient::connect(cfg("http://203.0.113.7:11434/v1"), audit.clone(), open_gate())
-            .await
-            .unwrap_err();
+        let err = LlmClient::connect(
+            cfg("http://203.0.113.7:11434/v1"),
+            audit.clone(),
+            open_gate(),
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
         assert_eq!(err.exit_code(), 3);
         let rows = audit.rows();
@@ -1024,9 +1045,14 @@ mod tests {
         let mut table = HashMap::new();
         table.insert("inference.local".to_string(), vec![server.addr.ip()]);
         let c = cfg(&format!("http://inference.local:{}/v1", server.addr.port()));
-        let client = LlmClient::connect_with_resolver(c, MemoryAuditSink::new(), open_gate(), &Static(table))
-            .await
-            .unwrap();
+        let client = LlmClient::connect_with_resolver(
+            c,
+            MemoryAuditSink::new(),
+            open_gate(),
+            &Static(table),
+        )
+        .await
+        .unwrap();
         assert_eq!(client.endpoint().host, "inference.local");
         let out = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
@@ -1048,9 +1074,13 @@ mod tests {
         }
         let server =
             MockServer::start(|_| MockResponse::json(200, &completion_json("direct"))).await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
-            .await
-            .unwrap();
+        let client = LlmClient::connect(
+            cfg(&server.base_url("/v1")),
+            MemoryAuditSink::new(),
+            open_gate(),
+        )
+        .await
+        .unwrap();
         let out = client
             .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
             .await;
@@ -1071,9 +1101,13 @@ mod tests {
             )
         })
         .await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
-            .await
-            .unwrap();
+        let client = LlmClient::connect(
+            cfg(&server.base_url("/v1")),
+            MemoryAuditSink::new(),
+            open_gate(),
+        )
+        .await
+        .unwrap();
         let models = client.models().await.unwrap();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].owned_by.as_deref(), Some("library"));
@@ -1091,8 +1125,8 @@ mod tests {
     /// panic fired.
     #[tokio::test]
     async fn a_refusing_gate_stops_the_request_before_it_is_sent() {
-        let server = MockServer::start(|_| panic!("a refused call must never reach the endpoint"))
-            .await;
+        let server =
+            MockServer::start(|_| panic!("a refused call must never reach the endpoint")).await;
         let err = LlmClient::connect(
             cfg(&server.base_url("/v1")),
             MemoryAuditSink::new(),
@@ -1147,7 +1181,7 @@ mod tests {
         let client = LlmClient::connect(
             cfg(&format!("http://127.0.0.1:{port}/v1")),
             MemoryAuditSink::new(),
-        open_gate(),
+            open_gate(),
         )
         .await
         .unwrap();
@@ -1166,9 +1200,13 @@ mod tests {
             )
         })
         .await;
-        let client = LlmClient::connect(cfg(&server.base_url("/v1")), MemoryAuditSink::new(), open_gate())
-            .await
-            .unwrap();
+        let client = LlmClient::connect(
+            cfg(&server.base_url("/v1")),
+            MemoryAuditSink::new(),
+            open_gate(),
+        )
+        .await
+        .unwrap();
         let probe = client.probe().await;
         assert!(probe.reachable);
         assert!(!probe.configured_model_listed);
@@ -1220,9 +1258,15 @@ mod tests {
             addrs: vec!["127.0.0.1:1".parse().unwrap()],
             classes: vec![crate::address::AddressClass::Loopback],
             public_waived: false,
+            overlay_waived: false,
         };
-        let err = build_http_client(&CountingGate::default(), EgressPurpose::ModelDownload, &ep, &LlmConfig::default())
-            .unwrap_err();
+        let err = build_http_client(
+            &CountingGate::default(),
+            EgressPurpose::ModelDownload,
+            &ep,
+            &LlmConfig::default(),
+        )
+        .unwrap_err();
         assert!(matches!(err, Error::PolicyRefusal { .. }));
     }
 

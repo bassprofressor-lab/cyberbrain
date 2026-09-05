@@ -358,7 +358,14 @@ impl AuditLog {
             .last()?
             .and_then(|e| e.chain_hash().map(str::to_owned))
             .unwrap_or_else(|| GENESIS.to_string());
-        let now = jiff::Timestamp::now();
+        // Truncated to milliseconds, which is the precision an audit store can hold.
+        // Keeping more here gives one event two timestamps: the one a caller is handed
+        // back and the coarser one that was written. A `since` filter built from the
+        // returned value would then skip the very row it came from, and a reader would
+        // conclude the log had a gap where it has none.
+        let now = jiff::Timestamp::now()
+            .round(jiff::Unit::Millisecond)
+            .unwrap_or_else(|_| jiff::Timestamp::now());
         let at = now.to_string();
         let mut event = AuditEvent {
             ts: now,

@@ -491,7 +491,11 @@ mod tests {
     struct OpenGate;
 
     impl cyberbrain_core::EgressGate for OpenGate {
-        fn permit(&self, _p: cyberbrain_core::EgressPurpose, _d: &str) -> cyberbrain_core::Result<()> {
+        fn permit(
+            &self,
+            _p: cyberbrain_core::EgressPurpose,
+            _d: &str,
+        ) -> cyberbrain_core::Result<()> {
             Ok(())
         }
     }
@@ -509,7 +513,6 @@ mod tests {
                 ..Default::default()
             },
             MemoryAuditSink::new(),
-        
             open_gate(),
         )
         .await
@@ -704,7 +707,6 @@ mod tests {
                 ..Default::default()
             },
             MemoryAuditSink::new(),
-        
             open_gate(),
         )
         .await

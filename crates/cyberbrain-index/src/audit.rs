@@ -62,9 +62,18 @@ pub struct AuditEntry {
     pub detail: Option<String>,
 }
 
-/// A row to append. `ts` and `seq` are assigned by the store.
+/// A row to append. `seq` is always assigned by the store.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct NewAuditEntry {
+    /// When the event happened, in the column's format
+    /// (`YYYY-MM-DDTHH:MM:SS.sssZ`, UTC, fixed width). `None` lets the store stamp the
+    /// moment of insertion instead.
+    ///
+    /// A writer that keeps its own timestamp **must** supply it here. Letting the store
+    /// stamp while the writer reports its own clock produces two timestamps for one event,
+    /// and since the column is truncated to milliseconds while a writer's clock is not, a
+    /// `since` filter built from the reported value can miss the very row it came from.
+    pub ts: Option<String>,
     pub actor: String,
     pub action: String,
     pub subject: Option<String>,
@@ -183,8 +192,14 @@ impl AuditStore {
         validate(&entry)?;
         tx.execute(
             "INSERT INTO audit (ts, actor, action, subject, detail)
-             VALUES (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), ?1, ?2, ?3, ?4)",
-            params![entry.actor, entry.action, entry.subject, entry.detail],
+             VALUES (coalesce(?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), ?2, ?3, ?4, ?5)",
+            params![
+                entry.ts,
+                entry.actor,
+                entry.action,
+                entry.subject,
+                entry.detail
+            ],
         )
         .ix()?;
         let stored = tx

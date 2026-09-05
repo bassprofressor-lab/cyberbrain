@@ -942,6 +942,7 @@ fn audit_is_append_only_and_filterable() {
 
     let first = store
         .append(&NewAuditEntry {
+            ts: None,
             actor: "cyberbrain-policy".into(),
             action: "write".into(),
             subject: Some("01ARZ3NDEKTSV4RRFFQ69G5FAV".into()),
@@ -950,6 +951,7 @@ fn audit_is_append_only_and_filterable() {
         .unwrap();
     store
         .append(&NewAuditEntry {
+            ts: None,
             actor: "cyberbrain-policy".into(),
             action: "policy.refusal".into(),
             ..Default::default()
@@ -1011,16 +1013,19 @@ fn audit_is_append_only_and_filterable() {
     // Rejected rows leave nothing behind.
     for bad in [
         NewAuditEntry {
+            ts: None,
             actor: "".into(),
             action: "x".into(),
             ..Default::default()
         },
         NewAuditEntry {
+            ts: None,
             actor: "a".into(),
             action: " ".into(),
             ..Default::default()
         },
         NewAuditEntry {
+            ts: None,
             actor: "a".into(),
             action: "x".into(),
             detail: Some("{not json".into()),
@@ -1041,6 +1046,7 @@ fn audit_detail_is_stored_verbatim() {
         "{\"z\":1.0,  \"_chain\":\"abc\",\n\"a\": [1,2 ,3],\"b\":{\"y\":null,\"x\":\"\\u00e9\"}}";
     let stored = store
         .append(&NewAuditEntry {
+            ts: None,
             actor: "policy".into(),
             action: "write".into(),
             subject: None,
@@ -1073,6 +1079,7 @@ fn audit_append_after_holds_the_write_lock() {
         .unwrap();
 
     a.append(&NewAuditEntry {
+        ts: None,
         actor: "p".into(),
         action: "first".into(),
         ..Default::default()
@@ -1087,11 +1094,13 @@ fn audit_append_after_holds_the_write_lock() {
             // While the lock is held, the other writer must wait and then fail, never
             // interleave.
             b_result = Some(b.append(&NewAuditEntry {
+                ts: None,
                 actor: "q".into(),
                 action: "intruder".into(),
                 ..Default::default()
             }));
             Ok(NewAuditEntry {
+                ts: None,
                 actor: "p".into(),
                 action: "second".into(),
                 subject: None,
@@ -1110,6 +1119,7 @@ fn audit_append_after_holds_the_write_lock() {
         .append_after(|last| {
             assert_eq!(last.unwrap().seq, 2);
             Ok(NewAuditEntry {
+                ts: None,
                 actor: "q".into(),
                 action: "third".into(),
                 ..Default::default()
@@ -1132,6 +1142,7 @@ fn audit_append_after_holds_the_write_lock() {
     assert!(err.to_string().contains("no"));
     assert_eq!(a.count().unwrap(), 3);
     b.append(&NewAuditEntry {
+        ts: None,
         actor: "q".into(),
         action: "fourth".into(),
         ..Default::default()
@@ -1283,6 +1294,7 @@ fn audit_survives_cache_deletion() {
     let record = dir.path().join("audit.db");
     let mut audit = AuditStore::open(&record).unwrap();
     let row = |action: &str| NewAuditEntry {
+        ts: None,
         actor: "cyberbrain-policy".into(),
         action: action.into(),
         subject: Some("x".into()),

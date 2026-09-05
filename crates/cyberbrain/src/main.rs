@@ -1,1 +1,316 @@
-fn main() { println!("cyberbrain 0.1.0"); }
+//! Cyberbrain: cited, trust-tiered, local-first memory for AI coding agents.
+//!
+//! Original work, copyright 2026 Krynex Labs, licensed FSL-1.1-ALv2.
+//! See `docs/SPEC.md` §0 for the clean-room boundary this project is built under.
+//!
+//! This file is dispatch. Every command is a thin adapter over [`app::App`]; the wiring of
+//! the six crates lives in `app.rs` and nowhere else.
+
+mod app;
+mod audit_bridge;
+mod cli;
+mod render;
+mod writers;
+
+use app::{App, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};
+use clap::Parser;
+use cli::{Cli, Command, ExportFormat, PolicyCommand};
+use cyberbrain_core::{Error, Result, Ring};
+use cyberbrain_policy::{Actor, AuditFilter};
+use serde::Serialize;
+use std::io::{Read, Write};
+
+/// How the command wants its output.
+#[derive(Clone, Copy)]
+struct Out {
+    json: bool,
+    quiet: bool,
+}
+
+impl Out {
+    fn emit<T: Serialize>(self, value: &T, human: impl FnOnce(&T) -> String) -> Result<()> {
+        if self.quiet {
+            return Ok(());
+        }
+        let text = if self.json {
+            serde_json::to_string_pretty(value)
+                .map_err(|e| Error::Index(format!("report does not serialise: {e}")))?
+        } else {
+            human(value)
+        };
+        let mut stdout = std::io::stdout().lock();
+        let _ = stdout.write_all(text.as_bytes());
+        if !text.ends_with('\n') {
+            let _ = stdout.write_all(b"\n");
+        }
+        Ok(())
+    }
+}
+
+/// SPEC §8.1: one failure taxonomy, two front ends. The code names the variant.
+fn error_code(e: &Error) -> &'static str {
+    match e {
+        Error::Io { .. } => "io",
+        Error::Frontmatter { .. } => "frontmatter",
+        Error::BadCitation(_) => "bad-citation",
+        Error::NoSuchNote(_) => "no-such-note",
+        Error::BadRing(_) => "bad-ring",
+        Error::RingCapExceeded { .. } => "ring-cap-exceeded",
+        Error::StoreIntegrity(_) => "store-integrity",
+        Error::Index(_) => "index",
+        Error::Embed(_) => "embed",
+        Error::EmbeddingProfileMismatch { .. } => "embedding-profile-mismatch",
+        Error::Llm(_) => "llm",
+        Error::PolicyRefusal { .. } => "policy-refusal",
+        Error::Config(_) => "config",
+    }
+}
+
+fn report_error(e: &Error, json: bool) {
+    let code = e.exit_code();
+    if json {
+        let v = serde_json::json!({
+            "error": { "code": error_code(e), "message": e.to_string(), "exit_code": code }
+        });
+        eprintln!("{v}");
+    } else {
+        let prefix = if code == 3 { "refused" } else { "error" };
+        eprintln!("cyberbrain: {prefix}: {e}");
+    }
+}
+
+fn runtime() -> Result<tokio::runtime::Runtime> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| Error::Index(format!("cannot start the async runtime: {e}")))
+}
+
+fn read_stdin() -> Result<String> {
+    let mut s = String::new();
+    std::io::stdin()
+        .read_to_string(&mut s)
+        .map_err(|e| Error::Io {
+            path: "<stdin>".into(),
+            source: e,
+        })?;
+    Ok(s)
+}
+
+fn main() {
+    let cli = Cli::parse();
+    let out = Out {
+        json: cli.json,
+        quiet: cli.quiet,
+    };
+    let code = match run(cli, out) {
+        Ok(code) => code,
+        Err(e) => {
+            report_error(&e, out.json);
+            e.exit_code()
+        }
+    };
+    std::process::exit(code);
+}
+
+/// Returns the exit code. `Ok(3)` is a policy decision that is not an error: the write was
+/// held and printed, and the caller must answer.
+fn run(cli: Cli, out: Out) -> Result<i32> {
+    match cli.command {
+        Command::Init { path } => {
+            let root = match path.or(cli.store) {
+                Some(p) => p,
+                None => std::env::current_dir()
+                    .map_err(|e| Error::Io {
+                        path: ".".into(),
+                        source: e,
+                    })?
+                    .join(cyberbrain_core::config::DEFAULT_STORE_DIR),
+            };
+            let r = App::init(&root, &Actor::Operator)?;
+            out.emit(&r, render::init)?;
+            return Ok(0);
+        }
+        // SPEC §9.1: a hook never fails the harness. Until it is wired, it stands down
+        // audibly on stderr and exits 0 with empty output, which is also what the Windows
+        // CI job invoking it through cmd.exe requires.
+        Command::Hook { event } => {
+            eprintln!("cyberbrain: hook {event:?} is not wired yet; standing down");
+            return Ok(0);
+        }
+        Command::Serve { .. } => {
+            return Err(Error::Index(
+                "`serve` is not wired yet; the HTTP API and web UI arrive with the next step"
+                    .into(),
+            ));
+        }
+        Command::Mcp => {
+            return Err(Error::Index(
+                "`mcp` is not wired yet; the stdio MCP server arrives with the next step".into(),
+            ));
+        }
+        _ => {}
+    }
+
+    let app = App::open(cli.store.as_deref(), Actor::Operator)?;
+    match cli.command {
+        Command::Scan { full, dry_run } => {
+            let r = app.scan(ScanOptions { full, dry_run })?;
+            out.emit(&r, render::scan)?;
+        }
+        Command::Recall { query, id, n, ring } => {
+            if let Some(id) = id {
+                let r = app.recall_id(&id)?;
+                out.emit(&r, render::expanded)?;
+            } else {
+                let query = query.ok_or_else(|| {
+                    Error::Config("recall needs a query, or --id <citation>".into())
+                })?;
+                let ring = ring.map(Ring::try_from).transpose()?;
+                let req = RecallRequest { n: Some(n), ring };
+                let r = runtime()?.block_on(app.recall(&query, &req))?;
+                out.emit(&r, render::recall)?;
+            }
+        }
+        Command::Find { symbol, .. } => {
+            return Err(Error::Index(format!(
+                "`find {symbol}` is not available: no crate implements the code index of \
+                 SPEC §10 yet"
+            )));
+        }
+        Command::Write {
+            ring,
+            kind,
+            name,
+            body,
+            tags,
+            retention,
+            force,
+            dry_run,
+        } => {
+            let body = match body {
+                Some(b) => b,
+                None => read_stdin()?,
+            };
+            let req = WriteRequest {
+                ring: Ring::try_from(ring)?,
+                kind: kind.into(),
+                name,
+                body,
+                tags,
+                retention,
+                force,
+                choice: None,
+                expected_updated: None,
+                dry_run,
+            };
+            let outcome = app.write(req)?;
+            out.emit(&outcome, |o| match o {
+                WriteOutcome::Written(w) => render::written(w),
+                WriteOutcome::Held { rendered, .. } => format!(
+                    "{rendered}Nothing was written. Re-run with --force to write it flagged, \
+                     or edit the body.\n"
+                ),
+                WriteOutcome::Conflict { name, current_updated } => {
+                    format!("{name} changed at {current_updated} since it was read; nothing was written\n")
+                }
+            })?;
+            match outcome {
+                WriteOutcome::Written(_) => {}
+                WriteOutcome::Held { .. } => return Ok(3),
+                WriteOutcome::Conflict { .. } => {
+                    return Err(Error::StoreIntegrity(
+                        "the note changed since it was read".into(),
+                    ));
+                }
+            }
+        }
+        Command::Forget { target, dry_run } => {
+            let r = app.forget(&target, dry_run)?;
+            out.emit(&r, cyberbrain_policy::erasure::render)?;
+        }
+        Command::Doctor => {
+            let r = app.doctor()?;
+            out.emit(&r, render::doctor)?;
+        }
+        Command::Status => {
+            let r = runtime()?.block_on(app.status())?;
+            out.emit(&r, render::status)?;
+        }
+        Command::Export { target, format } => {
+            let r = app.export(&target)?;
+            match format {
+                ExportFormat::Md => out.emit(&r, |n| {
+                    cyberbrain_core::frontmatter::render(&n.front, &n.body)
+                        .unwrap_or_else(|e| format!("cannot render: {e}"))
+                })?,
+                ExportFormat::Json => Out { json: true, ..out }.emit(&r, render::note)?,
+            }
+        }
+        Command::Policy { command } => return run_policy(&app, command, out),
+        Command::Init { .. } | Command::Hook { .. } | Command::Serve { .. } | Command::Mcp => {
+            unreachable!("handled before the store was opened")
+        }
+    }
+    Ok(0)
+}
+
+fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
+    match command {
+        PolicyCommand::Egress => {
+            let r = app.policy_egress();
+            out.emit(&r, |e| render::egress(e))?;
+        }
+        PolicyCommand::Audit {
+            limit,
+            action,
+            subject,
+            verify,
+        } => {
+            let filter = AuditFilter {
+                action,
+                subject,
+                limit: Some(limit),
+                ..Default::default()
+            };
+            let format = if out.json {
+                cyberbrain_policy::ExportFormat::Json
+            } else {
+                cyberbrain_policy::ExportFormat::Text
+            };
+            let r = app.policy_audit(&filter, verify, format)?;
+            out.emit(&r, |v| {
+                let mut s = String::new();
+                if let Some(ver) = &v.verified {
+                    s.push_str(&match ver {
+                        Ok(n) => format!("chain verified over {n} rows\n"),
+                        Err(e) => format!("CHAIN BROKEN: {e}\n"),
+                    });
+                }
+                s.push_str(&format!(
+                    "{} rows shown (ts\tactor\taction\tsubject\tdetail)\n",
+                    v.rows
+                ));
+                s.push_str(&v.rendered);
+                s
+            })?;
+        }
+        PolicyCommand::Subject { identifier } => {
+            let r = app.policy_subject(&identifier)?;
+            out.emit(&r, |r| r.render_markdown())?;
+        }
+        PolicyCommand::Retention { apply, dry_run } => {
+            let r = app.policy_retention(apply, dry_run)?;
+            out.emit(&r, render::retention)?;
+        }
+        PolicyCommand::ModelCard => {
+            let r = app.policy_model_card();
+            out.emit(&r, |r| render::model_cards(&r.cards, &r.absent))?;
+        }
+        PolicyCommand::Consent { withdraw } => {
+            let r = app.policy_consent(!withdraw)?;
+            out.emit(&r, render::consent)?;
+        }
+    }
+    Ok(0)
+}

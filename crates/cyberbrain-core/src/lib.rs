@@ -17,6 +17,6 @@ pub use config::{Config, PolicyProfile};
 pub use error::{Error, Result};
 pub use store::{Change, Fingerprint, Store};
 pub use types::{
-    Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit, Note, NoteId, NoteKind, PiiState,
-    RecallResult, Ring,
+    Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit, Note,
+    NoteId, NoteKind, PiiState, RecallResult, Ring,
 };
