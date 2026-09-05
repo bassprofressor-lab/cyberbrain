@@ -244,7 +244,13 @@ export function GraphScreen() {
     ctx.restore();
   }, [matches, neighbours, selected, hover, labels]);
 
-  // Animation loop while the simulation is hot; otherwise draw on demand.
+  // `draw` is rebuilt whenever hover, selection or labels change. The loop reads it through
+  // a ref so that a repaint never restarts the effect below, which would call fit() and throw
+  // away the view the reader panned and zoomed to.
+  const drawRef = useRef(draw);
+
+  // Animation loop while the simulation is hot; otherwise draw on demand. Runs once per
+  // graph, so fit() happens on new data and never again on its own.
   useEffect(() => {
     let alive = true;
     const loop = () => {
@@ -252,17 +258,17 @@ export function GraphScreen() {
       const s = simRef.current;
       if (s?.running) {
         s.tick();
-        draw();
+        drawRef.current();
         rafRef.current = requestAnimationFrame(loop);
       } else {
-        draw();
+        drawRef.current();
       }
     };
     fit();
     loop();
-    const ro = new ResizeObserver(() => draw());
+    const ro = new ResizeObserver(() => drawRef.current());
     if (wrapRef.current) ro.observe(wrapRef.current);
-    const mo = new MutationObserver(() => draw());
+    const mo = new MutationObserver(() => drawRef.current());
     mo.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
     return () => {
       alive = false;
@@ -270,7 +276,14 @@ export function GraphScreen() {
       ro.disconnect();
       mo.disconnect();
     };
-  }, [sim, draw, fit]);
+  }, [sim, fit]);
+
+  // Repaint on a visual change, leaving the view untouched. While the simulation is hot the
+  // loop is already painting every frame.
+  useEffect(() => {
+    drawRef.current = draw;
+    if (!simRef.current?.running) draw();
+  }, [draw]);
 
   const kick = () => {
     cancelAnimationFrame(rafRef.current);
