@@ -742,7 +742,29 @@ fn old_session_state_is_swept_at_startup() {
     ft.set_modified(then).unwrap();
     drop(ft);
     session_start(&f, "startup");
-    assert!(!old.exists());
+
+    // Diagnostic rather than a bare assertion: this failed exactly once during a heavily
+    // loaded workspace run and could not be reproduced in six attempts afterwards, so the
+    // cause is unknown. If it happens again, the next person should get the evidence
+    // instead of "assertion failed" — what the age actually was, and what else was in the
+    // directory. An unreproducible failure is a reason to instrument, not to declare fine.
+    if old.exists() {
+        let age = std::fs::metadata(&old)
+            .and_then(|m| m.modified())
+            .map(|t| std::time::SystemTime::now().duration_since(t));
+        let siblings: Vec<String> = std::fs::read_dir(&dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        panic!(
+            "the sweep left a state file older than {} days behind.\n             file: {}\n  age as read back: {age:?}\n  directory now holds: {siblings:?}",
+            session::STATE_MAX_AGE_DAYS,
+            old.display(),
+        );
+    }
     assert!(f.state().is_some());
 }
 
