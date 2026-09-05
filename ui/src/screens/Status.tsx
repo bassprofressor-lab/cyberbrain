@@ -27,6 +27,7 @@ function checkLabel(f: DoctorFinding): { label: string; tone: "ok" | "warn" | "d
   return { label: f.check, tone, hint: `check: ${f.check}` };
 }
 
+
 export function StatusScreen() {
   const s = useAsync(() => api.status(), []);
   const [doctor, setDoctor] = useState<DoctorReport | null>(null);
@@ -73,7 +74,7 @@ export function StatusScreen() {
   const endpointTone = d.inference.endpoint_class === "public" ? (d.inference.allow_public_endpoint ? "warn" : "danger") : "ok";
 
   return (
-    <div className="p-5 space-y-4 overflow-auto scroll-thin h-full">
+    <div className="p-6 space-y-6 overflow-auto scroll-thin h-full">
       <div className="flex items-center gap-3 flex-wrap">
         <h1 className="text-lg font-semibold">Status</h1>
         <span className="font-mono text-xs text-fg-muted">cyberbrain {d.version}</span>
@@ -93,7 +94,7 @@ export function StatusScreen() {
         </div>
       </div>
 
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Stat label="store" value={bytes(d.store.bytes)} sub={`${num(d.store.notes)} notes · ${num(d.store.blocks)} blocks · ${num(d.store.vectors)} vectors`} />
         <Stat label="index" value={indexFresh ? "fresh" : `${d.index.stale_notes} stale`} sub={`last scan ${relTime(d.index.last_scan)} · full ${relTime(d.index.last_full_scan)}`} tone={indexFresh ? "ok" : "warn"} />
         <Stat label="embedding" value={d.embedding.loaded ? `${d.embedding.model.split("/").pop()} · d${d.embedding.dim}` : "no model loaded"} sub={!d.embedding.loaded ? "search is lexical only" : d.embedding.matches_index === null ? "nothing to compare yet" : d.embedding.matches_index ? "profile matches the index" : "PROFILE MISMATCH — semantic search off"} tone={!d.embedding.loaded ? "warn" : d.embedding.matches_index === false ? "danger" : undefined} mono />
@@ -117,7 +118,7 @@ export function StatusScreen() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid gap-5 xl:grid-cols-2">
         <Section title="Store" aside={<code className="text-2xs">{d.store.path}</code>}>
           <KeyValue
             rows={[
@@ -267,7 +268,7 @@ export function StatusScreen() {
       </div>
 
       <div className="text-2xs text-fg-faint">
-        policy profile <code className="text-fg">{d.policy.profile}</code> · PII scan {d.policy.pii_scan ? "on" : "off"} · {num(d.policy.audit_rows)} audit rows · <a className="link" href={href("compliance")}>compliance</a>
+        token ledger and model load moved to <a className="link" href={href("usage")}>Usage</a> · policy profile <code className="text-fg">{d.policy.profile}</code> · PII scan {d.policy.pii_scan ? "on" : "off"} · {num(d.policy.audit_rows)} audit rows · <a className="link" href={href("compliance")}>compliance</a>
       </div>
     </div>
   );

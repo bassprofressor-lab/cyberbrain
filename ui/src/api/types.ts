@@ -992,11 +992,116 @@ export class ApiError extends Error {
 // ───────────────────────────────────────────────────────────────────────────── the client
 
 /** Every call the UI makes. Implemented twice: `http.ts` and `mock/index.ts`. UI-owned. */
+/** Totals for one retrieval op, over the rows still in the ledger. */
+export interface UsageTotals {
+  ops: number;
+  /** What the caller was handed. */
+  returned: number;
+  /** What the notes or files behind those hits hold in full. */
+  full: number;
+  hits: number;
+}
+
+export interface UsageSummary {
+  /** Oldest row still on disk. A share is never all-time unless this says so. */
+  since: string | null;
+  rows: number;
+  /** Counted in tokens: the index knows an exact count per block. */
+  recall: UsageTotals;
+  /** Counted in lines: that is the unit the agent is told to read. */
+  find: UsageTotals;
+  unreadable_rows: number;
+}
+
+export interface TaskUsage {
+  calls: number;
+  failed: number;
+  prompt_tokens: number;
+  /** Part of `prompt_tokens` the server answered from its prompt cache. */
+  cached_prompt_tokens: number;
+  completion_tokens: number;
+  elapsed_ms: number;
+  /** Calls the endpoint reported no counts for at all. */
+  calls_without_counts: number;
+  /** Calls that reported counts but said nothing about cache hits. */
+  calls_without_cache_report: number;
+}
+
+export interface InferenceUsage {
+  tasks: Record<string, TaskUsage>;
+  first: string | null;
+  last: string | null;
+}
+
+/** One measured model call. Fields that could not be measured are null, never zero. */
+export interface LoadRow {
+  at: string;
+  task: string;
+  wall_ms: number;
+  /** Cores busy machine-wide during the call, everything else on the box included. */
+  machine_cores: number | null;
+  machine_mem_delta_mb: number | null;
+  /** Cores the configured cgroup burned: exact attribution, present only when configured. */
+  endpoint_cores: number | null;
+  endpoint_mem_bytes: number | null;
+  endpoint_mem_peak_bytes: number | null;
+}
+
+export interface LoadSummary {
+  calls: number;
+  wall_ms: number;
+  machine_cores_avg: number | null;
+  endpoint_cores_avg: number | null;
+  last: LoadRow | null;
+  calls_without_attribution: number;
+  /** Cores this machine has, so a core count reads as a share. */
+  cores_total: number | null;
+}
+
+/** Vendor-reported, so every field is optional. Only Ollama answers this today. */
+export interface LoadedModel {
+  name: string;
+  size: number | null;
+  /** Of `size`, the part in video memory. Zero on a CPU-only host. */
+  size_vram: number | null;
+  context_length: number | null;
+  parameter_size: string | null;
+  quantization_level: string | null;
+  expires_at: string | null;
+}
+
+/** One UTC calendar day. Days where nothing happened are present and zero: a gap and a zero
+ *  are different facts and the axis has to show which one it is. */
+export interface DayBucket {
+  /** `YYYY-MM-DD`, UTC. */
+  date: string;
+  recall: UsageTotals;
+  find: UsageTotals;
+  calls: number;
+  prompt_tokens: number;
+  cached_prompt_tokens: number;
+  completion_tokens: number;
+  wall_ms: number;
+  endpoint_cores: number | null;
+  machine_cores: number | null;
+}
+
+export interface UsageReport {
+  retrieval: UsageSummary;
+  inference: InferenceUsage;
+  load: LoadSummary;
+  loaded_models: LoadedModel[] | null;
+  /** Oldest first, one per day. */
+  days: DayBucket[];
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
 
   status(): Promise<StatusReport>;
+  /** `days` of history for the daily buckets, 1 to 365; the server defaults to 30. */
+  usage(days?: number): Promise<UsageReport>;
   recall(params: RecallParams): Promise<RecallResult>;
   expand(citation: Citation): Promise<CitationExpansion>;
 

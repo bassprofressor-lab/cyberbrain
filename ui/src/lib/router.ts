@@ -2,12 +2,13 @@
  * Hash router. The page is served from inside a binary; a hash route needs no server-side
  * fallback and survives `file://` if someone opens dist/index.html directly.
  *
- *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/compliance#audit
+ *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/usage?days=30
+ *   #/compliance#audit
  *   #/status
  */
 import { useEffect, useState } from "react";
 
-export type Screen = "search" | "notes" | "note" | "graph" | "compliance" | "status";
+export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status";
 
 export interface Route {
   screen: Screen;
@@ -19,19 +20,22 @@ export interface Route {
 }
 
 export const SCREENS: Array<{ screen: Screen; label: string; key: string }> = [
+  { screen: "status", label: "Status", key: "t" },
   { screen: "search", label: "Search", key: "s" },
   { screen: "notes", label: "Notes", key: "n" },
   { screen: "graph", label: "Graph", key: "g" },
+  { screen: "usage", label: "Usage", key: "u" },
   { screen: "compliance", label: "Compliance", key: "c" },
-  { screen: "status", label: "Status", key: "t" },
 ];
 
 export function parseRoute(hash: string): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathAndQuery, anchor = null] = raw.split("#") as [string, string | undefined];
   const [path = "", query = ""] = pathAndQuery.split("?") as [string, string | undefined];
-  const [seg = "search", ...rest] = path.split("/");
-  const screen = (["search", "notes", "note", "graph", "compliance", "status"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "search";
+  // Status is the landing screen: it answers "is this store healthy and what did it cost"
+  // before the reader has typed anything. Search is one keystroke away (Mod+K).
+  const [seg = "status", ...rest] = path.split("/");
+  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "status";
   const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
   return { screen, param, query: new URLSearchParams(query), anchor };
 }

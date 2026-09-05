@@ -50,6 +50,7 @@ import {
   type Ring,
   type ScanReport,
   type StatusReport,
+  type UsageReport,
   type SubjectAccessReport,
 } from "../types";
 import { CLUSTERS, FILLER_SENTENCES, SEED_NOTES, type SeedNote } from "./data";
@@ -611,6 +612,55 @@ let lastFullScan: string | null = null;
 
 export const mockClient: CyberbrainApi = {
   transport: "mock",
+
+  // Fabricated like everything else here, and shaped so the layout is exercised: one op
+  // with cache reports, one without.
+  async usage(days = 30): Promise<UsageReport> {
+    return {
+      retrieval: {
+        since: new Date(NOW - 36 * 3600_000).toISOString(),
+        rows: 41,
+        recall: { ops: 33, returned: 62_140, full: 486_920, hits: 248 },
+        find: { ops: 8, returned: 214, full: 4_120, hits: 19 },
+        unreadable_rows: 0,
+      },
+      inference: {
+        tasks: {
+          "contradiction-check": { calls: 21, failed: 2, prompt_tokens: 42_180, cached_prompt_tokens: 9_640, completion_tokens: 1_902, elapsed_ms: 411_000, calls_without_counts: 0, calls_without_cache_report: 3 },
+          "session-summary": { calls: 2, failed: 0, prompt_tokens: 8_940, cached_prompt_tokens: 0, completion_tokens: 1_180, elapsed_ms: 39_000, calls_without_counts: 0, calls_without_cache_report: 2 },
+        },
+        first: new Date(NOW - 30 * 3600_000).toISOString(),
+        last: new Date(NOW - 900_000).toISOString(),
+      },
+      load: {
+        calls: 23,
+        wall_ms: 450_000,
+        machine_cores_avg: 6.2,
+        endpoint_cores_avg: 5.9,
+        last: { at: new Date(NOW - 900_000).toISOString(), task: "contradiction-check", wall_ms: 38_500, machine_cores: 6.1, machine_mem_delta_mb: 84, endpoint_cores: 5.9, endpoint_mem_bytes: 9_480_000_000, endpoint_mem_peak_bytes: 10_200_000_000 },
+        calls_without_attribution: 4,
+        cores_total: 12,
+      },
+      days: Array.from({ length: days }, (_, i) => {
+        const d = new Date(NOW - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10);
+        const busy = i > days - 6 || i % 7 === 3;
+        const r = busy ? 4 + ((i * 7) % 9) : 0;
+        return {
+          date: d,
+          recall: { ops: r, returned: r * 1_900, full: r * 14_800, hits: r * 8 },
+          find: { ops: busy ? 2 : 0, returned: busy ? 48 : 0, full: busy ? 910 : 0, hits: busy ? 3 : 0 },
+          calls: r,
+          prompt_tokens: r * 2_100,
+          cached_prompt_tokens: r * 480,
+          completion_tokens: r * 90,
+          wall_ms: r * 41_000,
+          endpoint_cores: busy ? 5.6 + ((i % 3) * 0.2) : null,
+          machine_cores: busy ? 5.9 + ((i % 3) * 0.2) : null,
+        };
+      }),
+      loaded_models: [{ name: "qwen2.5:7b-instruct", size: 5_062_566_870, size_vram: 0, context_length: 4096, parameter_size: "7.6B", quantization_level: "Q4_K_M", expires_at: new Date(NOW + 240_000).toISOString() }],
+    };
+  },
 
   async status(): Promise<StatusReport> {
     const rings = ([0, 1, 2, 3, 4] as Ring[]).map((ring) => {

@@ -27,6 +27,7 @@ import {
   type ScanReport,
   type StatusReport,
   type SubjectAccessReport,
+  type UsageReport,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -88,6 +89,7 @@ export const httpClient: CyberbrainApi = {
   transport: "http",
 
   status: () => request<StatusReport>("GET", "/status"),
+  usage: (days) => request<UsageReport>("GET", `/usage${qs({ days })}`),
   recall: (p: RecallParams) => request<RecallResult>("GET", `/recall${qs({ q: p.q, n: p.n, ring: p.ring })}`),
   expand: (citation) => request<CitationExpansion>("GET", `/recall/${encodeURIComponent(citation)}`),
 

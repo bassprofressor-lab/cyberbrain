@@ -10,6 +10,7 @@ import { GraphScreen } from "@/screens/Graph";
 import { NoteScreen } from "@/screens/Note";
 import { SearchScreen } from "@/screens/Search";
 import { StatusScreen } from "@/screens/Status";
+import { UsageScreen } from "@/screens/Usage";
 
 export function App() {
   const route = useRoute();
@@ -72,6 +73,7 @@ export function App() {
         {route.screen === "search" ? <SearchScreen route={route} /> : null}
         {route.screen === "notes" || route.screen === "note" ? <NoteScreen route={route} /> : null}
         {route.screen === "graph" ? <GraphScreen /> : null}
+        {route.screen === "usage" ? <UsageScreen route={route} /> : null}
         {route.screen === "compliance" ? <ComplianceScreen route={route} /> : null}
         {route.screen === "status" ? <StatusScreen /> : null}
       </main>

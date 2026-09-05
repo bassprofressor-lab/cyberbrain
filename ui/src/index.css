@@ -149,8 +149,8 @@
   --color-ring-4-bg: var(--ring-4-bg);
 
   --shadow-panel: var(--shadow);
-  --text-2xs: 0.6875rem;
-  --text-2xs--line-height: 1rem;
+  --text-2xs: 0.75rem;
+  --text-2xs--line-height: 1.05rem;
 }
 
 @custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
@@ -160,7 +160,9 @@
     background: var(--bg);
     color: var(--fg);
     font-family: var(--font-sans);
-    font-size: 14px;
+    /* Root scale for the whole page: every size below is in rem, so this one number
+       decides how close to the screen the reader has to sit. */
+    font-size: 16px;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
     font-feature-settings: "ss01", "cv11";
@@ -282,7 +284,7 @@
     text-align: center;
   }
   .label {
-    font-size: 0.6875rem;
+    font-size: 0.75rem;
     font-weight: 500;
     letter-spacing: 0.06em;
     text-transform: uppercase;
