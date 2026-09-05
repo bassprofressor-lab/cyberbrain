@@ -11,8 +11,8 @@ description = "Cyberbrain: core"
 [dependencies]
 blake3 = "1.8.7"
 ignore = "0.4.33"
-jiff = "0.2.35"
+jiff = { version = "0.2.35", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_yaml_ng = "0.10.0"
 thiserror = "2.0.20"
-ulid = "3.0.0"
+ulid = { version = "3.0.0", features = ["serde"] }
