@@ -1,0 +1,354 @@
+Third-party licences
+====================
+
+Cyberbrain is licensed FSL-1.1-ALv2 (see LICENSE.md). It builds on the packages below,
+each under its own terms. Generated from cargo metadata with --all-features, so it lists
+more than a default build actually links.
+
+293 packages, grouped by the licence they declare.
+
+-- (Apache-2.0 OR MIT) AND BSD-3-Clause --------------------------------------
+   encoding_rs 0.8.35  https://github.com/hsivonen/encoding_rs
+
+-- (MIT OR Apache-2.0) AND Unicode-3.0 ---------------------------------------
+   unicode-ident 1.0.24  https://github.com/dtolnay/unicode-ident
+
+-- Apache-2.0 ----------------------------------------------------------------
+   esaxx-rs 0.1.10  https://github.com/Narsil/esaxx-rs
+   safetensors 0.8.0  https://github.com/huggingface/safetensors
+   spm_precompiled 0.1.4  https://github.com/huggingface/spm_precompiled
+   sync_wrapper 1.0.2  https://github.com/Actyx/sync_wrapper
+   tokenizers 0.23.2  https://github.com/huggingface/tokenizers
+
+-- Apache-2.0 / MIT ----------------------------------------------------------
+   fnv 1.0.7  https://github.com/servo/rust-fnv
+
+-- Apache-2.0 AND ISC --------------------------------------------------------
+   ring 0.17.14  https://github.com/briansmith/ring
+
+-- Apache-2.0 OR BSL-1.0 -----------------------------------------------------
+   ryu 1.0.23  https://github.com/dtolnay/ryu
+
+-- Apache-2.0 OR ISC OR MIT --------------------------------------------------
+   hyper-rustls 0.27.9  https://github.com/rustls/hyper-rustls
+   rustls 0.23.43  https://github.com/rustls/rustls
+   rustls-native-certs 0.8.4  https://github.com/rustls/rustls-native-certs
+
+-- Apache-2.0 OR MIT ---------------------------------------------------------
+   atomic-waker 1.1.2  https://github.com/smol-rs/atomic-waker
+   bit-set 0.8.0  https://github.com/contain-rs/bit-set
+   bit-vec 0.8.0  https://github.com/contain-rs/bit-vec
+   const-oid 0.10.2  https://github.com/RustCrypto/formats
+   equivalent 1.0.2  https://github.com/indexmap-rs/equivalent
+   fastrand 2.5.0  https://github.com/smol-rs/fastrand
+   idna_adapter 1.2.2  https://github.com/hsivonen/idna_adapter
+   indexmap 2.14.2  https://github.com/indexmap-rs/indexmap
+   pin-project-lite 0.2.17  https://github.com/taiki-e/pin-project-lite
+   portable-atomic 1.15.0  https://github.com/taiki-e/portable-atomic
+   portable-atomic-util 0.2.8  https://github.com/taiki-e/portable-atomic-util
+   simd_cesu8 1.2.0  https://github.com/seancroach/simd_cesu8
+   utf8_iter 1.0.4  https://github.com/hsivonen/utf8_iter
+   utf8parse 0.2.2  https://github.com/alacritty/vte
+   zeroize 1.9.0  https://github.com/RustCrypto/utils
+
+-- Apache-2.0 OR MIT OR Zlib -------------------------------------------------
+   macro_rules_attribute 0.2.3  https://github.com/danielhenrymantilla/macro_rules_attribute-rs
+   macro_rules_attribute-proc_macro 0.2.3  https://github.com/danielhenrymantilla/macro_rules_attribute-rs
+
+-- Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT -----------------------
+   linux-raw-sys 0.12.1  https://github.com/sunfishcode/linux-raw-sys
+   rustix 1.1.4  https://github.com/bytecodealliance/rustix
+   wasi 0.11.1+wasi-snapshot-preview1  https://github.com/bytecodealliance/wasi
+   wasip2 1.0.4+wasi-0.2.12  https://github.com/bytecodealliance/wasi-rs
+   wit-bindgen 0.57.1  https://github.com/bytecodealliance/wit-bindgen
+
+-- Apache-2.0/MIT ------------------------------------------------------------
+   rayon-cond 0.4.0  https://github.com/cuviper/rayon-cond
+
+-- BSD-2-Clause OR Apache-2.0 OR MIT -----------------------------------------
+   zerocopy 0.8.56  https://github.com/google/zerocopy
+   zerocopy-derive 0.8.56  https://github.com/google/zerocopy
+
+-- BSD-3-Clause --------------------------------------------------------------
+   subtle 2.6.1  https://github.com/dalek-cryptography/subtle
+
+-- CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception -------------------
+   blake3 1.8.7  https://github.com/BLAKE3-team/BLAKE3
+
+-- CC0-1.0 OR MIT-0 OR Apache-2.0 --------------------------------------------
+   constant_time_eq 0.4.2  https://github.com/cesarb/constant_time_eq
+
+-- CDLA-Permissive-2.0 -------------------------------------------------------
+   webpki-root-certs 1.0.9  https://github.com/rustls/webpki-roots
+
+-- ISC -----------------------------------------------------------------------
+   rustls-webpki 0.103.15  https://github.com/rustls/webpki
+   untrusted 0.9.0  https://github.com/briansmith/untrusted
+
+-- MIT -----------------------------------------------------------------------
+   axum 0.8.9  https://github.com/tokio-rs/axum
+   axum-core 0.5.6  https://github.com/tokio-rs/axum
+   bytes 1.12.1  https://github.com/tokio-rs/bytes
+   castaway 0.2.4  https://github.com/sagebind/castaway
+   combine 4.6.8  https://github.com/Marwes/combine
+   compact_str 0.9.1  https://github.com/ParkMyCar/compact_str
+   darling 0.20.11  https://github.com/TedDriggs/darling
+   darling_core 0.20.11  https://github.com/TedDriggs/darling
+   darling_macro 0.20.11  https://github.com/TedDriggs/darling
+   fancy-regex 0.17.0  https://github.com/fancy-regex/fancy-regex
+   h2 0.4.19  https://github.com/hyperium/h2
+   http-body 1.1.0  https://github.com/hyperium/http-body
+   http-body-util 0.1.5  https://github.com/hyperium/http-body
+   http-range-header 0.4.2  https://github.com/MarcusGrass/parse-range-headers
+   hyper 1.11.1  https://github.com/hyperium/hyper
+   hyper-util 0.1.20  https://github.com/hyperium/hyper-util
+   libsqlite3-sys 0.38.2  https://github.com/rusqlite/rusqlite
+   mime_guess 2.0.5  https://github.com/abonander/mime_guess
+   mio 1.2.3  https://github.com/tokio-rs/mio
+   nom 7.1.3  https://github.com/Geal/nom
+   nu-ansi-term 0.50.3  https://github.com/nushell/nu-ansi-term
+   rsqlite-vfs 0.1.1
+   rusqlite 0.40.2  https://github.com/rusqlite/rusqlite
+   rust-embed 8.12.0  https://pyrossh.dev/repos/rust-embed
+   rust-embed-impl 8.12.0  https://pyrossh.dev/repos/rust-embed
+   rust-embed-utils 8.12.0  https://pyrossh.dev/repos/rust-embed
+   schannel 0.1.29  https://github.com/steffengy/schannel-rs
+   serde_yaml_ng 0.10.0  https://github.com/acatton/serde-yaml-ng
+   sharded-slab 0.1.7  https://github.com/hawkw/sharded-slab
+   slab 0.4.12  https://github.com/tokio-rs/slab
+   sqlite-wasm-rs 0.5.5  https://github.com/Spxg/sqlite-wasm-rs
+   strsim 0.11.1  https://github.com/rapidfuzz/strsim-rs
+   synstructure 0.13.2  https://github.com/mystor/synstructure
+   tokio 1.53.1  https://github.com/tokio-rs/tokio
+   tokio-macros 2.7.2  https://github.com/tokio-rs/tokio
+   tokio-util 0.7.19  https://github.com/tokio-rs/tokio
+   tower 0.5.3  https://github.com/tower-rs/tower
+   tower-http 0.6.11  https://github.com/tower-rs/tower-http
+   tower-http 0.7.1  https://github.com/tower-rs/tower-http
+   tower-layer 0.3.3  https://github.com/tower-rs/tower
+   tower-service 0.3.3  https://github.com/tower-rs/tower
+   tracing 0.1.44  https://github.com/tokio-rs/tracing
+   tracing-attributes 0.1.31  https://github.com/tokio-rs/tracing
+   tracing-core 0.1.36  https://github.com/tokio-rs/tracing
+   tracing-log 0.2.0  https://github.com/tokio-rs/tracing
+   tracing-subscriber 0.3.23  https://github.com/tokio-rs/tracing
+   try-lock 0.2.5  https://github.com/seanmonstar/try-lock
+   ulid 3.0.0  https://github.com/dylanhart/ulid-rs
+   unsafe-libyaml 0.2.11  https://github.com/dtolnay/unsafe-libyaml
+   valuable 0.1.1  https://github.com/tokio-rs/valuable
+   want 0.3.1  https://github.com/seanmonstar/want
+   winnow 1.0.4  https://github.com/winnow-rs/winnow
+   zmij 1.0.23  https://github.com/dtolnay/zmij
+
+-- MIT AND BSD-3-Clause ------------------------------------------------------
+   matchit 0.8.4  https://github.com/ibraheemdev/matchit
+
+-- MIT OR Apache-2.0 ---------------------------------------------------------
+   ahash 0.8.12  https://github.com/tkaitchuck/ahash
+   allocator-api2 0.2.21  https://github.com/zakarumych/allocator-api2
+   anstream 1.0.0  https://github.com/rust-cli/anstyle.git
+   anstyle 1.0.14  https://github.com/rust-cli/anstyle.git
+   anstyle-parse 1.0.0  https://github.com/rust-cli/anstyle.git
+   anstyle-query 1.1.5  https://github.com/rust-cli/anstyle.git
+   anstyle-wincon 3.0.11  https://github.com/rust-cli/anstyle.git
+   anyhow 1.0.104  https://github.com/dtolnay/anyhow
+   arrayvec 0.7.8  https://github.com/bluss/arrayvec
+   base64 0.22.1  https://github.com/marshallpierce/rust-base64
+   bitflags 2.13.1  https://github.com/bitflags/bitflags
+   block-buffer 0.12.1  https://github.com/RustCrypto/utils
+   bstr 1.13.1  https://github.com/BurntSushi/bstr
+   bumpalo 3.20.3  https://github.com/fitzgen/bumpalo
+   cc 1.4.5  https://github.com/rust-lang/cc-rs
+   cfg-if 1.0.4  https://github.com/rust-lang/cfg-if
+   chacha20 0.10.2  https://github.com/RustCrypto/stream-ciphers
+   clap 4.6.6  https://github.com/clap-rs/clap
+   clap_builder 4.6.6  https://github.com/clap-rs/clap
+   clap_derive 4.6.4  https://github.com/clap-rs/clap
+   clap_lex 1.1.0  https://github.com/clap-rs/clap
+   colorchoice 1.0.5  https://github.com/rust-cli/anstyle.git
+   core-foundation 0.10.1  https://github.com/servo/core-foundation-rs
+   core-foundation-sys 0.8.7  https://github.com/servo/core-foundation-rs
+   cpufeatures 0.3.1  https://github.com/RustCrypto/utils
+   crossbeam-deque 0.8.7  https://github.com/crossbeam-rs/crossbeam
+   crossbeam-epoch 0.9.20  https://github.com/crossbeam-rs/crossbeam
+   crossbeam-utils 0.8.22  https://github.com/crossbeam-rs/crossbeam
+   crypto-common 0.2.2  https://github.com/RustCrypto/traits
+   daachorse 3.0.3  https://github.com/daac-tools/daachorse
+   dary_heap 0.3.9  https://github.com/hanmertens/dary_heap
+   defmt 1.1.1  https://github.com/knurling-rs/defmt
+   defmt-macros 1.1.1  https://github.com/knurling-rs/defmt
+   defmt-parser 1.0.0  https://github.com/knurling-rs/defmt
+   derive_builder 0.20.2  https://github.com/colin-kiegel/rust-derive-builder
+   derive_builder_core 0.20.2  https://github.com/colin-kiegel/rust-derive-builder
+   derive_builder_macro 0.20.2  https://github.com/colin-kiegel/rust-derive-builder
+   digest 0.11.3  https://github.com/RustCrypto/traits
+   displaydoc 0.2.7  https://github.com/yaahc/displaydoc
+   either 1.18.0  https://github.com/rayon-rs/either
+   errno 0.3.14  https://github.com/lambda-fairy/rust-errno
+   find-msvc-tools 0.1.12  https://github.com/rust-lang/cc-rs
+   form_urlencoded 1.2.2  https://github.com/servo/rust-url
+   futures-channel 0.3.34  https://github.com/rust-lang/futures-rs
+   futures-core 0.3.34  https://github.com/rust-lang/futures-rs
+   futures-sink 0.3.34  https://github.com/rust-lang/futures-rs
+   futures-task 0.3.34  https://github.com/rust-lang/futures-rs
+   futures-util 0.3.34  https://github.com/rust-lang/futures-rs
+   getrandom 0.2.17  https://github.com/rust-random/getrandom
+   getrandom 0.3.4  https://github.com/rust-random/getrandom
+   getrandom 0.4.3  https://github.com/rust-random/getrandom
+   hashbrown 0.16.1  https://github.com/rust-lang/hashbrown
+   hashbrown 0.17.1  https://github.com/rust-lang/hashbrown
+   hashlink 0.12.1  https://github.com/djc/hashlink
+   heck 0.5.0  https://github.com/withoutboats/heck
+   http 1.5.0  https://github.com/hyperium/http
+   httparse 1.10.1  https://github.com/seanmonstar/httparse
+   httpdate 1.0.3  https://github.com/pyfisch/httpdate
+   hybrid-array 0.4.14  https://github.com/RustCrypto/hybrid-array
+   idna 1.1.0  https://github.com/servo/rust-url/
+   ipnet 2.12.1  https://github.com/krisprice/ipnet
+   is_terminal_polyfill 1.70.2  https://github.com/polyfill-rs/is_terminal_polyfill
+   itertools 0.14.0  https://github.com/rust-itertools/itertools
+   itoa 1.0.18  https://github.com/dtolnay/itoa
+   jni 0.22.4  https://github.com/jni-rs/jni-rs
+   jni-macros 0.22.4  https://github.com/jni-rs/jni-rs
+   jni-sys 0.4.1  https://github.com/jni-rs/jni-sys
+   jni-sys-macros 0.4.1  https://github.com/jni-rs/jni-sys
+   js-sys 0.3.105  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
+   lazy_static 1.5.0  https://github.com/rust-lang-nursery/lazy-static.rs
+   libc 0.2.189  https://github.com/rust-lang/libc
+   log 0.4.34  https://github.com/rust-lang/log
+   mime 0.3.17  https://github.com/hyperium/mime
+   monostate 0.1.18  https://github.com/dtolnay/monostate
+   monostate-impl 0.1.18  https://github.com/dtolnay/monostate
+   once_cell 1.21.4  https://github.com/matklad/once_cell
+   once_cell_polyfill 1.70.2  https://github.com/polyfill-rs/once_cell_polyfill
+   openssl-probe 0.2.1  https://github.com/rustls/openssl-probe
+   paste 1.0.15  https://github.com/dtolnay/paste
+   pastey 0.2.3  https://github.com/as1100k/pastey
+   percent-encoding 2.3.2  https://github.com/servo/rust-url/
+   pkg-config 0.3.34  https://github.com/rust-lang/pkg-config-rs
+   ppv-lite86 0.2.21  https://github.com/cryptocorrosion/cryptocorrosion
+   proc-macro2 1.0.107  https://github.com/dtolnay/proc-macro2
+   quote 1.0.47  https://github.com/dtolnay/quote
+   rand 0.10.2  https://github.com/rust-random/rand
+   rand 0.9.5  https://github.com/rust-random/rand
+   rand_chacha 0.9.0  https://github.com/rust-random/rand
+   rand_core 0.10.1  https://github.com/rust-random/rand_core
+   rand_core 0.9.5  https://github.com/rust-random/rand
+   rayon 1.12.0  https://github.com/rayon-rs/rayon
+   rayon-core 1.13.0  https://github.com/rayon-rs/rayon
+   regex 1.13.1  https://github.com/rust-lang/regex
+   regex-automata 0.4.18  https://github.com/rust-lang/regex
+   regex-syntax 0.8.11  https://github.com/rust-lang/regex
+   reqwest 0.13.4  https://github.com/seanmonstar/reqwest
+   rustc_version 0.4.1  https://github.com/djc/rustc-version-rs
+   rustls-pki-types 1.15.1  https://github.com/rustls/pki-types
+   rustls-platform-verifier 0.7.0  https://github.com/rustls/rustls-platform-verifier
+   rustls-platform-verifier-android 0.1.1  https://github.com/rustls/rustls-platform-verifier
+   rustversion 1.0.23  https://github.com/dtolnay/rustversion
+   security-framework 3.7.0  https://github.com/kornelski/rust-security-framework
+   security-framework-sys 2.17.0  https://github.com/kornelski/rust-security-framework
+   semver 1.0.28  https://github.com/dtolnay/semver
+   serde 1.0.229  https://github.com/serde-rs/serde
+   serde_core 1.0.229  https://github.com/serde-rs/serde
+   serde_derive 1.0.229  https://github.com/serde-rs/serde
+   serde_json 1.0.151  https://github.com/serde-rs/json
+   serde_path_to_error 0.1.20  https://github.com/dtolnay/path-to-error
+   serde_spanned 1.1.1  https://github.com/toml-rs/toml
+   sha2 0.11.0  https://github.com/RustCrypto/hashes
+   shlex 2.0.1  https://github.com/comex/rust-shlex
+   simdutf8 0.1.5  https://github.com/rusticstuff/simdutf8
+   smallvec 1.16.0  https://github.com/servo/rust-smallvec
+   socket2 0.6.5  https://github.com/rust-lang/socket2
+   stable_deref_trait 1.2.1  https://github.com/storyyeller/stable_deref_trait
+   static_assertions 1.1.0  https://github.com/nvzqz/static-assertions-rs
+   syn 2.0.119  https://github.com/dtolnay/syn
+   syn 3.0.5  https://github.com/dtolnay/syn
+   tempfile 3.27.0  https://github.com/Stebalien/tempfile
+   thiserror 2.0.20  https://github.com/dtolnay/thiserror
+   thiserror-impl 2.0.20  https://github.com/dtolnay/thiserror
+   thread_local 1.1.10  https://github.com/Amanieu/thread_local-rs
+   tokio-rustls 0.26.5  https://github.com/rustls/tokio-rustls
+   toml 1.1.5+spec-1.1.0  https://github.com/toml-rs/toml
+   toml_datetime 1.1.1+spec-1.1.0  https://github.com/toml-rs/toml
+   toml_parser 1.1.3+spec-1.1.0  https://github.com/toml-rs/toml
+   toml_writer 1.1.2+spec-1.1.0  https://github.com/toml-rs/toml
+   typenum 1.20.1  https://github.com/paholg/typenum
+   unicase 2.9.0  https://github.com/seanmonstar/unicase
+   unicode-segmentation 1.13.3  https://github.com/unicode-rs/unicode-segmentation
+   unicode_categories 0.1.1  https://github.com/swgillespie/unicode-categories
+   url 2.5.8  https://github.com/servo/rust-url
+   wasm-bindgen 0.2.128  https://github.com/wasm-bindgen/wasm-bindgen
+   wasm-bindgen-futures 0.4.78  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/futures
+   wasm-bindgen-macro 0.2.128  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/macro
+   wasm-bindgen-macro-support 0.2.128  https://github.com/wasm-bindgen/wasm-bindgen/tree/main/crates/macro-support
+   wasm-bindgen-shared 0.2.128  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared
+   web-sys 0.3.105  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys
+   web-time 1.1.0  https://github.com/daxpedda/web-time
+   windows-link 0.2.1  https://github.com/microsoft/windows-rs
+   windows-sys 0.52.0  https://github.com/microsoft/windows-rs
+   windows-sys 0.61.2  https://github.com/microsoft/windows-rs
+   windows-targets 0.52.6  https://github.com/microsoft/windows-rs
+   windows_aarch64_gnullvm 0.52.6  https://github.com/microsoft/windows-rs
+   windows_aarch64_msvc 0.52.6  https://github.com/microsoft/windows-rs
+   windows_i686_gnu 0.52.6  https://github.com/microsoft/windows-rs
+   windows_i686_gnullvm 0.52.6  https://github.com/microsoft/windows-rs
+   windows_i686_msvc 0.52.6  https://github.com/microsoft/windows-rs
+   windows_x86_64_gnu 0.52.6  https://github.com/microsoft/windows-rs
+   windows_x86_64_gnullvm 0.52.6  https://github.com/microsoft/windows-rs
+   windows_x86_64_msvc 0.52.6  https://github.com/microsoft/windows-rs
+
+-- MIT OR Apache-2.0 OR LGPL-2.1-or-later ------------------------------------
+   r-efi 5.3.0  https://github.com/r-efi/r-efi
+   r-efi 6.0.0  https://github.com/r-efi/r-efi
+
+-- MIT/Apache-2.0 ------------------------------------------------------------
+   base64 0.13.1  https://github.com/marshallpierce/rust-base64
+   bitflags 1.3.2  https://github.com/bitflags/bitflags
+   fallible-iterator 0.3.0  https://github.com/sfackler/rust-fallible-iterator
+   fallible-streaming-iterator 0.1.9  https://github.com/sfackler/fallible-streaming-iterator
+   ident_case 1.0.1  https://github.com/TedDriggs/ident_case
+   minimal-lexical 0.2.1  https://github.com/Alexhuszagh/minimal-lexical
+   serde_urlencoded 0.7.1  https://github.com/nox/serde_urlencoded
+   unicode-normalization-alignments 0.1.12  https://github.com/n1t0/unicode-normalization
+   vcpkg 0.2.15  https://github.com/mcgoo/vcpkg-rs
+   version_check 0.9.5  https://github.com/SergioBenitez/version_check
+
+-- Unicode-3.0 ---------------------------------------------------------------
+   icu_collections 2.3.0  https://github.com/unicode-org/icu4x
+   icu_locale_core 2.3.0  https://github.com/unicode-org/icu4x
+   icu_normalizer 2.3.0  https://github.com/unicode-org/icu4x
+   icu_normalizer_data 2.3.0  https://github.com/unicode-org/icu4x
+   icu_properties 2.3.0  https://github.com/unicode-org/icu4x
+   icu_properties_data 2.3.0  https://github.com/unicode-org/icu4x
+   icu_provider 2.3.1  https://github.com/unicode-org/icu4x
+   litemap 0.8.3  https://github.com/unicode-org/icu4x
+   potential_utf 0.1.6  https://github.com/unicode-org/icu4x
+   tinystr 0.8.4  https://github.com/unicode-org/icu4x
+   writeable 0.6.4  https://github.com/unicode-org/icu4x
+   yoke 0.8.3  https://github.com/unicode-org/icu4x
+   yoke-derive 0.8.2  https://github.com/unicode-org/icu4x
+   zerofrom 0.1.8  https://github.com/unicode-org/icu4x
+   zerofrom-derive 0.1.7  https://github.com/unicode-org/icu4x
+   zerotrie 0.2.5  https://github.com/unicode-org/icu4x
+   zerovec 0.11.8  https://github.com/unicode-org/icu4x
+   zerovec-derive 0.11.6  https://github.com/unicode-org/icu4x
+
+-- Unlicense OR MIT ----------------------------------------------------------
+   aho-corasick 1.1.5  https://github.com/BurntSushi/aho-corasick
+   globset 0.4.20  https://github.com/BurntSushi/ripgrep/tree/master/crates/globset
+   ignore 0.4.33  https://github.com/BurntSushi/ripgrep/tree/master/crates/ignore
+   jiff 0.2.35  https://github.com/BurntSushi/jiff
+   jiff-core 0.1.0  https://github.com/BurntSushi/jiff
+   jiff-static 0.2.35  https://github.com/BurntSushi/jiff
+   jiff-tzdb 0.1.8  https://github.com/BurntSushi/jiff
+   jiff-tzdb-platform 0.1.3  https://github.com/BurntSushi/jiff
+   memchr 2.8.3  https://github.com/BurntSushi/memchr
+   winapi-util 0.1.11  https://github.com/BurntSushi/winapi-util
+
+-- Unlicense/MIT -------------------------------------------------------------
+   same-file 1.0.6  https://github.com/BurntSushi/same-file
+   walkdir 2.5.0  https://github.com/BurntSushi/walkdir
+
+-- Zlib ----------------------------------------------------------------------
+   foldhash 0.2.0  https://github.com/orlp/foldhash
+
