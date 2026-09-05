@@ -545,3 +545,24 @@ impl DryRun {
         self.dry_run.unwrap_or(false)
     }
 }
+
+#[derive(Debug, Deserialize)]
+pub struct UsageParams {
+    /// Calendar days of history, 1 to 365. Default 30.
+    pub days: Option<usize>,
+}
+
+/// `GET /api/v1/usage`: what retrieval handed over against what reading in full would have
+/// cost, and what the local model charged for the checks it ran.
+#[derive(Debug, Serialize)]
+pub struct UsageReport {
+    pub retrieval: crate::usage::UsageSummary,
+    pub inference: crate::usage::InferenceUsage,
+    /// CPU and memory around the model calls, machine-wide and — when a cgroup is
+    /// configured — attributed to the endpoint itself.
+    pub load: crate::hostload::LoadSummary,
+    /// What the endpoint holds in memory right now. `null` when it does not say.
+    pub loaded_models: Option<Vec<cyberbrain_llm::LoadedModel>>,
+    /// One entry per calendar day, oldest first, empty days included.
+    pub days: Vec<crate::usage::DayBucket>,
+}

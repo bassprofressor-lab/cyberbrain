@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use crate::address::{EndpointPolicy, Resolver, SystemResolver, ValidatedEndpoint};
 use crate::audit::{AuditSink, CallKind, CallOutcome, InferenceEvent};
 use crate::backend::{self, Backend, Probe};
-use crate::types::{ChatRequest, ChatResponse, ModelInfo, Usage};
+use crate::types::{ChatRequest, ChatResponse, LoadedModel, ModelInfo, Usage};
 use crate::wire;
 
 /// `[llm]` section of `cyberbrain.toml`.
@@ -642,6 +642,87 @@ impl LlmClient {
     /// `GET /models`.
     pub async fn models(&self) -> Result<Vec<ModelInfo>> {
         Ok(self.models_with_headers().await?.0)
+    }
+
+    /// **Vendor route, outside the two-route contract this client otherwise keeps.**
+    /// `GET {host}/api/ps` is Ollama's, and nobody else answers it. It is asked because the
+    /// alternative — inferring memory use from the outside — cannot tell weights from page
+    /// cache, and a wrong number on a resource page is worse than no number. Anything but a
+    /// well-formed answer returns `Ok(None)`: this is a nicety, never a reason to fail.
+    ///
+    /// The egress gate authorises it exactly like a completion (same host, same purpose)
+    /// and the audit row carries `call: vendor-status`, so the departure from the contract
+    /// is visible in the log rather than only in this comment.
+    pub async fn loaded_models(&self) -> Option<Vec<LoadedModel>> {
+        let host = self
+            .endpoint
+            .base_url
+            .as_str()
+            .trim_end_matches('/')
+            .trim_end_matches("/v1")
+            .to_string();
+        let url = format!("{host}/api/ps");
+        let started = Instant::now();
+        if self.authorise().is_err() {
+            return None;
+        }
+        let resp = self
+            .http
+            .get(&url)
+            .timeout(self.cfg.probe_timeout)
+            .send()
+            .await;
+        let (outcome, body) = match resp {
+            Ok(r) if r.status().is_success() => (CallOutcome::Ok, r.text().await.ok()),
+            Ok(r) => (CallOutcome::BadStatus(r.status().as_u16()), None),
+            Err(e) => (transport_failure(&url, &e).0, None),
+        };
+        self.record(
+            CallKind::VendorStatus,
+            None,
+            &url,
+            &self.cfg.model,
+            outcome.clone(),
+            None,
+            started,
+        );
+        if !outcome.is_ok() {
+            return None;
+        }
+        let v: serde_json::Value = serde_json::from_str(&body?).ok()?;
+        let models = v.get("models")?.as_array()?;
+        Some(
+            models
+                .iter()
+                .map(|m| {
+                    let d = m.get("details");
+                    let text = |k: &str| {
+                        d.and_then(|d| d.get(k))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned)
+                    };
+                    LoadedModel {
+                        name: m
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unnamed")
+                            .to_string(),
+                        size: m.get("size").and_then(|v| v.as_u64()),
+                        size_vram: m.get("size_vram").and_then(|v| v.as_u64()),
+                        context_length: m
+                            .get("context_length")
+                            .and_then(|v| v.as_u64())
+                            .map(|n| n as u32),
+                        parameter_size: text("parameter_size"),
+                        quantization_level: text("quantization_level"),
+                        expires_at: m
+                            .get("expires_at")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_owned),
+                    }
+                })
+                .collect(),
+        )
     }
 
     /// Ask the endpoint what it is, for the status screen. Never fails: an unreachable

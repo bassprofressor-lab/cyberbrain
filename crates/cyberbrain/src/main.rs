@@ -10,10 +10,12 @@ mod app;
 mod audit_bridge;
 mod cli;
 mod hook;
+mod hostload;
 mod import;
 mod mcp;
 mod render;
 mod serve;
+mod usage;
 mod writers;
 
 use app::{App, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};

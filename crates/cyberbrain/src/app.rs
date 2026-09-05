@@ -16,6 +16,8 @@
 //! once here and handed the sink from step 2.
 
 use crate::audit_bridge::{AUDIT_DB_FILE, StoreAuditSink};
+use crate::hostload;
+use crate::usage;
 use crate::writers::{
     FsNoteWriter, IndexWriter, NoopIndexWriter, NoopNoteWriter, NoteWriter, SqliteIndexWriter,
     StoreEraser, lock_index,
@@ -1168,8 +1170,11 @@ impl App {
         if result.hits.len() >= 2 {
             match self.llm().await {
                 LlmState::Ready(client) => {
+                    let probe = self.load_probe();
+                    let started = std::time::Instant::now();
                     let (conflicts, caveats) =
                         cyberbrain_llm::tasks::find_conflicts(&client, &result.hits).await;
+                    self.record_load("contradiction-check", probe, started.elapsed());
                     result.conflicts = conflicts;
                     result.caveats.extend(caveats);
                 }
@@ -1182,7 +1187,243 @@ impl App {
                 "contradiction check skipped: fewer than two hits, nothing to compare".into(),
             );
         }
+        self.record_recall_usage(&result);
         Ok(result)
+    }
+
+    /// Ledger row for one recall: the tokens handed over against the tokens the notes those
+    /// hits came from hold in full. Both sides come from the index, which counts tokens per
+    /// block, so neither is an estimate. Failure to measure is failure to record, never a
+    /// zero: a zero here would read as "saved nothing".
+    fn record_recall_usage(&self, result: &RecallResult) {
+        if result.hits.is_empty() {
+            return;
+        }
+        let cited: std::collections::HashSet<&str> =
+            result.hits.iter().map(|h| h.citation.as_str()).collect();
+        let notes: std::collections::BTreeSet<&NoteId> =
+            result.hits.iter().map(|h| &h.note_id).collect();
+        let Ok(ix) = lock_index(&self.index) else {
+            return;
+        };
+        let (mut returned, mut full) = (0u64, 0u64);
+        for id in &notes {
+            let Ok(blocks) = ix.blocks_of(id) else {
+                return;
+            };
+            for b in blocks {
+                full += u64::from(b.token_count);
+                if cited.contains(b.citation.to_string().as_str()) {
+                    returned += u64::from(b.token_count);
+                }
+            }
+        }
+        drop(ix);
+        self.usage().append(&usage::UsageRow {
+            at: usage::now(),
+            op: "recall".into(),
+            unit: "tokens".into(),
+            returned,
+            full,
+            hits: result.hits.len() as u64,
+            sources: notes.len() as u64,
+        });
+    }
+
+    /// The before-half of a load measurement. Cheap enough (two small reads, three when a
+    /// cgroup is configured) to take around every model call.
+    fn load_probe(&self) -> (Option<hostload::HostSample>, Option<hostload::CgroupSample>) {
+        (hostload::read_host(), self.cgroup_sample())
+    }
+
+    fn cgroup_sample(&self) -> Option<hostload::CgroupSample> {
+        let dir = self.config.inference.load_cgroup.as_ref()?;
+        hostload::read_cgroup(Path::new(dir))
+    }
+
+    fn record_load(
+        &self,
+        task: &str,
+        before: (Option<hostload::HostSample>, Option<hostload::CgroupSample>),
+        wall: std::time::Duration,
+    ) {
+        let after = (hostload::read_host(), self.cgroup_sample());
+        let row = hostload::row(task, wall, (before.0, after.0), (before.1, after.1));
+        hostload::LoadLog::new(&self.root).append(&row);
+    }
+
+    /// The last `days` calendar days of everything the two ledgers and the audit log know,
+    /// oldest first, with empty days present and zero. Three sources are merged here rather
+    /// than in the page, because the page must not be the place where "no data" and "zero"
+    /// get to look alike.
+    pub fn usage_by_day(&self, days: usize) -> Vec<usage::DayBucket> {
+        let axis = usage::day_axis(days);
+        let mut by_date: std::collections::BTreeMap<String, usage::DayBucket> = axis
+            .iter()
+            .map(|d| {
+                (
+                    d.clone(),
+                    usage::DayBucket {
+                        date: d.clone(),
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+
+        // Retrieval ledger.
+        if let Ok(text) = std::fs::read_to_string(self.root.join("usage.jsonl")) {
+            for line in text.lines() {
+                let Ok(r) = serde_json::from_str::<usage::UsageRow>(line) else {
+                    continue;
+                };
+                let Some(day) = usage::day_of(&r.at).and_then(|d| by_date.get_mut(d)) else {
+                    continue;
+                };
+                let t = if r.op == "find" {
+                    &mut day.find
+                } else {
+                    &mut day.recall
+                };
+                t.ops += 1;
+                t.returned += r.returned;
+                t.full += r.full;
+                t.hits += r.hits;
+            }
+        }
+
+        // Model calls, from the audit log.
+        let filter = AuditFilter {
+            action: Some("inference.call".into()),
+            ..AuditFilter::default()
+        };
+        if let Ok(rows) = self.policy.audit().read(&filter) {
+            for r in rows {
+                let d = &r.detail;
+                let call = d.get("call").and_then(|v| v.as_str()).unwrap_or("");
+                if call != "chat-completion" && call != "chat-completion-stream" {
+                    continue;
+                }
+                let ts = r.ts.to_string();
+                let Some(day) = usage::day_of(&ts).and_then(|d| by_date.get_mut(d)) else {
+                    continue;
+                };
+                let num = |k: &str| d.get(k).and_then(|v| v.as_u64()).unwrap_or(0);
+                day.calls += 1;
+                day.prompt_tokens += num("prompt_tokens");
+                day.cached_prompt_tokens += num("cached_prompt_tokens");
+                day.completion_tokens += num("completion_tokens");
+            }
+        }
+
+        // Load ledger: averaged, so the day carries a rate and not a sum of rates.
+        let mut cores: std::collections::BTreeMap<String, (f64, u64, f64, u64)> =
+            std::collections::BTreeMap::new();
+        if let Ok(text) = std::fs::read_to_string(self.root.join("load.jsonl")) {
+            for line in text.lines() {
+                let Ok(r) = serde_json::from_str::<hostload::LoadRow>(line) else {
+                    continue;
+                };
+                let Some(date) = usage::day_of(&r.at).map(str::to_owned) else {
+                    continue;
+                };
+                if let Some(day) = by_date.get_mut(&date) {
+                    day.wall_ms += r.wall_ms;
+                }
+                let e = cores.entry(date).or_insert((0.0, 0, 0.0, 0));
+                if let Some(c) = r.endpoint_cores {
+                    e.0 += c;
+                    e.1 += 1;
+                }
+                if let Some(c) = r.machine_cores {
+                    e.2 += c;
+                    e.3 += 1;
+                }
+            }
+        }
+        for (date, (ep, epn, ma, man)) in cores {
+            let Some(day) = by_date.get_mut(&date) else {
+                continue;
+            };
+            if epn > 0 {
+                day.endpoint_cores = Some(ep / epn as f64);
+            }
+            if man > 0 {
+                day.machine_cores = Some(ma / man as f64);
+            }
+        }
+        by_date.into_values().collect()
+    }
+
+    pub fn load_summary(&self) -> hostload::LoadSummary {
+        hostload::LoadLog::new(&self.root).summary()
+    }
+
+    /// What the endpoint says it currently holds in memory. `None` when no model is
+    /// configured, the endpoint is unreachable, or it does not answer the vendor route.
+    pub async fn loaded_models(&self) -> Option<Vec<cyberbrain_llm::LoadedModel>> {
+        match self.llm().await {
+            LlmState::Ready(client) => client.loaded_models().await,
+            LlmState::Absent(_) => None,
+        }
+    }
+
+    fn usage(&self) -> usage::UsageLog {
+        usage::UsageLog::new(&self.root)
+    }
+
+    pub fn usage_summary(&self) -> usage::UsageSummary {
+        self.usage().summary()
+    }
+
+    /// What the local model actually cost, read back out of the audit log. Grouped by task,
+    /// because "contradiction-check" and "session-summary" are paid for separately. Rows the
+    /// endpoint did not report counts for are counted as calls and not as tokens, and the
+    /// number of those is carried so the totals cannot be mistaken for complete.
+    pub fn inference_usage(&self) -> usage::InferenceUsage {
+        let filter = AuditFilter {
+            action: Some("inference.call".into()),
+            ..AuditFilter::default()
+        };
+        let Ok(rows) = self.policy.audit().read(&filter) else {
+            return usage::InferenceUsage::default();
+        };
+        let mut out = usage::InferenceUsage::default();
+        for r in rows {
+            let d = &r.detail;
+            let call = d.get("call").and_then(|v| v.as_str()).unwrap_or("");
+            if call != "chat-completion" && call != "chat-completion-stream" {
+                continue;
+            }
+            let task = d
+                .get("task")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unnamed")
+                .to_string();
+            let e = out.tasks.entry(task).or_default();
+            let num = |k: &str| d.get(k).and_then(|v| v.as_u64());
+            e.calls += 1;
+            e.elapsed_ms += num("elapsed_ms").unwrap_or(0);
+            if d.get("outcome").and_then(|v| v.as_str()) != Some("ok") {
+                e.failed += 1;
+            }
+            match (num("prompt_tokens"), num("completion_tokens")) {
+                (Some(p), c) => {
+                    e.prompt_tokens += p;
+                    e.completion_tokens += c.unwrap_or(0);
+                    match num("cached_prompt_tokens") {
+                        Some(c) => e.cached_prompt_tokens += c,
+                        None => e.calls_without_cache_report += 1,
+                    }
+                }
+                _ => e.calls_without_counts += 1,
+            }
+            if out.first.is_none() {
+                out.first = Some(r.ts.to_string());
+            }
+            out.last = Some(r.ts.to_string());
+        }
+        out
     }
 
     /// `recall --id`: a citation back to its block and the whole note it came from.
@@ -1695,7 +1936,45 @@ impl App {
             ..cyberbrain_code::FindOptions::default()
         };
         let result = cyberbrain_code::find(&self.code_root(), symbol, limit, &opts)?;
-        Ok(FindReport::from(result))
+        let report = FindReport::from(result);
+        self.record_find_usage(&report);
+        Ok(report)
+    }
+
+    /// Ledger row for one find, counted in lines: the spans the caller is told to read
+    /// against the length of the files they sit in. The files were just walked, so reading
+    /// their line count back costs a warm read of at most `limit` files; a file that cannot
+    /// be read is left out of both sides rather than counted as free.
+    fn record_find_usage(&self, report: &FindReport) {
+        if report.hits.is_empty() {
+            return;
+        }
+        let mut returned = 0u64;
+        let mut full = 0u64;
+        let mut counted: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+        for h in &report.hits {
+            returned += u64::from(h.end_line.saturating_sub(h.start_line)) + 1;
+            if counted.insert(h.path.as_str()) {
+                match std::fs::read_to_string(report.root.join(&h.path)) {
+                    Ok(text) => full += text.lines().count() as u64,
+                    Err(_) => {
+                        counted.remove(h.path.as_str());
+                    }
+                }
+            }
+        }
+        if full == 0 {
+            return;
+        }
+        self.usage().append(&usage::UsageRow {
+            at: usage::now(),
+            op: "find".into(),
+            unit: "lines".into(),
+            returned,
+            full,
+            hits: report.hits.len() as u64,
+            sources: counted.len() as u64,
+        });
     }
 
     // ----- policy ------------------------------------------------------------------------

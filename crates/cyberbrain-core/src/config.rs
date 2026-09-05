@@ -129,6 +129,15 @@ pub struct InferenceConfig {
     pub model: Option<String>,
     /// Per-request timeout. The LLM layer is optional; it must never hang a core path.
     pub timeout_ms: u64,
+    /// cgroup v2 directory of the process serving `base_url`, when it is on this machine
+    /// and the operator wants its CPU and memory attributed exactly. Something like
+    /// `/sys/fs/cgroup/system.slice/docker-<id>.scope`. Left unset, the load page still
+    /// shows machine-wide figures and says that they are machine-wide. It is configured
+    /// rather than detected because the only automatic route runs through a container
+    /// runtime's proxy process, and an attribution that is wrong but looks exact is worse
+    /// than none.
+    #[serde(default)]
+    pub load_cgroup: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -195,6 +204,7 @@ impl Default for InferenceConfig {
             allow_overlay_network: false,
             model: None,
             timeout_ms: 30_000,
+            load_cgroup: None,
         }
     }
 }

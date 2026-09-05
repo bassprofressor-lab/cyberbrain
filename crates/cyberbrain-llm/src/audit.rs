@@ -24,6 +24,9 @@ pub enum CallKind {
     ChatCompletionStream,
     /// `GET /models`.
     ListModels,
+    /// A vendor route outside the OpenAI surface, asked only of a backend that was
+    /// fingerprinted first. Named so the audit log shows it left the two-route contract.
+    VendorStatus,
     /// No request was sent: the endpoint was validated (or refused) before any I/O.
     EndpointValidation,
 }

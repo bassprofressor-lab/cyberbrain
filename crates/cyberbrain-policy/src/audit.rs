@@ -472,6 +472,7 @@ impl cyberbrain_llm::AuditSink for AuditLog {
             "public_waived": event.public_waived,
             "elapsed_ms": event.elapsed.as_millis() as u64,
             "outcome_detail": event.outcome,
+            "cached_prompt_tokens": usage.and_then(|u| u.cached_prompt_tokens),
         });
         // The trait is infallible by design (the llm crate must never block on us). A
         // failed append is the one thing that cannot be recorded in the log itself; it goes

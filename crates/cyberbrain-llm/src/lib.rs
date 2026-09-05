@@ -54,4 +54,4 @@ pub use backend::{Backend, Probe};
 pub use client::{LlmClient, LlmConfig};
 pub use cyberbrain_core::{EgressPurpose, Error, Result};
 pub use degrade::{Degraded, Feature};
-pub use types::{ChatMessage, ChatRequest, ChatResponse, ModelInfo, Role, Usage};
+pub use types::{ChatMessage, ChatRequest, ChatResponse, LoadedModel, ModelInfo, Role, Usage};

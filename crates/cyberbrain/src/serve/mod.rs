@@ -105,6 +105,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/policy/retention/apply", post(policy::retention_apply))
         .route("/policy/model-card", get(policy::model_cards))
         .route("/policy/subject", get(policy::subject))
+        .route("/usage", get(ops::usage))
         .route("/doctor", get(ops::doctor))
         .route("/scan", post(ops::scan))
         .layer(axum::middleware::from_fn(no_store))

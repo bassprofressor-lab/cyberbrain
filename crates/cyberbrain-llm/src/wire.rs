@@ -75,6 +75,15 @@ pub(crate) struct WireUsage {
     pub completion_tokens: Option<u32>,
     #[serde(default)]
     pub total_tokens: Option<u32>,
+    /// OpenAI and Ollama both report prompt-cache hits here. Absent on servers that do not.
+    #[serde(default)]
+    pub prompt_tokens_details: Option<WirePromptTokensDetails>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub(crate) struct WirePromptTokensDetails {
+    #[serde(default)]
+    pub cached_tokens: Option<u32>,
 }
 
 impl From<WireUsage> for Usage {
@@ -83,6 +92,7 @@ impl From<WireUsage> for Usage {
             prompt_tokens: w.prompt_tokens,
             completion_tokens: w.completion_tokens,
             total_tokens: w.total_tokens,
+            cached_prompt_tokens: w.prompt_tokens_details.and_then(|d| d.cached_tokens),
         }
     }
 }

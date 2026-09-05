@@ -72,6 +72,9 @@ pub struct Usage {
     pub prompt_tokens: Option<u32>,
     pub completion_tokens: Option<u32>,
     pub total_tokens: Option<u32>,
+    /// Part of `prompt_tokens` the server answered from its prompt cache. `None` means the
+    /// server did not say, which is not the same as zero and is never turned into one.
+    pub cached_prompt_tokens: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,4 +93,21 @@ pub struct ChatResponse {
 pub struct ModelInfo {
     pub id: String,
     pub owned_by: Option<String>,
+}
+
+/// One model the endpoint says it currently holds in memory. Vendor-reported: only Ollama
+/// answers this today, and the fields are its own, so every one of them is optional.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadedModel {
+    pub name: String,
+    /// Bytes the weights occupy, as the server reports them.
+    pub size: Option<u64>,
+    /// Of `size`, the part in video memory. Zero on a CPU-only host, which is a fact worth
+    /// showing rather than hiding.
+    pub size_vram: Option<u64>,
+    pub context_length: Option<u32>,
+    pub parameter_size: Option<String>,
+    pub quantization_level: Option<String>,
+    /// When the server intends to unload it again. The next call after that pays the load.
+    pub expires_at: Option<String>,
 }

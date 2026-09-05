@@ -7,7 +7,7 @@ use super::policy::endpoint_class;
 use super::wire::{
     CitationExpansion, DoctorFinding, DoctorReport, DryRun, EmbeddingStatus, Hit, IndexStatus,
     InferenceStatus, PolicyStatus, RecallEcho, RecallParams, RecallResult, ResidentCap, RingCount,
-    ScanParams, ScanReport, StatusReport, StoreStatus,
+    ScanParams, ScanReport, StatusReport, StoreStatus, UsageParams, UsageReport,
 };
 use super::{ServeState, blocking};
 use crate::app::{RecallRequest, ScanOptions};
@@ -412,6 +412,28 @@ fn doctor_subject(check: &str, detail: &str) -> String {
         "audit chain" => "audit.db".into(),
         _ => "store".into(),
     }
+}
+
+/// Retrieval ledger and model cost in one answer, because a saving without its price is
+/// half a number.
+pub async fn usage(
+    State(st): State<Arc<ServeState>>,
+    ApiQuery(params): ApiQuery<UsageParams>,
+) -> ApiResult<Json<UsageReport>> {
+    // Asked before the blocking half: it is a network call, and it is the one field here
+    // that can be stale by the time the page renders, since a model is unloaded on a timer.
+    let loaded_models = st.app.loaded_models().await;
+    let days = params.days.unwrap_or(30).clamp(1, 365);
+    blocking(move || {
+        Ok(Json(UsageReport {
+            retrieval: st.app.usage_summary(),
+            inference: st.app.inference_usage(),
+            load: st.app.load_summary(),
+            loaded_models,
+            days: st.app.usage_by_day(days),
+        }))
+    })
+    .await
 }
 
 pub async fn doctor(State(st): State<Arc<ServeState>>) -> ApiResult<Json<DoctorReport>> {
