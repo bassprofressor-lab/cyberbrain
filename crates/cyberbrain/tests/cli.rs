@@ -89,6 +89,42 @@ impl Cb {
         (v, out.status.code().unwrap_or(-1), stderr)
     }
 
+    /// Like [`json`](Self::json), with the note body on stdin instead of `--body`.
+    ///
+    /// Windows caps a command line at 32767 characters, so a body of any size has to
+    /// arrive this way — which is what the CLI documents anyway. Passing a large body as
+    /// an argument works on Linux, where the limit is megabytes, and fails on Windows with
+    /// `os error 206`.
+    fn json_stdin(&self, args: &[&str], body: &str) -> (Value, i32, String) {
+        use std::io::Write;
+        let mut full = vec!["--json"];
+        full.extend_from_slice(args);
+        let mut child = Self::bin()
+            .arg("--store")
+            .arg(&self.store)
+            .args(&full)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(body.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+        let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+        let v = if stdout.trim().is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&stdout).unwrap_or_else(|e| panic!("{e}: {stdout}"))
+        };
+        (v, out.status.code().unwrap_or(-1), stderr)
+    }
+
     fn ok(&self, args: &[&str]) -> Value {
         let (v, code, err) = self.json(args);
         assert_eq!(code, 0, "{args:?}: {err}");
@@ -667,9 +703,12 @@ fn a_pii_hold_is_a_decision_with_exit_3_and_force_writes_it_flagged() {
 
     // Ring cap and bad names are user errors (1); a policy refusal (3) is not a crash.
     let big = "word ".repeat(9000);
-    let (_, code, err) = cb.json(&[
-        "write", "--ring", "0", "--kind", "decision", "--name", "huge", "--body", &big,
-    ]);
+    let (_, code, err) = cb.json_stdin(
+        &[
+            "write", "--ring", "0", "--kind", "decision", "--name", "huge",
+        ],
+        &big,
+    );
     assert_eq!(code, 1, "{err}");
     assert!(err.contains("ring-cap-exceeded"), "{err}");
     let (_, code, err) = cb.json(&[
