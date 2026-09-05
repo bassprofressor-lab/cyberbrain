@@ -7,23 +7,36 @@ use crate::app::{App, WriteRequest};
 use cyberbrain_core::{NoteKind, Ring};
 use cyberbrain_policy::{Actor, AuditFilter};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 // ---------------------------------------------------------------------------------------
 // Fixtures
 
+/// Holds the process lock for the life of the test.
+///
+/// These tests manipulate state that belongs to the process and not to a test: the working
+/// directory, environment variables, the panic hook, and a fault injector. Chasing each of
+/// those races separately kept producing a different failing test every few runs, always
+/// green when run alone. They simply must not run beside each other, and the fixture every
+/// hook test already builds is the one place that cannot be forgotten. 86 tests in 0.3 s;
+/// serialising them costs nothing worth measuring.
 struct Fixture {
     _dir: TempDir,
     store: std::path::PathBuf,
+    _lock: ProcessLock,
 }
 
 fn fixture() -> Fixture {
+    let _lock = process_lock();
     let dir = tempfile::tempdir().unwrap();
     let store = dir.path().join(".cyberbrain");
     App::init(&store, &Actor::Operator).unwrap();
-    Fixture { _dir: dir, store }
+    Fixture {
+        _dir: dir,
+        store,
+        _lock,
+    }
 }
 
 impl Fixture {
@@ -743,11 +756,13 @@ fn old_session_state_is_swept_at_startup() {
     drop(ft);
     session_start(&f, "startup");
 
-    // Diagnostic rather than a bare assertion: this failed exactly once during a heavily
-    // loaded workspace run and could not be reproduced in six attempts afterwards, so the
-    // cause is unknown. If it happens again, the next person should get the evidence
-    // instead of "assertion failed" — what the age actually was, and what else was in the
-    // directory. An unreproducible failure is a reason to instrument, not to declare fine.
+    // Diagnostic rather than a bare assertion. This failed intermittently until the hook
+    // tests stopped running beside each other: they share the process's working directory,
+    // environment, panic hook and fault injector, and a sibling test's temporary store was
+    // being resolved here. The fixture now holds a process lock, and the cause is known.
+    //
+    // The instrumentation stays as a tripwire. If it ever fires again the next person gets
+    // the age as read back and the directory's contents, rather than a line number.
     if old.exists() {
         let age = std::fs::metadata(&old)
             .and_then(|m| m.modified())
@@ -777,7 +792,7 @@ fn the_never_fail_rule_holds_for_an_error_and_for_a_panic() {
     let app = f.open();
     let before = audit_actions(&app).len();
 
-    FAIL_NEXT.store(1, Ordering::SeqCst);
+    FAIL_NEXT.with(|f| f.set(1));
     let out = run(
         Some(&app),
         HookEvent::SessionStart,
@@ -792,7 +807,7 @@ fn the_never_fail_rule_holds_for_an_error_and_for_a_panic() {
         out.stderr
     );
 
-    FAIL_NEXT.store(2, Ordering::SeqCst);
+    FAIL_NEXT.with(|f| f.set(2));
     let out = run(
         Some(&app),
         HookEvent::PreToolUse,
@@ -810,7 +825,7 @@ fn the_never_fail_rule_holds_for_an_error_and_for_a_panic() {
     assert_eq!(&actions[before..], ["hook.error", "hook.error"]);
 
     // With no store, the error is still swallowed; there is just nowhere to record it.
-    FAIL_NEXT.store(1, Ordering::SeqCst);
+    FAIL_NEXT.with(|f| f.set(1));
     let out = run(None, HookEvent::Stop, "{}");
     assert_eq!(out.exit_code, 0);
     assert!(
@@ -934,10 +949,28 @@ fn hot_path_events_stay_under_15_ms_p99_and_session_start_under_150() {
 // ---------------------------------------------------------------------------------------
 // Guards
 
+/// The working directory and the environment belong to the process, not to a test, and
+/// these tests run in parallel with every other test in this binary. Both guards therefore
+/// hold **the same** lock, and hold it for as long as the change is in effect.
+///
+/// The first version took the lock inside `enter()` into a local binding, so it was
+/// released the moment the guard was returned — it serialised the call to
+/// `set_current_dir` and left the whole period during which the directory was changed
+/// unprotected. Sibling tests resolving a store from the working directory then saw
+/// another test's temporary directory, and failed roughly one workspace run in two while
+/// passing every time they were run alone. A lock that does not span the critical section
+/// is not a lock.
+type ProcessLock = std::sync::MutexGuard<'static, ()>;
+
+fn process_lock() -> ProcessLock {
+    cwd_lock().lock().unwrap_or_else(|e| e.into_inner())
+}
+
+// No lock of its own: the fixture already holds it, and taking a non-reentrant mutex twice
+// on one thread would deadlock. Every user of this guard builds a fixture first.
 struct CwdGuard(std::path::PathBuf);
 impl CwdGuard {
     fn enter(p: &Path) -> Self {
-        let _l = cwd_lock().lock().unwrap_or_else(|e| e.into_inner());
         let old = std::env::current_dir().unwrap();
         std::env::set_current_dir(p).unwrap();
         CwdGuard(old)
@@ -953,8 +986,8 @@ struct EnvGuard(&'static str, Option<std::ffi::OsString>);
 impl EnvGuard {
     fn set(k: &'static str, v: &str) -> Self {
         let old = std::env::var_os(k);
-        // Tests in this module are the only readers of the variable and the writes are
-        // scoped to the guard; Rust 2024 marks the call unsafe for that reason.
+        // Writes are scoped to the guard, and the fixture's process lock keeps a sibling
+        // test from observing them; Rust 2024 marks the call unsafe regardless.
         unsafe { std::env::set_var(k, v) };
         EnvGuard(k, old)
     }

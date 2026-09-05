@@ -50,10 +50,19 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-/// Test hook for the never-fail rule: 1 makes the next dispatch return an error, 2 makes
-/// it panic. Zero otherwise. See `tests::the_never_fail_rule`.
+// Test hook for the never-fail rule: 1 makes the next dispatch return an error, 2 makes
+// it panic. Zero otherwise. See `tests::the_never_fail_rule`.
+//
+// **Thread-local, not global.** As a process-wide atomic it was consumed by whichever
+// hook test happened to dispatch next, so an injected panic surfaced inside an unrelated
+// test and the suite failed about one workspace run in two while every test passed when
+// run alone. Making it thread-local confines the injection to the test that asked for it,
+// which is what a fault injector is supposed to mean. Serialising the tests would have
+// hidden the same race behind a lock instead of removing it.
 #[cfg(test)]
-pub(super) static FAIL_NEXT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+thread_local! {
+    pub(super) static FAIL_NEXT: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
 
 struct Ctx<'a> {
     app: &'a App,
@@ -123,7 +132,7 @@ pub(super) fn dispatch(
     }
 
     #[cfg(test)]
-    match FAIL_NEXT.swap(0, std::sync::atomic::Ordering::SeqCst) {
+    match FAIL_NEXT.with(|f| f.replace(0)) {
         1 => return Err(cyberbrain_core::Error::Index("injected failure".into())),
         2 => panic!("injected panic"),
         _ => {}
