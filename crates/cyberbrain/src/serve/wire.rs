@@ -66,7 +66,12 @@ pub struct EmbeddingStatus {
     pub dim: usize,
     pub pooling: String,
     pub backend: &'static str,
-    pub matches_index: bool,
+    /// `null` when there is nothing to compare: no model loaded, or no vectors stored.
+    ///
+    /// It was a plain `bool` that reported `true` in that case with the truth pushed into
+    /// a caveat. A boolean that means "yes or unknown" is read as "yes" by everything that
+    /// does not also read the caveats, which is every client that only wants a green dot.
+    pub matches_index: Option<bool>,
     pub model_hash: String,
     pub model_verified_at: Option<jiff::Timestamp>,
     /// Additive: `true` only when a model artefact is loaded. types.ts has no field for

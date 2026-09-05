@@ -218,7 +218,7 @@ export function SearchScreen({ route }: { route: Route }) {
                 <div className="label mb-2">rings</div>
                 <RingLegend className="flex-col !gap-y-1.5" />
                 <p className="mt-3 text-fg-faint leading-relaxed">
-                  Score = RRF over lexical and semantic ranks × ring weight [2.0 1.6 1.0 0.8 0.5]. Lower ring wins a contradiction; both citations are shown.
+                  Score = RRF over lexical and semantic ranks × ring weight [1.15 1.10 1.00 0.92 0.80]. Lower ring wins a contradiction; both citations are shown.
                 </p>
               </div>
             </div>
@@ -276,9 +276,13 @@ export function SearchScreen({ route }: { route: Route }) {
                       <CitationChip citation={h.citation} ring={h.ring} className="ml-auto" />
                       <ScoreBar score={h.score} top={top} />
                       <span className="hidden md:inline-flex gap-1">
-                        {h.sources.map((s) => (
-                          <Pill key={s}>{s === "lexical" ? "lex" : "sem"}</Pill>
-                        ))}
+                        {h.sources.length ? (
+                          h.sources.map((s) => <Pill key={s}>{s === "lexical" ? "lex" : "sem"}</Pill>)
+                        ) : (
+                          <span className="text-2xs text-fg-faint" title="The index does not report which candidate list (lexical, semantic) this block came from; see the caveats below.">
+                            src n/a
+                          </span>
+                        )}
                       </span>
                     </div>
                     <div className={`mt-1.5 pl-7 text-sm leading-relaxed text-fg whitespace-pre-wrap break-words ${open ? "" : "line-clamp-4"}`} onClick={() => toggleExpand(h.citation)}>

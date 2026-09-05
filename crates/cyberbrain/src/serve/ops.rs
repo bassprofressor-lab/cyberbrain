@@ -284,15 +284,13 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
                 e.embedder.reason.clone().unwrap_or_default()
             ));
         }
-        let matches_index = match e.matches_index {
-            Some(b) => b,
-            None => {
-                caveats.push(
-                    "matches_index: nothing to compare (no model loaded or no vectors stored); shown as true".into(),
-                );
-                true
-            }
-        };
+        let matches_index = e.matches_index;
+        if matches_index.is_none() {
+            caveats.push(
+                "matches_index is null: nothing to compare (no model loaded or no vectors stored)"
+                    .into(),
+            );
+        }
         caveats.push("model_verified_at: the artefact hash is verified on every load but no timestamp of that load is kept".into());
 
         // Inference.
@@ -384,7 +382,11 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
 
 fn doctor_check(check: &str) -> String {
     match check {
+        // Both singular on the wire. The fallback below would have made this one
+        // `unresolvable-links` while its sibling is `dangling-link`, which is the kind of
+        // difference a client discovers by having a switch fall through.
         "dangling links" => "dangling-link".into(),
+        "unresolvable links" => "unresolvable-link".into(),
         "ring cap" => "ring-cap".into(),
         "stale index" => "stale-index".into(),
         "index integrity" => "orphan-vector".into(),
@@ -395,7 +397,13 @@ fn doctor_check(check: &str) -> String {
 
 fn doctor_subject(check: &str, detail: &str) -> String {
     match check {
-        "dangling links" => detail.split(" links to ").next().unwrap_or("").to_string(),
+        // The two link checks share a detail shape, so they share an arm. Splitting them
+        // when `doctor` gained the second check left the new one falling through to
+        // "store", and the operator lost the name of the note the link came from —
+        // exactly the column they need to go fix it.
+        "dangling links" | "unresolvable links" => {
+            detail.split(" links to ").next().unwrap_or("").to_string()
+        }
         "unreadable note" | "notes tree" | "retention" => {
             detail.split(": ").next().unwrap_or("").to_string()
         }

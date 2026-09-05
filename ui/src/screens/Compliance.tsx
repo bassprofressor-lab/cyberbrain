@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, type AuditAction, type AuditRow, type EgressPath, type RetentionApplyReport, type SubjectAccessReport } from "@/api/client";
+import { api, AUDIT_ACTION_FAMILIES, type AuditAction, type AuditActionFilter, type AuditRow, type EgressPath, type PiiState, type RetentionApplyReport, type SubjectAccessReport } from "@/api/client";
 import { CitationChip } from "@/components/Citation";
 import { RingBadge } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
@@ -19,7 +19,13 @@ const SECTIONS = [
   ["subject", "Subject access"],
 ] as const;
 
-const ACTIONS: AuditAction[] = ["write", "erase", "scan", "model-download", "inference", "policy-refusal", "egress-attempt", "egress-refused", "retention-apply", "hold-resolved", "subject-access"];
+/** The log's own vocabulary, by family: `note` selects `note.*`, and so on (`AuditActionFilter`). */
+const ACTION_FILTERS = AUDIT_ACTION_FAMILIES;
+
+function piiTone(state: PiiState): "ok" | "warn" | "danger" | "neutral" {
+  return state === "flagged" ? "danger" : state === "reviewed" ? "warn" : state === "none" ? "ok" : "neutral";
+}
+const PII_LABEL: Record<PiiState, string> = { unscanned: "not scanned", none: "scanned, nothing found", reviewed: "reviewed", flagged: "flagged" };
 
 export function ComplianceScreen({ route }: { route: Route }) {
   const egress = useAsync(() => api.egress(), []);
@@ -131,24 +137,30 @@ export function ComplianceScreen({ route }: { route: Route }) {
                           </span>
                         </td>
                         <td className="py-1.5 pr-3">
-                          <Pill tone={e.state === "flagged" ? "danger" : "warn"}>{e.state}</Pill>
+                          <Pill tone={piiTone(e.state)} title={e.state === "unscanned" ? "No write-time scan ever ran over this note (imported or hand-written). The findings column is a scan of the body as it is now." : undefined}>
+                            {PII_LABEL[e.state]}
+                          </Pill>
                         </td>
                         <td className="py-1.5 pr-3 font-mono">
-                          {e.findings.map((f, i) => (
-                            <div key={i}>
-                              <span className="text-fg-muted">{f.kind}</span> {f.excerpt} <span className="text-fg-faint tnum">{f.line}:{f.col}</span>
-                            </div>
-                          ))}
+                          {e.findings.length ? (
+                            e.findings.map((f, i) => (
+                              <div key={i}>
+                                <span className="text-fg-muted">{f.kind}</span> {f.excerpt} <span className="text-fg-faint tnum">{f.line}:{f.col}</span>
+                              </div>
+                            ))
+                          ) : (
+                            <span className="text-fg-faint font-sans">{e.state === "unscanned" ? "a scan of the body now finds nothing; the note stays unscanned until it is written through the tool" : "nothing found in the body now"}</span>
+                          )}
                         </td>
                         <td className="py-1.5 text-fg-muted" title={absTime(e.reviewed_at)}>
-                          {e.reviewed_at ? relTime(e.reviewed_at) : "—"}
+                          {e.reviewed_at ? relTime(e.reviewed_at) : <span className="text-fg-faint">never scanned</span>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <Empty title="No note carries unreviewed or flagged personal data.">Every write under profile eu/ch is scanned for e-mail addresses, IPs, API keys, IBANs and phone numbers before it lands. Heuristic: a seatbelt, not a guarantee.</Empty>
+                <Empty title="Every note was scanned and none carries reviewed or flagged personal data.">Every write under profile eu/ch is scanned for e-mail addresses, IPs, API keys, IBANs and phone numbers before it lands. Heuristic: a seatbelt, not a guarantee. A note nobody scanned would be listed here as “not scanned”.</Empty>
               )}
             </>
           ) : null}
@@ -173,12 +185,12 @@ export function ComplianceScreen({ route }: { route: Route }) {
                     <KeyValue
                       rows={[
                         ["source", <span className="text-xs">{m.source}</span>],
-                        ["licence", m.license],
-                        ["hash", m.hash ? <code className="text-xs break-all">{m.hash}</code> : <span className="text-fg-faint">not held (endpoint model)</span>],
-                        ["format", m.format ?? "—"],
-                        ["dimension", m.dim ? `${m.dim} · ${m.pooling}` : "—"],
-                        ["size", bytes(m.bytes)],
-                        ["verified", m.verified_at ? <span title={absTime(m.verified_at)}>{relTime(m.verified_at)} on load</span> : "—"],
+                        ["licence", m.license === "not stated" ? <span className="text-fg-muted">not stated by the source; never guessed</span> : m.license],
+                        ["hash", m.hash ? <code className="text-xs break-all">{m.hash}</code> : <span className="text-fg-faint">not held (endpoint model; weights are not on this machine)</span>],
+                        ["format", m.format ?? <span className="text-fg-faint">not stated</span>],
+                        ["dimension", m.dim ? `${m.dim} · ${m.pooling ?? "pooling not stated"}` : <span className="text-fg-faint">{m.role === "inference" ? "not applicable (generates text)" : "not stated"}</span>],
+                        ["size", m.bytes === null ? <span className="text-fg-faint">{m.role === "inference" ? "not held" : "not stated"}</span> : bytes(m.bytes)],
+                        ["verified", m.verified_at ? <span title={absTime(m.verified_at)}>{relTime(m.verified_at)} on load</span> : m.hash ? <span className="text-fg-muted">hash checked on every load; no timestamp of that check is kept</span> : <span className="text-fg-faint">nothing to verify</span>],
                       ]}
                     />
                   </div>
@@ -256,8 +268,8 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
         <div className="label sm:col-span-2">how this statement is known, not hoped</div>
         <div>· The list of purposes is closed at compile time (register hash <code className="text-fg">{register.register_hash}</code>). A path not on it cannot be built.</div>
         <div>· All outbound I/O goes through one wrapper that requires a registered purpose; CI fails on an HTTP client constructed anywhere else.</div>
-        <div>· Every use of a path writes an audit row with destination, bytes and purpose. The counts above are those rows, not a separate metric.</div>
-        <div>· The inference endpoint must be loopback or private-range unless <code>allow_public_endpoint</code> is set; a refusal is logged as <code>egress-refused</code>.</div>
+        <div>· Every use of a path writes an <code>egress.permitted</code> row and, when the request closes, an <code>egress.completed</code> row with the bytes. “Uses” count the former, “bytes out” sum the latter; a request that never closed counts as a use with no bytes.</div>
+        <div>· The inference endpoint must be loopback or private-range unless <code>allow_public_endpoint</code> is set; a refusal is logged as <code>policy.refusal</code>.</div>
         <div>· The core embeds statically; no model server, no system library, no runtime fetch. The UI you are reading is served from the binary and fetches nothing external.</div>
         <div>· Telemetry is not a purpose. There is no opt-out because there is nothing to opt out of.</div>
       </div>
@@ -293,7 +305,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
                   <Dot tone={p.enabled ? "ok" : "off"} />
                   {p.enabled ? "enabled" : "disabled"}
                 </span>
-                {p.disabled_reason ? <div className="text-fg-faint mt-0.5 max-w-[14rem] whitespace-normal">{p.disabled_reason}</div> : null}
+                <div className="text-fg-faint mt-0.5 max-w-[14rem] whitespace-normal">{p.enabled ? p.state : p.disabled_reason}</div>
               </td>
               <td className="py-2 pr-3">
                 <code className="break-all">{p.destination}</code>
@@ -301,7 +313,10 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
                   <Pill tone={p.destination_class === "public" ? "warn" : "ok"}>{p.destination_class}</Pill>
                 </div>
               </td>
-              <td className="py-2 pr-3 text-fg-muted max-w-[18rem]">{p.data}</td>
+              <td className="py-2 pr-3 text-fg-muted max-w-[18rem]">
+                {p.data}
+                <div className="mt-0.5">{p.carries_note_content ? <Pill tone="warn">carries note content</Pill> : <Pill tone="ok">no note content</Pill>}</div>
+              </td>
               <td className="py-2 pr-3 font-mono">{p.permitted_by.join(" ")}</td>
               <td className="py-2 pr-3 tnum">{num(p.uses_total)}</td>
               <td className="py-2 pr-3 tnum">{bytes(p.bytes_out_total)}</td>
@@ -317,7 +332,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
 }
 
 function AuditSection() {
-  const [action, setAction] = useState<AuditAction | "">("");
+  const [action, setAction] = useState<AuditActionFilter | "">("");
   const [actor, setActor] = useState("");
   const [q, setQ] = useState("");
   const [rows, setRows] = useState<AuditRow[]>([]);
@@ -343,7 +358,14 @@ function AuditSection() {
         setError(null);
       },
       (e) => {
+        // A 400 here is the server refusing a filter that matches nothing, with the names
+        // that exist; keep the old rows off the screen so the message is not read as data.
         setError(toApiError(e));
+        if (before === undefined) {
+          setRows([]);
+          setTotal(0);
+          setNext(null);
+        }
         setLoading(false);
       },
     );
@@ -380,7 +402,12 @@ function AuditSection() {
     }
   };
 
-  const toneOf = (a: AuditAction): "ok" | "warn" | "danger" | "neutral" => (a === "erase" || a === "retention-apply" ? "warn" : a === "policy-refusal" || a === "egress-refused" ? "danger" : a === "model-download" ? "warn" : a === "inference" ? "ok" : "neutral");
+  const toneOf = (a: AuditAction): "ok" | "warn" | "danger" | "neutral" => {
+    if (a === "policy.refusal" || a === "egress.failed" || a === "egress.abandoned" || a === "note.erase.failed") return "danger";
+    if (a.startsWith("note.erase") || a === "retention.expired" || a === "note.write.held" || a === "index.cleared" || a === "index.note-dropped") return "warn";
+    if (a === "inference.call" || a === "egress.completed" || a === "egress.permitted") return "ok";
+    return "neutral";
+  };
 
   return (
     <Section
@@ -395,11 +422,11 @@ function AuditSection() {
       }
     >
       <div className="flex flex-wrap gap-2 mb-3">
-        <select className="input" value={action} onChange={(e) => setAction(e.target.value as AuditAction | "")} aria-label="Action">
+        <select className="input" value={action} onChange={(e) => setAction(e.target.value as AuditActionFilter | "")} aria-label="Action family" title="Filters by family prefix: note selects note.write, note.erase and their sub-actions">
           <option value="">any action</option>
-          {ACTIONS.map((a) => (
-            <option key={a} value={a}>
-              {a}
+          {ACTION_FILTERS.map((a) => (
+            <option key={a.value} value={a.value}>
+              {a.label}
             </option>
           ))}
         </select>
@@ -432,11 +459,15 @@ function AuditSection() {
                 </td>
                 <td className="py-1 pr-3 font-mono break-all max-w-[16rem]">{r.subject}</td>
                 <td className="py-1 text-fg-muted">
-                  {Object.entries(r.detail).map(([k, v]) => (
-                    <span key={k} className="inline-block mr-2 whitespace-nowrap">
-                      <span className="text-fg-faint">{k}</span>=<span className="font-mono">{String(v)}</span>
-                    </span>
-                  ))}
+                  {Object.keys(r.detail).length ? (
+                    Object.entries(r.detail).map(([k, v]) => (
+                      <span key={k} className="inline-block mr-2 whitespace-nowrap" title={typeof v === "string" && /^[[{]/.test(v) ? "nested value, shown as its JSON text" : undefined}>
+                        <span className="text-fg-faint">{k}</span>=<span className="font-mono">{v === null ? "null" : String(v)}</span>
+                      </span>
+                    ))
+                  ) : (
+                    <span className="text-fg-faint">no detail on this row</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -478,6 +509,7 @@ function RetentionSection() {
   };
   const entries = queue.data?.entries ?? [];
   const due = queue.data?.due ?? 0;
+  const invalid = entries.filter((e) => e.invalid !== undefined).length;
   return (
     <Section
       title="Retention queue"
@@ -485,6 +517,8 @@ function RetentionSection() {
         <>
           <span className="tnum">
             {entries.length} with a retention · <span className={due ? "text-warn" : ""}>{due} due</span>
+            {invalid ? <> · <span className="text-warn">{invalid} invalid</span></> : null}
+            {queue.data ? <> · {queue.data.indefinite} kept indefinitely</> : null}
           </span>
           <button className="btn btn-sm" disabled={!due || busy} onClick={() => run(true)} title="Runs the real erase path with a no-op writer and shows what would go">
             dry-run apply
@@ -516,18 +550,28 @@ function RetentionSection() {
                     </span>
                   </td>
                   <td className="py-1.5 pr-3">
-                    <span title={e.retention}>{duration(e.retention)}</span>
+                    {e.invalid !== undefined ? <code className="text-warn" title={e.invalid}>{e.retention}</code> : <span title={e.retention}>{duration(e.retention)}</span>}
                   </td>
-                  <td className="py-1.5 pr-3 tnum text-fg-muted" title={absTime(e.expires_at)}>
-                    {relTime(e.expires_at)}
+                  <td className="py-1.5 pr-3 tnum text-fg-muted" title={e.invalid !== undefined ? "No expiry can be computed from an invalid duration." : absTime(e.expires_at)}>
+                    {e.invalid !== undefined ? <span className="text-fg-faint">never</span> : relTime(e.expires_at)}
                   </td>
-                  <td className="py-1.5">{e.due ? <Pill tone="warn">due — awaiting apply</Pill> : <Pill>kept</Pill>}</td>
+                  <td className="py-1.5">
+                    {e.invalid !== undefined ? (
+                      <Pill tone="warn" title={e.invalid}>
+                        invalid: {e.invalid}
+                      </Pill>
+                    ) : e.due ? (
+                      <Pill tone="warn">due — awaiting apply</Pill>
+                    ) : (
+                      <Pill>kept</Pill>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         ) : (
-          <Empty title="No note carries a retention duration; everything is kept indefinitely." />
+          <Empty title={`No note carries a retention duration; ${queue.data ? `all ${num(queue.data.indefinite)} notes are` : "everything is"} kept indefinitely.`} />
         )
       ) : null}
       {entries.length > 40 ? <div className="mt-2 text-2xs text-fg-faint">{entries.length - 40} more, sorted by expiry</div> : null}
@@ -553,9 +597,22 @@ function RetentionSection() {
             {report.removed.map((r) => (
               <li key={r.note.id}>
                 {r.note.name}: {r.removed.blocks} blocks, {r.removed.vectors} vectors, {r.removed.fts_rows} fts, {r.removed.links_in + r.removed.links_out} links
+                {r.notes.length ? <span className="text-fg-faint font-sans"> · {r.notes.join("; ")}</span> : null}
               </li>
             ))}
           </ul>
+          {report.skipped.length ? (
+            <div className="mt-2">
+              <div className="label">skipped, with the reason</div>
+              <ul className="mt-0.5 space-y-0.5">
+                {report.skipped.map((x) => (
+                  <li key={x.name}>
+                    <span className="font-mono">{x.name}</span> <span className="text-fg-muted">— {x.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </Section>
@@ -606,8 +663,18 @@ function SubjectSection() {
           <div className="text-fg-muted tnum">
             {report.hits.length} hit{report.hits.length === 1 ? "" : "s"} for <code className="text-fg">{report.identifier}</code> across {num(report.searched.notes)} notes, {num(report.searched.blocks)} blocks, {num(report.searched.audit_rows)} audit rows
           </div>
+          <div className="mt-1 text-fg-muted">
+            response due: <span className="text-fg">{report.response_deadline}</span>
+          </div>
+          {report.caveats.length ? (
+            <ul className="mt-1.5 space-y-0.5 text-fg-faint">
+              {report.caveats.map((c, i) => (
+                <li key={i}>· {c}</li>
+              ))}
+            </ul>
+          ) : null}
           {report.hits.length === 0 ? (
-            <div className="mt-2 panel px-3 py-2 text-ok">Nothing held about this identifier.</div>
+            <div className="mt-2 panel px-3 py-2 text-ok">Nothing found for this identifier in what was searched; read the caveats above for what a substring search cannot see.</div>
           ) : (
             <ul className="mt-2 space-y-1">
               {report.hits.map((h, i) => (

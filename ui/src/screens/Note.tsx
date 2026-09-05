@@ -121,7 +121,7 @@ function NoteRow({ n, active, cursor, onHover }: { n: NoteSummary; active: boole
           <span style={{ color: `var(--ring-${n.ring})` }}>r{n.ring}</span>
           <span>{n.kind}</span>
           <span>{relTime(n.updated)}</span>
-          {n.pii !== "none" ? <Pill tone={n.pii === "flagged" ? "danger" : "warn"}>pii {n.pii}</Pill> : null}
+          {n.pii !== "none" ? <Pill tone={n.pii === "flagged" ? "danger" : n.pii === "reviewed" ? "warn" : "neutral"}>{n.pii === "unscanned" ? "not scanned" : `pii ${n.pii}`}</Pill> : null}
         </div>
       </a>
     </li>
@@ -230,7 +230,11 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
           <RingBadge ring={f.ring} showName />
           <h1 className="text-lg font-semibold font-mono truncate">{f.name}</h1>
           <Pill>{f.kind}</Pill>
-          {f.pii !== "none" ? <Pill tone={f.pii === "flagged" ? "danger" : "warn"}>pii {f.pii}</Pill> : null}
+          {f.pii !== "none" ? (
+            <Pill tone={f.pii === "flagged" ? "danger" : f.pii === "reviewed" ? "warn" : "neutral"} title={f.pii === "unscanned" ? "No write-time scan ever ran over this note. Writing it through the tool scans it." : undefined}>
+              {f.pii === "unscanned" ? "pii not scanned" : `pii ${f.pii}`}
+            </Pill>
+          ) : null}
           <div className="ml-auto flex gap-1.5">
             {editing ? (
               <>
@@ -272,7 +276,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
             {f.ring} · {RING_LABEL[f.ring]}
           </Field>
           <Field label="tags" className="col-span-2">
-            {f.tags.length ? (
+            {f.tags?.length ? (
               <span className="flex flex-wrap gap-1">
                 {f.tags.map((t) => (
                   <a key={t} href={href("notes", null, { q: t })} className="inline-flex h-5 px-1.5 rounded bg-surface-2 text-xs text-fg-muted hover:text-fg">
@@ -299,7 +303,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
               aria-label="Note body"
             />
             <div className="mt-1.5 text-2xs text-fg-faint">
-              Body only. Frontmatter fields are edited above the fold in a later version; <code>id</code>, <code>created</code> and <code>links</code> are server-owned. The write goes through the PII scan for profile eu/ch.
+              Body only. Frontmatter fields are edited above the fold in a later version; <code>id</code>, <code>created</code>, <code>updated</code>, <code>links</code> and <code>pii</code> are server-owned. The write goes through the PII scan for profile eu/ch and is reindexed in the same request.
             </div>
           </div>
         ) : (
@@ -452,7 +456,14 @@ function ForgetDialog({ report, onCancel, onConfirm }: { report: ForgetReport; o
             <li>outbound links {r.links_out}</li>
             <li>derivatives {r.derivatives}</li>
           </ul>
-          <p className="text-2xs text-fg-faint">An audit row <code>erase</code> is written. Notes that link here keep their <code>[[link]]</code>; it becomes intent.</p>
+          {report.notes.length ? (
+            <ul className="text-2xs text-fg-muted space-y-0.5">
+              {report.notes.map((x, i) => (
+                <li key={i}>{x}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="text-2xs text-fg-faint">Audit rows <code>note.erase.requested</code> and <code>note.erase.completed</code> are written. Notes that link here keep their <code>[[link]]</code>; it becomes intent.</p>
           <div className="flex gap-1.5 justify-end">
             <button className="btn btn-sm" onClick={onCancel}>cancel</button>
             <button className="btn btn-sm btn-danger" onClick={onConfirm}>erase for real</button>

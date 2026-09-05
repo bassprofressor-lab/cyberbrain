@@ -579,6 +579,18 @@ pub async fn put_note(
     blocking(move || {
         let existing = st.app.export(&target)?;
         let cur = &existing.front;
+        // A PUT without `expected_updated` used to skip the conflict check entirely, so
+        // omitting the field bought last-writer-wins silently. An agent hook and a human
+        // in the UI can edit the same note at once, and the one whose write vanishes never
+        // learns of it. A client that read the note knows its stamp; not sending it is a
+        // mistake, not a request to overwrite blindly.
+        if parsed.expected_updated.is_none() {
+            return Err(ApiError::bad_request(
+                "`expected_updated` is required when updating an existing note: send the \
+                 `updated` value you read, so a concurrent write is refused instead of \
+                 silently discarded",
+            ));
+        }
         if let Some(n) = &parsed.front.name
             && n != &cur.name
         {

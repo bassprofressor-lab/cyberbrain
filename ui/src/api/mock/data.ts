@@ -3,7 +3,7 @@
  * which is what the operator's first real store will look like. Nothing here is copied
  * from any other tool's notes.
  */
-import type { NoteKind, Ring } from "../types";
+import type { NoteKind, PiiState, Ring } from "../types";
 
 export interface SeedNote {
   name: string;
@@ -14,7 +14,8 @@ export interface SeedNote {
   created: number;
   updated: number;
   retention?: string;
-  pii?: "none" | "reviewed" | "flagged";
+  /** Default "none": written through the tool, scanned, nothing found. Imported files are "unscanned". */
+  pii?: PiiState;
   body: string;
 }
 
@@ -534,6 +535,9 @@ retention.`,
     tags: ["audit", "observation"],
     created: 5,
     updated: 5,
+    // Hand-edited by someone who did not know the format. Doctor and the retention queue
+    // report it as invalid: it will never expire, and the operator meant it to.
+    retention: "90 days",
     body: `# Observation: audit log growth
 
 At one inference call per recall and ~300 recalls a day, the audit table grows by about
@@ -564,9 +568,11 @@ for the follow-up. Follow-up in two weeks.`,
     tags: ["sqlite", "imported"],
     created: 51,
     updated: 51,
+    pii: "unscanned",
     body: `# Imported: FTS5 notes (unverified)
 
-Imported from a colleague's scratch file. Claims, not yet checked:
+Imported from a colleague's scratch file ([[FTS5_Scratch_Notes]] in their vault; that name
+can never be a note here). Claims, not yet checked:
 
 - FTS5 \`bm25()\` returns **negative** numbers; smaller is better. (Confirmed later in
   [[hybrid-recall-rrf]] testing.)
@@ -580,6 +586,7 @@ Imported from a colleague's scratch file. Claims, not yet checked:
     tags: ["postgres", "imported"],
     created: 30,
     updated: 30,
+    pii: "unscanned",
     body: `# Imported: "PGDATA stays at /var/lib/postgresql/data in every image version"
 
 Copied from a forum answer dated 2023. States that the official image never changes the
@@ -595,6 +602,7 @@ imported material is ring 4.`,
     tags: ["hooks", "imported"],
     created: 25,
     updated: 25,
+    pii: "unscanned",
     body: `# Imported: harness hook payload examples
 
 Sample JSON payloads for \`pre-tool-use\` and \`post-tool-use\` events as observed from
@@ -605,6 +613,8 @@ verify against [[hook-payload-schema]] once written.`,
 
 /** Names that appear as `[[links]]` above but have no note: intent, shown as such. */
 export const INTENDED_DANGLING = ["hook-payload-schema"];
+/** A `[[link]]` above whose name can never be a note (capitals, underscores): doctor reports it as unresolvable, not as intent. */
+export const UNRESOLVABLE_LINKS = ["FTS5_Scratch_Notes"];
 
 /** Topic clusters used to generate the filler notes that make the graph a few hundred nodes. */
 export const CLUSTERS: Array<{ prefix: string; tags: string[]; ring: Ring; kind: NoteKind; count: number; hub: string }> = [

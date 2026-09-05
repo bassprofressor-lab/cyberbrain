@@ -45,9 +45,13 @@ export function Field({ label, children, className = "" }: { label: ReactNode; c
   );
 }
 
-export function Pill({ children, tone = "neutral", className = "" }: { children: ReactNode; tone?: "neutral" | "ok" | "warn" | "danger"; className?: string }) {
+export function Pill({ children, tone = "neutral", className = "", title }: { children: ReactNode; tone?: "neutral" | "ok" | "warn" | "danger"; className?: string; title?: string | undefined }) {
   const cls = tone === "ok" ? "text-ok bg-ok-bg border-ok/40" : tone === "warn" ? "text-warn bg-warn-bg border-warn/40" : tone === "danger" ? "text-danger bg-danger-bg border-danger/40" : "text-fg-muted bg-surface-2";
-  return <span className={`inline-flex items-center gap-1 h-5 px-1.5 rounded border text-2xs font-medium whitespace-nowrap ${cls} ${className}`}>{children}</span>;
+  return (
+    <span className={`inline-flex items-center gap-1 h-5 px-1.5 rounded border text-2xs font-medium whitespace-nowrap ${cls} ${className}`} title={title}>
+      {children}
+    </span>
+  );
 }
 
 export function Dot({ tone }: { tone: "ok" | "warn" | "danger" | "off" }) {
