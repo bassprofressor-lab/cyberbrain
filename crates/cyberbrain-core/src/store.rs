@@ -748,11 +748,15 @@ mod tests {
             .skipped
             .iter()
             .map(|s| {
+                // Separators normalised for the comparison only. `Skipped.path` is a
+                // `PathBuf` and stays native, which is right for a path a caller may want
+                // to open; it is this assertion's hardcoded forward slashes that are
+                // platform-specific, not the value.
                 s.path
                     .strip_prefix(store.notes_dir())
                     .unwrap()
                     .to_string_lossy()
-                    .into_owned()
+                    .replace('\\', "/")
             })
             .collect();
         assert_eq!(
