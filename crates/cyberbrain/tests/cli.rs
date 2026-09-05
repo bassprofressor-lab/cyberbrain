@@ -896,3 +896,58 @@ fn export_gives_the_file_back_or_a_json_view() {
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
 }
+
+/// An `--action` filter that matches nothing must be refused, not answered with an empty
+/// table. In an audit tool those are opposite statements: "there is no such action name"
+/// and "nothing of that kind ever happened". Someone checking whether erasures occurred
+/// types a plausible name, gets zero rows, and concludes the wrong thing.
+///
+/// Written against the broken state first: with the check removed, `gibtsnicht` returned
+/// exit 0 and `0 rows shown`, and `note.erase` — a real family — returned nothing at all
+/// because the store compares action names exactly.
+#[test]
+fn an_audit_filter_that_matches_nothing_says_so_and_families_are_served() {
+    let cb = Cb::new();
+    cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "bug",
+        "--name",
+        "a-note",
+        "--body",
+        "some text",
+    ]);
+    cb.run(&["forget", "a-note"]);
+
+    // A name that does not exist anywhere in the log: refused, exit 1, and the message
+    // names what is actually there so the reader can correct themselves.
+    let out = cb.run(&["policy", "audit", "--action", "no-such-action"]);
+    assert_eq!(out.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("no audit action named"), "{err}");
+    assert!(
+        err.contains("note.erase.completed"),
+        "must list what is present: {err}"
+    );
+
+    // A family prefix serves the whole family, because validation accepts it and
+    // accepting a name without serving it is the empty-table failure again.
+    let family = String::from_utf8_lossy(
+        &cb.run(&["policy", "audit", "--action", "note.erase"])
+            .stdout,
+    )
+    .to_string();
+    assert!(family.contains("note.erase.requested"), "{family}");
+    assert!(family.contains("note.erase.completed"), "{family}");
+
+    // An exact name still selects exactly that one.
+    let exact = String::from_utf8_lossy(
+        &cb.run(&["policy", "audit", "--action", "note.erase.completed"])
+            .stdout,
+    )
+    .to_string();
+    assert!(exact.contains("note.erase.completed"), "{exact}");
+    assert!(!exact.contains("note.erase.requested"), "{exact}");
+}

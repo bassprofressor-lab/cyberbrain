@@ -1472,6 +1472,37 @@ impl App {
     ) -> Result<AuditView> {
         let verified = verify.then(|| self.policy.verify_audit().map_err(|e| e.to_string()));
         let rows = self.policy.audit().read(filter)?.len();
+
+        // An `--action` that matches nothing is refused, not answered with an empty table.
+        // In an audit tool the two readings are opposite: "no such action name" and
+        // "nothing of that kind ever happened". Someone checking whether erasures occurred
+        // types the obvious name, gets zero rows and concludes the wrong thing. So when a
+        // filter selects nothing out of a non-empty log, say which actions are actually in
+        // it — measured from the log rather than a hard-coded list, because the binary and
+        // the index write names the policy vocabulary does not contain.
+        if rows == 0 && filter.action.is_some() {
+            let all = self.policy.audit().read(&AuditFilter::default())?;
+            if !all.is_empty() {
+                let wanted = filter.action.as_deref().unwrap_or_default();
+                let mut present: Vec<String> = all
+                    .iter()
+                    .map(|e| e.action.clone())
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect();
+                present.sort();
+                if !present
+                    .iter()
+                    .any(|a| a == wanted || a.starts_with(&format!("{wanted}.")))
+                {
+                    return Err(Error::Config(format!(
+                        "no audit action named {wanted:?}; the log contains: {}. Refused rather than answered with an empty table: a missing name and a thing that never happened are different answers",
+                        present.join(", ")
+                    )));
+                }
+            }
+        }
+
         let rendered = self.policy.export_audit(filter, format)?;
         Ok(AuditView {
             rows,

@@ -144,12 +144,16 @@ impl AuditSink for StoreAuditSink {
     fn read(&self, filter: &AuditFilter) -> Result<Vec<AuditEvent>> {
         // `since` is a timestamp on this side and text on the store's; rather than trust
         // two formats to sort alike, filter it here and apply the limit afterwards.
+        // `action` is matched here rather than in the store, because a reader asking for
+        // `note` means the whole family and the store compares exactly. Accepting a family
+        // name in validation and then not serving it is worse than not accepting it: the
+        // answer comes back empty and reads as "that never happened".
         let store_filter = cyberbrain_index::AuditFilter {
             since: None,
-            action: filter.action.clone(),
+            action: None,
             subject: filter.subject.clone(),
             contains: filter.contains.clone(),
-            limit: if filter.since.is_some() {
+            limit: if filter.since.is_some() || filter.action.is_some() {
                 None
             } else {
                 filter.limit
@@ -157,6 +161,7 @@ impl AuditSink for StoreAuditSink {
         };
         let rows = self.lock()?.read(&store_filter)?;
         let mut out = Vec::with_capacity(rows.len());
+        let narrowed = filter.since.is_some() || filter.action.is_some();
         for r in rows {
             let e = to_event(r)?;
             if let Some(since) = filter.since
@@ -164,8 +169,13 @@ impl AuditSink for StoreAuditSink {
             {
                 continue;
             }
+            if let Some(action) = &filter.action
+                && !(e.action == *action || e.action.starts_with(&format!("{action}.")))
+            {
+                continue;
+            }
             out.push(e);
-            if filter.since.is_some() && filter.limit.is_some_and(|l| out.len() >= l) {
+            if narrowed && filter.limit.is_some_and(|l| out.len() >= l) {
                 break;
             }
         }
