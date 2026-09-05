@@ -133,8 +133,15 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let mut raw = Vec::new();
             let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut raw);
             let stdin = String::from_utf8_lossy(&raw);
-            let opened = App::open(
+            // The session says which project it is in; that beats the directory this
+            // process happens to have been started in. They agree today, and relying on
+            // that would mean reading another project's memory the day they do not.
+            let session_cwd = serde_json::from_str::<serde_json::Value>(&stdin)
+                .ok()
+                .and_then(|v| Some(std::path::PathBuf::from(v.get("cwd")?.as_str()?)));
+            let opened = App::open_from(
                 cli.store.as_deref(),
+                session_cwd.as_deref(),
                 Actor::Hook(hook::event_name(event).into()),
             );
             let out = hook::run_with(opened.as_ref().ok(), opened.as_ref().err(), event, &stdin);

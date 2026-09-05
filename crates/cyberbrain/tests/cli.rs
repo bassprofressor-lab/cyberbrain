@@ -1048,3 +1048,94 @@ fn doctor_separates_links_that_can_never_resolve_from_ones_that_merely_do_not_ex
         "the two cases must be separate checks so their counts do not merge: {out}"
     );
 }
+
+/// A hook is told which project the session is in. That statement wins over the directory
+/// the process happens to start in, and the two are not the same thing: the harness starts
+/// the hook in the project directory today, so a hook that used the process directory
+/// would look correct right up until that changed and it silently read another project's
+/// memory.
+///
+/// Written against the broken state first: with discovery walking up from the process
+/// directory, this resolved the *other* store and the assertion below saw its path.
+#[test]
+fn a_hook_resolves_the_store_the_session_names_not_the_one_it_was_started_in() {
+    use std::io::Write;
+
+    // Discovery looks for a directory literally named `.cyberbrain`, so both stores are
+    // created under that name rather than through `Cb::new`, which puts its store at
+    // `<tmp>/store` where the walk would never see it.
+    let init = |path: &std::path::Path| {
+        assert!(
+            Cb::bin()
+                .args(["init", "--path"])
+                .arg(path)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+    };
+
+    let session_dir = tempfile::tempdir().unwrap();
+    let session_store = session_dir.path().join(".cyberbrain");
+    init(&session_store);
+    assert!(
+        Cb::bin()
+            .arg("--store")
+            .arg(&session_store)
+            .args([
+                "write",
+                "--ring",
+                "0",
+                "--kind",
+                "decision",
+                "--name",
+                "the-right-store",
+                "--body",
+                "this note only exists in the session's store",
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+
+    // A second store, and the hook is started from inside it.
+    let other_dir = tempfile::tempdir().unwrap();
+    let other_store = other_dir.path().join(".cyberbrain");
+    init(&other_store);
+
+    let payload = serde_json::json!({
+        "session_id": "s",
+        "source": "startup",
+        "cwd": session_dir.path(),
+    })
+    .to_string();
+
+    let mut child = Cb::bin()
+        .current_dir(other_dir.path())
+        .args(["hook", "session-start"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert_eq!(out.status.code(), Some(0), "a hook never fails the harness");
+    assert!(
+        stdout.contains("the-right-store"),
+        "the hook must read the store the session named: {stdout}"
+    );
+    assert!(
+        !stdout.contains(&cyberbrain_core::slash(&other_store)),
+        "it must not fall back to the directory it was started in: {stdout}"
+    );
+}

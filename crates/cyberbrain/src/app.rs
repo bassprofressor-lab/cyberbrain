@@ -75,10 +75,24 @@ pub fn discover_store(explicit: Option<&Path>) -> Result<PathBuf> {
             Slash(p)
         )));
     }
-    let cwd = std::env::current_dir().map_err(|e| Error::Io {
-        path: PathBuf::from("."),
-        source: e,
-    })?;
+    discover_store_from(None)
+}
+
+/// [`discover_store`], starting the walk somewhere other than the process's directory.
+///
+/// A hook is told which project the session is in, in its payload. The harness happens to
+/// start the hook in that directory today, so both agree and the distinction is invisible.
+/// It is not guaranteed to: a hook that resolves its store from the process's directory
+/// would, the day that changes, quietly read and write the wrong project's memory. The
+/// session's own statement of where it is wins.
+pub fn discover_store_from(start: Option<&Path>) -> Result<PathBuf> {
+    let cwd = match start {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir().map_err(|e| Error::Io {
+            path: PathBuf::from("."),
+            source: e,
+        })?,
+    };
     for dir in cwd.ancestors() {
         let candidate = dir.join(DEFAULT_STORE_DIR);
         if is_store(&candidate) {
@@ -608,7 +622,16 @@ pub struct App {
 impl App {
     /// Steps 1 to 5 of §8.2. Steps 6 and 7 happen on first use.
     pub fn open(store: Option<&Path>, actor: Actor) -> Result<App> {
-        let root = discover_store(store)?;
+        Self::open_from(store, None, actor)
+    }
+
+    /// [`open`](Self::open), with the store discovery walk starting at `start` when no
+    /// explicit store was given. Used by the hooks, which are told where the session is.
+    pub fn open_from(store: Option<&Path>, start: Option<&Path>, actor: Actor) -> Result<App> {
+        let root = match store {
+            Some(_) => discover_store(store)?,
+            None => discover_store_from(start)?,
+        };
         // 1. Config.
         let config = Config::load(&root)?;
         let store = Store::with_config(&root, &config)?;
