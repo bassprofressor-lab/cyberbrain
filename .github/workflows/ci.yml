@@ -1,0 +1,128 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+jobs:
+  test:
+    name: test / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  # SPEC §9.1: the Windows hook has to survive cmd.exe. A job that only compiles proves
+  # nothing about quoting, spaces in paths, or the absence of a POSIX shell — the failures
+  # this is here to catch all happen at invocation, not at build.
+  windows-hook:
+    name: windows hook through cmd.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p cyberbrain
+      - name: install into a path containing a space
+        shell: cmd
+        run: |
+          mkdir "C:\Program Files\cyberbrain test"
+          copy target\release\cyberbrain.exe "C:\Program Files\cyberbrain test\"
+      - name: run each hook through cmd.exe
+        shell: cmd
+        run: |
+          cd %RUNNER_TEMP%
+          "C:\Program Files\cyberbrain test\cyberbrain.exe" init --store .cyberbrain || exit /b 1
+          for %%E in (session-start user-prompt-submit pre-tool-use post-tool-use stop pre-compact) do (
+            echo {} | "C:\Program Files\cyberbrain test\cyberbrain.exe" hook %%E || exit /b 1
+          )
+
+  # SPEC §15: what matters to a user is that the shipped binary needs nothing at runtime.
+  # Built on the toolchain image, run on a bare one.
+  bare-runtime:
+    name: release binary runs on a bare image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p cyberbrain
+      - name: run it where no toolchain, sqlite or openssl exists
+        run: |
+          docker run --rm -v "$PWD/target/release/cyberbrain:/cyberbrain:ro" \
+            debian:trixie-slim /cyberbrain --version
+
+  licences:
+    name: licences and advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # SPEC §2 applies to the JS tree as well: one AGPL dependency anywhere and the
+      # project's own licence becomes a claim it cannot keep.
+      - run: npm ci && npm run licenses
+        working-directory: ui
+
+  # SPEC §15: no build script may pull in a C++ toolchain or cmake without it being a
+  # decision. `cc` for bundled SQLite is the whole permitted list.
+  c-footprint:
+    name: build-time C footprint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo tree --workspace --edges normal,build --prefix none --format "{p}" | sort -u > /tmp/deps.txt
+      - name: refuse cmake, aws-lc-sys, openssl-sys, native-tls
+        run: |
+          if grep -Ei '^(cmake|aws-lc-sys|openssl-sys|native-tls) ' /tmp/deps.txt; then
+            echo "::error::a banned build-time dependency entered the tree (SPEC §15)"
+            exit 1
+          fi
+
+  ui:
+    name: ui builds and typechecks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+        working-directory: ui
+      - run: npx tsc --noEmit
+        working-directory: ui
+      - run: npm run build
+        working-directory: ui
+
+  benchmarks:
+    name: performance budgets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # SPEC §15's budgets are only real if something measures them. Debug builds are
+      # 15x slower and would either fail always or need a meaningless limit, so these
+      # run in release and are #[ignore]d elsewhere.
+      - run: cargo test --workspace --release -- --ignored
