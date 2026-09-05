@@ -142,6 +142,14 @@ split makes the rule true again and makes each file's nature obvious from its na
 `audit.db` carries `BEFORE UPDATE` and `BEFORE DELETE` triggers that abort, so append-only is
 enforced by the database and not by convention.
 
+**One writer, one chain.** Every audit row goes through the policy crate's `AuditLog`, which
+maintains a blake3 hash chain over the rows and can name the first altered one. Any other
+component that wants to record something returns the facts to its caller and the caller
+logs them. A second writer appending unchained rows into the same table makes `verify()`
+report the first of them as tampering, which sends somebody hunting a forged log that is
+merely a mixed one. The storage layer therefore offers a raw `AuditStore` and the semantics
+live in exactly one place above it.
+
 ---
 
 ## 5. Index
@@ -471,6 +479,23 @@ resolves differently between validation and connection cannot be used to slip pa
 
 Registered purposes for v0.1: `ModelDownload` (once, on consent), `LocalInference` (loopback
 or private range only). That is the entire list. Telemetry does not exist.
+
+`ModelDownload` is permitted only towards the exact host in `embedding.model_source`, and
+only when `embedding.model_download_consent` is set. Both live in the configuration file
+rather than in memory: consent that is forgotten on restart is asked for until somebody
+clicks it away, which is not consent. An unset source means nothing may be downloaded at all
+and the artefact has to be placed by hand.
+
+**Permission is asked per request, not per client.** Authorising a channel once and then
+letting an unbounded number of requests ride it is precisely the accounting this register
+exists to provide. The signature enforces it: the one function that may build an HTTP client
+takes the `EgressGate` itself, not a description of its purpose. A parameter that names an
+intent lets a call site describe itself; only a parameter carrying the means to ask can make
+it ask.
+
+**"Local" means the same thing everywhere.** `::` and `0.0.0.0` are bind addresses, not
+destinations, and are refused by every component. Two parts of the system with different
+ideas of what counts as local is how a hole opens between them.
 
 **"Private range" means** loopback, RFC1918, RFC4193 unique-local, and link-local. It
 deliberately does **not** include `100.64.0.0/10`: that range is carrier-grade NAT, where an

@@ -98,6 +98,14 @@ pub struct EmbeddingConfig {
     /// Embedding profile the vectors must match (SPEC §5). Interpreted by
     /// `cyberbrain-embed`; the index refuses to compare vectors from a different one.
     pub profile: String,
+    /// Where the model artefact may be fetched from, if it is missing. The egress gate
+    /// permits `ModelDownload` only towards this exact host, so an empty value means the
+    /// artefact must be placed by hand and nothing may be downloaded at all.
+    pub model_source: Option<String>,
+    /// Whether the operator has agreed to that one download (SPEC §12.1: "once, on
+    /// explicit consent"). Persisted rather than held in memory, because consent that is
+    /// forgotten on restart gets asked for again until somebody clicks it away.
+    pub model_download_consent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -172,6 +180,8 @@ impl Default for EmbeddingConfig {
         Self {
             model_path: PathBuf::from("models/model2vec"),
             profile: "static-model2vec".to_string(),
+            model_source: None,
+            model_download_consent: false,
         }
     }
 }
@@ -222,6 +232,13 @@ ring_weights = [1.15, 1.10, 1.00, 0.92, 0.80]
 model_path = "models/model2vec"
 # Profile id the stored vectors must match; a mismatch disables semantic search loudly.
 profile = "static-model2vec"
+# Where the artefact may be fetched from if it is missing. The egress gate permits a model
+# download towards this exact host and nowhere else. Left unset, nothing may be downloaded
+# and the artefact has to be placed by hand.
+# model_source = "https://example.org/potion-base-8M"
+# Your agreement to that one download. It is stored rather than asked each run, because
+# consent that is forgotten on restart just gets clicked away.
+model_download_consent = false
 
 [inference]
 # OpenAI-compatible endpoint for the optional local LLM layer (Ollama, LM Studio,
@@ -426,7 +443,7 @@ pub fn endpoint_host(url: &str) -> std::result::Result<String, String> {
 /// *name* other than `localhost` is treated as public: we do not resolve names, and a
 /// name that resolves to a private address today may not tomorrow. Fail closed.
 pub fn host_is_local(host: &str) -> bool {
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::net::{IpAddr, Ipv4Addr};
     if host == "localhost" || host.ends_with(".localhost") {
         return true;
     }
@@ -439,7 +456,10 @@ pub fn host_is_local(host: &str) -> bool {
                 || v6.to_ipv4_mapped().is_some_and(|v4: Ipv4Addr| {
                     v4.is_loopback() || v4.is_private() || v4.is_link_local()
                 })
-                || v6 == Ipv6Addr::UNSPECIFIED
+            // `::` is deliberately NOT local. It is the unspecified address: legitimate
+            // as a bind target, meaningless as a destination. Treating it as local here
+            // disagreed with the egress gate, which refuses it as non-unicast, and two
+            // components disagreeing about what counts as local is how a hole opens.
         }
         Err(_) => false,
     }
@@ -617,5 +637,14 @@ mod tests {
         assert!(host_is_local("localhost"));
         assert!(!host_is_local("localhost.evil.com"));
         assert!(!host_is_local("100.64.0.1"), "CGNAT is not private");
+        // `::` and `0.0.0.0` are bind addresses, not destinations. The egress gate refuses
+        // them as non-unicast, and core has to agree: two components with different ideas
+        // of "local" is how a hole opens between them.
+        assert!(!host_is_local("::"), "the unspecified address is not a destination");
+        assert!(!host_is_local("0.0.0.0"), "the unspecified address is not a destination");
+        assert!(host_is_local("::1"));
+        assert!(host_is_local("fd00::1"));
+        assert!(host_is_local("192.168.1.10"));
+        assert!(!host_is_local("203.0.113.7"));
     }
 }
