@@ -118,6 +118,23 @@ pub enum Command {
         format: ExportFormat,
     },
 
+    /// Bring an existing tree of Markdown notes into the store, driven by a mapping file.
+    ///
+    /// Deliberately generic. It handles a tree because the tree is Markdown, not because it
+    /// knows what wrote it: every source-specific detail lives in the mapping file and none
+    /// of it in the code.
+    Import {
+        /// TOML mapping file: what to take, what to skip, how to split, which ring.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Accept every PII finding in bulk. Holding several hundred imports one at a time
+        /// is unusable, and an unusable gate gets bypassed rather than obeyed.
+        #[arg(long)]
+        accept_pii: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Serve the web UI and the HTTP API on loopback (SPEC §8.1, §13).
     Serve {
         #[arg(long, default_value_t = 7777)]
@@ -238,7 +255,7 @@ mod tests {
         let names: Vec<&str> = cmd.get_subcommands().map(|s| s.get_name()).collect();
         for expected in [
             "init", "scan", "recall", "find", "write", "forget", "doctor", "status", "export",
-            "serve", "hook", "mcp", "policy",
+            "import", "serve", "hook", "mcp", "policy",
         ] {
             assert!(
                 names.contains(&expected),
@@ -251,7 +268,7 @@ mod tests {
     #[test]
     fn state_changing_commands_offer_dry_run() {
         let cmd = Cli::command();
-        for name in ["scan", "write", "forget"] {
+        for name in ["scan", "write", "forget", "import"] {
             let sub = cmd.find_subcommand(name).unwrap();
             assert!(
                 sub.get_arguments().any(|a| a.get_long() == Some("dry-run")),

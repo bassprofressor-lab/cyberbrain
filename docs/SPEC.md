@@ -291,6 +291,7 @@ cyberbrain forget <name|id> [--dry-run]   erase note, blocks, vectors, links, an
 cyberbrain doctor                     dangling links, ring cap, stale index, orphan vectors
 cyberbrain status [--json]            store health, model, backend, compliance profile
 cyberbrain export <name|id> [--format md|json]
+cyberbrain import --plan <file.toml> [--accept-pii]   bring an existing Markdown tree in
 cyberbrain serve [--port 7777]        local web UI (§13)
 cyberbrain hook <event>               agent harness integration (§9)
 cyberbrain mcp                        MCP server over stdio (§9)
@@ -305,6 +306,27 @@ no-op writer, never a parallel simulation** — a separate dry-run implementatio
 implementation, and it drifts.
 
 ---
+
+### 8.0.1 Import
+
+`import` brings an existing tree of Markdown notes into a store, driven by a TOML mapping
+file that says what to take, what to skip, how to split a large file into notes, and which
+ring each group lands in.
+
+It is **generic on purpose**. It handles a given tree because that tree is Markdown, not
+because it knows what wrote it, and every source-specific detail lives in the mapping file
+rather than in the code. A subcommand named after another product would tie the two together
+in public for no functional gain, and §0 is the reason that matters here.
+
+**Reconciliation is the feature.** An import is usually followed by the source being deleted,
+so a silent drop is not a bug that gets noticed later — it is data that no longer exists. The
+report therefore counts the way out, not the way in: items found, notes written, and **every
+item that did not make it named individually with its reason**. A count that appears only as
+the difference between two numbers is not a report. Anything dropped without an explicit rule
+saying to skip it makes the command exit non-zero.
+
+Importing the same tree twice recognises what is already there and says so, rather than
+duplicating it.
 
 ### 8.1 The HTTP API
 

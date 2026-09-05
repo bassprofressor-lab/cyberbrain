@@ -149,6 +149,12 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 "`mcp` is not wired yet; the stdio MCP server arrives with the next step".into(),
             ));
         }
+        Command::Import { .. } => {
+            return Err(Error::Index(
+                "`import` is not wired yet; the Markdown importer arrives with the next step"
+                    .into(),
+            ));
+        }
         _ => {}
     }
 
@@ -248,7 +254,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             }
         }
         Command::Policy { command } => return run_policy(&app, command, out),
-        Command::Init { .. } | Command::Hook { .. } | Command::Serve { .. } | Command::Mcp => {
+        Command::Init { .. }
+        | Command::Hook { .. }
+        | Command::Serve { .. }
+        | Command::Mcp
+        | Command::Import { .. } => {
             unreachable!("handled before the store was opened")
         }
     }
