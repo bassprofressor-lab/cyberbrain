@@ -1957,11 +1957,7 @@ fn normalise_link_target(name: &str) -> String {
         match ch {
             'a'..='z' | '0'..='9' => out.push(ch),
             'A'..='Z' => out.push(ch.to_ascii_lowercase()),
-            '_' | ' ' | '-' | '.' | '/' => {
-                if !out.ends_with('-') {
-                    out.push('-');
-                }
-            }
+            '_' | ' ' | '-' | '.' | '/' if !out.ends_with('-') => out.push('-'),
             _ => {}
         }
     }
