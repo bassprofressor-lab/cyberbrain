@@ -1421,7 +1421,14 @@ impl App {
             );
         }
 
+        // Two different facts, and lumping them together hides the actionable one. A link
+        // to a name that could exist is intent: somebody will write that note. A link to a
+        // name that can never be a note — underscores, capitals, a path — is a typo or a
+        // leftover from another tool's naming, and no amount of writing notes will ever
+        // resolve it. Reporting both as "does not exist (valid: it names intent)" tells the
+        // operator to wait for something that is never coming.
         checks.push("dangling links");
+        checks.push("unresolvable links");
         {
             let ix = lock_index(&self.index)?;
             for l in ix.dangling_links()? {
@@ -1429,14 +1436,34 @@ impl App {
                     .note(&l.from_note)?
                     .map(|r| r.front.name)
                     .unwrap_or_else(|| l.from_note.to_string());
-                push(
-                    "warning",
-                    "dangling links",
-                    format!(
-                        "{from} links to [[{}]] which does not exist (valid: it names intent)",
-                        l.to_name
+                match cyberbrain_core::validate_name(&l.to_name) {
+                    Ok(()) => push(
+                        "warning",
+                        "dangling links",
+                        format!(
+                            "{from} links to [[{}]] which does not exist yet (valid name: it names intent)",
+                            l.to_name
+                        ),
                     ),
-                );
+                    Err(reason) => {
+                        // Offer the kebab-case form when a note actually sits under it.
+                        // Most of these come from another tool's file names, and the
+                        // note the author meant is often already in the store.
+                        let normalised = normalise_link_target(&l.to_name);
+                        let hint = match ix.note_by_name(&normalised)? {
+                            Some(_) => format!("; did you mean [[{normalised}]]?"),
+                            None => String::new(),
+                        };
+                        push(
+                            "warning",
+                            "unresolvable links",
+                            format!(
+                                "{from} links to [[{}]], which can never resolve: a note name {reason}{hint}",
+                                l.to_name
+                            ),
+                        )
+                    }
+                }
             }
         }
 
@@ -1918,6 +1945,27 @@ impl SubjectSource for IndexSubjectSource<'_> {
             })
             .collect())
     }
+}
+
+/// The kebab-case form of a link target, for suggesting what the author probably meant.
+/// Underscores and spaces become hyphens, capitals fold down, everything else is dropped,
+/// and runs of hyphens collapse. Only ever used to look up an existing note, never to
+/// rewrite a link: a `[[target]]` in a note is the author's text and stays theirs.
+fn normalise_link_target(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for ch in name.chars() {
+        match ch {
+            'a'..='z' | '0'..='9' => out.push(ch),
+            'A'..='Z' => out.push(ch.to_ascii_lowercase()),
+            '_' | ' ' | '-' | '.' | '/' => {
+                if !out.ends_with('-') {
+                    out.push('-');
+                }
+            }
+            _ => {}
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 #[cfg(test)]

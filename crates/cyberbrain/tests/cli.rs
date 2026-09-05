@@ -949,3 +949,55 @@ fn an_audit_filter_that_matches_nothing_says_so_and_families_are_served() {
     assert!(exact.contains("note.erase.completed"), "{exact}");
     assert!(!exact.contains("note.erase.requested"), "{exact}");
 }
+
+/// A link to a name that could exist and a link to a name that never can are different
+/// facts, and reporting both as "does not exist" tells the operator to wait for something
+/// that is not coming. Written against the broken state first: with both cases sharing one
+/// message, the second assertion below matched the first finding and passed vacuously.
+#[test]
+fn doctor_separates_links_that_can_never_resolve_from_ones_that_merely_do_not_exist() {
+    let cb = Cb::new();
+    // A valid target nobody has written yet, and a target from another tool's file naming.
+    cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "source-note",
+        "--body",
+        "See [[not-written-yet]] and [[lesson_messwerkzeug_eichen]].",
+    ]);
+    // The note the underscore link probably meant, under a name that is actually legal.
+    cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "lesson",
+        "--name",
+        "lesson-messwerkzeug-eichen",
+        "--body",
+        "calibrate the instrument first",
+    ]);
+
+    let out = String::from_utf8_lossy(&cb.run(&["doctor"]).stdout).to_string();
+
+    assert!(
+        out.contains("[[not-written-yet]] which does not exist yet"),
+        "a legal name is intent, not an error: {out}"
+    );
+    assert!(
+        out.contains("[[lesson_messwerkzeug_eichen]], which can never resolve"),
+        "an illegal name must be reported as unresolvable: {out}"
+    );
+    assert!(
+        out.contains("did you mean [[lesson-messwerkzeug-eichen]]?"),
+        "when the intended note exists under a legal name, say so: {out}"
+    );
+    assert!(
+        out.contains("unresolvable links"),
+        "the two cases must be separate checks so their counts do not merge: {out}"
+    );
+}

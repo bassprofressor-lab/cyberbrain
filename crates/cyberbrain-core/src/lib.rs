@@ -15,6 +15,7 @@ pub mod types;
 pub use citation::Citation;
 pub use config::{Config, PolicyProfile};
 pub use error::{Error, Result};
+pub use frontmatter::validate_name;
 pub use store::{Change, Fingerprint, Store};
 pub use types::{
     Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit, Note,
