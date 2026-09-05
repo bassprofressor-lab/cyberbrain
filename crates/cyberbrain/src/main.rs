@@ -9,6 +9,7 @@
 mod app;
 mod audit_bridge;
 mod cli;
+mod mcp;
 mod render;
 mod writers;
 
@@ -47,23 +48,11 @@ impl Out {
     }
 }
 
-/// SPEC §8.1: one failure taxonomy, two front ends. The code names the variant.
+/// SPEC §8.1: one failure taxonomy, three front ends. Delegates to the core, where the
+/// names live beside the exit codes; kept as a crate-local alias so `serve` and `mcp` do
+/// not each reach for a different spelling of the same thing.
 fn error_code(e: &Error) -> &'static str {
-    match e {
-        Error::Io { .. } => "io",
-        Error::Frontmatter { .. } => "frontmatter",
-        Error::BadCitation(_) => "bad-citation",
-        Error::NoSuchNote(_) => "no-such-note",
-        Error::BadRing(_) => "bad-ring",
-        Error::RingCapExceeded { .. } => "ring-cap-exceeded",
-        Error::StoreIntegrity(_) => "store-integrity",
-        Error::Index(_) => "index",
-        Error::Embed(_) => "embed",
-        Error::EmbeddingProfileMismatch { .. } => "embedding-profile-mismatch",
-        Error::Llm(_) => "llm",
-        Error::PolicyRefusal { .. } => "policy-refusal",
-        Error::Config(_) => "config",
-    }
+    e.code()
 }
 
 fn report_error(e: &Error, json: bool) {
@@ -145,9 +134,9 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             ));
         }
         Command::Mcp => {
-            return Err(Error::Index(
-                "`mcp` is not wired yet; the stdio MCP server arrives with the next step".into(),
-            ));
+            let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Mcp)?);
+            runtime()?.block_on(mcp::serve_stdio(app))?;
+            return Ok(0);
         }
         Command::Import { .. } => {
             return Err(Error::Index(

@@ -439,8 +439,38 @@ Hard requirements:
 ### 9.2 MCP
 
 `cyberbrain mcp` serves the same operations over stdio MCP: `recall`, `recall_id`, `find`,
-`write`, `status`. Tool descriptions are generated from one source shared with the CLI help,
-so the two cannot drift.
+`write`, `status`.
+
+**Protocol.** JSON-RPC 2.0 over stdio, implemented in-tree. **No MCP crate**, and the reason
+is §12.1 rather than taste: a transport dependency that performs I/O of its own would make
+the egress register's guarantee false without anybody noticing. This is stated here so that
+nobody later "cleans it up" into a library.
+
+**stdout carries protocol and nothing else.** Diagnostics go to stderr. A stray `println!`
+corrupts the stream and the failure surfaces on the far side of the pipe as a client bug.
+This rule cannot be tested in-process: an in-process test's stream is not the process's
+stdout, so it stays green while the real thing is broken. It is guarded by a test that
+spawns the server as a child and demands every line it writes parse as JSON-RPC.
+
+**Tool descriptions are the CLI help.** The **first paragraph** of a command's doc comment
+is shared; anything after it is CLI-only. That split is what lets `write`'s help mention
+stdin without leaking the word into a protocol where stdin means something else. A test
+asserts the shared text is byte-identical, so a hand-edited second copy fails the build.
+
+**A refusal is a result, not a transport error.** A held write, a conflict and a policy
+refusal come back as tool results with `isError` set and the findings attached, so the
+calling agent can act on them. JSON-RPC errors are reserved for the protocol itself: parse
+errors, unknown methods, unknown or mistyped arguments. An unknown argument name is refused
+rather than ignored, because a misspelt `ring` must not quietly fall through to a default.
+
+**Caveats travel in both shapes**: verbatim in `structuredContent.caveats` and in the text
+block. Over MCP there is no human reading a terminal, so an agent handed hits with no note
+that the contradiction check was skipped will treat an unchecked result as a checked one —
+the silent case §7 exists to prevent, with the one reader who would have noticed removed.
+
+**Nothing ends the session but a stream failure.** Malformed frames, protocol errors and
+application errors are all answered. This is §9.1's never-fail-the-harness rule in its MCP
+form, and for the same reason.
 
 ---
 

@@ -70,6 +70,32 @@ pub enum Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 impl Error {
+    /// The stable machine-readable name of the variant.
+    ///
+    /// It lives here beside [`Error::exit_code`] because the two together are the one
+    /// failure taxonomy that the CLI, the HTTP API and the MCP server all report (SPEC
+    /// §8.1). Three front ends deriving their own names from one enum is how a caller ends
+    /// up handling `no-such-note` on one surface and `not_found` on another.
+    ///
+    /// These strings are part of the interface. Rename a variant and this mapping stays.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Error::Io { .. } => "io",
+            Error::Frontmatter { .. } => "frontmatter",
+            Error::BadCitation(_) => "bad-citation",
+            Error::NoSuchNote(_) => "no-such-note",
+            Error::BadRing(_) => "bad-ring",
+            Error::RingCapExceeded { .. } => "ring-cap-exceeded",
+            Error::StoreIntegrity(_) => "store-integrity",
+            Error::Index(_) => "index",
+            Error::Embed(_) => "embed",
+            Error::EmbeddingProfileMismatch { .. } => "embedding-profile-mismatch",
+            Error::Llm(_) => "llm",
+            Error::PolicyRefusal { .. } => "policy-refusal",
+            Error::Config(_) => "config",
+        }
+    }
+
     /// SPEC §8: 0 success, 1 user error, 2 internal error, 3 policy refusal.
     pub fn exit_code(&self) -> i32 {
         match self {

@@ -60,6 +60,7 @@ pub enum Command {
         /// Expand a citation to its full note instead of searching.
         #[arg(long, value_name = "CITATION", conflicts_with = "query")]
         id: Option<String>,
+        /// How many hits to return.
         #[arg(long, short, default_value_t = 8)]
         n: usize,
         /// Restrict to exactly this ring.
@@ -69,22 +70,33 @@ pub enum Command {
 
     /// Exact line ranges for a symbol, so the agent reads a slice and not a file.
     Find {
+        /// The symbol to locate: a function, type, class, constant or table name.
         symbol: String,
+        /// Most hits to return before the result is reported as truncated.
         #[arg(long, short, default_value_t = 20)]
         limit: usize,
     },
 
-    /// Write a note. The body comes from stdin unless --body is given.
+    /// Write a note.
+    ///
+    /// The body comes from stdin unless --body is given. Only the first paragraph is
+    /// shared with the MCP tool description (SPEC §9.2); anything after it is CLI-only,
+    /// which is what lets this sentence mention stdin without leaking into a protocol
+    /// where stdin means something else entirely.
     Write {
+        /// Trust tier, 0 to 4. Lower is more trusted and wins a contradiction.
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=4))]
         ring: u8,
+        /// What the note records. Drives filtering and the write template, not retrieval.
         #[arg(long)]
         kind: NoteKindArg,
         /// kebab-case slug, unique in the store.
         #[arg(long)]
         name: String,
+        /// The note body as Markdown. Omit to read it from stdin.
         #[arg(long)]
         body: Option<String>,
+        /// A tag. Repeat the flag for several.
         #[arg(long)]
         tags: Vec<String>,
         /// ISO-8601 duration, e.g. P2Y. Absent means keep indefinitely.
@@ -93,6 +105,7 @@ pub enum Command {
         /// Write despite PII findings, recording them as flagged rather than reviewed.
         #[arg(long)]
         force: bool,
+        /// Run the real path with no-op writers and report what would have happened.
         #[arg(long)]
         dry_run: bool,
     },
