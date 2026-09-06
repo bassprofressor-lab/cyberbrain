@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -56,6 +56,8 @@ const MIGRATIONS: &[&str] = &[
         ring UNINDEXED,
         tokenize = 'unicode61 remove_diacritics 2'
     );
+    -- v2 replaces this table; a fresh database gets v1 and then the migration, so the two
+    -- paths cannot drift.
 
     CREATE TABLE vectors (
         citation TEXT PRIMARY KEY NOT NULL REFERENCES blocks(citation),
@@ -77,6 +79,35 @@ const MIGRATIONS: &[&str] = &[
     -- this file is a cache that may be deleted and the record may not.
 
     INSERT INTO meta (key, value) VALUES ('generation', '0');
+    "#,
+    // v2: the note name becomes searchable.
+    //
+    // The lexical index held block text only, so a note whose distinguishing word lives in
+    // its title was unfindable by that word: `inferenz-setup-05-09-2026` says "Inferenz"
+    // nowhere in its body, and asking for it returned five unrelated notes. The name is
+    // kebab-case and `unicode61` splits on the hyphens, so the title's words become terms
+    // like any other.
+    //
+    // The name lands on the note's first block only: on every block a title word would
+    // match every row of the note and one note would fill the whole top-k.
+    //
+    // FTS5 cannot add a column to an existing table, so the table is rebuilt and refilled
+    // from `blocks` and `notes`. That runs inside the migration transaction on the next
+    // open; no rescan of the notes tree is needed, because both sources are already here.
+    r#"
+    DROP TABLE blocks_fts;
+
+    CREATE VIRTUAL TABLE blocks_fts USING fts5(
+        text,
+        name,
+        citation UNINDEXED,
+        ring UNINDEXED,
+        tokenize = 'unicode61 remove_diacritics 2'
+    );
+
+    INSERT INTO blocks_fts (rowid, text, name, citation, ring)
+        SELECT b.id, b.text, CASE WHEN b.idx = 0 THEN n.name END, b.citation, n.ring
+        FROM blocks b JOIN notes n ON n.id = b.note_id;
     "#,
 ];
 

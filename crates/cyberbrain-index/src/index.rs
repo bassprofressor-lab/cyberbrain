@@ -477,7 +477,7 @@ impl Index {
                 .ix()?;
             let mut ins_fts = tx
                 .prepare_cached(
-                    "INSERT INTO blocks_fts (rowid, text, citation, ring) VALUES (?1, ?2, ?3, ?4)",
+                    "INSERT INTO blocks_fts (rowid, text, name, citation, ring) VALUES (?1, ?2, ?3, ?4, ?5)",
                 )
                 .ix()?;
             let mut ins_vec = tx
@@ -497,8 +497,18 @@ impl Index {
                         Error::Index(format!("storing block {cit} of note {id_s}: {e}"))
                     })?;
                 let rowid = tx.last_insert_rowid();
+                // The name goes on the first block only. On every row it would be
+                // correct and useless: a title word would then match all 37 rows of a
+                // 37-block note and the whole note would swamp the top-k it just won.
+                // One row per note means a title match brings the note in once, at its
+                // opening block, which is where a reader who searched the title lands.
+                let name = if b.idx == 0 {
+                    Some(note.front.name.as_str())
+                } else {
+                    None
+                };
                 ins_fts
-                    .execute(params![rowid, b.text, cit, ring.as_u8() as i64])
+                    .execute(params![rowid, b.text, name, cit, ring.as_u8() as i64])
                     .ix()?;
                 if let (Some(vs), Some(p)) = (vectors, &profile) {
                     let mut v = vs[i].clone();

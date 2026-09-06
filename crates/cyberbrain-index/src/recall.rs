@@ -176,6 +176,13 @@ impl Index {
         if k == 0 {
             return Ok(Vec::new());
         }
+        // Deliberately the default bm25 weighting, all columns equal. Weighting the name
+        // five times was preregistered and measured on 34 labelled questions over a real
+        // 1,004-note store: it found one more note inside the top ten and cost one that had
+        // been first, so recall@1 fell 0.62 -> 0.59 and MRR stayed flat. The rule said the
+        // primary metric had to rise, so it was dropped rather than kept for the anecdote
+        // it fixed. A title hit therefore ranks like any other, and a note whose keyword is
+        // only in its name can still be outranked by a block that says the word twice.
         let mut out = Vec::new();
         match ring {
             None => {

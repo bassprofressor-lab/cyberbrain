@@ -379,6 +379,44 @@ fn n_and_k_are_honoured() {
     assert_eq!(r.hits.len(), 2);
 }
 
+/// A note whose distinguishing word lives only in its title used to be unfindable by that
+/// word. Calibrated against the state before the name column existed, where this returned
+/// nothing at all.
+#[test]
+fn a_word_that_only_the_title_carries_still_finds_the_note() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open(&tempfile::tempdir().unwrap().path().join("i.db")).unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    put(
+        &mut ix,
+        &e,
+        &note(
+            "inferenz-setup-2026",
+            Ring::Knowledge,
+            "Lokales Modell fuer den Widerspruchs-Check.\n\nOllama im Container, Loopback.\n\nQwen, 7b, kein GPU.",
+            &[],
+        ),
+    );
+    let hits = ix
+        .recall("inferenz", None, &RecallOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1, "the title word must reach the note");
+    assert_eq!(hits[0].note_name, "inferenz-setup-2026");
+    // ...once. The name is on the opening block, not on all three, or one note would fill
+    // the whole result. `setup` appears nowhere in the body either, so every hit it
+    // returns can only have come through the name column.
+    let all = ix
+        .recall("setup", None, &RecallOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(
+        all.len(),
+        1,
+        "a title match brings the note in once, not per block"
+    );
+}
+
 /// The reason for prefix terms: `unicode61` does no stemming, so without them the reader
 /// has to type the exact word form that somebody else wrote months ago. Calibrated against
 /// the state before the change — with exact terms only, this query returned nothing.
