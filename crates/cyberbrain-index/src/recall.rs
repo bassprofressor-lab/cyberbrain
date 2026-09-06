@@ -45,13 +45,28 @@ impl Default for RecallOptions {
 /// quoted and the terms are ORed, so a typo in one term does not empty the result and a
 /// stray `-`, `:` or `"` in the query is never read as syntax. BM25 still ranks the
 /// blocks that match more terms higher. `None` when nothing searchable is left.
+///
+/// Terms of four characters or more are prefix terms (`"postgres"*`). The tokenizer is
+/// `unicode61`, which does no stemming: without this, `postgres` misses `PostgreSQL` and
+/// `Vektor` misses `Vektoren`, and the reader has to guess the exact form somebody wrote
+/// months ago. Three characters and under stay exact, because `"in"*` matches half the
+/// store and buys nothing. A prefix term also covers the exact word, so nothing that
+/// matched before stops matching.
 pub fn fts_query(query: &str) -> Option<String> {
     const MAX_TERMS: usize = 32;
+    /// Shorter terms are prefixes of too much to be worth the candidates they drag in.
+    const PREFIX_FROM: usize = 4;
     let terms: Vec<String> = query
         .split(|c: char| !(c.is_alphanumeric() || c == '_'))
         .filter(|t| !t.is_empty())
         .take(MAX_TERMS)
-        .map(|t| format!("\"{t}\""))
+        .map(|t| {
+            if t.chars().count() >= PREFIX_FROM {
+                format!("\"{t}\"*")
+            } else {
+                format!("\"{t}\"")
+            }
+        })
         .collect();
     if terms.is_empty() {
         None

@@ -379,6 +379,33 @@ fn n_and_k_are_honoured() {
     assert_eq!(r.hits.len(), 2);
 }
 
+/// The reason for prefix terms: `unicode61` does no stemming, so without them the reader
+/// has to type the exact word form that somebody else wrote months ago. Calibrated against
+/// the state before the change — with exact terms only, this query returned nothing.
+#[test]
+fn a_short_query_word_finds_the_longer_written_one() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open(&tempfile::tempdir().unwrap().path().join("i.db")).unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    put(
+        &mut ix,
+        &e,
+        &note(
+            "pg18",
+            Ring::Knowledge,
+            "PostgreSQL 18 puts the data directory somewhere else entirely.",
+            &[],
+        ),
+    );
+    let hits = ix
+        .recall("postgres", None, &RecallOptions::default())
+        .unwrap()
+        .hits;
+    assert_eq!(hits.len(), 1, "`postgres` must reach `PostgreSQL`");
+    // Two characters stay exact, or every query would drag half the store in.
+    assert_eq!(crate::recall::fts_query("pg").unwrap(), "\"pg\"");
+}
+
 #[test]
 fn fts_query_never_breaks_on_syntax() {
     let e = HashEmbedder::new("test-v1", 256);
@@ -396,9 +423,10 @@ fn fts_query_never_breaks_on_syntax() {
         let r = ix.recall(q, Some(&e), &RecallOptions::default());
         assert!(r.is_ok(), "query {q:?} failed: {:?}", r.err());
     }
+    // Four characters and up become prefix terms, shorter ones stay exact.
     assert_eq!(
         crate::recall::fts_query("config.py").unwrap(),
-        "\"config\" OR \"py\""
+        "\"config\"* OR \"py\""
     );
     assert_eq!(crate::recall::fts_query("  ,, "), None);
     let r = ix.recall("", Some(&e), &RecallOptions::default()).unwrap();
