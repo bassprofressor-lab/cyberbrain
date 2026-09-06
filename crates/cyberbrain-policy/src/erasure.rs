@@ -77,6 +77,12 @@ pub struct ErasureReport {
     pub links_in_unresolved: usize,
     /// Anything cached beyond the index rows (summaries, embeddings on disk, ...).
     pub derivatives: usize,
+    /// Whether this store embeds at all, filled by the eraser from the index's recorded
+    /// profile. It decides whether "0 vectors removed" is a finding or the normal state:
+    /// on a lexical-only store every note has none, and reporting that as a possible
+    /// silent failure trains the reader to ignore the line that matters.
+    #[serde(default)]
+    pub vectors_expected: bool,
     /// What the eraser could not confirm, in words. Never empty out of politeness.
     pub notes: Vec<String>,
 }
@@ -158,8 +164,8 @@ fn sanity_notes(r: &mut ErasureReport) {
     if !r.file_removed {
         r.notes.push("the note file was not removed (already gone, or the eraser skipped it); the index rows were".into());
     }
-    if r.blocks > 0 && r.vectors == 0 {
-        r.notes.push(format!("{} block(s) removed but 0 vectors: either the note was never embedded or vectors were left behind; run `cyberbrain doctor`", r.blocks));
+    if r.vectors_expected && r.blocks > 0 && r.vectors == 0 {
+        r.notes.push(format!("{} block(s) removed but 0 vectors, on a store that embeds: either this note was never indexed or vectors were left behind; run `cyberbrain doctor`", r.blocks));
     }
     if r.blocks > 0 && r.fts_rows == 0 {
         r.notes.push(format!("{} block(s) removed but 0 FTS rows: lexical search may still find this note; run `cyberbrain doctor`", r.blocks));
@@ -293,6 +299,27 @@ pub(crate) mod tests {
         assert_eq!(sink.rows()[1].detail["error"], "index: disk on fire");
     }
 
+    /// The same report on a store that does not embed. Calibrated against the state that
+    /// used to produce the warning: only the flag differs from the test above.
+    #[test]
+    fn a_lexical_only_store_is_not_accused_of_losing_vectors() {
+        let (log, _) = AuditLog::in_memory();
+        let mut e = ScriptedEraser::ok(ErasureReport {
+            file_removed: true,
+            blocks: 3,
+            fts_rows: 3,
+            vectors: 0,
+            vectors_expected: false,
+            ..Default::default()
+        });
+        let r = forget(&log, &Actor::Operator, Profile::Eu, &mut e, &req(false)).unwrap();
+        assert!(
+            !r.notes.iter().any(|n| n.contains("0 vectors")),
+            "a store with no embedding profile has no vectors to lose: {:?}",
+            r.notes
+        );
+    }
+
     #[test]
     fn the_spec_named_silent_failure_is_called_out() {
         let (log, _) = AuditLog::in_memory();
@@ -301,6 +328,7 @@ pub(crate) mod tests {
             blocks: 3,
             fts_rows: 3,
             vectors: 0,
+            vectors_expected: true,
             ..Default::default()
         });
         let r = forget(&log, &Actor::Operator, Profile::Eu, &mut e, &req(false)).unwrap();

@@ -64,6 +64,13 @@ impl NoteWriter for NoopNoteWriter {
 /// The index.
 pub trait IndexWriter: Send + Sync {
     fn set_embedding_profile(&self, profile: &EmbeddingProfile) -> Result<ProfileChange>;
+    /// Whether the index records an embedding profile, and so whether a note is expected to
+    /// carry vectors. Read by the eraser: without this, `forget` on a lexical-only store
+    /// reports "0 vectors" as a possible silent failure on every single note, which is the
+    /// first thing a new reader sees and is never true there. A read failure answers
+    /// `false`, because the note it drives is a warning, and a warning nobody can act on is
+    /// worse than none.
+    fn embeds(&self) -> bool;
     fn upsert_note(
         &self,
         note: &Note,
@@ -85,6 +92,12 @@ pub struct SqliteIndexWriter {
 }
 
 impl IndexWriter for SqliteIndexWriter {
+    fn embeds(&self) -> bool {
+        lock_index(&self.index)
+            .and_then(|ix| ix.embedding_profile())
+            .is_ok_and(|p| p.is_some())
+    }
+
     fn set_embedding_profile(&self, profile: &EmbeddingProfile) -> Result<ProfileChange> {
         lock_index(&self.index)?.set_embedding_profile(profile)
     }
@@ -113,6 +126,12 @@ pub struct NoopIndexWriter {
 }
 
 impl IndexWriter for NoopIndexWriter {
+    fn embeds(&self) -> bool {
+        lock_index(&self.index)
+            .and_then(|ix| ix.embedding_profile())
+            .is_ok_and(|p| p.is_some())
+    }
+
     fn set_embedding_profile(&self, profile: &EmbeddingProfile) -> Result<ProfileChange> {
         let ix = lock_index(&self.index)?;
         let previous = ix.embedding_profile()?;
@@ -194,6 +213,7 @@ impl Eraser for StoreEraser<'_> {
     fn erase(&mut self, req: &EraseRequest) -> Result<ErasureReport> {
         let mut report = ErasureReport {
             file_removed: self.notes.remove(&req.path)?,
+            vectors_expected: self.index.embeds(),
             ..ErasureReport::default()
         };
         match self.index.delete_note(&req.note_id) {
