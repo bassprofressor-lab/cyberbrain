@@ -60,22 +60,29 @@ box, a DGX Spark and an Apple M4 Mac.
 
 ## Install
 
-Not on crates.io yet, and there is no release binary: v0.1.0 is built from source.
+```console
+$ cargo install cyberbrain
+$ cyberbrain init
+```
+
+The web page is compiled into the binary and ships inside the crate, so this needs no node
+toolchain. Leave the page out if you would rather not carry it; the CLI, the hooks, the MCP
+server and the HTTP API are unaffected, and `serve` answers the API while saying the page was
+not built in:
+
+```console
+$ cargo install cyberbrain --no-default-features
+```
+
+From a checkout, build the page first — there it is not packaged, it is built:
 
 ```console
 $ git clone https://github.com/bassprofressor-lab/cyberbrain && cd cyberbrain
-$ (cd ui && npm ci && npm run build)            # the web page, embedded at compile time
+$ (cd ui && npm ci && npm run build)
 $ cargo install --path crates/cyberbrain
 ```
 
-The page is compiled into the binary, which means building it needs a node toolchain. That
-is deliberately not the price of installing: leave it out and the CLI, the hooks, the MCP
-server and the HTTP API are all unaffected, and `serve` answers the API while saying the
-page was not built in.
-
-```console
-$ cargo install --path crates/cyberbrain --no-default-features
-```
+There is no release binary yet. When there is, it will be on the releases page.
 
 Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no
 model server, no node.

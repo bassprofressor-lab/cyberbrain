@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: embed"
+readme = "README.md"
+description = "In-process static embeddings with a hash-verified model artefact, for Cyberbrain"
 
 [features]
 # Exposes `synthetic::write_synthetic_model` so other crates' tests can build a tiny

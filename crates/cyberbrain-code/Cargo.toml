@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: the code index behind `find`"
+readme = "README.md"
+description = "Code index for Cyberbrain: exact line ranges for a symbol, so an agent reads a slice"
 
 [dependencies]
 cyberbrain-core.workspace = true

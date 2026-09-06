@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.0] — 2026-09-06
+
+The first published version.
+
 ### Added
 
 - `cyberbrain policy obligations`, `GET /api/v1/policy/obligations` and a section on the
@@ -48,10 +54,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - The audit chain reports the broken row the way a reader counts rows, from one.
 - The ring-cap error carried ten stray spaces from a wrapped string literal.
 
-## [0.1.0] — unreleased
-
-The first version. Not published: there is no package on crates.io or npm and no release
-binary. Cited, trust-tiered, local-first memory for AI coding agents, as described in
-[`docs/SPEC.md`](docs/SPEC.md).
+Cited, trust-tiered, local-first memory for AI coding agents, as described in
+[`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
+workflow when a tag is pushed.
 
 [Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/main...HEAD

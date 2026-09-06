@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: index"
+readme = "README.md"
+description = "SQLite index and hybrid lexical/semantic recall for Cyberbrain"
 
 [dependencies]
 blake3 = "1.8.7"

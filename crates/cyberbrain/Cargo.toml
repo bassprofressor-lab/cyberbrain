@@ -14,7 +14,8 @@ categories.workspace = true
 # that .gitignore excludes. The web page is both: built to ui/dist at the repository root
 # and copied here by the release step (see README, "Releasing"). Listing it explicitly is
 # the only way a published crate can carry the page that `--features ui` embeds.
-include = ["src/**", "build.rs", "ui-dist/**"]
+readme = "README.md"
+include = ["src/**", "build.rs", "README.md", "LICENSE.md", "ui-dist/**"]
 
 [[bin]]
 name = "cyberbrain"

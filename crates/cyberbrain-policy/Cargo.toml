@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: compliance layer (egress register, profiles, PII, retention, erasure, audit)"
+readme = "README.md"
+description = "Compliance subsystem for Cyberbrain: egress register, audit chain, PII gate, retention"
 
 [features]
 default = ["http"]

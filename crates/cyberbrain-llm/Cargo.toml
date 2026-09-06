@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: llm"
+readme = "README.md"
+description = "Optional local inference over an OpenAI-compatible endpoint, for Cyberbrain"
 
 [dependencies]
 cyberbrain-core.workspace = true

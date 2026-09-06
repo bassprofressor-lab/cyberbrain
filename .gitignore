@@ -5,3 +5,4 @@ ui/dist/
 *.db
 crates/cyberbrain/ui-dist/
 eval-local/
+crates/cyberbrain/LICENSE.md

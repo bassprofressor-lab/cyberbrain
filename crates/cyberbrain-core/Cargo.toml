@@ -6,7 +6,8 @@ rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
 repository.workspace = true
-description = "Cyberbrain: core"
+readme = "README.md"
+description = "Types, config and block splitting for Cyberbrain, a cited local memory for AI coding agents"
 
 [dependencies]
 blake3 = "1.8.7"
