@@ -7,12 +7,16 @@
 **Cited, trust-tiered, local-first memory for AI coding agents.**
 
 [![CI](https://github.com/bassprofressor-lab/cyberbrain/actions/workflows/ci.yml/badge.svg)](https://github.com/bassprofressor-lab/cyberbrain/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cyberbrain?label=crates.io&color=b7410e)](https://crates.io/crates/cyberbrain)
 [![Licence: FSL-1.1-ALv2](https://img.shields.io/badge/licence-FSL--1.1--ALv2-blue)](LICENSE.md)
 [![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-b7410e)](rust-toolchain.toml)
 [![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows-333)](#install)
-[![v0.1.0](https://img.shields.io/badge/version-0.1.0-lightgrey)](CHANGELOG.md)
+[![No telemetry](https://img.shields.io/badge/telemetry-does%20not%20exist-2ea44f)](#built-for-the-eu-switchable-off)
 
-[Install](#install) · [Start](#start) · [Compliance](#built-for-the-eu-switchable-off) ·
+**English** · [Deutsch](README.de.md)
+
+[Install](#install) · [Five minutes](#five-minutes) · [How it works](#how-it-works) ·
+[What it needs](#what-it-needs) · [Compliance](#built-for-the-eu-switchable-off) ·
 [Spec](docs/SPEC.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
 
 </div>
@@ -38,26 +42,6 @@ caveat: contradiction check skipped: no inference model is configured
 
 That last line is the point as much as the hit is. The tool says what it did **not** check.
 
-## What it is for
-
-An agent that forgets everything between sessions relearns the same things and repeats the
-same mistakes. Cyberbrain gives it a memory that survives, and three properties that keep
-that memory worth trusting:
-
-**Cited.** Every retrieved statement carries an identifier that resolves back to the exact
-source block. `cyberbrain recall --id r2-867ef2a8cd01` expands it. An answer without a
-citation is a bug, not a degraded result.
-
-**Trust-tiered.** Notes live in numbered rings. Ring 0 holds operator invariants and
-overrides everything; ring 4 is unverified material. Rings 0 and 1 are injected into every
-session and are size-capped so that stays affordable. When two blocks contradict, the lower
-ring wins and the conflict is reported rather than silently resolved.
-
-**Local-first.** Hybrid lexical and semantic search, embeddings computed on your machine.
-The core performs no network I/O at all. Optional local inference over any OpenAI-compatible
-endpoint — Ollama, LM Studio, llama.cpp, or NVIDIA PAIR spreading the work across an RTX
-box, a DGX Spark and an Apple M4 Mac.
-
 ## Install
 
 ```console
@@ -65,16 +49,32 @@ $ cargo install cyberbrain
 $ cyberbrain init
 ```
 
-The web page is compiled into the binary and ships inside the crate, so this needs no node
-toolchain. Leave the page out if you would rather not carry it; the CLI, the hooks, the MCP
-server and the HTTP API are unaffected, and `serve` answers the API while saying the page was
-not built in:
+Or take a binary from the [latest release](https://github.com/bassprofressor-lab/cyberbrain/releases/latest)
+and check it against the `SHA256SUMS` that ships beside it:
+
+```console
+$ sha256sum -c SHA256SUMS
+$ ./cyberbrain-linux-x86_64 init
+```
+
+Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no
+model server, no node.
+
+<details>
+<summary>Without the web page, or from a checkout</summary>
+
+<br>
+
+The page is compiled into the binary and ships inside the crate, so the normal install needs
+no node toolchain. Leave the page out if you would rather not carry it; the CLI, the hooks,
+the MCP server and the HTTP API are unaffected, and `serve` answers the API while saying the
+page was not built in:
 
 ```console
 $ cargo install cyberbrain --no-default-features
 ```
 
-From a checkout, build the page first — there it is not packaged, it is built:
+From a checkout the page is not packaged, it is built, so build it first:
 
 ```console
 $ git clone https://github.com/bassprofressor-lab/cyberbrain && cd cyberbrain
@@ -82,12 +82,9 @@ $ (cd ui && npm ci && npm run build)
 $ cargo install --path crates/cyberbrain
 ```
 
-There is no release binary yet. When there is, it will be on the releases page.
+</details>
 
-Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no
-model server, no node.
-
-## Start
+## Five minutes
 
 ```console
 $ cyberbrain init
@@ -105,8 +102,40 @@ Four ways in, all from the same binary:
 | `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
 | `cyberbrain serve` | the web page and the HTTP API, on loopback, with no authentication because it never leaves the machine |
 
+## How it works
+
+```mermaid
+flowchart LR
+  Q["your question"] --> R["recall"]
+  N["notes/<br>plain Markdown"] --> I["index<br>FTS5 + vectors<br>(disposable)"]
+  I --> R
+  R --> H["hits<br>citation · ring · score"]
+  R --> C["caveats<br>what was not checked"]
+```
+
+Notes are the source of truth and stay yours: one Markdown file per note, in the repository,
+readable without this tool. The index is derived and can be deleted at any time;
+`cyberbrain scan` rebuilds it. Retrieval is lexical and semantic at once — SQLite FTS5 for
+the words, a flat cosine scan over local embeddings for the meaning — fused into one ranking.
+
+### Three properties that keep a memory worth trusting
+
+**Cited.** Every retrieved statement carries an identifier that resolves back to the exact
+source block. `cyberbrain recall --id r2-867ef2a8cd01` expands it. An answer without a
+citation is a bug, not a degraded result.
+
+**Trust-tiered.** Notes live in numbered rings. Ring 0 holds operator invariants and
+overrides everything; ring 4 is unverified material. Rings 0 and 1 are injected into every
+session and are size-capped so that stays affordable. When two blocks contradict, the lower
+ring wins and the conflict is reported rather than silently resolved.
+
+**Local-first.** Embeddings are computed on your machine. The core performs no network I/O
+at all. Optional local inference over any OpenAI-compatible endpoint — Ollama, LM Studio,
+llama.cpp, or NVIDIA PAIR spreading the work across an RTX box, a DGX Spark and an Apple M4
+Mac.
+
 <details>
-<summary>What the web UI shows (three screenshots)</summary>
+<summary>What the web UI shows (screenshots)</summary>
 
 <br>
 
@@ -125,16 +154,38 @@ the network.
 
 </details>
 
+## What it needs
+
+A laptop. There is no large model to host here: semantic search uses **static embeddings**,
+which is a table lookup and an average rather than a forward pass through a network. That is
+why one CPU core is enough, and why the artefact on disk is larger than the work it does —
+what takes up the space is vocabulary, not computation.
+
+| | without a model | with the embedding model |
+|---|---|---|
+| one search | 10 ms | 2.3 s, most of it loading the model |
+| memory | 14 MB | 1.55 GB peak while the search runs |
+| full re-index | 0.7 s | 4.0 s |
+| on disk | — | 507 MB for the artefact |
+
+<sub>Measured on 2026-09-06 against a real store of 1,004 notes and 4,031 blocks, on a server
+with no GPU (AMD EPYC-Milan, 12 vCPU, 23 GB RAM). Your corpus will give other numbers; the
+order of magnitude is the point.</sub>
+
+No GPU, no model server, no account, no cloud, and no download without your consent. The
+only part that wants better hardware is the optional contradiction check: it needs an
+inference endpoint, and on that CPU-only server one check took 126 s, over the 3 s budget —
+so the hits came back unchecked, and said so.
+
 ### Semantic search needs a model, and it will tell you if it has none
 
 Out of the box search is lexical, and every result says so in a caveat. Lexical means
 literal: without a model, `postgres` does not find `PostgreSQL`, and the words you search
 for are the words that have to be in the paragraph. To turn on semantic search, place a
-model2vec artefact — `model.safetensors`, `tokenizer.json` and a
-`manifest.json` carrying the blake3 digest of each — under `<store>/models/model2vec`.
-Nothing is downloaded on your behalf unless you set `embedding.model_source` and
-`embedding.model_download_consent` in the config, and even then it happens once, through the
-one registered outbound path.
+model2vec artefact — `model.safetensors`, `tokenizer.json` and a `manifest.json` carrying
+the blake3 digest of each — under `<store>/models/model2vec`. Nothing is downloaded on your
+behalf unless you set `embedding.model_source` and `embedding.model_download_consent` in the
+config, and even then it happens once, through the one registered outbound path.
 
 ## Built for the EU, switchable off
 
@@ -155,23 +206,43 @@ Today that list has two entries and ends with "Telemetry does not exist."
 - **A PII check before a note is written**, holding the write for your decision rather than
   redacting behind your back.
 - **An append-only audit log** with a blake3 hash chain, and a `verify` that names the first
-  altered row.
+  altered row and exits non-zero.
 - **Retention** per note, applied on request and never silently in the background.
+- **An obligation catalogue**: `cyberbrain policy obligations` prints what the active profile
+  claims the law requires, each line with its article and a confidence.
 
 `policy.profile` is `eu`, `ch` or `off`. Switzerland is a separate profile rather than "EU
 minus", because the revised FADP differs in substance and folding them together produces
-claims that are wrong in one of the two countries. Every obligation carries a confidence,
-and nothing below high confidence drives behaviour.
+claims that are wrong in one of the two countries. Nothing below high confidence drives
+behaviour.
 
 ## Status
 
-**v0.1.0, and young.** 447 tests, seven crates, clippy and rustfmt clean. It has been run
-against one operator's real corpus — 1,086 notes across five projects — and not much else.
-Expect rough edges, report them.
+**v0.1.0, and young.** 447 tests, seven crates, clippy and rustfmt clean. Published on
+crates.io, with binaries for Linux and Windows on the release page. It has been run against
+one operator's real corpus — 1,086 notes across five projects — and not much else. Expect
+rough edges, report them.
 
 Cyberbrain is an original work. It shares no source code with any other memory tool; §0 of
 [`docs/SPEC.md`](docs/SPEC.md) records the boundary it was built under, and the commit
 history documents it decision by decision.
+
+<details>
+<summary>The seven crates</summary>
+
+<br>
+
+| crate | what it is |
+|---|---|
+| [`cyberbrain`](https://crates.io/crates/cyberbrain) | the binary: CLI, hooks, MCP server, HTTP API and the web page |
+| [`cyberbrain-core`](https://crates.io/crates/cyberbrain-core) | store, notes, rings, config, the types everything else agrees on |
+| [`cyberbrain-index`](https://crates.io/crates/cyberbrain-index) | the disposable index: FTS5, vectors, hybrid retrieval |
+| [`cyberbrain-embed`](https://crates.io/crates/cyberbrain-embed) | static embeddings, loaded from a hash-verified artefact |
+| [`cyberbrain-code`](https://crates.io/crates/cyberbrain-code) | the code index behind `cyberbrain find` |
+| [`cyberbrain-llm`](https://crates.io/crates/cyberbrain-llm) | the optional OpenAI-compatible client |
+| [`cyberbrain-policy`](https://crates.io/crates/cyberbrain-policy) | egress register, audit chain, PII gate, profiles, obligations |
+
+</details>
 
 ## Contributing and security
 

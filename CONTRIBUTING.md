@@ -87,6 +87,13 @@ Telemetry, usage pings, crash reporters, "anonymous" statistics. The egress regi
 entries and the compliance screen ends with the sentence "Telemetry does not exist." That is a
 promise to the reader, not a default someone gets to flip.
 
+## The README exists twice
+
+[`README.md`](README.md) and [`README.de.md`](README.de.md) are the same document in English
+and German. A change to one that is not made in the other leaves half the readers with a page
+that is quietly wrong, which is worse than having no translation at all. If you cannot write
+the German half, say so in the pull request and it will be written for you.
+
 ## Licensing of your contribution
 
 The project is [FSL-1.1-ALv2](LICENSE.md), © Krynex Labs. By opening a pull request you state
