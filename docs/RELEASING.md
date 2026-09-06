@@ -27,6 +27,15 @@ $ cp -r ui/dist crates/cyberbrain/ui-dist     # the step that cannot be skipped
 $ cargo package -p cyberbrain --list | grep -c '^ui-dist/'   # must not be 0
 ```
 
+Update `CHANGELOG.md`: move `Unreleased` under the new version with the date it actually
+shipped. The licence's Apache-2.0 conversion runs from that date, so it is the one line in
+this repository that has a legal consequence two years out.
+
+Tagging `vX.Y.Z` runs `.github/workflows/release.yml`, which builds the page and the binary
+for Linux and Windows, checks the binary's own version against the tag, runs it once on a
+machine that has never seen a store, and attaches the files plus `SHA256SUMS` to a **draft**
+release. The notes are written by a person; the workflow only fills the assets.
+
 Then publish the seven crates in dependency order, each waiting for the index to catch up:
 
 ```

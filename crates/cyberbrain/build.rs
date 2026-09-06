@@ -30,6 +30,20 @@ fn ui_dir(manifest: &Path) -> PathBuf {
     }
 }
 
+/// Whether a node toolchain is reachable. On Windows the launcher is `npm.cmd` and
+/// `Command::new("npm")` does not find it, which would tell every Windows user they have no
+/// node when they do.
+fn has_npm() -> bool {
+    ["npm", "npm.cmd"].iter().any(|c| {
+        std::process::Command::new(c)
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success())
+    })
+}
+
 fn main() {
     // Without the `ui` feature nothing is embedded, so there is nothing to guard.
     if std::env::var_os("CARGO_FEATURE_UI").is_none() {
@@ -57,12 +71,24 @@ fn main() {
     let release = std::env::var("PROFILE").as_deref() == Ok("release");
     if !ui.join("index.html").is_file() {
         if release {
+            // Two different people hit this: one has node and forgot the step, one has no
+            // node at all and needs to know the feature is optional. The same sentence for
+            // both sends the second one to install a toolchain they never needed.
+            let advice = if has_npm() {
+                "Build it first:  cd ui && npm ci && npm run build"
+            } else {
+                "No npm on this machine. Either install a node toolchain and run\n\
+                 `cd ui && npm ci && npm run build`, or build without the page:\n\
+                 `cargo build --release --no-default-features` — the CLI, the hooks, the MCP\n\
+                 server and the HTTP API are unaffected, and `serve` answers the API while\n\
+                 saying the page was not built in.\n\
+                 In a published crate this means the page was not copied to\n\
+                 crates/cyberbrain/ui-dist before cargo publish"
+            };
             panic!(
-                "{} is missing or empty; a release binary would embed no web UI at all.\n\
-                 In a checkout:        cd ui && npm ci && npm run build\n\
-                 In a published crate: the page was not copied to crates/cyberbrain/ui-dist \
-                 before cargo publish; install with --no-default-features until it is",
-                ui.display()
+                "{} is missing or empty; a release binary would embed no web UI at all.\n{}",
+                ui.display(),
+                advice
             );
         }
         println!("cargo:warning=ui/dist is missing; `cyberbrain serve` will have no UI");

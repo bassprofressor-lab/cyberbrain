@@ -29,6 +29,11 @@ In practice:
   the provenance claim in the README true.
 - Found a bug in one of them while using it? Report it to them. Do not port their fix here.
 
+**None of this applies to you as a user.** Run Cyberbrain next to whatever else you like,
+including the two projects named above; the licence restricts building a competing product,
+not using one. The rule binds people who write code that ends up in this repository, and it
+binds them because of what the repository claims about itself.
+
 This is not lawyer theatre. The licence, the ability to dual-licence and the sentence "shares
 no source code with any other memory tool" all rest on it, and any one contribution that
 breaks it breaks all three retroactively.

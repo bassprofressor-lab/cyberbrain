@@ -1,0 +1,112 @@
+# Binaries for a tag, so the install instruction can be "download and run" instead of
+# "install two toolchains first".
+#
+# The page is built before the binary on every platform: `ui` is a default feature, the page
+# lives at the repository root, and a release binary without it would serve a 404 where the
+# README promises a web UI. `build.rs` refuses a mock bundle, so this cannot ship fabricated
+# compliance figures by accident.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  # Buildable without a tag to prove the workflow itself, which is otherwise only ever
+  # exercised at the worst possible moment.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux-x86_64
+            bin: cyberbrain
+          - os: windows-latest
+            name: windows-x86_64
+            bin: cyberbrain.exe
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build the embedded page
+        run: npm ci && npm run build
+        working-directory: ui
+
+      - name: build the binary
+        run: cargo build --release -p cyberbrain
+
+      # The tag says what it is; the binary has to agree. A release built from the wrong
+      # commit is the kind of thing nobody notices until someone reports a fixed bug.
+      - name: the binary agrees with the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          want="${GITHUB_REF_NAME#v}"
+          got="$(target/release/${{ matrix.bin }} --version | awk '{print $2}')"
+          test "$want" = "$got" || { echo "::error::tag $want, binary $got"; exit 1; }
+
+      # Not a smoke test for its own sake: this is the first run on a machine that has never
+      # seen a store, which is the state every new user is in.
+      - name: it works on a machine that has never run it
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP"
+          B="$GITHUB_WORKSPACE/target/release/${{ matrix.bin }}"
+          "$B" init
+          "$B" write --ring 2 --kind knowledge --name release-check --body 'A release that cannot write a note is not a release.'
+          "$B" scan
+          "$B" recall 'release' | grep -q release-check
+          "$B" policy egress | grep -q "Telemetry does not exist"
+          echo '{}' | "$B" hook session-start > /dev/null
+
+      - name: name it after the platform and hash it
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/${{ matrix.bin }}" "dist/cyberbrain-${{ matrix.name }}${{ matrix.bin == 'cyberbrain.exe' && '.exe' || '' }}"
+          cd dist
+          if command -v sha256sum > /dev/null; then sha256sum * > "SHA256SUMS-${{ matrix.name }}"; else shasum -a 256 * > "SHA256SUMS-${{ matrix.name }}"; fi
+          cat "SHA256SUMS-${{ matrix.name }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+
+  publish:
+    name: attach to the release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: one directory, one checksum file
+        run: |
+          mkdir -p out
+          find dist -type f -not -name 'SHA256SUMS-*' -exec cp {} out/ \;
+          cat dist/*/SHA256SUMS-* > out/SHA256SUMS
+          ls -la out
+      # A draft, not a publish: the release notes are written by a person, and the tag
+      # existing is not the same as the release being ready to read.
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: out/*
+          body: |
+            Binaries for ${{ github.ref_name }}. Verify with `sha256sum -c SHA256SUMS`.
+
+            Nothing is needed at runtime: no system SQLite, no OpenSSL, no model server, no
+            node. `cyberbrain --help` to start, `cyberbrain init` in a project.
