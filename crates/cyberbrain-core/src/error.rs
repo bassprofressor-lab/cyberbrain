@@ -31,7 +31,7 @@ pub enum Error {
     /// `blocks::approx_tokens`, because this is enforced at write time where no tokenizer
     /// exists — so the cap is a guard rail, not an exact accounting.
     #[error(
-        "writing to ring {ring} would put the resident rings at ~{actual} tokens, over the          cap of {cap}; shorten a note or move one to ring 2"
+        "writing to ring {ring} would put the resident rings at ~{actual} tokens, over the cap of {cap}; shorten a note or move one to ring 2"
     )]
     RingCapExceeded { ring: u8, actual: usize, cap: usize },
 

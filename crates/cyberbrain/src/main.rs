@@ -18,7 +18,7 @@ mod serve;
 mod usage;
 mod writers;
 
-use app::{App, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};
+use app::{App, AuditView, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};
 use clap::Parser;
 use cli::{Cli, Command, ExportFormat, PolicyCommand};
 use cyberbrain_core::{Error, Result, Ring};
@@ -308,6 +308,7 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 cyberbrain_policy::ExportFormat::Text
             };
             let r = app.policy_audit(&filter, verify, format)?;
+            let code = audit_exit_code(&r);
             out.emit(&r, |v| {
                 let mut s = String::new();
                 if let Some(ver) = &v.verified {
@@ -323,6 +324,7 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 s.push_str(&v.rendered);
                 s
             })?;
+            return Ok(code);
         }
         PolicyCommand::Subject { identifier } => {
             let r = app.policy_subject(&identifier)?;
@@ -342,4 +344,48 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+/// The exit code of `policy audit --verify`.
+///
+/// A broken chain must not exit 0. This is the one command whose whole purpose is to fail
+/// when the log was tampered with, and a check that cannot fail a script is decoration:
+/// a nightly `cyberbrain policy audit --verify` would have reported success over an edited
+/// log. The rows are printed either way, so the evidence is on screen before the process
+/// leaves. Reporting commands (`doctor`, plain `audit`) keep exiting 0; findings there are
+/// advisory, a broken hash chain is not.
+fn audit_exit_code(view: &AuditView) -> i32 {
+    match &view.verified {
+        Some(Err(_)) => 1,
+        // Not asked to verify, or verified and intact.
+        _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(verified: Option<std::result::Result<usize, String>>) -> AuditView {
+        AuditView {
+            rows: 3,
+            verified,
+            rendered: String::new(),
+        }
+    }
+
+    /// Calibrated against the broken state first: this is the case the exit code exists for.
+    #[test]
+    fn a_broken_chain_exits_non_zero() {
+        let broken = view(Some(Err(
+            "audit chain broken at row 2: content does not match its hash".into(),
+        )));
+        assert_eq!(audit_exit_code(&broken), 1);
+    }
+
+    #[test]
+    fn an_intact_chain_and_an_unverified_listing_both_exit_zero() {
+        assert_eq!(audit_exit_code(&view(Some(Ok(3)))), 0);
+        assert_eq!(audit_exit_code(&view(None)), 0);
+    }
 }
