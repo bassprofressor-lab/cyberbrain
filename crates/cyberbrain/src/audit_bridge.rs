@@ -245,7 +245,7 @@ mod tests {
         log.record(&Actor::Cli, AuditAction::NoteWrite, "c", json!({}))
             .unwrap();
         let err = log.verify().unwrap_err().to_string();
-        assert!(err.contains("row 1"), "{err}");
+        assert!(err.contains("row 2"), "{err}");
         assert!(err.contains("no _chain"), "{err}");
     }
 

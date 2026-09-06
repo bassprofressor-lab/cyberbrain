@@ -500,16 +500,20 @@ impl cyberbrain_llm::AuditSink for AuditLog {
 pub fn verify_chain(rows: &[AuditEvent]) -> Result<usize> {
     let mut prev = GENESIS.to_string();
     for (i, row) in rows.iter().enumerate() {
+        // The reader counts from one, and so does every listing this number is compared
+        // against; a zero-based index here sent someone looking at the wrong row. Not
+        // named `at`: that is already the chain's own timestamp, three lines down.
+        let row_no = i + 1;
         let (Some(p), Some(h), Some(at)) = (row.chain_prev(), row.chain_hash(), row.chain_at())
         else {
             return Err(Error::Index(format!(
-                "audit chain broken at row {i} ({} {} {}): row carries no _chain",
+                "audit chain broken at row {row_no} ({} {} {}): row carries no _chain",
                 row.ts, row.action, row.subject
             )));
         };
         if p != prev {
             return Err(Error::Index(format!(
-                "audit chain broken at row {i} ({} {} {}): prev does not match the row \
+                "audit chain broken at row {row_no} ({} {} {}): prev does not match the row \
                  before it; a row was removed, reordered or inserted",
                 row.ts, row.action, row.subject
             )));
@@ -517,7 +521,7 @@ pub fn verify_chain(rows: &[AuditEvent]) -> Result<usize> {
         let expect = row.compute_hash(&prev, at);
         if h != expect {
             return Err(Error::Index(format!(
-                "audit chain broken at row {i} ({} {} {}): content does not match its hash; \
+                "audit chain broken at row {row_no} ({} {} {}): content does not match its hash; \
                  the row was edited",
                 row.ts, row.action, row.subject
             )));
@@ -626,7 +630,8 @@ mod tests {
         let mut rows = sink.rows();
         rows[0].subject = "tampered".into();
         let err = verify_chain(&rows).unwrap_err().to_string();
-        assert!(err.contains("row 0"), "{err}");
+        // The first row of the log, counted the way the listing prints it.
+        assert!(err.contains("row 1"), "{err}");
         assert!(err.contains("edited"), "{err}");
     }
 
@@ -640,7 +645,7 @@ mod tests {
         let mut rows = sink.rows();
         rows.remove(1);
         let err = verify_chain(&rows).unwrap_err().to_string();
-        assert!(err.contains("row 1"), "{err}");
+        assert!(err.contains("row 2"), "{err}");
         assert!(err.contains("removed"), "{err}");
     }
 
