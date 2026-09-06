@@ -621,6 +621,81 @@ pub struct App {
     llm: Mutex<Option<LlmState>>,
 }
 
+/// Ledger task names for the contradiction check. The abandoned one is separate on purpose:
+/// a call that was cut off is not a call that cost that much, and the usage page should not
+/// average the two together.
+const TASK_CONTRADICTION: &str = "contradiction-check";
+const TASK_CONTRADICTION_ABANDONED: &str = "contradiction-check-abandoned";
+
+/// How the previous contradiction check on this store ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LastCheck {
+    /// No row in the ledger: nothing has been measured here yet.
+    Unknown,
+    /// It finished, and took this long.
+    Completed { ms: u64 },
+    /// It was still running when the budget ran out.
+    Abandoned,
+}
+
+/// What to do about the contradiction check, decided before a token is spent.
+#[derive(Debug, PartialEq, Eq)]
+enum CheckPlan {
+    /// Run it, but hand the hits over if it takes longer than this.
+    Run(std::time::Duration),
+    /// Do not start it: the last one measured longer than the budget, and the endpoint is
+    /// not going to have become fast since.
+    SkipMeasuredSlow { last_ms: u64, budget_ms: u64 },
+    /// Do not start it: the last one was cut off at the budget, and the same bet on the
+    /// same endpoint pays the same nothing.
+    SkipAbandoned { budget_ms: u64 },
+    /// Budget 0: the operator asked to wait however long the client's own timeout allows.
+    RunUnbounded,
+}
+
+/// The budget is spent on the *next* call, so the decision rests on how the last one ended.
+/// Without that memory a slow endpoint costs the full budget on every recall and returns
+/// nothing for it, which is the same stall in smaller instalments — measured: with only
+/// completed calls remembered, the second recall paid three seconds again.
+fn plan_contradiction_check(budget_ms: u64, last: LastCheck) -> CheckPlan {
+    if budget_ms == 0 {
+        return CheckPlan::RunUnbounded;
+    }
+    match last {
+        LastCheck::Abandoned => CheckPlan::SkipAbandoned { budget_ms },
+        LastCheck::Completed { ms } if ms > budget_ms => CheckPlan::SkipMeasuredSlow {
+            last_ms: ms,
+            budget_ms,
+        },
+        _ => CheckPlan::Run(std::time::Duration::from_millis(budget_ms)),
+    }
+}
+
+/// How long a measurement of the inference endpoint speaks for the next call. A day: long
+/// enough that a slow endpoint is not re-probed on every recall, short enough that adding a
+/// GPU is noticed by tomorrow without anyone deleting a ledger file.
+const CHECK_MEASUREMENT_GOOD_FOR: std::time::Duration = std::time::Duration::from_secs(86_400);
+
+/// Whether a ledger timestamp is old enough to say nothing about now. An unparseable one
+/// counts as stale: the fallback is to try, not to stay silent forever on a bad string.
+fn stale(at: &str) -> bool {
+    let Ok(then) = at.parse::<jiff::Timestamp>() else {
+        return true;
+    };
+    jiff::Timestamp::now().duration_since(then).unsigned_abs() > CHECK_MEASUREMENT_GOOD_FOR
+}
+
+/// Milliseconds a reader can hold in their head: `126 s`, `3.0 s`, `450 ms`.
+fn secs(ms: u64) -> String {
+    if ms < 1000 {
+        format!("{ms} ms")
+    } else if ms < 10_000 {
+        format!("{:.1} s", ms as f64 / 1000.0)
+    } else {
+        format!("{} s", ms / 1000)
+    }
+}
+
 impl App {
     /// Steps 1 to 5 of §8.2. Steps 6 and 7 happen on first use.
     pub fn open(store: Option<&Path>, actor: Actor) -> Result<App> {
@@ -1166,17 +1241,82 @@ impl App {
                 .push(format!("embedder not loaded: {reason}"));
         }
         // Contradiction check (SPEC §7): only with a configured local model, and its
-        // absence is said out loud.
+        // absence is said out loud. It runs under a budget, because the hits are ready in
+        // milliseconds and this call is the only reason a recall ever feels slow.
         if result.hits.len() >= 2 {
             match self.llm().await {
                 LlmState::Ready(client) => {
-                    let probe = self.load_probe();
-                    let started = std::time::Instant::now();
-                    let (conflicts, caveats) =
-                        cyberbrain_llm::tasks::find_conflicts(&client, &result.hits).await;
-                    self.record_load("contradiction-check", probe, started.elapsed());
-                    result.conflicts = conflicts;
-                    result.caveats.extend(caveats);
+                    let budget_ms = self.config.inference.contradiction_budget_ms;
+                    let last = match hostload::LoadLog::new(&self.root)
+                        .last_of(&[TASK_CONTRADICTION, TASK_CONTRADICTION_ABANDONED])
+                    {
+                        None => LastCheck::Unknown,
+                        // A measurement from another day says nothing about this one: a
+                        // faster model, a GPU, a machine that was busy last time. Without
+                        // this, one slow afternoon would switch the check off for good and
+                        // nothing would ever try again.
+                        Some(r) if stale(&r.at) => LastCheck::Unknown,
+                        Some(r) if r.task == TASK_CONTRADICTION_ABANDONED => LastCheck::Abandoned,
+                        Some(r) => LastCheck::Completed { ms: r.wall_ms },
+                    };
+                    match plan_contradiction_check(budget_ms, last) {
+                        CheckPlan::SkipMeasuredSlow { last_ms, budget_ms } => {
+                            result.caveats.push(format!(
+                                "contradiction check skipped: the last one took {}, over the {} \
+                                 budget (inference.contradiction_budget_ms); the hits are not \
+                                 checked against each other",
+                                secs(last_ms),
+                                secs(budget_ms)
+                            ));
+                        }
+                        CheckPlan::SkipAbandoned { budget_ms } => {
+                            result.caveats.push(format!(
+                                "contradiction check skipped: the last one was still running when \
+                                 its {} budget ran out (inference.contradiction_budget_ms); the \
+                                 hits are not checked against each other",
+                                secs(budget_ms)
+                            ));
+                        }
+                        plan => {
+                            let probe = self.load_probe();
+                            let started = std::time::Instant::now();
+                            let checked = match plan {
+                                CheckPlan::Run(budget) => tokio::time::timeout(
+                                    budget,
+                                    cyberbrain_llm::tasks::find_conflicts(&client, &result.hits),
+                                )
+                                .await
+                                .ok(),
+                                _ => Some(
+                                    cyberbrain_llm::tasks::find_conflicts(&client, &result.hits)
+                                        .await,
+                                ),
+                            };
+                            match checked {
+                                Some((conflicts, caveats)) => {
+                                    self.record_load(TASK_CONTRADICTION, probe, started.elapsed());
+                                    result.conflicts = conflicts;
+                                    result.caveats.extend(caveats);
+                                }
+                                None => {
+                                    // Abandoned, not completed: recorded under its own task so
+                                    // the ledger keeps saying what happened, and so the next
+                                    // call in another process knows without paying again.
+                                    self.record_load(
+                                        TASK_CONTRADICTION_ABANDONED,
+                                        probe,
+                                        started.elapsed(),
+                                    );
+                                    result.caveats.push(format!(
+                                        "contradiction check gave up after {} \
+                                         (inference.contradiction_budget_ms); the hits are not \
+                                         checked against each other",
+                                        secs(budget_ms)
+                                    ));
+                                }
+                            }
+                        }
+                    }
                 }
                 LlmState::Absent(reason) => result
                     .caveats
@@ -2278,6 +2418,94 @@ fn normalise_link_target(name: &str) -> String {
         }
     }
     out.trim_matches('-').to_string()
+}
+
+#[cfg(test)]
+mod contradiction_budget_tests {
+    use super::*;
+
+    /// Calibrated against the state that made this exist: a store whose ledger says the
+    /// last check took 126 s is not asked to try again, because it would stall the recall
+    /// for two minutes and then be cancelled anyway.
+    #[test]
+    fn a_measured_slow_endpoint_is_not_asked_again() {
+        assert_eq!(
+            plan_contradiction_check(3_000, LastCheck::Completed { ms: 126_184 }),
+            CheckPlan::SkipMeasuredSlow {
+                last_ms: 126_184,
+                budget_ms: 3_000
+            }
+        );
+    }
+
+    /// The case the first implementation got wrong, found by timing two calls in a row: a
+    /// check that was cut off leaves no completed measurement, so remembering only
+    /// completed calls made every recall pay the budget again and get nothing for it.
+    #[test]
+    fn an_abandoned_check_is_not_retried_either() {
+        assert_eq!(
+            plan_contradiction_check(3_000, LastCheck::Abandoned),
+            CheckPlan::SkipAbandoned { budget_ms: 3_000 }
+        );
+    }
+
+    #[test]
+    fn a_fast_one_runs_under_the_budget() {
+        assert_eq!(
+            plan_contradiction_check(3_000, LastCheck::Completed { ms: 800 }),
+            CheckPlan::Run(std::time::Duration::from_millis(3_000))
+        );
+        // Nothing measured yet: try once. That is what makes the first call the one that
+        // learns, rather than every call paying for the ignorance of the last.
+        assert_eq!(
+            plan_contradiction_check(3_000, LastCheck::Unknown),
+            CheckPlan::Run(std::time::Duration::from_millis(3_000))
+        );
+    }
+
+    /// Exactly at the budget is not over it.
+    #[test]
+    fn the_boundary_is_not_slow() {
+        assert_eq!(
+            plan_contradiction_check(3_000, LastCheck::Completed { ms: 3_000 }),
+            CheckPlan::Run(std::time::Duration::from_millis(3_000))
+        );
+    }
+
+    /// Yesterday's measurement is not evidence about today's endpoint.
+    #[test]
+    fn a_measurement_expires_after_a_day() {
+        let now = jiff::Timestamp::now();
+        let fresh = (now - jiff::SignedDuration::from_hours(2)).to_string();
+        let old = (now - jiff::SignedDuration::from_hours(30)).to_string();
+        assert!(!stale(&fresh), "two hours old still counts");
+        assert!(stale(&old), "thirty hours old does not");
+        assert!(
+            stale("not a timestamp"),
+            "an unreadable stamp means try again"
+        );
+    }
+
+    #[test]
+    fn zero_means_wait_however_long_it_takes() {
+        assert_eq!(
+            plan_contradiction_check(0, LastCheck::Completed { ms: 126_184 }),
+            CheckPlan::RunUnbounded
+        );
+        assert_eq!(
+            plan_contradiction_check(0, LastCheck::Abandoned),
+            CheckPlan::RunUnbounded
+        );
+    }
+
+    /// The caveat is read by a person deciding whether to care, so the number has to be
+    /// one they can hold: seconds, not 126184.
+    #[test]
+    fn durations_read_like_durations() {
+        assert_eq!(secs(450), "450 ms");
+        assert_eq!(secs(3_000), "3.0 s");
+        assert_eq!(secs(126_184), "126 s");
+    }
 }
 
 #[cfg(test)]

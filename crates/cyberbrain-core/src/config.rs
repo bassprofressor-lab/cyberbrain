@@ -129,6 +129,15 @@ pub struct InferenceConfig {
     pub model: Option<String>,
     /// Per-request timeout. The LLM layer is optional; it must never hang a core path.
     pub timeout_ms: u64,
+    /// How long a recall may wait for the contradiction check before it hands the hits over
+    /// unchecked. Separate from `timeout_ms` because the two answer different questions:
+    /// that one is how long a call may take, this one is how long a *person* waits for
+    /// hits that were ready in milliseconds. On a CPU-only box one check over eight blocks
+    /// took 126 s here, so the whole recall did too, while the search itself cost 3 ms.
+    /// A skipped check is said out loud in the caveats, and 0 means wait as long as
+    /// `timeout_ms` allows.
+    #[serde(default = "default_contradiction_budget_ms")]
+    pub contradiction_budget_ms: u64,
     /// cgroup v2 directory of the process serving `base_url`, when it is on this machine
     /// and the operator wants its CPU and memory attributed exactly. Something like
     /// `/sys/fs/cgroup/system.slice/docker-<id>.scope`. Left unset, the load page still
@@ -196,6 +205,12 @@ impl Default for EmbeddingConfig {
     }
 }
 
+/// Three seconds: long enough for a small model on a GPU to answer over eight blocks,
+/// short enough that a person does not think the tool hung.
+fn default_contradiction_budget_ms() -> u64 {
+    3_000
+}
+
 impl Default for InferenceConfig {
     fn default() -> Self {
         Self {
@@ -204,6 +219,7 @@ impl Default for InferenceConfig {
             allow_overlay_network: false,
             model: None,
             timeout_ms: 30_000,
+            contradiction_budget_ms: default_contradiction_budget_ms(),
             load_cgroup: None,
         }
     }
@@ -264,6 +280,10 @@ allow_public_endpoint = false
 allow_overlay_network = false
 # model = "qwen3:8b"
 timeout_ms = 30000
+# How long a recall waits for the contradiction check. The hits are ready in milliseconds;
+# this is the wait a person notices. Over budget, the hits come back with a caveat saying
+# the check did not run. 0 waits as long as timeout_ms.
+contradiction_budget_ms = 3000
 
 [policy]
 # eu | ch | off. "off" compiles the checks in and disables them.

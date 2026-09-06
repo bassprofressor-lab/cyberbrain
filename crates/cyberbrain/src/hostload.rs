@@ -188,6 +188,21 @@ impl LoadLog {
         }
     }
 
+    /// The most recent row belonging to any of `tasks`.
+    ///
+    /// Read before a recall decides whether to wait for the contradiction check: the last
+    /// measurement is the best available estimate of the next one, and it survives the
+    /// process, which a one-shot CLI call otherwise cannot. Several task names because a
+    /// call that completed and a call that was cut off are recorded apart, and the decision
+    /// needs whichever happened last.
+    pub fn last_of(&self, tasks: &[&str]) -> Option<LoadRow> {
+        let text = std::fs::read_to_string(&self.path).ok()?;
+        text.lines()
+            .rev()
+            .filter_map(|l| serde_json::from_str::<LoadRow>(l).ok())
+            .find(|r| tasks.contains(&r.task.as_str()))
+    }
+
     pub fn summary(&self) -> LoadSummary {
         let mut s = LoadSummary {
             cores_total: std::thread::available_parallelism().ok().map(|n| n.get()),
