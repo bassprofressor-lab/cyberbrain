@@ -1,10 +1,31 @@
+<div align="center">
+
+<img src="docs/images/logo.svg" width="88" alt="">
+
 # Cyberbrain
 
-Cited, trust-tiered, local-first memory for AI coding agents.
+**Cited, trust-tiered, local-first memory for AI coding agents.**
+
+[![CI](https://github.com/bassprofressor-lab/cyberbrain/actions/workflows/ci.yml/badge.svg)](https://github.com/bassprofressor-lab/cyberbrain/actions/workflows/ci.yml)
+[![Licence: FSL-1.1-ALv2](https://img.shields.io/badge/licence-FSL--1.1--ALv2-blue)](LICENSE.md)
+[![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-b7410e)](rust-toolchain.toml)
+[![Linux and Windows](https://img.shields.io/badge/runs%20on-Linux%20%C2%B7%20Windows-333)](#install)
+[![v0.1.0](https://img.shields.io/badge/version-0.1.0-lightgrey)](CHANGELOG.md)
+
+[Install](#install) · [Start](#start) · [Compliance](#built-for-the-eu-switchable-off) ·
+[Spec](docs/SPEC.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
 
 One native binary. Your notes stay plain Markdown you can read, edit and grep. Nothing
 leaves the machine unless you say so, and every path that could is listed in one place you
 can print.
+
+<img src="docs/images/search.png" alt="Recall over a project's notes: each hit carries its ring, its citation and its score">
+
+<sub>A question in the words you would use months later. Each hit carries the ring it came
+from, a citation that resolves back to the block, and its score. Screenshots are from a
+demo store; the notes in them are invented.</sub>
 
 ```console
 $ cyberbrain recall 'postgres data directory'
@@ -68,8 +89,34 @@ $ cyberbrain scan
 $ cyberbrain recall 'what you learned'
 ```
 
-Wire it into an agent harness with `cyberbrain hook <event>`, serve the web UI with
-`cyberbrain serve`, or speak MCP over stdio with `cyberbrain mcp`.
+Four ways in, all from the same binary:
+
+| | |
+|---|---|
+| `cyberbrain <command>` | everything is reachable from the command line, `--json` on all of it |
+| `cyberbrain hook <event>` | six agent lifecycle events; measured p99 of 4 ms including process start, against a 15 ms budget |
+| `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
+| `cyberbrain serve` | the web page and the HTTP API, on loopback, with no authentication because it never leaves the machine |
+
+<details>
+<summary>What the web UI shows (three screenshots)</summary>
+
+<br>
+
+**Status** — what the store holds, what the index knows, which model is loaded, and a panel
+that lists what the page *cannot* measure.
+
+<img src="docs/images/status.png" alt="Status screen">
+
+**Graph** — notes and the links between them, by ring. A link to a note that does not exist
+yet is drawn as intent rather than as an error.
+
+<img src="docs/images/graph.png" alt="Graph screen">
+
+The page is compiled into the binary, speaks English and German, and fetches nothing from
+the network.
+
+</details>
 
 ### Semantic search needs a model, and it will tell you if it has none
 
@@ -83,6 +130,12 @@ Nothing is downloaded on your behalf unless you set `embedding.model_source` and
 one registered outbound path.
 
 ## Built for the EU, switchable off
+
+<img src="docs/images/compliance.png" alt="The compliance screen: nothing has left this machine, and the obligation catalogue below it">
+
+<sub>The headline is computed from the egress register, not typed in. Below it, what the
+active profile claims the law says — with the article each line rests on and how sure the
+author is of it.</sub>
 
 Compliance is a subsystem, not a section in the docs. `cyberbrain policy egress` prints
 every path by which bytes can leave the machine, what each carries, and whether it is on.
