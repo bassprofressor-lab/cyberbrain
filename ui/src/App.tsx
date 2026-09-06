@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { api } from "@/api/client";
 import { ShortcutHelp } from "@/components/ShortcutHelp";
 import { Kbd } from "@/components/ui";
+import { LANG_NAME, setLang, useLang, useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, SCREENS, useRoute } from "@/lib/router";
 import { useTheme } from "@/lib/theme";
@@ -15,21 +16,25 @@ import { UsageScreen } from "@/screens/Usage";
 export function App() {
   const route = useRoute();
   const theme = useTheme();
+  const t = useT();
+  const lang = useLang();
   const current = route.screen === "note" ? "notes" : route.screen;
+  const other = lang === "en" ? "de" : "en";
 
   useShortcuts(
     "global",
     [
-      ...SCREENS.map((s) => ({ keys: `g ${s.key}`, label: `Go to ${s.label}`, run: () => navigate(href(s.screen)) })),
-      { keys: "Mod+k", label: "Search", run: () => navigate(href("search")), inInputs: true },
-      { keys: "Shift+T", label: "Toggle theme", run: theme.cycle },
+      ...SCREENS.map((s) => ({ keys: `g ${s.key}`, label: t.keys.goTo(t.nav[s.screen]), run: () => navigate(href(s.screen)) })),
+      { keys: "Mod+k", label: t.keys.search, run: () => navigate(href("search")), inInputs: true },
+      { keys: "Shift+T", label: t.keys.toggleTheme, run: theme.cycle },
+      { keys: "Shift+L", label: t.keys.toggleLanguage, run: () => setLang(other) },
     ],
-    [theme.choice],
+    [theme.choice, lang],
   );
 
   useEffect(() => {
-    document.title = `${SCREENS.find((s) => s.screen === current)?.label ?? "Cyberbrain"}${route.param ? ` · ${route.param}` : ""} — Cyberbrain`;
-  }, [current, route.param]);
+    document.title = `${t.nav[current]}${route.param ? ` · ${route.param}` : ""} — Cyberbrain`;
+  }, [current, route.param, t]);
 
   return (
     <div className="h-screen grid grid-cols-[13rem_1fr] grid-rows-[1fr] overflow-hidden">
@@ -43,7 +48,7 @@ export function App() {
             {SCREENS.map((s) => (
               <li key={s.screen}>
                 <a href={href(s.screen)} className={`flex items-center gap-2 px-4 py-1.5 text-sm ${current === s.screen ? "row-selected font-medium" : "text-fg-muted hover:text-fg"}`} aria-current={current === s.screen ? "page" : undefined}>
-                  <span className="flex-1">{s.label}</span>
+                  <span className="flex-1">{t.nav[s.screen]}</span>
                   <span className="text-2xs text-fg-faint font-mono">g {s.key}</span>
                 </a>
               </li>
@@ -53,19 +58,20 @@ export function App() {
         <div className="px-4 py-3 border-t space-y-2 text-2xs text-fg-faint">
           {api.transport === "mock" ? (
             <div className="rounded border border-warn/50 bg-warn-bg text-warn px-2 py-1.5 leading-snug" role="status">
-              <div className="font-medium">MOCK DATA</div>
-              <div>No backend. Every number on every screen is fabricated for layout; the compliance statement is not evidence of anything.</div>
+              <div className="font-medium">{t.app.mockTitle}</div>
+              <div>{t.app.mockBody}</div>
             </div>
           ) : (
-            <div>
-              connected to same-origin <code>/api/v1</code>
-            </div>
+            <div>{t.app.connected("/api/v1")}</div>
           )}
-          <div className="flex items-center justify-between">
-            <button className="btn btn-sm" onClick={theme.cycle} title="Theme: system → light → dark">
-              theme: {theme.choice === "system" ? `system (${theme.effective})` : theme.choice}
+          <div className="flex items-center gap-1.5">
+            <button className="btn btn-sm min-w-0 flex-1 justify-start truncate" onClick={theme.cycle} title={t.app.themeTitle}>
+              {theme.choice === "system" ? t.app.themeSystem(theme.effective === "dark" ? t.app.themeDark : t.app.themeLight) : theme.choice === "dark" ? t.app.themeDark : t.app.themeLight}
             </button>
-            <Kbd keys="?" />
+            <button className="btn btn-sm shrink-0 font-medium tracking-wide" onClick={() => setLang(other)} title={`${t.app.languageTitle} · ${LANG_NAME[other]}`} aria-label={t.keys.toggleLanguage} lang={other}>
+              {other.toUpperCase()}
+            </button>
+            <Kbd keys="?" className="shrink-0" />
           </div>
         </div>
       </aside>

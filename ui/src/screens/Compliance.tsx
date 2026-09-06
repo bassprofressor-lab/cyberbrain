@@ -5,19 +5,13 @@ import { RingBadge } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
 import { Dot, Empty, ErrorBanner, KeyValue, Loading, Pill, Section, Stat } from "@/components/ui";
 import { absTime, bytes, duration, num, relTime, shortDate } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, type Route } from "@/lib/router";
 import { toApiError, useAsync } from "@/lib/useAsync";
 
-const SECTIONS = [
-  ["overview", "Overview"],
-  ["egress", "Egress register"],
-  ["audit", "Audit log"],
-  ["pii", "PII"],
-  ["retention", "Retention"],
-  ["models", "Model card"],
-  ["subject", "Subject access"],
-] as const;
+/** Anchors, so they never change with the language; the label comes from the dictionary. */
+const SECTIONS = ["overview", "egress", "audit", "pii", "retention", "models", "subject"] as const;
 
 /** The log's own vocabulary, by family: `note` selects `note.*`, and so on (`AuditActionFilter`). */
 const ACTION_FILTERS = AUDIT_ACTION_FAMILIES;
@@ -25,9 +19,8 @@ const ACTION_FILTERS = AUDIT_ACTION_FAMILIES;
 function piiTone(state: PiiState): "ok" | "warn" | "danger" | "neutral" {
   return state === "flagged" ? "danger" : state === "reviewed" ? "warn" : state === "none" ? "ok" : "neutral";
 }
-const PII_LABEL: Record<PiiState, string> = { unscanned: "not scanned", none: "scanned, nothing found", reviewed: "reviewed", flagged: "flagged" };
-
 export function ComplianceScreen({ route }: { route: Route }) {
+  const t = useT();
   const egress = useAsync(() => api.egress(), []);
   const pii = useAsync(() => api.pii(), []);
   const retention = useAsync(() => api.retention(), []);
@@ -50,7 +43,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
       },
       { root, rootMargin: "-10% 0px -70% 0px" },
     );
-    for (const [id] of SECTIONS) {
+    for (const id of SECTIONS) {
       const el = document.getElementById(`c-${id}`);
       if (el) obs.observe(el);
     }
@@ -59,8 +52,8 @@ export function ComplianceScreen({ route }: { route: Route }) {
 
   useShortcuts(
     "compliance",
-    SECTIONS.map(([id, label], i) => ({ keys: String(i + 1), label: `Jump to ${label}`, run: () => document.getElementById(`c-${id}`)?.scrollIntoView({ block: "start" }) })),
-    [],
+    SECTIONS.map((id, i) => ({ keys: String(i + 1), label: t.compliance.jumpTo(t.compliance.sections[id]), run: () => document.getElementById(`c-${id}`)?.scrollIntoView({ block: "start" }) })),
+    [t],
   );
 
   const profile = egress.data?.profile ?? status.data?.policy.profile;
@@ -69,45 +62,43 @@ export function ComplianceScreen({ route }: { route: Route }) {
     <div className="grid h-full grid-cols-1 md:grid-cols-[12rem_1fr]">
       <nav className="border-r hidden md:block py-3">
         <ul className="text-sm">
-          {SECTIONS.map(([id, label], i) => (
+          {SECTIONS.map((id, i) => (
             <li key={id}>
               <a href={href("compliance", null, undefined, id)} className={`flex items-center gap-2 px-4 py-1.5 ${active === id ? "row-selected font-medium" : "text-fg-muted hover:text-fg"}`}>
                 <span className="font-mono text-2xs text-fg-faint w-3">{i + 1}</span>
-                {label}
+                {t.compliance.sections[id]}
               </a>
             </li>
           ))}
         </ul>
         {profile ? (
           <div className="px-4 mt-4 text-2xs text-fg-faint">
-            profile <code className={profile === "off" ? "text-warn" : "text-fg"}>{profile}</code>
-            <div className="mt-1 leading-relaxed">{profile === "eu" ? "GDPR, EU AI Act" : profile === "ch" ? "revised FADP" : "checks compiled in, disabled"}</div>
+            {t.compliance.profile} <code className={profile === "off" ? "text-warn" : "text-fg"}>{profile}</code>
+            <div className="mt-1 leading-relaxed">{profile === "eu" ? t.compliance.profileEu : profile === "ch" ? t.compliance.profileCh : t.compliance.profileOff}</div>
           </div>
         ) : null}
       </nav>
       <div ref={scrollRef} className="overflow-auto scroll-thin p-5 space-y-5 min-w-0">
         <div id="c-overview">
-          {egress.error ? <ErrorBanner error={egress.error} onRetry={egress.reload} /> : egress.data ? <Overview register={egress.data} auditRows={status.data?.policy.audit_rows ?? null} /> : <Loading label="reading egress register" />}
+          {egress.error ? <ErrorBanner error={egress.error} onRetry={egress.reload} /> : egress.data ? <Overview register={egress.data} auditRows={status.data?.policy.audit_rows ?? null} /> : <Loading label={t.compliance.loadingEgress} />}
         </div>
 
-        <Section id="c-egress" title="Egress register" aside={egress.data ? <span className="font-mono">register {egress.data.register_hash}</span> : null}>
+        <Section id="c-egress" title={t.compliance.sections.egress} aside={egress.data ? <span className="font-mono">{t.compliance.egress.register(egress.data.register_hash)}</span> : null}>
           {egress.data ? <EgressTable paths={egress.data.paths} /> : null}
-          <p className="mt-3 text-xs text-fg-muted leading-relaxed">
-            Every code path that can send bytes off the machine is registered at compile time in one module; all outbound I/O goes through a single wrapper that takes one of these purposes, and CI fails on any HTTP client built elsewhere. A purpose not on this list does not exist in the binary. Telemetry is not on the list.
-          </p>
+          <p className="mt-3 text-xs text-fg-muted leading-relaxed">{t.compliance.egress.note}</p>
         </Section>
 
         <div id="c-audit">
           <AuditSection />
         </div>
 
-        <Section id="c-pii" title="PII findings" aside={pii.data ? <Pill tone={pii.data.scan_enabled ? "ok" : "warn"}>{pii.data.scan_enabled ? "write-time scan on" : "scan off (profile off)"}</Pill> : null}>
+        <Section id="c-pii" title={t.compliance.pii.title} aside={pii.data ? <Pill tone={pii.data.scan_enabled ? "ok" : "warn"}>{pii.data.scan_enabled ? t.compliance.pii.scanOn : t.compliance.pii.scanOff}</Pill> : null}>
           {pii.error ? <ErrorBanner error={pii.error} onRetry={pii.reload} /> : null}
           {pii.data ? (
             <>
               {pii.data.holds.length ? (
                 <div className="mb-3 panel border-warn/50 px-3 py-2 text-sm">
-                  <span className="text-warn font-medium">{pii.data.holds.length} write{pii.data.holds.length === 1 ? "" : "s"} held</span> awaiting a decision:{" "}
+                  <span className="text-warn font-medium">{t.compliance.pii.held(pii.data.holds.length)}</span> {t.compliance.pii.awaiting}{" "}
                   {pii.data.holds.map((h) => (
                     <a key={h.hold_id} href={href("note", h.note)} className="link mr-2">
                       {h.note}
@@ -119,10 +110,10 @@ export function ComplianceScreen({ route }: { route: Route }) {
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="label text-left">
-                      <th className="py-1 pr-3 font-medium">note</th>
-                      <th className="py-1 pr-3 font-medium">state</th>
-                      <th className="py-1 pr-3 font-medium">findings (masked)</th>
-                      <th className="py-1 font-medium">reviewed</th>
+                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colNote}</th>
+                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colState}</th>
+                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colFindings}</th>
+                      <th className="py-1 font-medium">{t.compliance.pii.colReviewed}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -137,8 +128,8 @@ export function ComplianceScreen({ route }: { route: Route }) {
                           </span>
                         </td>
                         <td className="py-1.5 pr-3">
-                          <Pill tone={piiTone(e.state)} title={e.state === "unscanned" ? "No write-time scan ever ran over this note (imported or hand-written). The findings column is a scan of the body as it is now." : undefined}>
-                            {PII_LABEL[e.state]}
+                          <Pill tone={piiTone(e.state)} title={e.state === "unscanned" ? t.compliance.pii.unscannedTitle : undefined}>
+                            {t.pii.state[e.state]}
                           </Pill>
                         </td>
                         <td className="py-1.5 pr-3 font-mono">
@@ -149,18 +140,18 @@ export function ComplianceScreen({ route }: { route: Route }) {
                               </div>
                             ))
                           ) : (
-                            <span className="text-fg-faint font-sans">{e.state === "unscanned" ? "a scan of the body now finds nothing; the note stays unscanned until it is written through the tool" : "nothing found in the body now"}</span>
+                            <span className="text-fg-faint font-sans">{e.state === "unscanned" ? t.compliance.pii.unscannedNothing : t.compliance.pii.nothingNow}</span>
                           )}
                         </td>
                         <td className="py-1.5 text-fg-muted" title={absTime(e.reviewed_at)}>
-                          {e.reviewed_at ? relTime(e.reviewed_at) : <span className="text-fg-faint">never scanned</span>}
+                          {e.reviewed_at ? relTime(e.reviewed_at) : <span className="text-fg-faint">{t.compliance.pii.neverScanned}</span>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               ) : (
-                <Empty title="Every note was scanned and none carries reviewed or flagged personal data.">Every write under profile eu/ch is scanned for e-mail addresses, IPs, API keys, IBANs and phone numbers before it lands. Heuristic: a seatbelt, not a guarantee. A note nobody scanned would be listed here as “not scanned”.</Empty>
+                <Empty title={t.compliance.pii.emptyTitle}>{t.compliance.pii.emptyBody}</Empty>
               )}
             </>
           ) : null}
@@ -170,7 +161,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           <RetentionSection />
         </div>
 
-        <Section id="c-models" title="Model card" aside={<span>EU AI Act transparency · what generates or embeds on this machine</span>}>
+        <Section id="c-models" title={t.compliance.sections.models} aside={<span>{t.compliance.models.aside}</span>}>
           {models.error ? <ErrorBanner error={models.error} onRetry={models.reload} /> : null}
           {models.data ? (
             <div className="grid gap-3 lg:grid-cols-2">
@@ -179,25 +170,25 @@ export function ComplianceScreen({ route }: { route: Route }) {
                   <div className="flex items-center gap-2">
                     <Pill tone={m.active ? "ok" : "neutral"}>{m.role}</Pill>
                     <span className="font-mono font-medium">{m.name}</span>
-                    {m.active ? <span className="ml-auto text-2xs text-fg-faint">in use</span> : null}
+                    {m.active ? <span className="ml-auto text-2xs text-fg-faint">{t.compliance.models.inUse}</span> : null}
                   </div>
                   <div className="mt-2">
                     <KeyValue
                       rows={[
-                        ["source", <span className="text-xs">{m.source}</span>],
-                        ["licence", m.license === "not stated" ? <span className="text-fg-muted">not stated by the source; never guessed</span> : m.license],
-                        ["hash", m.hash ? <code className="text-xs break-all">{m.hash}</code> : <span className="text-fg-faint">not held (endpoint model; weights are not on this machine)</span>],
-                        ["format", m.format ?? <span className="text-fg-faint">not stated</span>],
-                        ["dimension", m.dim ? `${m.dim} · ${m.pooling ?? "pooling not stated"}` : <span className="text-fg-faint">{m.role === "inference" ? "not applicable (generates text)" : "not stated"}</span>],
-                        ["size", m.bytes === null ? <span className="text-fg-faint">{m.role === "inference" ? "not held" : "not stated"}</span> : bytes(m.bytes)],
-                        ["verified", m.verified_at ? <span title={absTime(m.verified_at)}>{relTime(m.verified_at)} on load</span> : m.hash ? <span className="text-fg-muted">hash checked on every load; no timestamp of that check is kept</span> : <span className="text-fg-faint">nothing to verify</span>],
+                        [t.compliance.models.source, <span className="text-xs">{m.source}</span>],
+                        [t.compliance.models.licence, m.license === "not stated" ? <span className="text-fg-muted">{t.compliance.models.licenceNone}</span> : m.license],
+                        [t.compliance.models.hash, m.hash ? <code className="text-xs break-all">{m.hash}</code> : <span className="text-fg-faint">{t.compliance.models.hashNone}</span>],
+                        [t.compliance.models.format, m.format ?? <span className="text-fg-faint">{t.common.notStated}</span>],
+                        [t.compliance.models.dimension, m.dim ? `${m.dim} · ${m.pooling ?? t.compliance.models.poolingNone}` : <span className="text-fg-faint">{m.role === "inference" ? t.compliance.models.dimNotApplicable : t.common.notStated}</span>],
+                        [t.compliance.models.size, m.bytes === null ? <span className="text-fg-faint">{m.role === "inference" ? t.compliance.models.notHeld : t.common.notStated}</span> : bytes(m.bytes)],
+                        [t.compliance.models.verified, m.verified_at ? <span title={absTime(m.verified_at)}>{t.compliance.models.verifiedOnLoad(relTime(m.verified_at))}</span> : m.hash ? <span className="text-fg-muted">{t.compliance.models.verifiedNoStamp}</span> : <span className="text-fg-faint">{t.compliance.models.nothingToVerify}</span>],
                       ]}
                     />
                   </div>
                   <div className="mt-2 text-xs">
-                    <div className="label">intended use</div>
+                    <div className="label">{t.compliance.models.intendedUse}</div>
                     <p className="mt-0.5 text-fg-muted leading-relaxed">{m.intended_use}</p>
-                    <div className="label mt-2">limitations</div>
+                    <div className="label mt-2">{t.compliance.models.limitations}</div>
                     <p className="mt-0.5 text-fg-muted leading-relaxed">{m.limitations}</p>
                   </div>
                 </div>
@@ -215,6 +206,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
 }
 
 function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof api.egress>>; auditRows: number | null }) {
+  const t = useT();
   const pub = register.paths.filter((p) => p.destination_class === "public");
   const local = register.paths.filter((p) => p.destination_class !== "public");
   const pubUses = pub.reduce((a, p) => a + p.uses_total, 0);
@@ -231,15 +223,15 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
   let headline: string;
   let sub: string;
   if (pubUses === 0) {
-    headline = "Nothing has left this machine.";
-    sub = `In ${days} days no registered path sent a byte to a public destination. ${pubEnabled.length ? `${pubEnabled.length} such path${pubEnabled.length === 1 ? " is" : "s are"} enabled and unused.` : "No such path is currently enabled."}`;
+    headline = t.compliance.overview.nothingLeft;
+    sub = t.compliance.overview.nothingLeftSub(days, pubEnabled.length);
   } else if (pub.every((p) => p.purpose === "model-download")) {
-    headline = "No note content has left this machine.";
-    sub = `The only outbound traffic to the internet in ${days} days was ${pubUses} model download${pubUses === 1 ? "" : "s"} (${bytes(pubBytes)} sent, on your consent, ${relTime(lastPub)}). That request carried no note text, no identifier, no telemetry. ${pubEnabled.length === 0 ? "The download path is now disabled: the artefact is present and hash-verified." : ""}`;
+    headline = t.compliance.overview.noContent;
+    sub = t.compliance.overview.noContentSub(days, pubUses, bytes(pubBytes), relTime(lastPub), pubEnabled.length === 0);
   } else {
     tone = "warn";
-    headline = "Bytes have left this machine.";
-    sub = `${pubUses} outbound request${pubUses === 1 ? "" : "s"} to public destinations in ${days} days (${bytes(pubBytes)}). See the register below for which purposes.`;
+    headline = t.compliance.overview.bytesLeft;
+    sub = t.compliance.overview.bytesLeftSub(pubUses, days, bytes(pubBytes));
   }
   if (anyLocalPublic) tone = "warn";
 
@@ -254,43 +246,44 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
           <p className="mt-1.5 text-sm text-fg-muted leading-relaxed max-w-3xl">{sub}</p>
         </div>
         <div className="ml-auto text-right text-2xs text-fg-faint shrink-0">
-          <div>profile <code className="text-fg">{register.profile}</code></div>
-          <div title={absTime(register.since)}>since {shortDate(register.since)}</div>
+          <div>{t.compliance.profile} <code className="text-fg">{register.profile}</code></div>
+          <div title={absTime(register.since)}>{t.compliance.overview.since(shortDate(register.since))}</div>
         </div>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="to the internet" value={pubUses === 0 ? "0 requests" : `${num(pubUses)} request${pubUses === 1 ? "" : "s"}`} sub={pubUses === 0 ? "no bytes to any public host" : `${bytes(pubBytes)} out · ${pub.map((p) => p.purpose).join(", ")}`} tone={pubUses === 0 ? "ok" : undefined} />
-        <Stat label="to your own network" value={`${num(localUses)} call${localUses === 1 ? "" : "s"}`} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => p.destination_class).join(", ")}` : "no local endpoint configured"} />
-        <Stat label="refused by the wrapper" value={num(register.refused_total)} sub={register.refused_total ? "attempts outside policy, each logged" : "no attempt outside policy"} tone={register.refused_total ? "warn" : "ok"} />
-        <Stat label="audit rows" value={auditRows === null ? "—" : num(auditRows)} sub="append-only, exportable" />
+        <Stat label={t.compliance.overview.internet} value={pubUses === 0 ? t.compliance.overview.noRequests : t.compliance.overview.requests(num(pubUses))} sub={pubUses === 0 ? t.compliance.overview.noBytes : t.compliance.overview.bytesOut(bytes(pubBytes), pub.map((p) => p.purpose).join(", "))} tone={pubUses === 0 ? "ok" : undefined} />
+        <Stat label={t.compliance.overview.ownNetwork} value={t.compliance.overview.calls(num(localUses))} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => p.destination_class).join(", ")}` : t.compliance.overview.noLocalEndpoint} />
+        <Stat label={t.compliance.overview.refused} value={num(register.refused_total)} sub={register.refused_total ? t.compliance.overview.refusedSub : t.compliance.overview.refusedNone} tone={register.refused_total ? "warn" : "ok"} />
+        <Stat label={t.compliance.overview.auditRows} value={auditRows === null ? "—" : num(auditRows)} sub={t.compliance.overview.auditRowsSub} />
       </div>
       <div className="mt-4 grid gap-x-6 gap-y-1.5 sm:grid-cols-2 text-xs text-fg-muted">
-        <div className="label sm:col-span-2">how this statement is known, not hoped</div>
-        <div>· The list of purposes is closed at compile time (register hash <code className="text-fg">{register.register_hash}</code>). A path not on it cannot be built.</div>
-        <div>· All outbound I/O goes through one wrapper that requires a registered purpose; CI fails on an HTTP client constructed anywhere else.</div>
-        <div>· Every use of a path writes an <code>egress.permitted</code> row and, when the request closes, an <code>egress.completed</code> row with the bytes. “Uses” count the former, “bytes out” sum the latter; a request that never closed counts as a use with no bytes.</div>
-        <div>· The inference endpoint must be loopback or private-range unless <code>allow_public_endpoint</code> is set; a refusal is logged as <code>policy.refusal</code>.</div>
-        <div>· The core embeds statically; no model server, no system library, no runtime fetch. The UI you are reading is served from the binary and fetches nothing external.</div>
-        <div>· Telemetry is not a purpose. There is no opt-out because there is nothing to opt out of.</div>
+        <div className="label sm:col-span-2">{t.compliance.overview.howKnown}</div>
+        <div>· {t.compliance.overview.how1(register.register_hash)}</div>
+        <div>· {t.compliance.overview.how2}</div>
+        <div>· {t.compliance.overview.how3}</div>
+        <div>· {t.compliance.overview.how4}</div>
+        <div>· {t.compliance.overview.how5}</div>
+        <div>· {t.compliance.overview.how6}</div>
       </div>
     </div>
   );
 }
 
 function EgressTable({ paths }: { paths: EgressPath[] }) {
+  const t = useT();
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-xs min-w-[48rem]">
         <thead>
           <tr className="label text-left">
-            <th className="py-1 pr-3 font-medium">purpose</th>
-            <th className="py-1 pr-3 font-medium">state</th>
-            <th className="py-1 pr-3 font-medium">destination</th>
-            <th className="py-1 pr-3 font-medium">what is sent</th>
-            <th className="py-1 pr-3 font-medium">permitted by</th>
-            <th className="py-1 pr-3 font-medium tnum">uses</th>
-            <th className="py-1 pr-3 font-medium tnum">bytes out</th>
-            <th className="py-1 font-medium">last used</th>
+            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colPurpose}</th>
+            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colState}</th>
+            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colDestination}</th>
+            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colData}</th>
+            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colPermitted}</th>
+            <th className="py-1 pr-3 font-medium tnum">{t.compliance.egress.colUses}</th>
+            <th className="py-1 pr-3 font-medium tnum">{t.compliance.egress.colBytes}</th>
+            <th className="py-1 font-medium">{t.compliance.egress.colLast}</th>
           </tr>
         </thead>
         <tbody>
@@ -303,7 +296,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
               <td className="py-2 pr-3 whitespace-nowrap">
                 <span className="inline-flex items-center gap-1.5">
                   <Dot tone={p.enabled ? "ok" : "off"} />
-                  {p.enabled ? "enabled" : "disabled"}
+                  {p.enabled ? t.compliance.egress.enabled : t.compliance.egress.disabled}
                 </span>
                 <div className="text-fg-faint mt-0.5 max-w-[14rem] whitespace-normal">{p.enabled ? p.state : p.disabled_reason}</div>
               </td>
@@ -315,13 +308,13 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
               </td>
               <td className="py-2 pr-3 text-fg-muted max-w-[18rem]">
                 {p.data}
-                <div className="mt-0.5">{p.carries_note_content ? <Pill tone="warn">carries note content</Pill> : <Pill tone="ok">no note content</Pill>}</div>
+                <div className="mt-0.5">{p.carries_note_content ? <Pill tone="warn">{t.compliance.egress.carries}</Pill> : <Pill tone="ok">{t.compliance.egress.carriesNot}</Pill>}</div>
               </td>
               <td className="py-2 pr-3 font-mono">{p.permitted_by.join(" ")}</td>
               <td className="py-2 pr-3 tnum">{num(p.uses_total)}</td>
               <td className="py-2 pr-3 tnum">{bytes(p.bytes_out_total)}</td>
               <td className="py-2 text-fg-muted whitespace-nowrap" title={absTime(p.last_used)}>
-                {p.last_used ? relTime(p.last_used) : "never"}
+                {p.last_used ? relTime(p.last_used) : t.common.never}
               </td>
             </tr>
           ))}
@@ -332,6 +325,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
 }
 
 function AuditSection() {
+  const t = useT();
   const [action, setAction] = useState<AuditActionFilter | "">("");
   const [actor, setActor] = useState("");
   const [q, setQ] = useState("");
@@ -371,8 +365,8 @@ function AuditSection() {
     );
   };
   useEffect(() => {
-    const t = setTimeout(() => load(), 150);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => load(), 150);
+    return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [action, actor, q]);
 
@@ -396,7 +390,7 @@ function AuditSection() {
       a.download = `cyberbrain-audit-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast(`exported ${all.length} rows`);
+      toast(t.compliance.audit.exported(all.length));
     } catch (e) {
       toast(toApiError(e).message, "err");
     }
@@ -411,39 +405,39 @@ function AuditSection() {
 
   return (
     <Section
-      title="Audit log"
+      title={t.compliance.audit.title}
       aside={
         <>
-          <span className="tnum">{num(total)} rows match</span>
+          <span className="tnum">{t.compliance.audit.rowsMatch(num(total))}</span>
           <button className="btn btn-sm" onClick={exportJson}>
-            export JSON
+            {t.compliance.audit.export}
           </button>
         </>
       }
     >
       <div className="flex flex-wrap gap-2 mb-3">
-        <select className="input" value={action} onChange={(e) => setAction(e.target.value as AuditActionFilter | "")} aria-label="Action family" title="Filters by family prefix: note selects note.write, note.erase and their sub-actions">
-          <option value="">any action</option>
+        <select className="input" value={action} onChange={(e) => setAction(e.target.value as AuditActionFilter | "")} aria-label={t.compliance.audit.actionAria} title={t.compliance.audit.actionTitle}>
+          <option value="">{t.compliance.audit.anyAction}</option>
           {ACTION_FILTERS.map((a) => (
-            <option key={a.value} value={a.value}>
-              {a.label}
+            <option key={a} value={a}>
+              {t.compliance.audit.families[a as keyof typeof t.compliance.audit.families] ?? a}
             </option>
           ))}
         </select>
-        <input className="input w-40" placeholder="actor prefix" value={actor} onChange={(e) => setActor(e.target.value)} aria-label="Actor" />
-        <input className="input flex-1 min-w-40" placeholder="subject or detail contains…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search audit" />
+        <input className="input w-40" placeholder={t.compliance.audit.actorPlaceholder} value={actor} onChange={(e) => setActor(e.target.value)} aria-label={t.compliance.audit.actorAria} />
+        <input className="input flex-1 min-w-40" placeholder={t.compliance.audit.searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t.compliance.audit.searchAria} />
       </div>
       {error ? <ErrorBanner error={error} onRetry={() => load()} /> : null}
       <div className="overflow-x-auto">
         <table className="w-full text-xs min-w-[44rem]">
           <thead>
             <tr className="label text-left">
-              <th className="py-1 pr-3 font-medium tnum">seq</th>
-              <th className="py-1 pr-3 font-medium">time</th>
-              <th className="py-1 pr-3 font-medium">actor</th>
-              <th className="py-1 pr-3 font-medium">action</th>
-              <th className="py-1 pr-3 font-medium">subject</th>
-              <th className="py-1 font-medium">detail</th>
+              <th className="py-1 pr-3 font-medium tnum">{t.compliance.audit.colSeq}</th>
+              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colTime}</th>
+              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colActor}</th>
+              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colAction}</th>
+              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colSubject}</th>
+              <th className="py-1 font-medium">{t.compliance.audit.colDetail}</th>
             </tr>
           </thead>
           <tbody>
@@ -461,12 +455,12 @@ function AuditSection() {
                 <td className="py-1 text-fg-muted">
                   {Object.keys(r.detail).length ? (
                     Object.entries(r.detail).map(([k, v]) => (
-                      <span key={k} className="inline-block mr-2 whitespace-nowrap" title={typeof v === "string" && /^[[{]/.test(v) ? "nested value, shown as its JSON text" : undefined}>
+                      <span key={k} className="inline-block mr-2 whitespace-nowrap" title={typeof v === "string" && /^[[{]/.test(v) ? t.compliance.audit.nestedTitle : undefined}>
                         <span className="text-fg-faint">{k}</span>=<span className="font-mono">{v === null ? "null" : String(v)}</span>
                       </span>
                     ))
                   ) : (
-                    <span className="text-fg-faint">no detail on this row</span>
+                    <span className="text-fg-faint">{t.compliance.audit.noDetail}</span>
                   )}
                 </td>
               </tr>
@@ -474,12 +468,12 @@ function AuditSection() {
           </tbody>
         </table>
       </div>
-      {!loading && !rows.length ? <Empty title="No audit rows match." /> : null}
+      {!loading && !rows.length ? <Empty title={t.compliance.audit.empty} /> : null}
       {loading ? <Loading /> : null}
       {next !== null && !loading ? (
         <div className="mt-2 text-center">
           <button className="btn btn-sm" onClick={() => load(next)}>
-            older rows
+            {t.compliance.audit.older}
           </button>
         </div>
       ) : null}
@@ -488,6 +482,7 @@ function AuditSection() {
 }
 
 function RetentionSection() {
+  const t = useT();
   const queue = useAsync(() => api.retention(), []);
   const [report, setReport] = useState<RetentionApplyReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -498,7 +493,7 @@ function RetentionSection() {
       const r = await api.applyRetention(dryRun);
       setReport(r);
       if (!dryRun) {
-        toast(`erased ${r.removed.length} note${r.removed.length === 1 ? "" : "s"} through the forget path`);
+        toast(t.compliance.retention.erasedToast(r.removed.length));
         queue.reload();
       }
     } catch (e) {
@@ -512,16 +507,16 @@ function RetentionSection() {
   const invalid = entries.filter((e) => e.invalid !== undefined).length;
   return (
     <Section
-      title="Retention queue"
+      title={t.compliance.retention.title}
       aside={
         <>
           <span className="tnum">
-            {entries.length} with a retention · <span className={due ? "text-warn" : ""}>{due} due</span>
-            {invalid ? <> · <span className="text-warn">{invalid} invalid</span></> : null}
-            {queue.data ? <> · {queue.data.indefinite} kept indefinitely</> : null}
+            <span className={due ? "text-warn" : ""}>{t.compliance.retention.summary(entries.length, due)}</span>
+            {invalid ? <> · <span className="text-warn">{t.compliance.retention.invalid(invalid)}</span></> : null}
+            {queue.data ? <> · {t.compliance.retention.indefinite(queue.data.indefinite)}</> : null}
           </span>
-          <button className="btn btn-sm" disabled={!due || busy} onClick={() => run(true)} title="Runs the real erase path with a no-op writer and shows what would go">
-            dry-run apply
+          <button className="btn btn-sm" disabled={!due || busy} onClick={() => run(true)} title={t.compliance.retention.dryRunTitle}>
+            {t.compliance.retention.dryRun}
           </button>
         </>
       }
@@ -532,10 +527,10 @@ function RetentionSection() {
           <table className="w-full text-xs">
             <thead>
               <tr className="label text-left">
-                <th className="py-1 pr-3 font-medium">note</th>
-                <th className="py-1 pr-3 font-medium">retention</th>
-                <th className="py-1 pr-3 font-medium">expires</th>
-                <th className="py-1 font-medium">state</th>
+                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colNote}</th>
+                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colRetention}</th>
+                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colExpires}</th>
+                <th className="py-1 font-medium">{t.compliance.retention.colState}</th>
               </tr>
             </thead>
             <tbody>
@@ -552,18 +547,18 @@ function RetentionSection() {
                   <td className="py-1.5 pr-3">
                     {e.invalid !== undefined ? <code className="text-warn" title={e.invalid}>{e.retention}</code> : <span title={e.retention}>{duration(e.retention)}</span>}
                   </td>
-                  <td className="py-1.5 pr-3 tnum text-fg-muted" title={e.invalid !== undefined ? "No expiry can be computed from an invalid duration." : absTime(e.expires_at)}>
-                    {e.invalid !== undefined ? <span className="text-fg-faint">never</span> : relTime(e.expires_at)}
+                  <td className="py-1.5 pr-3 tnum text-fg-muted" title={e.invalid !== undefined ? t.compliance.retention.invalidTitle : absTime(e.expires_at)}>
+                    {e.invalid !== undefined ? <span className="text-fg-faint">{t.common.never}</span> : relTime(e.expires_at)}
                   </td>
                   <td className="py-1.5">
                     {e.invalid !== undefined ? (
                       <Pill tone="warn" title={e.invalid}>
-                        invalid: {e.invalid}
+                        {t.compliance.retention.invalidPill(e.invalid)}
                       </Pill>
                     ) : e.due ? (
-                      <Pill tone="warn">due — awaiting apply</Pill>
+                      <Pill tone="warn">{t.compliance.retention.due}</Pill>
                     ) : (
-                      <Pill>kept</Pill>
+                      <Pill>{t.compliance.retention.kept}</Pill>
                     )}
                   </td>
                 </tr>
@@ -571,39 +566,37 @@ function RetentionSection() {
             </tbody>
           </table>
         ) : (
-          <Empty title={`No note carries a retention duration; ${queue.data ? `all ${num(queue.data.indefinite)} notes are` : "everything is"} kept indefinitely.`} />
+          <Empty title={t.compliance.retention.emptyTitle(queue.data ? num(queue.data.indefinite) : null)} />
         )
       ) : null}
-      {entries.length > 40 ? <div className="mt-2 text-2xs text-fg-faint">{entries.length - 40} more, sorted by expiry</div> : null}
-      <p className="mt-3 text-xs text-fg-muted">Expiry never happens in the background. A due note stays until you apply, and applying goes through the same path as <code>forget</code>: file, blocks, vectors, FTS rows and links in one transaction, one audit row each.</p>
+      {entries.length > 40 ? <div className="mt-2 text-2xs text-fg-faint">{t.compliance.retention.more(entries.length - 40)}</div> : null}
+      <p className="mt-3 text-xs text-fg-muted">{t.compliance.retention.note}</p>
       {report ? (
         <div className="mt-3 panel px-3 py-2 text-xs">
           <div className="flex items-center gap-2">
-            <Pill tone={report.dry_run ? "neutral" : "warn"}>{report.dry_run ? "dry run" : "applied"}</Pill>
-            <span>
-              {report.removed.length} note{report.removed.length === 1 ? "" : "s"} {report.dry_run ? "would be" : ""} erased
-            </span>
+            <Pill tone={report.dry_run ? "neutral" : "warn"}>{report.dry_run ? t.note.forgetDialog.dryRun : t.compliance.retention.applied}</Pill>
+            <span>{report.dry_run ? t.compliance.retention.wouldErase(report.removed.length) : t.compliance.retention.erased(report.removed.length)}</span>
             {report.dry_run && report.removed.length ? (
               <button className="btn btn-sm btn-danger ml-auto" disabled={busy} onClick={() => run(false)}>
-                apply for real
+                {t.compliance.retention.applyReal}
               </button>
             ) : (
               <button className="btn btn-sm ml-auto" onClick={() => setReport(null)}>
-                close
+                {t.common.close}
               </button>
             )}
           </div>
           <ul className="mt-1.5 font-mono tnum space-y-0.5">
             {report.removed.map((r) => (
               <li key={r.note.id}>
-                {r.note.name}: {r.removed.blocks} blocks, {r.removed.vectors} vectors, {r.removed.fts_rows} fts, {r.removed.links_in + r.removed.links_out} links
+                {r.note.name}: {t.compliance.retention.removedLine({ blocks: r.removed.blocks, vectors: r.removed.vectors, fts: r.removed.fts_rows, links: r.removed.links_in + r.removed.links_out })}
                 {r.notes.length ? <span className="text-fg-faint font-sans"> · {r.notes.join("; ")}</span> : null}
               </li>
             ))}
           </ul>
           {report.skipped.length ? (
             <div className="mt-2">
-              <div className="label">skipped, with the reason</div>
+              <div className="label">{t.compliance.retention.skipped}</div>
               <ul className="mt-0.5 space-y-0.5">
                 {report.skipped.map((x) => (
                   <li key={x.name}>
@@ -620,6 +613,7 @@ function RetentionSection() {
 }
 
 function SubjectSection() {
+  const t = useT();
   const [q, setQ] = useState("");
   const [report, setReport] = useState<SubjectAccessReport | null>(null);
   const [busy, setBusy] = useState(false);
@@ -643,7 +637,7 @@ function SubjectSection() {
     return g;
   }, [report]);
   return (
-    <Section title="Subject access request" aside={<span>GDPR Art. 15 · FADP Art. 25</span>}>
+    <Section title={t.compliance.subject.title} aside={<span>{t.compliance.subject.aside}</span>}>
       <form
         className="flex gap-2"
         onSubmit={(e) => {
@@ -651,20 +645,20 @@ function SubjectSection() {
           run();
         }}
       >
-        <input className="input flex-1" placeholder="name, e-mail or handle" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Identifier" />
+        <input className="input flex-1" placeholder={t.compliance.subject.placeholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t.compliance.subject.aria} />
         <button className="btn" disabled={busy || !q.trim()}>
-          {busy ? "searching…" : "search everything"}
+          {busy ? t.common.searching : t.compliance.subject.submit}
         </button>
       </form>
-      <p className="mt-2 text-xs text-fg-muted">Searches every note, block and audit row for the identifier and lists what is held, with citations, in a form that can be handed to the person. The search itself writes an audit row.</p>
+      <p className="mt-2 text-xs text-fg-muted">{t.compliance.subject.note}</p>
       {error ? <div className="mt-3"><ErrorBanner error={error} /></div> : null}
       {report && grouped ? (
         <div className="mt-3 text-xs">
           <div className="text-fg-muted tnum">
-            {report.hits.length} hit{report.hits.length === 1 ? "" : "s"} for <code className="text-fg">{report.identifier}</code> across {num(report.searched.notes)} notes, {num(report.searched.blocks)} blocks, {num(report.searched.audit_rows)} audit rows
+            {t.compliance.subject.hits(report.hits.length, report.identifier, num(report.searched.notes), num(report.searched.blocks), num(report.searched.audit_rows))}
           </div>
           <div className="mt-1 text-fg-muted">
-            response due: <span className="text-fg">{report.response_deadline}</span>
+            {t.compliance.subject.deadline} <span className="text-fg">{report.response_deadline}</span>
           </div>
           {report.caveats.length ? (
             <ul className="mt-1.5 space-y-0.5 text-fg-faint">
@@ -674,7 +668,7 @@ function SubjectSection() {
             </ul>
           ) : null}
           {report.hits.length === 0 ? (
-            <div className="mt-2 panel px-3 py-2 text-ok">Nothing found for this identifier in what was searched; read the caveats above for what a substring search cannot see.</div>
+            <div className="mt-2 panel px-3 py-2 text-ok">{t.compliance.subject.nothing}</div>
           ) : (
             <ul className="mt-2 space-y-1">
               {report.hits.map((h, i) => (

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Graph, type Ring } from "@/api/client";
 import { RingBadge, RingGlyph } from "@/components/RingBadge";
 import { ErrorBanner, Kbd, Loading, Pill } from "@/components/ui";
-import { RING_LABEL } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate } from "@/lib/router";
 import { useAsync } from "@/lib/useAsync";
@@ -62,6 +62,7 @@ export function GraphScreen() {
   const [rings, setRings] = useState<Set<Ring>>(new Set([0, 1, 2, 3, 4]));
   const [showDangling, setShowDangling] = useState(true);
   const [hideIsolated, setHideIsolated] = useState(false);
+  const t = useT();
   const [labels, setLabels] = useState<"auto" | "all" | "none">("auto");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -399,20 +400,20 @@ export function GraphScreen() {
   useShortcuts(
     "graph",
     [
-      { keys: "/", label: "Find node by name", run: () => searchRef.current?.select() },
-      { keys: "+", label: "Zoom in", run: () => zoom(1.25) },
-      { keys: "=", label: "Zoom in", run: () => zoom(1.25), hidden: true },
-      { keys: "-", label: "Zoom out", run: () => zoom(0.8) },
-      { keys: "0", label: "Fit to view", run: () => (fit(), draw()) },
-      { keys: "Enter", label: "Open selected / first match", run: () => {
+      { keys: "/", label: t.graph.keys.find, run: () => searchRef.current?.select() },
+      { keys: "+", label: t.graph.keys.zoomIn, run: () => zoom(1.25) },
+      { keys: "=", label: t.graph.keys.zoomIn, run: () => zoom(1.25), hidden: true },
+      { keys: "-", label: t.graph.keys.zoomOut, run: () => zoom(0.8) },
+      { keys: "0", label: t.graph.keys.fit, run: () => (fit(), draw()) },
+      { keys: "Enter", label: t.graph.keys.open, run: () => {
           const target = selNode ?? (matches && sim ? sim.nodes.find((n) => matches.has(n.id)) : null);
           if (target && !target.dangling) navigate(href("note", target.name));
         }, inInputs: true },
-      { keys: "Escape", label: "Clear selection", run: () => (setSelected(null), setQuery("")), inInputs: true },
-      { keys: "l", label: "Cycle labels auto / all / none", run: () => setLabels((l) => (l === "auto" ? "all" : l === "all" ? "none" : "auto")) },
-      { keys: "d", label: "Toggle dangling links", run: () => setShowDangling((v) => !v) },
+      { keys: "Escape", label: t.graph.keys.clear, run: () => (setSelected(null), setQuery("")), inInputs: true },
+      { keys: "l", label: t.graph.keys.labels, run: () => setLabels((l) => (l === "auto" ? "all" : l === "all" ? "none" : "auto")) },
+      { keys: "d", label: t.graph.keys.dangling, run: () => setShowDangling((v) => !v) },
     ],
-    [selNode, matches, sim],
+    [selNode, matches, sim, t],
   );
 
   const counts = useMemo(() => {
@@ -423,28 +424,28 @@ export function GraphScreen() {
   return (
     <div className="flex flex-col h-full">
       <div className="px-4 py-2 border-b flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
-        <input ref={searchRef} className="input w-52" placeholder="find node… (/)" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Find node" />
+        <input ref={searchRef} className="input w-52" placeholder={t.graph.findPlaceholder} value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t.graph.findAria} />
         <div className="flex items-center gap-1">
           {([0, 1, 2, 3, 4] as Ring[]).map((r) => (
-            <button key={r} className={`btn btn-sm ${rings.has(r) ? "" : "opacity-40"}`} onClick={() => toggleRing(r)} aria-pressed={rings.has(r)} title={RING_LABEL[r]}>
+            <button key={r} className={`btn btn-sm ${rings.has(r) ? "" : "opacity-40"}`} onClick={() => toggleRing(r)} aria-pressed={rings.has(r)} title={t.rings.label[r]}>
               <RingGlyph ring={r} size={9} />
               <span style={{ color: `var(--ring-${r})` }}>r{r}</span>
             </button>
           ))}
         </div>
         <label className="inline-flex items-center gap-1.5 text-fg-muted cursor-pointer">
-          <input type="checkbox" checked={showDangling} onChange={(e) => setShowDangling(e.target.checked)} /> dangling as intent
+          <input type="checkbox" checked={showDangling} onChange={(e) => setShowDangling(e.target.checked)} /> {t.graph.danglingAsIntent}
         </label>
         <label className="inline-flex items-center gap-1.5 text-fg-muted cursor-pointer">
-          <input type="checkbox" checked={hideIsolated} onChange={(e) => setHideIsolated(e.target.checked)} /> hide isolated
+          <input type="checkbox" checked={hideIsolated} onChange={(e) => setHideIsolated(e.target.checked)} /> {t.graph.hideIsolated}
         </label>
-        <select className="input h-6 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label="Labels">
-          <option value="auto">labels: auto</option>
-          <option value="all">labels: all</option>
-          <option value="none">labels: none</option>
+        <select className="input h-6 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label={t.graph.labelsAria}>
+          <option value="auto">{t.graph.labelsAuto}</option>
+          <option value="all">{t.graph.labelsAll}</option>
+          <option value="none">{t.graph.labelsNone}</option>
         </select>
         <span className="ml-auto text-fg-faint tnum">
-          {counts ? `${counts.shown}/${counts.nodes} notes · ${counts.edges} links · ${counts.dangling} intent` : ""} · <Kbd keys="0" /> fit <Kbd keys="+" /> <Kbd keys="-" /> zoom
+          {counts ? t.graph.counts(counts) : ""} · <Kbd keys="0" /> {t.graph.fit} <Kbd keys="+" /> <Kbd keys="-" /> {t.graph.zoom}
         </span>
       </div>
       <div ref={wrapRef} className="relative flex-1 min-h-0">
@@ -453,7 +454,7 @@ export function GraphScreen() {
             <ErrorBanner error={g.error} onRetry={g.reload} />
           </div>
         ) : null}
-        {g.loading && !g.data ? <Loading label="loading graph" /> : null}
+        {g.loading && !g.data ? <Loading label={t.graph.loading} /> : null}
         <canvas
           ref={canvasRef}
           className="w-full h-full block cursor-grab active:cursor-grabbing"
@@ -468,34 +469,34 @@ export function GraphScreen() {
           }}
           onDoubleClick={onDouble}
           role="img"
-          aria-label="Note graph; rings drawn as concentric circles, r0 innermost"
+          aria-label={t.graph.canvasAria}
         />
         {hover && !dragRef.current ? (
           <div className="absolute pointer-events-none panel px-2 py-1 text-xs shadow-panel" style={{ left: hover.px + 12, top: hover.py + 12 }}>
             <div className="flex items-center gap-1.5">
-              {hover.node.dangling ? <Pill>intent</Pill> : <RingBadge ring={hover.node.ring} />}
+              {hover.node.dangling ? <Pill>{t.common.intent}</Pill> : <RingBadge ring={hover.node.ring} />}
               <span className="font-mono">{hover.node.name}</span>
             </div>
-            <div className="text-fg-faint mt-0.5">{hover.node.dangling ? `linked from ${hover.node.degree}, no note yet` : `${hover.node.kind} · ${hover.node.degree} link${hover.node.degree === 1 ? "" : "s"}`}</div>
+            <div className="text-fg-faint mt-0.5">{hover.node.dangling ? t.graph.hoverDangling(hover.node.degree) : t.graph.hoverNode(hover.node.kind, hover.node.degree)}</div>
           </div>
         ) : null}
         {selNode ? (
           <div className="absolute right-3 top-3 panel shadow-panel w-64 p-3 text-sm">
             <div className="flex items-center gap-2">
-              {selNode.dangling ? <Pill>intent</Pill> : <RingBadge ring={selNode.ring} showName />}
-              <button className="ml-auto text-fg-faint hover:text-fg" onClick={() => setSelected(null)} aria-label="Clear selection">
+              {selNode.dangling ? <Pill>{t.common.intent}</Pill> : <RingBadge ring={selNode.ring} showName />}
+              <button className="ml-auto text-fg-faint hover:text-fg" onClick={() => setSelected(null)} aria-label={t.graph.clearSelection}>
                 ×
               </button>
             </div>
             <div className="mt-1.5 font-mono break-words">{selNode.name}</div>
-            <div className="mt-1 text-xs text-fg-muted">{selNode.dangling ? `No note with this name. ${selNode.degree} note${selNode.degree === 1 ? "" : "s"} link to it; that is intent, not an error.` : `${selNode.kind} · ${selNode.degree} link${selNode.degree === 1 ? "" : "s"} · neighbours highlighted`}</div>
+            <div className="mt-1 text-xs text-fg-muted">{selNode.dangling ? t.graph.selDangling(selNode.degree) : t.graph.selNode(selNode.kind, selNode.degree)}</div>
             {!selNode.dangling ? (
               <div className="mt-2 flex gap-1.5">
                 <a className="btn btn-sm btn-primary" href={href("note", selNode.name)}>
-                  open <Kbd keys="Enter" className="opacity-70" />
+                  {t.common.open} <Kbd keys="Enter" className="opacity-70" />
                 </a>
                 <a className="btn btn-sm" href={href("search", null, { q: selNode.name.replace(/-/g, " ") })}>
-                  recall
+                  {t.graph.recall}
                 </a>
               </div>
             ) : null}
@@ -508,9 +509,9 @@ export function GraphScreen() {
             </span>
           ))}
           <span className="inline-flex items-center gap-1">
-            <span className="inline-block w-[9px] h-[9px] rounded-full border border-dashed border-fg-faint" /> intent
+            <span className="inline-block w-[9px] h-[9px] rounded-full border border-dashed border-fg-faint" /> {t.common.intent}
           </span>
-          <span className="text-fg-faint">drag to pan · drag node to pin · double-click opens</span>
+          <span className="text-fg-faint">{t.graph.legendHint}</span>
         </div>
       </div>
     </div>

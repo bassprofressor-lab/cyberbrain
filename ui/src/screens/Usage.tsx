@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { api, type DayBucket, type LoadedModel, type LoadSummary, type TaskUsage, type UsageTotals } from "@/api/client";
 import { ErrorBanner, Loading, Pill, Section, Stat } from "@/components/ui";
-import { bytes, num, relTime } from "@/lib/format";
+import { bytes, dec, num, relTime } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, type Route } from "@/lib/router";
 import { useWidth } from "@/lib/useWidth";
@@ -31,16 +32,16 @@ function tick(date: string): string {
 }
 
 /**
- * An axis that reads in round numbers. The step is 1, 2 or 5 x 10^n and never below 1,
- * because everything on this axis is a count: the ceiling is a number a person recognises
- * (400,000, not 353,862), the grid does not re-label itself every time a single new day
- * nudges the maximum, and a store with one recorded day no longer draws 0, 0.5, 1 and
- * labels the last two both "1".
+ * An axis that reads in round numbers. The step is 1, 2 or 5 x 10^n, so the ceiling is a number
+ * a person recognises (400,000, not 353,862) and the grid does not re-label itself every time a
+ * single new day nudges the maximum.
  */
 function niceScale(max: number, steps = 2): { max: number; ticks: number[] } {
   if (!(max > 0)) return { max: 1, ticks: [0, 1] };
   const rough = max / steps;
   const mag = 10 ** Math.floor(Math.log10(rough));
+  // Everything on this axis is a count, so the step never goes below 1: a store with a
+  // single recorded day used to draw ticks 0, 0.5, 1 and label the last two both "1".
   const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((c) => c >= rough - 1e-9) ?? 10 * mag);
   const top = Math.ceil(max / step - 1e-9) * step;
   const ticks: number[] = [];
@@ -54,6 +55,7 @@ function niceScale(max: number, steps = 2): { max: number; ticks: number[] } {
  * invites the reader to add them up a second time.
  */
 function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; lower: Series; upper: Series; unit: string; empty: string }) {
+  const t = useT();
   const [hover, setHover] = useState<number | null>(null);
   const [wrap, W] = useWidth<HTMLDivElement>(720);
   const H = 140;
@@ -71,7 +73,7 @@ function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; l
 
   return (
     <div className="relative" ref={wrap}>
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label={`${lower.label} and ${upper.label} per day`}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label={t.usage.chartAria(lower.label, upper.label)}>
         {gridAt.map((v, i) => (
           <g key={i}>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(v)} y2={y(v)} stroke="var(--line)" strokeWidth={1} />
@@ -123,7 +125,7 @@ function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; l
         </span>
         {h ? (
           <span className="ml-auto tnum text-fg-muted">
-            {h.date}: {num(lower.key(h))} {lower.label.toLowerCase()} · {num(upper.key(h))} {upper.label.toLowerCase()} {unit}
+            {t.usage.hoverDay(h.date, lower.key(h), lower.label, upper.key(h), upper.label, unit)}
           </span>
         ) : null}
       </div>
@@ -133,6 +135,7 @@ function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; l
 
 /** Cores over time. A rate, so dots for what was measured and a line only where two measured days touch. */
 function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }) {
+  const t = useT();
   const [hover, setHover] = useState<number | null>(null);
   const [wrap, W] = useWidth<HTMLDivElement>(720);
   const H = 110;
@@ -147,12 +150,12 @@ function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }
   const h = hover !== null ? days[hover] : undefined;
   return (
     <div ref={wrap}>
-      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="cores burned per day">
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label={t.usage.coresAria}>
         {cores ? (
           <g>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(cores)} y2={y(cores)} stroke="var(--line-strong)" strokeWidth={1} strokeDasharray="3 3" />
             <text x={W - PAD.r} y={y(cores) + 13} textAnchor="end" fontSize={11} fill="var(--fg-muted)">
-              {cores} cores in this machine
+              {t.usage.coresInMachine(cores)}
             </text>
           </g>
         ) : null}
@@ -169,17 +172,17 @@ function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }
         <line x1={PAD.l} x2={W - PAD.r} y1={PAD.t + plotH} y2={PAD.t + plotH} stroke="var(--line-strong)" strokeWidth={1} />
         {[0, max].map((v, i) => (
           <text key={i} x={PAD.l - 6} y={y(v) + 3.5} textAnchor="end" fontSize={11} fill="var(--fg-muted)">
-            {v.toFixed(0)}
+            {dec(v, 0)}
           </text>
         ))}
       </svg>
       <div className="mt-1 flex items-center gap-4 text-xs">
         <span className="inline-flex items-center gap-1.5">
-          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: A }} /> cores burned by the endpoint
+          <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ background: A }} /> {t.usage.coresLegend}
         </span>
         {h && h.endpoint_cores !== null ? (
           <span className="ml-auto tnum text-fg-muted">
-            {h.date}: {h.endpoint_cores.toFixed(1)} cores{h.machine_cores !== null ? ` · ${h.machine_cores.toFixed(1)} machine-wide` : ""}
+            {t.usage.hoverCores(h.date, dec(h.endpoint_cores), h.machine_cores !== null ? dec(h.machine_cores) : null)}
           </span>
         ) : null}
       </div>
@@ -192,64 +195,65 @@ function savedPct(t: UsageTotals): number {
 }
 
 export function UsageScreen({ route }: { route: Route }) {
+  const t = useT();
   const days = Number(route.query.get("days")) || 30;
   const u = useAsync(() => api.usage(days), [days]);
   const [table, setTable] = useState(false);
-  useShortcuts("usage", [{ keys: "r", label: "Refresh", run: () => u.reload() }]);
+  useShortcuts("usage", [{ keys: "r", label: t.usage.keys.refresh, run: () => u.reload() }], [t]);
 
   const totals = useMemo(() => {
-    const t = Object.values(u.data?.inference.tasks ?? {});
-    const tok = t.reduce((a, x) => a + x.prompt_tokens + x.completion_tokens, 0);
-    const ms = t.reduce((a, x) => a + x.elapsed_ms, 0);
-    const cached = t.reduce((a, x) => a + x.cached_prompt_tokens, 0);
-    const prompt = t.reduce((a, x) => a + x.prompt_tokens, 0);
+    const tasks = Object.values(u.data?.inference.tasks ?? {});
+    const tok = tasks.reduce((a, x) => a + x.prompt_tokens + x.completion_tokens, 0);
+    const ms = tasks.reduce((a, x) => a + x.elapsed_ms, 0);
+    const cached = tasks.reduce((a, x) => a + x.cached_prompt_tokens, 0);
+    const prompt = tasks.reduce((a, x) => a + x.prompt_tokens, 0);
     return { tok, ms, cached, prompt, tps: ms > 0 ? tok / (ms / 1000) : null };
   }, [u.data]);
 
   if (u.error) return <div className="p-6"><ErrorBanner error={u.error} onRetry={u.reload} /></div>;
   const d = u.data;
-  if (!d) return <Loading label="reading the ledgers" />;
+  if (!d) return <Loading label={t.usage.loading} />;
   const load: LoadSummary = d.load;
 
   return (
     <div className="p-6 space-y-6 overflow-auto scroll-thin h-full">
       <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-lg font-semibold">Usage</h1>
-        <span className="text-xs text-fg-muted">what retrieval saved, and what the local model charged for it</span>
+        <h1 className="text-lg font-semibold">{t.usage.title}</h1>
+        <span className="text-xs text-fg-muted">{t.usage.subtitle}</span>
         <div className="ml-auto flex items-center gap-1.5">
           {RANGES.map((r) => (
             <a key={r} href={href("usage", null, { days: r })} className={`btn btn-sm ${r === days ? "btn-primary" : ""}`}>
-              {r} d
+              {t.common.dayShort(r)}
             </a>
           ))}
-          <button className="btn btn-sm" onClick={() => setTable((t) => !t)} aria-pressed={table}>
-            {table ? "charts" : "table"}
+          <button className="btn btn-sm" onClick={() => setTable((v) => !v)} aria-pressed={table}>
+            {table ? t.usage.charts : t.usage.table}
           </button>
           <button className="btn btn-sm" onClick={() => u.reload()} disabled={u.loading}>
-            refresh
+            {t.common.refresh}
           </button>
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label="recall saved" value={`${savedPct(d.retrieval.recall)}%`} sub={`${num(d.retrieval.recall.returned)} of ${num(d.retrieval.recall.full)} tokens read`} />
-        <Stat label="find saved" value={`${savedPct(d.retrieval.find)}%`} sub={`${num(d.retrieval.find.returned)} of ${num(d.retrieval.find.full)} lines read`} />
-        <Stat label="model throughput" value={totals.tps === null ? "—" : `${Math.round(totals.tps)} tok/s`} sub={`${num(totals.tok)} tokens over ${Math.round(totals.ms / 1000)} s of waiting`} />
+        <Stat label={t.usage.stat.recallSaved} value={`${savedPct(d.retrieval.recall)}%`} sub={t.usage.stat.recallSavedSub(num(d.retrieval.recall.returned), num(d.retrieval.recall.full))} />
+        <Stat label={t.usage.stat.findSaved} value={`${savedPct(d.retrieval.find)}%`} sub={t.usage.stat.findSavedSub(num(d.retrieval.find.returned), num(d.retrieval.find.full))} />
+        <Stat label={t.usage.stat.throughput} value={totals.tps === null ? "—" : t.usage.stat.throughputValue(Math.round(totals.tps))} sub={t.usage.stat.throughputSub(num(totals.tok), Math.round(totals.ms / 1000))} />
         <Stat
-          label="endpoint cpu"
-          value={load.endpoint_cores_avg === null ? "not attributed" : `${load.endpoint_cores_avg.toFixed(1)} cores`}
-          sub={load.endpoint_cores_avg === null ? "set inference.load_cgroup to attribute exactly" : `average per call${load.cores_total ? ` · ${Math.round((load.endpoint_cores_avg / load.cores_total) * 100)}% of ${load.cores_total}` : ""}`}
+          label={t.usage.stat.cpu}
+          value={load.endpoint_cores_avg === null ? t.usage.stat.cpuNone : t.usage.stat.cpuValue(dec(load.endpoint_cores_avg))}
+          sub={load.endpoint_cores_avg === null ? t.usage.stat.cpuNoneSub : `${t.usage.stat.cpuSub}${load.cores_total ? t.usage.stat.cpuShare(Math.round((load.endpoint_cores_avg / load.cores_total) * 100), load.cores_total) : ""}`}
           tone={load.endpoint_cores_avg === null ? "warn" : undefined}
         />
       </div>
 
       {table ? (
-        <Section title={`Day by day · ${days} days`}>
+        <Section title={t.usage.dayByDay(days)}>
           <div className="overflow-x-auto scroll-thin">
             <table className="w-full text-xs tnum">
               <thead className="text-fg-muted text-left">
                 <tr>
-                  {["day", "recalls", "tokens returned", "tokens in full", "finds", "calls", "prompt", "cached", "answer", "cores"].map((h) => (
+                  {t.usage.columns.map((h) => (
                     <th key={h} className="font-medium py-1 pr-4 whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -266,83 +270,77 @@ export function UsageScreen({ route }: { route: Route }) {
                     <td className="py-1 pr-4">{num(x.prompt_tokens)}</td>
                     <td className="py-1 pr-4">{num(x.cached_prompt_tokens)}</td>
                     <td className="py-1 pr-4">{num(x.completion_tokens)}</td>
-                    <td className="py-1 pr-4">{x.endpoint_cores === null ? "—" : x.endpoint_cores.toFixed(1)}</td>
+                    <td className="py-1 pr-4">{x.endpoint_cores === null ? "—" : dec(x.endpoint_cores)}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="mt-2 text-2xs text-fg-faint">Days with nothing recorded are left out of this table and kept in the charts, where the axis has to stay continuous.</p>
+          <p className="mt-2 text-2xs text-fg-faint">{t.usage.tableNote}</p>
         </Section>
       ) : (
         <div className="space-y-5">
-          <Section title="Context tokens per day" aside={<span className="text-2xs">recall · {days} days</span>}>
+          <Section title={t.usage.contextChart} aside={<span className="text-2xs">{t.usage.contextAside(days)}</span>}>
             <StackedDays
               days={d.days}
-              lower={{ label: "returned", key: (x) => x.recall.returned, color: A }}
-              upper={{ label: "never read", key: (x) => Math.max(0, x.recall.full - x.recall.returned), color: "var(--surface-3)" }}
-              unit="tokens"
-              empty="No recall recorded in this range."
+              lower={{ label: t.usage.returned, key: (x) => x.recall.returned, color: A }}
+              upper={{ label: t.usage.neverRead, key: (x) => Math.max(0, x.recall.full - x.recall.returned), color: "var(--surface-3)" }}
+              unit={t.common.tokens}
+              empty={t.usage.emptyRecall}
             />
-            <p className="mt-2 text-2xs text-fg-faint">
-              The bar is what the notes behind the hits hold in full; the coloured part is what was handed over. The rest is the ceiling that reading them whole would have cost — a saving only where reading them whole was the real alternative.
-            </p>
+            <p className="mt-2 text-2xs text-fg-faint">{t.usage.contextNote}</p>
           </Section>
 
-          <Section title="Model prompt tokens per day" aside={<span className="text-2xs">{num(totals.cached)} of {num(totals.prompt)} from cache</span>}>
+          <Section title={t.usage.promptChart} aside={<span className="text-2xs">{t.usage.promptAside(num(totals.cached), num(totals.prompt))}</span>}>
             <StackedDays
               days={d.days}
-              lower={{ label: "from cache", key: (x) => x.cached_prompt_tokens, color: A }}
-              upper={{ label: "processed", key: (x) => Math.max(0, x.prompt_tokens - x.cached_prompt_tokens), color: B }}
-              unit="tokens"
-              empty="No model call recorded in this range."
+              lower={{ label: t.usage.fromCache, key: (x) => x.cached_prompt_tokens, color: A }}
+              upper={{ label: t.usage.processed, key: (x) => Math.max(0, x.prompt_tokens - x.cached_prompt_tokens), color: B }}
+              unit={t.common.tokens}
+              empty={t.usage.emptyCalls}
             />
-            <p className="mt-2 text-2xs text-fg-faint">
-              Cache hits are prompt tokens the endpoint did not process again. On a local model that buys time, not money — nothing here was billed and nothing left this machine. Calls made before the cache figure was recorded report none, which makes the cached share a floor.
-            </p>
+            <p className="mt-2 text-2xs text-fg-faint">{t.usage.promptNote}</p>
           </Section>
 
-          <Section title="CPU during model calls" aside={load.calls_without_attribution ? <Pill tone="warn">{num(load.calls_without_attribution)} calls unattributed</Pill> : null}>
+          <Section title={t.usage.cpuChart} aside={load.calls_without_attribution ? <Pill tone="warn">{t.usage.unattributed(num(load.calls_without_attribution))}</Pill> : null}>
             <CoresChart days={d.days} cores={load.cores_total} />
-            <p className="mt-2 text-2xs text-fg-faint">
-              Cores the endpoint's own cgroup burned, averaged per day. Exact attribution, and it exists only because <code>inference.load_cgroup</code> names that cgroup; without it the page falls back to machine-wide figures and says so. The dashed line is what this machine has.
-            </p>
+            <p className="mt-2 text-2xs text-fg-faint">{t.usage.cpuNote}</p>
           </Section>
         </div>
       )}
 
       <div className="grid gap-5 xl:grid-cols-2">
-        <Section title="What the local model cost" aside={d.inference.last ? <span className="text-2xs">last call {relTime(d.inference.last)}</span> : <Pill>no calls yet</Pill>}>
+        <Section title={t.usage.cost.title} aside={d.inference.last ? <span className="text-2xs">{t.usage.cost.lastCall(relTime(d.inference.last))}</span> : <Pill>{t.usage.cost.noCalls}</Pill>}>
           {Object.keys(d.inference.tasks).length === 0 ? (
-            <p className="text-sm text-fg-muted">No chat completion recorded. Without a configured model the contradiction check, ring proposals and session summaries stay off, and recall says so in its caveats.</p>
+            <p className="text-sm text-fg-muted">{t.usage.cost.none}</p>
           ) : (
             <ul className="space-y-2.5">
-              {Object.entries(d.inference.tasks).map(([task, t]: [string, TaskUsage]) => (
+              {Object.entries(d.inference.tasks).map(([task, tu]: [string, TaskUsage]) => (
                 <li key={task} className="panel px-4 py-3">
                   <div className="flex items-baseline justify-between gap-3 flex-wrap">
                     <code className="text-sm">{task}</code>
                     <span className="text-xs text-fg-faint tnum">
-                      {num(t.calls)} calls{t.failed ? <span className="text-warn"> · {num(t.failed)} failed</span> : null} · {Math.round(t.elapsed_ms / Math.max(1, t.calls) / 1000)} s each
+                      {t.usage.cost.calls(num(tu.calls))}{tu.failed ? <span className="text-warn">{t.usage.cost.failed(num(tu.failed))}</span> : null}{t.usage.cost.each(Math.round(tu.elapsed_ms / Math.max(1, tu.calls) / 1000))}
                     </span>
                   </div>
                   <div className="mt-2 grid grid-cols-3 gap-3 text-sm tnum">
                     <div>
-                      <div className="label">prompt</div>
-                      <div className="mt-0.5">{num(t.prompt_tokens)}</div>
+                      <div className="label">{t.usage.cost.prompt}</div>
+                      <div className="mt-0.5">{num(tu.prompt_tokens)}</div>
                     </div>
                     <div>
-                      <div className="label">from cache</div>
-                      <div className="mt-0.5">{num(t.cached_prompt_tokens)}</div>
+                      <div className="label">{t.usage.cost.fromCache}</div>
+                      <div className="mt-0.5">{num(tu.cached_prompt_tokens)}</div>
                     </div>
                     <div>
-                      <div className="label">answer</div>
-                      <div className="mt-0.5">{num(t.completion_tokens)}</div>
+                      <div className="label">{t.usage.cost.answer}</div>
+                      <div className="mt-0.5">{num(tu.completion_tokens)}</div>
                     </div>
                   </div>
-                  {t.calls_without_cache_report || t.calls_without_counts ? (
+                  {tu.calls_without_cache_report || tu.calls_without_counts ? (
                     <div className="mt-1.5 text-2xs text-fg-faint">
-                      {t.calls_without_cache_report ? `${num(t.calls_without_cache_report)} calls reported no cache figure. ` : ""}
-                      {t.calls_without_counts ? `${num(t.calls_without_counts)} calls reported no counts at all.` : ""}
+                      {tu.calls_without_cache_report ? t.usage.cost.noCacheFigure(num(tu.calls_without_cache_report)) : ""}
+                      {tu.calls_without_counts ? t.usage.cost.noCounts(num(tu.calls_without_counts)) : ""}
                     </div>
                   ) : null}
                 </li>
@@ -351,13 +349,11 @@ export function UsageScreen({ route }: { route: Route }) {
           )}
         </Section>
 
-        <Section title="Held in memory" aside={d.loaded_models === null ? <Pill>endpoint does not say</Pill> : null}>
+        <Section title={t.usage.memory.title} aside={d.loaded_models === null ? <Pill>{t.usage.memory.endpointSilent}</Pill> : null}>
           {d.loaded_models === null ? (
-            <p className="text-sm text-fg-muted">
-              This endpoint does not answer <code>/api/ps</code>, so what it holds in memory is unknown. Only Ollama answers it; the two OpenAI routes carry no such field, and guessing it from the outside cannot tell weights from page cache.
-            </p>
+            <p className="text-sm text-fg-muted">{t.usage.memory.noApi}</p>
           ) : d.loaded_models.length === 0 ? (
-            <p className="text-sm text-fg-muted">Nothing loaded right now. The next call pays the load time before it answers.</p>
+            <p className="text-sm text-fg-muted">{t.usage.memory.nothing}</p>
           ) : (
             <ul className="space-y-2">
               {d.loaded_models.map((m: LoadedModel) => (
@@ -369,8 +365,8 @@ export function UsageScreen({ route }: { route: Route }) {
                     </span>
                   </div>
                   <div className="mt-1 text-xs tnum text-fg-muted">
-                    {bytes(m.size)} resident · {m.size_vram === 0 ? "none in VRAM (CPU only)" : `${bytes(m.size_vram)} in VRAM`}
-                    {m.expires_at ? <> · unloaded {relTime(m.expires_at)}</> : null}
+                    {t.usage.memory.resident(bytes(m.size))} · {m.size_vram === 0 ? t.usage.memory.noVram : t.usage.memory.vram(bytes(m.size_vram))}
+                    {m.expires_at ? <> · {t.usage.memory.unloaded(relTime(m.expires_at))}</> : null}
                   </div>
                 </li>
               ))}
@@ -378,18 +374,18 @@ export function UsageScreen({ route }: { route: Route }) {
           )}
           {load.last ? (
             <div className="mt-3 text-2xs text-fg-faint tnum">
-              last call: {load.last.task}, {(load.last.wall_ms / 1000).toFixed(1)} s
-              {load.last.endpoint_cores !== null ? ` · ${load.last.endpoint_cores.toFixed(1)} cores` : ""}
-              {load.last.endpoint_mem_bytes !== null ? ` · ${bytes(load.last.endpoint_mem_bytes)} resident, peak ${bytes(load.last.endpoint_mem_peak_bytes)}` : ""}
+              {t.usage.memory.lastCall(load.last.task, dec(load.last.wall_ms / 1000))}
+              {load.last.endpoint_cores !== null ? t.usage.memory.lastCores(dec(load.last.endpoint_cores)) : ""}
+              {load.last.endpoint_mem_bytes !== null ? t.usage.memory.lastMem(bytes(load.last.endpoint_mem_bytes), bytes(load.last.endpoint_mem_peak_bytes)) : ""}
             </div>
           ) : null}
         </Section>
       </div>
 
       <div className="text-2xs text-fg-faint">
-        Ledgers: <code>usage.jsonl</code> and <code>load.jsonl</code> in the store, one line per operation; model calls come from the audit log. Days are UTC.
-        {d.retrieval.unreadable_rows ? ` ${num(d.retrieval.unreadable_rows)} ledger rows could not be parsed and are left out.` : ""}{" "}
-        <a className="link" href={href("status")} onClick={() => navigate(href("status"))}>store health is on Status</a>.
+        {t.usage.footer.ledgers}
+        {d.retrieval.unreadable_rows ? t.usage.footer.unreadable(num(d.retrieval.unreadable_rows)) : ""}{" "}
+        <a className="link" href={href("status")} onClick={() => navigate(href("status"))}>{t.usage.footer.storeHealth}</a>.
       </div>
     </div>
   );

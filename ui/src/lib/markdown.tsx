@@ -3,6 +3,7 @@
  * one that does not is rendered as intent (dashed, muted, title explains) — never hidden,
  * never an error (SPEC §3.1).
  */
+import { dict } from "@/lib/i18n";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { Root, Text, Link, Parent } from "mdast";
@@ -65,7 +66,7 @@ export function Markdown({ source, resolves, className }: MarkdownProps) {
           );
         }
         return (
-          <span className="link-intent" title={`[[${name}]] has no note yet. Intent, not an error; doctor lists it as dangling.`} data-intent={name}>
+          <span className="link-intent" title={dict().markdown.wikilinkIntent(name)} data-intent={name}>
             {children}
             <span aria-hidden className="ml-0.5 text-[0.7em] align-super">?</span>
           </span>
@@ -80,8 +81,8 @@ export function Markdown({ source, resolves, className }: MarkdownProps) {
       );
     },
     img: ({ alt, src }) => (
-      <span className="inline-block px-2 py-1 rounded border border-dashed text-fg-muted text-xs" title="images are not loaded; the UI makes no outbound requests">
-        image: {alt || (typeof src === "string" ? src : "")}
+      <span className="inline-block px-2 py-1 rounded border border-dashed text-fg-muted text-xs" title={dict().markdown.imageTitle}>
+        {dict().markdown.image}: {alt || (typeof src === "string" ? src : "")}
       </span>
     ),
   };

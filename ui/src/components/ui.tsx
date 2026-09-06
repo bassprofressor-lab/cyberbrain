@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { ApiError } from "@/api/client";
+import { useT } from "@/lib/i18n";
 import { prettyKeys } from "@/lib/keys";
 
 export function Kbd({ keys, className = "" }: { keys: string; className?: string }) {
@@ -68,15 +69,17 @@ export function Empty({ title, children }: { title: ReactNode; children?: ReactN
   );
 }
 
-export function Loading({ label = "loading" }: { label?: string }) {
+export function Loading({ label }: { label?: string }) {
+  const t = useT();
   return (
     <div className="py-6 text-center text-xs text-fg-faint" role="status">
-      {label}…
+      {label ?? t.common.loading}…
     </div>
   );
 }
 
 export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
+  const t = useT();
   return (
     <div className="panel border-danger/50 bg-danger-bg px-4 py-3 text-sm" role="alert">
       <div className="flex items-start gap-3">
@@ -84,14 +87,14 @@ export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () 
           <div className="font-medium text-danger">
             {error.body.code}
             <span className="ml-2 font-mono text-2xs text-fg-muted">
-              http {error.status || "—"} · exit {error.body.exit_code}
+              {t.error.http(error.status || "—", error.body.exit_code)}
             </span>
           </div>
           <div className="mt-0.5 text-fg">{error.message}</div>
         </div>
         {onRetry ? (
           <button className="btn btn-sm" onClick={onRetry}>
-            retry
+            {t.common.retry}
           </button>
         ) : null}
       </div>

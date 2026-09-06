@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Citation as CitationT, Ring } from "@/api/client";
 import { copyText } from "@/lib/clipboard";
+import { useT } from "@/lib/i18n";
 import { useToast } from "./Toast";
 
 /**
@@ -10,6 +11,7 @@ import { useToast } from "./Toast";
  */
 export function CitationChip({ citation, ring, size = "md", className = "" }: { citation: CitationT; ring?: Ring; size?: "sm" | "md"; className?: string }) {
   const toast = useToast();
+  const t = useT();
   const [copied, setCopied] = useState(false);
   const r = ring ?? (Number(citation[1]) as Ring);
   const doCopy = async (e?: React.MouseEvent) => {
@@ -17,9 +19,9 @@ export function CitationChip({ citation, ring, size = "md", className = "" }: { 
     const ok = await copyText(citation);
     if (ok) {
       setCopied(true);
-      toast(`copied ${citation}`);
+      toast(t.citation.copied(citation));
       setTimeout(() => setCopied(false), 1200);
-    } else toast("clipboard unavailable", "err");
+    } else toast(t.citation.clipboardUnavailable, "err");
   };
   return (
     <button
@@ -30,8 +32,8 @@ export function CitationChip({ citation, ring, size = "md", className = "" }: { 
         borderColor: copied ? "var(--ok)" : `color-mix(in oklch, var(--ring-${r}) 40%, var(--line))`,
         background: copied ? "var(--ok-bg)" : "var(--surface)",
       }}
-      title="Copy citation"
-      aria-label={`Copy citation ${citation}`}
+      title={t.citation.copy}
+      aria-label={t.citation.copyAria(citation)}
     >
       <span style={{ color: `var(--ring-${r})` }}>{citation.slice(0, 2)}</span>
       <span className="text-fg">{citation.slice(2)}</span>

@@ -5,14 +5,14 @@ import { RingBadge, RingLegend } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
 import { Empty, ErrorBanner, Kbd, Pill } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
-import { highlight } from "@/lib/format";
+import { dec, highlight } from "@/lib/format";
+import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, type Route } from "@/lib/router";
 import { toApiError } from "@/lib/useAsync";
 
-const EXAMPLES = ["postgres data directory", "hook budget", "why no hf-hub", "windows cmd.exe quoting", "contradiction lower ring"];
-
 export function SearchScreen({ route }: { route: Route }) {
+  const t = useT();
   const toast = useToast();
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
@@ -28,8 +28,8 @@ export function SearchScreen({ route }: { route: Route }) {
 
   // The URL is the state of record so a search can be bookmarked and shared with an agent.
   useEffect(() => {
-    const t = setTimeout(() => navigate(href("search", null, { q: q || undefined, n: n !== 8 ? n : undefined, ring: ring ?? undefined }), true), 150);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => navigate(href("search", null, { q: q || undefined, n: n !== 8 ? n : undefined, ring: ring ?? undefined }), true), 150);
+    return () => clearTimeout(timer);
   }, [q, n, ring]);
 
   useEffect(() => {
@@ -42,7 +42,7 @@ export function SearchScreen({ route }: { route: Route }) {
     }
     const g = ++gen.current;
     setLoading(true);
-    const t = setTimeout(() => {
+    const timer = setTimeout(() => {
       const params: Parameters<typeof api.recall>[0] = { q: query, n };
       if (ring !== null) params.ring = ring;
       api.recall(params).then(
@@ -61,7 +61,7 @@ export function SearchScreen({ route }: { route: Route }) {
         },
       );
     }, 220);
-    return () => clearTimeout(t);
+    return () => clearTimeout(timer);
   }, [q, n, ring]);
 
   useEffect(() => {
@@ -78,12 +78,12 @@ export function SearchScreen({ route }: { route: Route }) {
 
   const copyCitation = async (h: Hit | undefined) => {
     if (!h) return;
-    (await copyText(h.citation)) ? toast(`copied ${h.citation}`) : toast("clipboard unavailable", "err");
+    (await copyText(h.citation)) ? toast(t.citation.copied(h.citation)) : toast(t.citation.clipboardUnavailable, "err");
   };
   const copyAll = async () => {
     if (!hits.length) return;
     const text = hits.map((h) => h.citation).join("\n");
-    (await copyText(text)) ? toast(`copied ${hits.length} citations`) : toast("clipboard unavailable", "err");
+    (await copyText(text)) ? toast(t.citation.copiedN(hits.length)) : toast(t.citation.clipboardUnavailable, "err");
   };
   const move = (d: number) => {
     if (!hits.length) return;
@@ -103,20 +103,20 @@ export function SearchScreen({ route }: { route: Route }) {
   useShortcuts(
     "search",
     [
-      { keys: "/", label: "Focus query", run: () => inputRef.current?.select() },
-      { keys: "Mod+k", label: "Focus query", run: () => inputRef.current?.select(), inInputs: true, hidden: true },
-      { keys: "ArrowDown", label: "Next hit", run: () => move(1), inInputs: true },
-      { keys: "ArrowUp", label: "Previous hit", run: () => move(-1), inInputs: true },
-      { keys: "j", label: "Next hit", run: () => move(1) },
-      { keys: "k", label: "Previous hit", run: () => move(-1) },
-      { keys: "c", label: "Copy citation of selected hit", run: () => copyCitation(current) },
-      { keys: "y", label: "Copy citation of selected hit", run: () => copyCitation(current), hidden: true },
-      { keys: "Shift+C", label: "Copy all citations", run: copyAll },
-      { keys: "Enter", label: "Open note of selected hit", run: openSelected },
-      { keys: "e", label: "Expand / collapse selected hit", run: () => current && toggleExpand(current.citation) },
-      { keys: "Escape", label: "Back to query", run: () => inputRef.current?.select(), inInputs: true },
+      { keys: "/", label: t.search.keys.focus, run: () => inputRef.current?.select() },
+      { keys: "Mod+k", label: t.search.keys.focus, run: () => inputRef.current?.select(), inInputs: true, hidden: true },
+      { keys: "ArrowDown", label: t.search.keys.next, run: () => move(1), inInputs: true },
+      { keys: "ArrowUp", label: t.search.keys.prev, run: () => move(-1), inInputs: true },
+      { keys: "j", label: t.search.keys.next, run: () => move(1) },
+      { keys: "k", label: t.search.keys.prev, run: () => move(-1) },
+      { keys: "c", label: t.search.keys.copy, run: () => copyCitation(current) },
+      { keys: "y", label: t.search.keys.copy, run: () => copyCitation(current), hidden: true },
+      { keys: "Shift+C", label: t.search.keys.copyAll, run: copyAll },
+      { keys: "Enter", label: t.search.keys.open, run: openSelected },
+      { keys: "e", label: t.search.keys.expand, run: () => current && toggleExpand(current.citation) },
+      { keys: "Escape", label: t.search.keys.back, run: () => inputRef.current?.select(), inInputs: true },
     ],
-    [hits, sel, current],
+    [hits, sel, current, t],
   );
 
   const ringOptions = useMemo(() => [null, 0, 1, 2, 3, 4] as Array<Ring | null>, []);
@@ -129,7 +129,7 @@ export function SearchScreen({ route }: { route: Route }) {
             <input
               ref={inputRef}
               className="input w-full h-9 pl-3 pr-16 text-sm"
-              placeholder="Recall… (hybrid: lexical + semantic, fused, ring-weighted)"
+              placeholder={t.search.placeholder}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               onKeyDown={(e) => {
@@ -141,22 +141,22 @@ export function SearchScreen({ route }: { route: Route }) {
               }}
               spellCheck={false}
               autoComplete="off"
-              aria-label="Recall query"
+              aria-label={t.search.aria}
             />
             <span className="absolute right-2 top-1/2 -translate-y-1/2 text-fg-faint text-2xs hidden sm:inline-flex gap-1">
               <Kbd keys="/" />
             </span>
           </div>
-          <select className="input h-9" value={n} onChange={(e) => setN(Number(e.target.value))} aria-label="Number of hits" title="n — hits returned">
+          <select className="input h-9" value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t.search.nAria} title={t.search.nTitle}>
             {[8, 16, 32, 64].map((v) => (
               <option key={v} value={v}>
-                n = {v}
+                {t.search.nOption(v)}
               </option>
             ))}
           </select>
         </div>
         <div className="mt-2 flex items-center gap-1 flex-wrap">
-          <span className="label mr-1">ring</span>
+          <span className="label mr-1">{t.common.ring}</span>
           {ringOptions.map((r) => (
             <button
               key={String(r)}
@@ -165,11 +165,11 @@ export function SearchScreen({ route }: { route: Route }) {
               aria-pressed={ring === r}
               style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}
             >
-              {r === null ? "all" : `r${r}`}
+              {r === null ? t.common.all : `r${r}`}
             </button>
           ))}
           <span className="ml-auto text-2xs text-fg-faint tnum">
-            {loading ? "searching…" : result ? `${result.mode} · ${result.elapsed_ms} ms · k_lex ${result.params.k_lex} · k_sem ${result.params.k_sem}` : ""}
+            {loading ? t.common.searching : result ? t.search.stats(result.mode, Math.round(result.elapsed_ms), result.params.k_lex, result.params.k_sem) : ""}
           </span>
         </div>
       </div>
@@ -179,9 +179,9 @@ export function SearchScreen({ route }: { route: Route }) {
 
         {!q.trim() ? (
           <div className="max-w-2xl mx-auto mt-10">
-            <Empty title="Type to recall. Every hit carries a citation you can paste back to an agent.">
+            <Empty title={t.search.emptyTitle}>
               <div className="mt-4 flex flex-wrap justify-center gap-1.5">
-                {EXAMPLES.map((ex) => (
+                {t.search.examples.map((ex) => (
                   <button key={ex} className="btn btn-sm" onClick={() => setQ(ex)}>
                     {ex}
                   </button>
@@ -190,16 +190,16 @@ export function SearchScreen({ route }: { route: Route }) {
             </Empty>
             <div className="panel p-4 mt-6 grid gap-4 sm:grid-cols-2 text-xs">
               <div>
-                <div className="label mb-2">keys</div>
+                <div className="label mb-2">{t.search.keysTitle}</div>
                 <ul className="space-y-1.5">
                   {[
-                    ["/", "focus query"],
-                    ["↓ ↑ or j k", "move selection"],
-                    ["c", "copy citation of selected hit"],
-                    ["Shift+C", "copy all citations, one per line"],
-                    ["↵", "open the note at that block"],
-                    ["e", "expand selected block"],
-                    ["?", "all shortcuts"],
+                    ["/", t.search.keyList.focus],
+                    [`↓ ↑ ${t.common.or} j k`, t.search.keyList.move],
+                    ["c", t.search.keyList.copy],
+                    ["Shift+C", t.search.keyList.copyAll],
+                    ["↵", t.search.keyList.open],
+                    ["e", t.search.keyList.expand],
+                    ["?", t.search.keyList.help],
                   ].map(([k, v]) => (
                     <li key={k} className="flex justify-between gap-3">
                       <span className="text-fg-muted">{v}</span>
@@ -215,11 +215,9 @@ export function SearchScreen({ route }: { route: Route }) {
                 </ul>
               </div>
               <div>
-                <div className="label mb-2">rings</div>
+                <div className="label mb-2">{t.search.ringsTitle}</div>
                 <RingLegend className="flex-col !gap-y-1.5" />
-                <p className="mt-3 text-fg-faint leading-relaxed">
-                  Score = RRF over lexical and semantic ranks × ring weight [1.15 1.10 1.00 0.92 0.80]. Lower ring wins a contradiction; both citations are shown.
-                </p>
+                <p className="mt-3 text-fg-faint leading-relaxed">{t.search.scoring}</p>
               </div>
             </div>
           </div>
@@ -230,15 +228,15 @@ export function SearchScreen({ route }: { route: Route }) {
             {result.conflicts.length ? (
               <div className="panel border-warn/50 mb-3 px-4 py-3" role="note">
                 <div className="flex items-center gap-2 text-sm font-medium text-warn">
-                  {result.conflicts.length} contradiction{result.conflicts.length === 1 ? "" : "s"} reported — lower ring wins, both kept
+                  {t.search.conflicts(result.conflicts.length)}
                 </div>
                 <ul className="mt-2 space-y-2">
                   {result.conflicts.map((c, i) => (
                     <li key={i} className="text-xs">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-fg-muted w-12">wins</span>
+                        <span className="text-fg-muted w-12">{t.search.wins}</span>
                         <CitationChip citation={c.winner} size="sm" />
-                        <span className="text-fg-muted w-12 sm:ml-3">loses</span>
+                        <span className="text-fg-muted w-12 sm:ml-3">{t.search.loses}</span>
                         <CitationChip citation={c.loser} size="sm" />
                       </div>
                       <div className="mt-1 text-fg-muted">{c.reason}</div>
@@ -249,12 +247,12 @@ export function SearchScreen({ route }: { route: Route }) {
             ) : null}
 
             {hits.length === 0 && !loading ? (
-              <Empty title={`No block matched "${q}"${ring !== null ? ` in ring ${ring}` : ""}.`}>
-                {ring !== null ? "Try all rings." : "Recall is over blocks, not titles. Try the words that would appear in the paragraph."}
+              <Empty title={t.search.noHits(q, ring)}>
+                {ring !== null ? t.search.tryAllRings : t.search.tryWords}
               </Empty>
             ) : null}
 
-            <ol ref={listRef} className="space-y-1.5" aria-label="Hits">
+            <ol ref={listRef} className="space-y-1.5" aria-label={t.search.hitsAria}>
               {hits.map((h, i) => {
                 const isSel = i === sel;
                 const open = expanded.has(h.citation);
@@ -279,8 +277,8 @@ export function SearchScreen({ route }: { route: Route }) {
                         {h.sources.length ? (
                           h.sources.map((s) => <Pill key={s}>{s === "lexical" ? "lex" : "sem"}</Pill>)
                         ) : (
-                          <span className="text-2xs text-fg-faint" title="The index does not report which candidate list (lexical, semantic) this block came from; see the caveats below.">
-                            src n/a
+                          <span className="text-2xs text-fg-faint" title={t.search.srcUnknownTitle}>
+                            {t.search.srcUnknown}
                           </span>
                         )}
                       </span>
@@ -310,13 +308,14 @@ export function SearchScreen({ route }: { route: Route }) {
 }
 
 function ScoreBar({ score, top }: { score: number; top: number }) {
+  const t = useT();
   const pct = top > 0 ? Math.max(4, Math.round((score / top) * 100)) : 0;
   return (
-    <span className="inline-flex items-center gap-1.5 w-24" title={`fused, ring-weighted score ${score}`}>
+    <span className="inline-flex items-center gap-1.5 w-24" title={t.search.scoreTitle(score)}>
       <span className="h-1.5 flex-1 rounded-sm bg-surface-3 overflow-hidden">
         <span className="block h-full bg-fg-muted" style={{ width: `${pct}%` }} />
       </span>
-      <span className="font-mono text-2xs text-fg-muted tnum w-10 text-right">{score.toFixed(4)}</span>
+      <span className="font-mono text-2xs text-fg-muted tnum w-10 text-right">{dec(score, 4)}</span>
     </span>
   );
 }

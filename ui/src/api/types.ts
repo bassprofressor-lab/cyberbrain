@@ -566,20 +566,20 @@ export const AUDIT_ACTIONS: readonly AuditActionKnown[] = [
  */
 export type AuditActionFilter = AuditAction | "note" | "note.write" | "note.erase" | "egress" | "index";
 
-/** Families for the UI's dropdown: the prefix and what it selects. UI-owned. */
-export const AUDIT_ACTION_FAMILIES: ReadonlyArray<{ value: AuditActionFilter; label: string }> = [
-  { value: "note", label: "note.* (every write, hold, erase)" },
-  { value: "note.write", label: "note.write.* (writes, holds, resolutions)" },
-  { value: "note.erase", label: "note.erase.* (forget, retention)" },
-  { value: "egress", label: "egress.* (permitted, completed, failed, abandoned)" },
-  { value: "policy.refusal", label: "policy.refusal" },
-  { value: "inference.call", label: "inference.call" },
-  { value: "retention.expired", label: "retention.expired" },
-  { value: "subject.access", label: "subject.access" },
-  { value: "index", label: "index.* (cleared, note dropped, profile changed)" },
-  { value: "store.init", label: "store.init" },
-  { value: "audit.export", label: "audit.export" },
-  { value: "consent.model-download", label: "consent.model-download" },
+/** Families for the UI's dropdown, in display order. The wording lives in the dictionary. */
+export const AUDIT_ACTION_FAMILIES: ReadonlyArray<AuditActionFilter> = [
+  "note",
+  "note.write",
+  "note.erase",
+  "egress",
+  "policy.refusal",
+  "inference.call",
+  "retention.expired",
+  "subject.access",
+  "index",
+  "store.init",
+  "audit.export",
+  "consent.model-download",
 ];
 
 /**

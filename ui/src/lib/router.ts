@@ -19,13 +19,16 @@ export interface Route {
   anchor: string | null;
 }
 
-export const SCREENS: Array<{ screen: Screen; label: string; key: string }> = [
-  { screen: "status", label: "Status", key: "t" },
-  { screen: "search", label: "Search", key: "s" },
-  { screen: "notes", label: "Notes", key: "n" },
-  { screen: "graph", label: "Graph", key: "g" },
-  { screen: "usage", label: "Usage", key: "u" },
-  { screen: "compliance", label: "Compliance", key: "c" },
+/** Every screen with an entry in the sidebar. `note` is reached from `notes`, not from the nav. */
+export type NavScreen = Exclude<Screen, "note">;
+
+export const SCREENS: Array<{ screen: NavScreen; key: string }> = [
+  { screen: "status", key: "t" },
+  { screen: "search", key: "s" },
+  { screen: "notes", key: "n" },
+  { screen: "graph", key: "g" },
+  { screen: "usage", key: "u" },
+  { screen: "compliance", key: "c" },
 ];
 
 export function parseRoute(hash: string): Route {
