@@ -4,6 +4,7 @@ import { ErrorBanner, Loading, Pill, Section, Stat } from "@/components/ui";
 import { bytes, num, relTime } from "@/lib/format";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, type Route } from "@/lib/router";
+import { useWidth } from "@/lib/useWidth";
 import { useAsync } from "@/lib/useAsync";
 
 /**
@@ -30,32 +31,51 @@ function tick(date: string): string {
 }
 
 /**
+ * An axis that reads in round numbers. The step is 1, 2 or 5 x 10^n and never below 1,
+ * because everything on this axis is a count: the ceiling is a number a person recognises
+ * (400,000, not 353,862), the grid does not re-label itself every time a single new day
+ * nudges the maximum, and a store with one recorded day no longer draws 0, 0.5, 1 and
+ * labels the last two both "1".
+ */
+function niceScale(max: number, steps = 2): { max: number; ticks: number[] } {
+  if (!(max > 0)) return { max: 1, ticks: [0, 1] };
+  const rough = max / steps;
+  const mag = 10 ** Math.floor(Math.log10(rough));
+  const step = Math.max(1, [1, 2, 5, 10].map((m) => m * mag).find((c) => c >= rough - 1e-9) ?? 10 * mag);
+  const top = Math.ceil(max / step - 1e-9) * step;
+  const ticks: number[] = [];
+  for (let v = 0; v <= top + step / 2; v += step) ticks.push(v);
+  return { max: top, ticks };
+}
+
+/**
  * Stacked daily bars. Stacked because both pairs here are part-to-whole — what was read of
  * what there was, what came from cache of what was sent — and a part shown beside its whole
  * invites the reader to add them up a second time.
  */
 function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; lower: Series; upper: Series; unit: string; empty: string }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 720;
-  const H = 190;
-  const PAD = { l: 46, r: 8, t: 10, b: 22 };
+  const [wrap, W] = useWidth<HTMLDivElement>(720);
+  const H = 140;
+  const PAD = { l: 52, r: 8, t: 10, b: 22 };
   const plotW = W - PAD.l - PAD.r;
   const plotH = H - PAD.t - PAD.b;
-  const max = Math.max(1, ...days.map((d) => lower.key(d) + upper.key(d)));
+  const scale = niceScale(Math.max(1, ...days.map((d) => lower.key(d) + upper.key(d))));
+  const max = scale.max;
   const slot = plotW / Math.max(1, days.length);
   const barW = Math.max(2, Math.min(18, slot - 3));
   const y = (v: number) => PAD.t + plotH - (v / max) * plotH;
-  const gridAt = [0, 0.5, 1].map((f) => f * max);
+  const gridAt = scale.ticks;
   const anyData = days.some((d) => lower.key(d) + upper.key(d) > 0);
   const h = hover !== null ? days[hover] : undefined;
 
   return (
-    <div className="relative">
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={`${lower.label} and ${upper.label} per day`}>
+    <div className="relative" ref={wrap}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label={`${lower.label} and ${upper.label} per day`}>
         {gridAt.map((v, i) => (
           <g key={i}>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(v)} y2={y(v)} stroke="var(--line)" strokeWidth={1} />
-            <text x={PAD.l - 6} y={y(v) + 3.5} textAnchor="end" fontSize={10} fill="var(--fg-faint)">
+            <text x={PAD.l - 6} y={y(v) + 3.5} textAnchor="end" fontSize={11} fill="var(--fg-muted)">
               {num(Math.round(v))}
             </text>
           </g>
@@ -87,7 +107,7 @@ function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; l
         <line x1={PAD.l} x2={W - PAD.r} y1={PAD.t + plotH} y2={PAD.t + plotH} stroke="var(--line-strong)" strokeWidth={1} />
         {days.map((d, i) =>
           i === 0 || i === days.length - 1 || i === Math.floor(days.length / 2) ? (
-            <text key={d.date} x={PAD.l + i * slot + slot / 2} y={H - 6} textAnchor="middle" fontSize={10} fill="var(--fg-faint)">
+            <text key={d.date} x={PAD.l + i * slot + slot / 2} y={H - 6} textAnchor="middle" fontSize={11} fill="var(--fg-muted)">
               {tick(d.date)}
             </text>
           ) : null,
@@ -114,9 +134,9 @@ function StackedDays({ days, lower, upper, unit, empty }: { days: DayBucket[]; l
 /** Cores over time. A rate, so dots for what was measured and a line only where two measured days touch. */
 function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }) {
   const [hover, setHover] = useState<number | null>(null);
-  const W = 720;
-  const H = 150;
-  const PAD = { l: 46, r: 8, t: 10, b: 22 };
+  const [wrap, W] = useWidth<HTMLDivElement>(720);
+  const H = 110;
+  const PAD = { l: 52, r: 8, t: 10, b: 22 };
   const plotW = W - PAD.l - PAD.r;
   const plotH = H - PAD.t - PAD.b;
   const max = Math.max(1, cores ?? 0, ...days.map((d) => d.machine_cores ?? 0));
@@ -126,12 +146,12 @@ function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }
   const pts = days.map((d, i) => ({ i, v: d.endpoint_cores, m: d.machine_cores, date: d.date })).filter((p) => p.v !== null);
   const h = hover !== null ? days[hover] : undefined;
   return (
-    <div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="cores burned per day">
+    <div ref={wrap}>
+      <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block" role="img" aria-label="cores burned per day">
         {cores ? (
           <g>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(cores)} y2={y(cores)} stroke="var(--line-strong)" strokeWidth={1} strokeDasharray="3 3" />
-            <text x={W - PAD.r} y={y(cores) + 13} textAnchor="end" fontSize={10} fill="var(--fg-faint)">
+            <text x={W - PAD.r} y={y(cores) + 13} textAnchor="end" fontSize={11} fill="var(--fg-muted)">
               {cores} cores in this machine
             </text>
           </g>
@@ -148,7 +168,7 @@ function CoresChart({ days, cores }: { days: DayBucket[]; cores: number | null }
         ))}
         <line x1={PAD.l} x2={W - PAD.r} y1={PAD.t + plotH} y2={PAD.t + plotH} stroke="var(--line-strong)" strokeWidth={1} />
         {[0, max].map((v, i) => (
-          <text key={i} x={PAD.l - 6} y={y(v) + 3.5} textAnchor="end" fontSize={10} fill="var(--fg-faint)">
+          <text key={i} x={PAD.l - 6} y={y(v) + 3.5} textAnchor="end" fontSize={11} fill="var(--fg-muted)">
             {v.toFixed(0)}
           </text>
         ))}
