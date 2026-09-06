@@ -18,6 +18,10 @@ So: build the page, copy it into the crate, and check that it is in the package 
 $ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
 $ cargo test --workspace                      # and once with --release -- --ignored
 $ cargo deny check
+$ cargo test --workspace 2>&1 | grep -c '^test result: ok'   # the README states a test
+                                              # count; it drifts with every change, and a
+                                              # stale one is the first number a reader
+                                              # checks. Update README.md to match.
 $ (cd ui && npm ci && npm run build && npm run licenses)
 $ cp -r ui/dist crates/cyberbrain/ui-dist     # the step that cannot be skipped
 $ cargo package -p cyberbrain --list | grep -c '^ui-dist/'   # must not be 0

@@ -105,13 +105,20 @@ and nothing below high confidence drives behaviour.
 
 ## Status
 
-**v0.1.0, and young.** 437 tests, seven crates, clippy and rustfmt clean. It has been run
+**v0.1.0, and young.** 447 tests, seven crates, clippy and rustfmt clean. It has been run
 against one operator's real corpus — 1,086 notes across five projects — and not much else.
 Expect rough edges, report them.
 
 Cyberbrain is an original work. It shares no source code with any other memory tool; §0 of
 [`docs/SPEC.md`](docs/SPEC.md) records the boundary it was built under, and the commit
 history documents it decision by decision.
+
+## Contributing and security
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) before the first pull request: the clean-room rule in
+SPEC §0 binds contributors, and a contribution that breaks it breaks the provenance claim
+above retroactively. Vulnerabilities go through [`SECURITY.md`](SECURITY.md), not a public
+issue.
 
 ## Licence
 
