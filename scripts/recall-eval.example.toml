@@ -1,0 +1,24 @@
+# Example query set for scripts/recall-eval.py. Copy it, point it at your own store, and
+# write questions the way you would ask them months later — not with the words the note
+# uses, or you are measuring your own memory of the phrasing.
+#
+#   scripts/recall-eval.py my-queries.toml --store ~/project/.cyberbrain
+#
+# `expect` lists every note that would be an honest answer; any one of them counts. `kind`
+# only groups the report, so use whatever buckets tell you where it hurts. These four have
+# earned their keep:
+#
+#   literal        the words are in the note (the control group)
+#   paraphrase     other words, same thing — this is what the embedder is for
+#   morphology     a different word form (singular, short form, compound)
+#   cross-lingual  asked in the other language of a bilingual store
+
+[[query]]
+q = "why does the container lose its data on a major upgrade"
+expect = ["pg18-moves-pgdata"]
+kind = "paraphrase"
+
+[[query]]
+q = "postgres data directory"
+expect = ["pg18-moves-pgdata"]
+kind = "morphology"
