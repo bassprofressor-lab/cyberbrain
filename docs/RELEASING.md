@@ -1,0 +1,49 @@
+# Releasing
+
+The order matters in one place and is easy to get wrong there, so it is written down.
+
+## The one hazard
+
+`default = ["ui"]`, so an ordinary `cargo install cyberbrain` builds the web page in. The
+page is not source: it is built by node into `ui/dist` at the repository root, and
+`cargo package` takes **nothing** from outside the crate directory — silently, with no
+warning. A crate published from a tree where `crates/cyberbrain/ui-dist` is absent carries
+no page, and every `cargo install cyberbrain` then fails in `build.rs`.
+
+So: build the page, copy it into the crate, and check that it is in the package listing.
+
+## Order
+
+```console
+$ cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings
+$ cargo test --workspace                      # and once with --release -- --ignored
+$ cargo deny check
+$ (cd ui && npm ci && npm run build && npm run licenses)
+$ cp -r ui/dist crates/cyberbrain/ui-dist     # the step that cannot be skipped
+$ cargo package -p cyberbrain --list | grep -c '^ui-dist/'   # must not be 0
+```
+
+Then publish the seven crates in dependency order, each waiting for the index to catch up:
+
+```
+cyberbrain-core
+cyberbrain-index      cyberbrain-embed      cyberbrain-code      cyberbrain-llm
+cyberbrain-policy
+cyberbrain
+```
+
+`crates/cyberbrain/ui-dist` is a build artefact: it is gitignored, listed in `include`, and
+should be deleted again after publishing so a stale page cannot be embedded by accident.
+
+## After
+
+Check the published crate the way a stranger gets it:
+
+```console
+$ cargo install cyberbrain --root /tmp/cb-check
+$ /tmp/cb-check/bin/cyberbrain serve --port 7900        # the page must be there
+```
+
+Until the crates are on crates.io, the README says so and gives the from-source path. Keep
+those two in step: a README that promises `cargo install cyberbrain` before the crate
+exists is the first thing a new reader tries.

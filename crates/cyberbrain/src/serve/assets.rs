@@ -14,9 +14,11 @@ use axum::http::header;
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 
+/// The folder comes from `build.rs` rather than a literal, because it is `ui/dist` in a
+/// checkout and `crates/cyberbrain/ui-dist` in a published crate; see `ui_dir` there.
 #[cfg(feature = "ui")]
 #[derive(rust_embed::RustEmbed)]
-#[folder = "../../ui/dist"]
+#[folder = "$CYBERBRAIN_UI_DIR"]
 pub struct Ui;
 
 /// What the header falls back to when the built page carries no `<meta>` policy. The

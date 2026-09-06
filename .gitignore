@@ -3,3 +3,4 @@ target/
 ui/node_modules/
 ui/dist/
 *.db
+crates/cyberbrain/ui-dist/

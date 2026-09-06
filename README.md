@@ -39,20 +39,21 @@ box, a DGX Spark and an Apple M4 Mac.
 
 ## Install
 
-Prebuilt binaries are on the releases page. From source:
+Not on crates.io yet, and there is no release binary: v0.1.0 is built from source.
 
 ```console
-$ cargo install cyberbrain                      # CLI, hooks, MCP, HTTP API
-$ cargo install cyberbrain --features ui        # ...and the embedded web page
+$ git clone https://github.com/bassprofressor-lab/cyberbrain && cd cyberbrain
+$ (cd ui && npm ci && npm run build)            # the web page, embedded at compile time
+$ cargo install --path crates/cyberbrain
 ```
 
-The `ui` feature compiles the web page into the binary, which means building it needs a
-node toolchain. That is deliberately not the price of installing: without it the CLI, the
-hooks, the MCP server and the HTTP API are all unaffected, and `serve` answers the API
-while saying the page was not built in. From a source checkout, build the page first:
+The page is compiled into the binary, which means building it needs a node toolchain. That
+is deliberately not the price of installing: leave it out and the CLI, the hooks, the MCP
+server and the HTTP API are all unaffected, and `serve` answers the API while saying the
+page was not built in.
 
 ```console
-$ cd ui && npm ci && npm run build
+$ cargo install --path crates/cyberbrain --no-default-features
 ```
 
 Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no
@@ -72,8 +73,10 @@ Wire it into an agent harness with `cyberbrain hook <event>`, serve the web UI w
 
 ### Semantic search needs a model, and it will tell you if it has none
 
-Out of the box search is lexical, and every result says so in a caveat. To turn on semantic
-search, place a model2vec artefact — `model.safetensors`, `tokenizer.json` and a
+Out of the box search is lexical, and every result says so in a caveat. Lexical means
+literal: without a model, `postgres` does not find `PostgreSQL`, and the words you search
+for are the words that have to be in the paragraph. To turn on semantic search, place a
+model2vec artefact — `model.safetensors`, `tokenizer.json` and a
 `manifest.json` carrying the blake3 digest of each — under `<store>/models/model2vec`.
 Nothing is downloaded on your behalf unless you set `embedding.model_source` and
 `embedding.model_download_consent` in the config, and even then it happens once, through the
@@ -102,9 +105,9 @@ and nothing below high confidence drives behaviour.
 
 ## Status
 
-**v0.1.0, and young.** 423 tests, seven crates, clippy and rustfmt clean. It has been run
-against one operator's real corpus — nearly 900 notes across five projects — and not much
-else. Expect rough edges, report them.
+**v0.1.0, and young.** 437 tests, seven crates, clippy and rustfmt clean. It has been run
+against one operator's real corpus — 1,086 notes across five projects — and not much else.
+Expect rough edges, report them.
 
 Cyberbrain is an original work. It shares no source code with any other memory tool; §0 of
 [`docs/SPEC.md`](docs/SPEC.md) records the boundary it was built under, and the commit

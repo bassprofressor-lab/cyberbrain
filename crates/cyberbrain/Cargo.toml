@@ -10,6 +10,11 @@ homepage.workspace = true
 description.workspace = true
 keywords.workspace = true
 categories.workspace = true
+# `cargo package` takes nothing from outside this directory and, without `include`, nothing
+# that .gitignore excludes. The web page is both: built to ui/dist at the repository root
+# and copied here by the release step (see README, "Releasing"). Listing it explicitly is
+# the only way a published crate can carry the page that `--features ui` embeds.
+include = ["src/**", "build.rs", "ui-dist/**"]
 
 [[bin]]
 name = "cyberbrain"
@@ -27,7 +32,7 @@ cyberbrain-llm.workspace = true
 cyberbrain-policy = { workspace = true, features = ["llm"] }
 jiff = { version = "0.2.35", features = ["serde"] }
 mime_guess = { version = "2.0.5", optional = true }
-rust-embed = { version = "8.12.0", optional = true }
+rust-embed = { version = "8.12.0", optional = true, features = ["interpolate-folder-path"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "sync"] }
@@ -39,11 +44,11 @@ tracing-subscriber = "0.3.23"
 ulid = { version = "3.0.0", features = ["serde"] }
 
 [features]
-# The web UI is compiled into the binary from `ui/dist`, which means building it needs a
-# node toolchain. That must not be the price of `cargo install`: a published crate does
-# not carry `ui/dist` at all, so without this switch every install from crates.io would
-# fail in the build script. With `--no-default-features` the CLI, the hooks and the MCP
-# server are unaffected and `serve` answers the API while saying the page was not built in.
+# The web UI is compiled into the binary from the built page: `ui/dist` in a checkout,
+# `ui-dist` here in a published crate (see `include` above and `ui_dir` in build.rs).
+# Building it needs a node toolchain, which must not be the price of `cargo install` —
+# with `--no-default-features` the CLI, the hooks and the MCP server are unaffected and
+# `serve` answers the API while saying the page was not built in.
 default = ["ui"]
 ui = ["dep:rust-embed", "dep:mime_guess"]
 
