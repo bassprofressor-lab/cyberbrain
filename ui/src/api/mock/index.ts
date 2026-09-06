@@ -37,6 +37,7 @@ import {
   type NoteListParams,
   type NoteSummary,
   type NoteWriteRequest,
+  type ObligationsView,
   type PiiFinding,
   type PiiHold,
   type PiiHoldResolution,
@@ -786,6 +787,38 @@ export const mockClient: CyberbrainApi = {
       }
     }
     return latency(g, 120);
+  },
+
+  // The three lines a reader would check first, in the two confidence levels that make the
+  // point. Fabricated like the rest of this file; the real catalogue is longer.
+  async obligations(): Promise<ObligationsView> {
+    return latency({
+      profile: PROFILE,
+      law: "GDPR, Regulation (EU) 2016/679",
+      obligations: [
+        {
+          topic: "erasure",
+          summary: "Data subjects may demand erasure; the controller erases without undue delay and informs recipients.",
+          basis: "GDPR Art. 17, Art. 19",
+          confidence: "high",
+          note: "`cyberbrain forget` is the mechanism; the audit row is the evidence.",
+        },
+        {
+          topic: "access",
+          summary: "Data subjects may obtain a copy of their data. Respond within one month.",
+          basis: "GDPR Art. 15, Art. 12(3)",
+          confidence: "high",
+          note: "",
+        },
+        {
+          topic: "ai-regulation",
+          summary: "The EU AI Act applies in the EU. Cyberbrain prints a model card so a deployer inside a regulated workflow has identity, source, licence and hash on paper.",
+          basis: "Regulation (EU) 2024/1689",
+          confidence: "low",
+          note: "Risk class depends on the deployer's use; this tool cannot determine it.",
+        },
+      ],
+    });
   },
 
   async egress(): Promise<EgressRegister> {

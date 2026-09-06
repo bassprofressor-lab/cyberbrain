@@ -387,6 +387,40 @@ pub fn status(r: &StatusReport) -> String {
     s
 }
 
+/// The obligation catalogue. Grouped by nothing and sorted by nothing: the order in the
+/// profile is the order a reader gets, because it runs scope first and sanctions last, which
+/// is how the law reads. Confidence is printed on every line, including `high`, so the label
+/// is a fact about each line rather than a warning that only appears when something is
+/// shaky.
+pub fn obligations(v: &crate::app::ObligationsView) -> String {
+    let mut s = format!(
+        "Profile {}: {}\n{} obligation(s) this profile encodes.\n\n",
+        v.profile.as_str(),
+        v.law,
+        v.obligations.len()
+    );
+    for o in &v.obligations {
+        let _ = writeln!(
+            s,
+            "{:?}  [{}]\n  {}\n  basis: {}",
+            o.topic,
+            o.confidence.as_str(),
+            o.summary,
+            o.basis
+        );
+        if !o.note.is_empty() {
+            let _ = writeln!(s, "  note: {}", o.note);
+        }
+        s.push('\n');
+    }
+    s.push_str(
+        "Confidence is the author's, not counsel's: high means the rule was verified in the \
+         primary text, low means do not repeat it to a regulator without checking. Nothing \
+         below high drives behaviour in code.\n",
+    );
+    s
+}
+
 pub fn egress(entries: &[EgressEntry]) -> String {
     let mut s = String::from("Every path by which bytes may leave this machine:\n\n");
     for e in entries {

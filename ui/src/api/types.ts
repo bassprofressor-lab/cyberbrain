@@ -499,6 +499,47 @@ export interface EgressRegister {
   register_hash: string;
 }
 
+/** `cyberbrain_policy::profile::Topic`, kebab-case on the wire. */
+export type ObligationTopic =
+  | "scope"
+  | "legal-basis"
+  | "erasure"
+  | "access"
+  | "breach-notification"
+  | "processing-register"
+  | "data-protection-officer"
+  | "impact-assessment"
+  | "cross-border-transfer"
+  | "sanctions"
+  | "ai-regulation";
+
+/** How sure the author is of a line. `low` never drives behaviour in the binary. */
+export type Confidence = "low" | "medium" | "high";
+
+/** One thing the profile claims about the law. `note` is empty when nothing needs saying. */
+export interface Obligation {
+  topic: ObligationTopic;
+  summary: string;
+  basis: string;
+  confidence: Confidence;
+  note: string;
+}
+
+/**
+ * GET /api/v1/policy/obligations → 200 ObligationsView (`app::ObligationsView`)
+ *
+ * The catalogue the active profile encodes. It is the answer to "what does eu actually
+ * mean here", and it carries its own uncertainty: the confidence is on every line so the
+ * gap between "verified in the primary text" and "checked from memory" is visible rather
+ * than averaged away.
+ */
+export interface ObligationsView {
+  profile: PolicyProfile;
+  /** The law the profile names, e.g. "GDPR, Regulation (EU) 2016/679". */
+  law: string;
+  obligations: Obligation[];
+}
+
 /**
  * The audit vocabulary the log actually speaks. `cyberbrain_policy::AuditAction::as_str`
  * plus the actions the binary writes through `record_raw`. The row's `action` column is
@@ -1114,6 +1155,7 @@ export interface CyberbrainApi {
   graph(): Promise<Graph>;
 
   egress(): Promise<EgressRegister>;
+  obligations(): Promise<ObligationsView>;
   audit(params?: AuditParams): Promise<AuditPage>;
   pii(): Promise<PiiReport>;
   retention(): Promise<RetentionQueue>;

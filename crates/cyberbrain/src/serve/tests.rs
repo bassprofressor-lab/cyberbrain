@@ -1082,6 +1082,39 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     fx.create(2, "team", "Bob Smith owns the pager.").await;
     fx.create(3, "fresh", "gamma").await;
 
+    // The obligation catalogue: the profile's own claims, each with a basis and a
+    // confidence. Read over HTTP because that is where it was missing: the list existed in
+    // the library and no surface printed it.
+    let o = fx.ok("/api/v1/policy/obligations").await;
+    assert_eq!(o["profile"], "eu");
+    assert!(o["law"].as_str().unwrap().contains("2016/679"));
+    let obs = o["obligations"].as_array().unwrap();
+    assert!(
+        obs.len() >= 10,
+        "eu encodes more than a handful: {}",
+        obs.len()
+    );
+    for ob in obs {
+        assert!(
+            !ob["basis"].as_str().unwrap().is_empty(),
+            "no basis on {ob}"
+        );
+        let c = ob["confidence"].as_str().unwrap();
+        assert!(matches!(c, "low" | "medium" | "high"), "odd confidence {c}");
+        // The rule the library enforces in its own tests, now visible to a caller: a line
+        // the author is unsure about has to say what is unsure.
+        if c == "low" {
+            assert!(
+                !ob["note"].as_str().unwrap().is_empty(),
+                "low without a note: {ob}"
+            );
+        }
+    }
+    assert!(
+        obs.iter().any(|o| o["topic"] == "ai-regulation"),
+        "the AI Act line is the one a deployer comes for"
+    );
+
     // Egress register: the spec's two purposes and nothing else.
     let e = fx.ok("/api/v1/policy/egress").await;
     assert_eq!(e["profile"], "eu");

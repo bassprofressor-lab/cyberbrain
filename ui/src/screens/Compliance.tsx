@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, AUDIT_ACTION_FAMILIES, type AuditAction, type AuditActionFilter, type AuditRow, type EgressPath, type PiiState, type RetentionApplyReport, type SubjectAccessReport } from "@/api/client";
+import { api, AUDIT_ACTION_FAMILIES, type Confidence, type AuditAction, type AuditActionFilter, type AuditRow, type EgressPath, type PiiState, type RetentionApplyReport, type SubjectAccessReport } from "@/api/client";
 import { CitationChip } from "@/components/Citation";
 import { RingBadge } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
@@ -11,7 +11,7 @@ import { href, type Route } from "@/lib/router";
 import { toApiError, useAsync } from "@/lib/useAsync";
 
 /** Anchors, so they never change with the language; the label comes from the dictionary. */
-const SECTIONS = ["overview", "egress", "audit", "pii", "retention", "models", "subject"] as const;
+const SECTIONS = ["overview", "obligations", "egress", "audit", "pii", "retention", "models", "subject"] as const;
 
 /** The log's own vocabulary, by family: `note` selects `note.*`, and so on (`AuditActionFilter`). */
 const ACTION_FILTERS = AUDIT_ACTION_FAMILIES;
@@ -81,6 +81,10 @@ export function ComplianceScreen({ route }: { route: Route }) {
       <div ref={scrollRef} className="overflow-auto scroll-thin p-5 space-y-5 min-w-0">
         <div id="c-overview">
           {egress.error ? <ErrorBanner error={egress.error} onRetry={egress.reload} /> : egress.data ? <Overview register={egress.data} auditRows={status.data?.policy.audit_rows ?? null} /> : <Loading label={t.compliance.loadingEgress} />}
+        </div>
+
+        <div id="c-obligations">
+          <ObligationsSection />
         </div>
 
         <Section id="c-egress" title={t.compliance.sections.egress} aside={egress.data ? <span className="font-mono">{t.compliance.egress.register(egress.data.register_hash)}</span> : null}>
@@ -266,6 +270,58 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
         <div>· {t.compliance.overview.how6}</div>
       </div>
     </div>
+  );
+}
+
+/**
+ * The obligation catalogue of the active profile.
+ *
+ * It existed in the library from the start and was read by nothing but a test. A compliance
+ * subsystem that cannot show what it thinks the law says is asking to be taken on faith,
+ * which is the one thing this screen exists not to do.
+ */
+function ObligationsSection() {
+  const t = useT();
+  const o = useAsync(() => api.obligations(), []);
+  const tone = (c: Confidence): "ok" | "warn" | "neutral" => (c === "high" ? "ok" : c === "medium" ? "neutral" : "warn");
+  return (
+    <Section title={t.compliance.obligations.title} aside={o.data ? <span>{t.compliance.obligations.aside(o.data.law)}</span> : null}>
+      {o.error ? <ErrorBanner error={o.error} onRetry={o.reload} /> : null}
+      {!o.data ? <Loading /> : null}
+      {o.data ? (
+        <>
+          <p className="mb-3 max-w-4xl text-xs text-fg-muted leading-relaxed">{t.compliance.obligations.intro}</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs min-w-[44rem]">
+              <thead>
+                <tr className="label text-left">
+                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colTopic}</th>
+                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colSummary}</th>
+                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colBasis}</th>
+                  <th className="py-1 font-medium">{t.compliance.obligations.colConfidence}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {o.data.obligations.map((ob) => (
+                  <tr key={ob.topic} className="border-t align-top">
+                    <td className="py-2 pr-3 whitespace-nowrap font-medium text-fg">{t.compliance.obligations.topics[ob.topic] ?? ob.topic}</td>
+                    <td className="py-2 pr-3 text-fg-muted max-w-[34rem]">
+                      {ob.summary}
+                      {ob.note ? <div className="mt-1 text-fg-faint">{ob.note}</div> : null}
+                    </td>
+                    <td className="py-2 pr-3 font-mono whitespace-nowrap text-fg-muted">{ob.basis}</td>
+                    <td className="py-2">
+                      <Pill tone={tone(ob.confidence)}>{t.compliance.obligations.confidence[ob.confidence]}</Pill>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="mt-3 max-w-4xl text-xs text-fg-muted leading-relaxed">{t.compliance.obligations.footer}</p>
+        </>
+      ) : null}
+    </Section>
   );
 }
 

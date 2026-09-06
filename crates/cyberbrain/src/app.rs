@@ -38,6 +38,7 @@ use cyberbrain_index::{
     RecallOptions, content_hash,
 };
 use cyberbrain_llm::{LlmClient, LlmConfig, Probe};
+use cyberbrain_policy::profile::ProfileExt;
 use cyberbrain_policy::{
     Actor, AuditFilter, EgressEntry, EraseReason, EraseRequest, ErasureReport, ExportFormat,
     Finding, Identifier, MemoryAuditSink, ModelCard, ModelInventory, ModelRole, OperatorChoice,
@@ -342,6 +343,15 @@ pub struct AuditView {
     pub rows: usize,
     pub verified: Option<std::result::Result<usize, String>>,
     pub rendered: String,
+}
+
+/// `policy obligations`, one profile's whole catalogue.
+#[derive(Debug, Clone, Serialize)]
+pub struct ObligationsView {
+    pub profile: cyberbrain_core::PolicyProfile,
+    /// The law the profile encodes, as the profile names it.
+    pub law: String,
+    pub obligations: Vec<cyberbrain_policy::profile::Obligation>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2121,6 +2131,22 @@ impl App {
 
     pub fn policy_egress(&self) -> Vec<EgressEntry> {
         self.policy.egress().register()
+    }
+
+    /// What the active profile claims about the law, with the basis and how sure the author
+    /// is of each line.
+    ///
+    /// The catalogue has existed since the profiles did and was read by nothing but a test:
+    /// a compliance claim nobody can print is a comment. Printing it is also the honest
+    /// move, because roughly a third of the lines carry a confidence below `high`, and a
+    /// reader who cannot see that gap will assume there is none.
+    pub fn policy_obligations(&self) -> ObligationsView {
+        let profile = self.config.policy.profile;
+        ObligationsView {
+            profile,
+            law: profile.law().to_string(),
+            obligations: profile.obligations(),
+        }
     }
 
     /// The audit log, rendered. Reading through `export` records the export itself

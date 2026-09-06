@@ -180,6 +180,8 @@ pub enum Command {
 pub enum PolicyCommand {
     /// Every path by which bytes may leave this machine, and whether it is enabled.
     Egress,
+    /// What the active profile claims about the law, with the basis and the confidence.
+    Obligations,
     /// The audit log.
     Audit {
         #[arg(long, default_value_t = 50)]
@@ -274,6 +276,25 @@ mod tests {
                 names.contains(&expected),
                 "{expected} is missing from the CLI"
             );
+        }
+    }
+
+    /// The compliance surface is only worth something if it can be printed. The obligation
+    /// catalogue existed from the first profile and was reachable from nowhere for months.
+    #[test]
+    fn the_policy_surface_can_print_what_it_claims() {
+        let cmd = Cli::command();
+        let policy = cmd.find_subcommand("policy").unwrap();
+        let subs: Vec<&str> = policy.get_subcommands().map(|s| s.get_name()).collect();
+        for expected in [
+            "egress",
+            "obligations",
+            "audit",
+            "subject",
+            "retention",
+            "model-card",
+        ] {
+            assert!(subs.contains(&expected), "policy {expected} is missing");
         }
     }
 

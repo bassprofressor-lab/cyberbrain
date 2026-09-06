@@ -453,7 +453,7 @@ export const de: Dict = {
     },
   },
   compliance: {
-    sections: { overview: "Überblick", egress: "Egress-Register", audit: "Audit-Log", pii: "PII", retention: "Aufbewahrung", models: "Modellkarte", subject: "Auskunft" },
+    sections: { overview: "Überblick", obligations: "Pflichten", egress: "Egress-Register", audit: "Audit-Log", pii: "PII", retention: "Aufbewahrung", models: "Modellkarte", subject: "Auskunft" },
     jumpTo: (label: string) => `Zu ${label} springen`,
     profile: "Profil",
     profileEu: "DSGVO, EU AI Act",
@@ -489,6 +489,32 @@ export const de: Dict = {
       how4: "Der Inferenz-Endpunkt muss Loopback oder im privaten Bereich liegen, sofern nicht allow_public_endpoint gesetzt ist; eine Abweisung wird als policy.refusal protokolliert.",
       how5: "Der Kern bettet statisch ein: kein Modellserver, keine Systembibliothek, kein Nachladen zur Laufzeit. Die Oberfläche, die du gerade liest, kommt aus der Binärdatei und holt nichts von außen.",
       how6: "Telemetrie ist kein Zweck. Es gibt kein Opt-out, weil es nichts gibt, wovon man sich abmelden könnte.",
+    },
+    obligations: {
+      title: "Was dieses Profil behauptet",
+      aside: (law: string) => `Profil bildet ab: ${law}`,
+      intro:
+        "Der Katalog hinter dem Profil, ausgedruckt statt vorausgesetzt. Jede Zeile nennt die Norm, auf der sie steht, und wie sicher sich der Autor ist — denn eine Compliance-Aussage ohne ihre Unsicherheit ist eine Aussage über die Zuversicht des Autors, nicht über das Recht.",
+      colTopic: "Thema",
+      colSummary: "was gilt",
+      colBasis: "Grundlage",
+      colConfidence: "Sicherheit",
+      confidence: { low: "gering", medium: "mittel", high: "hoch" },
+      footer:
+        "Die Sicherheitsstufe ist die eines Entwicklers, nicht die eines Anwalts. Hoch heißt: im Primärtext geprüft. Mittel: die Sache stimmt, eine Zahl oder eine Ausnahme ist aus dem Gedächtnis. Gering: nicht ungeprüft gegenüber einer Behörde wiederholen. Nichts unterhalb von hoch steuert das Verhalten der Binärdatei.",
+      topics: {
+        scope: "Anwendungsbereich",
+        "legal-basis": "Rechtsgrundlage",
+        erasure: "Löschung",
+        access: "Auskunft",
+        "breach-notification": "Meldung von Verletzungen",
+        "processing-register": "Verarbeitungsverzeichnis",
+        "data-protection-officer": "Datenschutzbeauftragter",
+        "impact-assessment": "Folgenabschätzung",
+        "cross-border-transfer": "Drittlandübermittlung",
+        sanctions: "Sanktionen",
+        "ai-regulation": "KI-Regulierung",
+      },
     },
     egress: {
       register: (hash: string) => `Register ${hash}`,

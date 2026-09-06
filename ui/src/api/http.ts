@@ -18,6 +18,7 @@ import {
   type NoteListParams,
   type NoteSummary,
   type NoteWriteRequest,
+  type ObligationsView,
   type PiiHoldResolution,
   type PiiReport,
   type RecallParams,
@@ -102,6 +103,7 @@ export const httpClient: CyberbrainApi = {
   graph: () => request<Graph>("GET", "/graph"),
 
   egress: () => request<EgressRegister>("GET", "/policy/egress"),
+  obligations: () => request<ObligationsView>("GET", "/policy/obligations"),
   audit: (p: AuditParams = {}) => request<AuditPage>("GET", `/policy/audit${qs({ limit: p.limit, before: p.before, action: p.action, actor: p.actor, q: p.q })}`),
   pii: () => request<PiiReport>("GET", "/policy/pii"),
   retention: () => request<RetentionQueue>("GET", "/policy/retention"),

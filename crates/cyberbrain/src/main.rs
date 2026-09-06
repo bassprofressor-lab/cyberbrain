@@ -290,6 +290,10 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             let r = app.policy_egress();
             out.emit(&r, |e| render::egress(e))?;
         }
+        PolicyCommand::Obligations => {
+            let r = app.policy_obligations();
+            out.emit(&r, render::obligations)?;
+        }
         PolicyCommand::Audit {
             limit,
             action,

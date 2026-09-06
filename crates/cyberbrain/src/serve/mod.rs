@@ -99,6 +99,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/holds/{id}", post(notes::resolve_hold))
         .route("/graph", get(notes::graph))
         .route("/policy/egress", get(policy::egress))
+        .route("/policy/obligations", get(policy::obligations))
         .route("/policy/audit", get(policy::audit))
         .route("/policy/pii", get(policy::pii))
         .route("/policy/retention", get(policy::retention))

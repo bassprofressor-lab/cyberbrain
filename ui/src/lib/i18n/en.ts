@@ -455,7 +455,7 @@ export const en = {
     },
   },
   compliance: {
-    sections: { overview: "Overview", egress: "Egress register", audit: "Audit log", pii: "PII", retention: "Retention", models: "Model card", subject: "Subject access" },
+    sections: { overview: "Overview", obligations: "Obligations", egress: "Egress register", audit: "Audit log", pii: "PII", retention: "Retention", models: "Model card", subject: "Subject access" },
     jumpTo: (label: string) => `Jump to ${label}`,
     profile: "profile",
     profileEu: "GDPR, EU AI Act",
@@ -491,6 +491,32 @@ export const en = {
       how4: "The inference endpoint must be loopback or private-range unless allow_public_endpoint is set; a refusal is logged as policy.refusal.",
       how5: "The core embeds statically; no model server, no system library, no runtime fetch. The UI you are reading is served from the binary and fetches nothing external.",
       how6: "Telemetry is not a purpose. There is no opt-out because there is nothing to opt out of.",
+    },
+    obligations: {
+      title: "What this profile claims",
+      aside: (law: string) => `profile encodes ${law}`,
+      intro:
+        "The catalogue behind the profile, printed rather than implied. Every line names the article it rests on and how sure the author is of it, because a compliance claim without its uncertainty is a claim about the author's confidence, not about the law.",
+      colTopic: "topic",
+      colSummary: "what it says",
+      colBasis: "basis",
+      colConfidence: "confidence",
+      confidence: { low: "low", medium: "medium", high: "high" },
+      footer:
+        "The confidence is an engineer's, not counsel's. High means the rule was verified in the primary text; medium means the substance is right but a number or an exception is from memory; low means do not repeat it to a regulator without checking. Nothing below high drives behaviour in the binary.",
+      topics: {
+        scope: "Scope",
+        "legal-basis": "Legal basis",
+        erasure: "Erasure",
+        access: "Access",
+        "breach-notification": "Breach notification",
+        "processing-register": "Processing register",
+        "data-protection-officer": "Data protection officer",
+        "impact-assessment": "Impact assessment",
+        "cross-border-transfer": "Cross-border transfer",
+        sanctions: "Sanctions",
+        "ai-regulation": "AI regulation",
+      },
     },
     egress: {
       register: (hash: string) => `register ${hash}`,

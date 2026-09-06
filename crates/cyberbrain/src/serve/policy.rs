@@ -43,6 +43,15 @@ fn detail_u64(e: &AuditEvent, key: &str) -> u64 {
     e.detail.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
 
+/// The obligation catalogue of the active profile. Straight from the library: the wire
+/// shape is the library's `Obligation`, because inventing a second one here is how a field
+/// ends up meaning two things.
+pub async fn obligations(
+    State(st): State<Arc<ServeState>>,
+) -> ApiResult<Json<crate::app::ObligationsView>> {
+    blocking(move || Ok(Json(st.app.policy_obligations()))).await
+}
+
 pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressRegister>> {
     blocking(move || {
         let app = &st.app;
