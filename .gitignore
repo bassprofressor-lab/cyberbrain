@@ -6,3 +6,4 @@ ui/dist/
 crates/cyberbrain/ui-dist/
 eval-local/
 crates/cyberbrain/LICENSE.md
+packaging/windows/cyberbrain-setup-*.exe

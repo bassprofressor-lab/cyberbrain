@@ -31,6 +31,28 @@ jobs:
       - run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
       - run: cargo test --workspace --no-default-features
 
+  # The installer is the only artefact nobody can try on the machine that writes it, so it
+  # gets built on every push rather than first at release time, where a typo in the script
+  # would surface with a tag already public.
+  desktop-installer:
+    name: desktop launcher and installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p cyberbrain -p cyberbrain-desktop --no-default-features
+      - shell: bash
+        run: |
+          if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
+            choco install nsis -y --no-progress
+          fi
+          export PATH="/c/Program Files (x86)/NSIS:$PATH"
+          staging="$(pwd)/target/release"
+          cd packaging/windows
+          makensis -DVERSION=0.0.0-ci "-DSOURCE=$staging" cyberbrain.nsi
+          test -f cyberbrain-setup-0.0.0-ci.exe
+
   # SPEC §9.1: the Windows hook has to survive cmd.exe. A job that only compiles proves
   # nothing about quoting, spaces in paths, or the absence of a POSIX shell — the failures
   # this is here to catch all happen at invocation, not at build.

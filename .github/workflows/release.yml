@@ -73,11 +73,41 @@ jobs:
           "$B" policy egress | grep -q "Telemetry does not exist"
           echo '{}' | "$B" hook session-start > /dev/null
 
+      # The desktop launcher and its installer, Windows only: this is the "install and
+      # click" way in, and it only means anything on the platform that has a Start menu.
+      - name: build the desktop launcher
+        if: matrix.os == 'windows-latest'
+        run: cargo build --release -p cyberbrain-desktop
+
+      - name: makensis is on the runner
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
+            choco install nsis -y --no-progress
+          fi
+          echo "/c/Program Files (x86)/NSIS" >> "$GITHUB_PATH"
+
+      - name: build the installer
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          # The version comes from the manifest, not from the tag: a dispatch run has no
+          # tag, and the tag is checked against the binary a few steps up anyway.
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | python -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='cyberbrain'))")
+          staging="$(pwd)/target/release"
+          cd packaging/windows
+          makensis "-DVERSION=$version" "-DSOURCE=$staging" cyberbrain.nsi
+          mv "cyberbrain-setup-$version.exe" "$GITHUB_WORKSPACE/"
+          echo "INSTALLER=cyberbrain-setup-$version.exe" >> "$GITHUB_ENV"
+
       - name: name it after the platform and hash it
         shell: bash
         run: |
           mkdir -p dist
           cp "target/release/${{ matrix.bin }}" "dist/cyberbrain-${{ matrix.name }}${{ matrix.bin == 'cyberbrain.exe' && '.exe' || '' }}"
+          if [ -n "${INSTALLER:-}" ]; then cp "$INSTALLER" dist/; fi
           cd dist
           if command -v sha256sum > /dev/null; then sha256sum * > "SHA256SUMS-${{ matrix.name }}"; else shasum -a 256 * > "SHA256SUMS-${{ matrix.name }}"; fi
           cat "SHA256SUMS-${{ matrix.name }}"

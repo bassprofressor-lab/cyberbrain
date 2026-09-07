@@ -60,6 +60,18 @@ $ ./cyberbrain-linux-x86_64 init
 Linux and Windows. The binary needs nothing at runtime: no system SQLite, no OpenSSL, no
 model server, no node.
 
+### Windows without a terminal
+
+The release also carries `cyberbrain-setup-<version>.exe`. It installs the command-line tool
+and a small launcher, and puts **Cyberbrain** in the Start menu. Clicking it asks once which
+project to open, starts the server on a port Windows picks, opens your browser at it, and
+sits in the notification area until you quit it — right-click for the project folder, a
+different project, or Quit. Closing it stops the server.
+
+It is not signed, so SmartScreen will warn on first run: More info, then Run anyway. The
+installer deliberately does not touch your `PATH`; if you want `cyberbrain` on the command
+line as well, add `C:\Program Files\Cyberbrain` yourself, or `cargo install cyberbrain`.
+
 <details>
 <summary>Without the web page, or from a checkout</summary>
 

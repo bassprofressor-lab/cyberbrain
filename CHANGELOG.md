@@ -12,7 +12,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A way into Cyberbrain on Windows that is not a terminal.** The release carries
+  `cyberbrain-setup-<version>.exe`, which installs the command-line tool plus a launcher and
+  puts Cyberbrain in the Start menu. The launcher asks once which project to open, starts the
+  server on a port Windows picks, opens the browser at it, and lives in the notification area
+  until quit; a job object makes sure the server goes when it does, even when it is killed
+  rather than asked. Not a second implementation of anything: the page and the API are the
+  ones `cyberbrain serve` has always served.
+
+### Fixed
+
+- `cyberbrain serve --no-open` did nothing at all. The flag had been in the help since the
+  command existed, promising not to do something that never happened; `serve` now opens the
+  address it just bound, and `--no-open` is how you stop it. On a machine with nothing to
+  open, it says so and carries on serving.
 
 ## [0.1.0] — 2026-09-06
 

@@ -1,0 +1,49 @@
+[package]
+name = "cyberbrain-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Windows desktop launcher for Cyberbrain: a Start menu entry instead of a terminal"
+keywords = ["ai-agents", "memory", "windows", "desktop"]
+categories = ["command-line-utilities"]
+# Not a library and useless without the installer that places it next to cyberbrain.exe,
+# so it ships through the release page rather than crates.io.
+publish = false
+
+[[bin]]
+name = "cyberbrain-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# The launcher's own state: which project was open last. Same two crates the rest of the
+# workspace uses for its files, so the format is one people already know from cyberbrain.toml.
+serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.5"
+
+[target.'cfg(windows)'.dependencies]
+# `default-features = false` on both, and it is not a size micro-optimisation: their
+# defaults are the Linux arms — GTK3 through libappindicator for the tray, xdg-portal and
+# Wayland for the dialog. None of that is compiled here, but it is in the dependency graph
+# that cargo-deny reads, where the archived GTK3 bindings show up as an advisory about code
+# this project never builds. On Windows neither default contributes anything.
+tray-icon = { version = "0.24.2", default-features = false }
+rfd = { version = "0.17.2", default-features = false }
+# The tray wants straight RGBA; the icon is a PNG so that one file feeds the tray, the
+# installer and the shortcut. This is the only decoder in the graph.
+png = "0.18.1"
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+  "Win32_UI_Shell",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+

@@ -131,7 +131,10 @@ pub fn router(app: Arc<App>) -> Router {
 /// Bind `127.0.0.1:port` and serve until the process ends. The address is not a
 /// parameter on purpose (SPEC §8.2): opening the bind without adding authentication is
 /// the accident this signature prevents.
-pub async fn serve(app: Arc<App>, port: u16) -> Result<()> {
+///
+/// `open` belongs here rather than in the caller for one reason: with `--port 0` the
+/// address does not exist until the bind returns, and the caller has nothing to open.
+pub async fn serve(app: Arc<App>, port: u16, open: bool) -> Result<()> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let listener = tokio::net::TcpListener::bind(addr)
         .await
@@ -152,7 +155,32 @@ pub async fn serve(app: Arc<App>, port: u16) -> Result<()> {
     println!(
         "cyberbrain serve: http://{bound}/  (loopback only, no authentication; API at /api/v1)"
     );
+    if open {
+        open_browser(&format!("http://{bound}/"));
+    }
     axum::serve(listener, router(app))
         .await
         .map_err(|e| Error::Config(format!("serve: {e}")))
+}
+
+/// Hand the address to whatever the machine uses to open things.
+///
+/// Best effort by design: on a headless server there is nothing to open, and that is not a
+/// reason to fail a command whose job is to serve. It still says so, because a branch that
+/// fails silently is how `--no-open` came to mean nothing in the first place.
+fn open_browser(url: &str) {
+    #[cfg(target_os = "windows")]
+    let result = std::process::Command::new("cmd")
+        .args(["/c", "start", "", url])
+        .spawn();
+    #[cfg(target_os = "macos")]
+    let result = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    let result = std::process::Command::new("xdg-open").arg(url).spawn();
+
+    if let Err(e) = result {
+        eprintln!(
+            "cyberbrain serve: could not open a browser ({e}); open the address above yourself"
+        );
+    }
 }
