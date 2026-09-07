@@ -150,7 +150,7 @@ Section /o "Hub service (collector)" SecHub
   ${If} $0 != 0
     ; Not fatal: the rest of the installation is fine and the command can be run again.
     ; Saying what happened beats a silent half-installed collector.
-    MessageBox MB_ICONEXCLAMATION "The hub service could not be registered:$\r$\n$\r$\n$1$\r$\n$\r$\nEverything else was installed. You can try again later with:$\r$\n  cyberbrain hub service install"
+    MessageBox MB_ICONEXCLAMATION "The hub service could not be registered:$\r$\n$\r$\n$1$\r$\nEverything else was installed, and the workstation side works.$\r$\n$\r$\nTo try again, in a prompt opened with Run as administrator:$\r$\n  cd $\"$INSTDIR$\"$\r$\n  cyberbrain.exe hub service install$\r$\n$\r$\nIf it says the service is being removed, restart Windows first."
   ${Else}
     DetailPrint $1
     ; Without this the service listens and nothing ever reaches it, which looks exactly

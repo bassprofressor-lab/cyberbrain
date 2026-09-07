@@ -140,6 +140,19 @@ pub fn log(msg: &str) {
     }
 }
 
+/// An operating system error with its number, because the number is what a person can look
+/// up and quote. Without it "Access is denied" and "The specified service already exists"
+/// are two sentences with no thread back to anything.
+/// Called from the Windows module and from the tests; on any other platform the binary
+/// itself has no caller for it.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn describe_os_error(io: &std::io::Error) -> String {
+    match io.raw_os_error() {
+        Some(code) => format!("{io} (Windows error {code})"),
+        None => io.to_string(),
+    }
+}
+
 #[cfg(not(windows))]
 mod platform {
     use super::*;
@@ -181,11 +194,39 @@ mod platform {
     };
     use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
 
+    /// What actually went wrong, rather than the wrapper's opinion of it.
+    ///
+    /// `windows_service::Error::Winapi` displays as "IO error in winapi call" and keeps the
+    /// operating system's message and code in `source()`. Printing only the outer layer is
+    /// how a failed installation ends up telling somebody nothing at all. It did.
+    fn why(e: windows_service::Error) -> String {
+        match &e {
+            windows_service::Error::Winapi(io) => describe_os_error(io),
+            other => other.to_string(),
+        }
+    }
+
+    /// Windows codes worth naming, because each has a different fix.
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SERVICE_MARKED_FOR_DELETE: i32 = 1072;
+
+    fn os_code(e: &windows_service::Error) -> Option<i32> {
+        match e {
+            windows_service::Error::Winapi(io) => io.raw_os_error(),
+            _ => None,
+        }
+    }
+
     fn manager(access: ServiceManagerAccess) -> Result<ServiceManager> {
         ServiceManager::local_computer(None::<&str>, access).map_err(|e| {
+            let hint = if os_code(&e) == Some(ERROR_ACCESS_DENIED) {
+                " This needs administrator rights: right-click, Run as administrator."
+            } else {
+                ""
+            };
             Error::Config(format!(
-                "cannot reach the service control manager: {e}. This needs an elevated \
-                 prompt — right-click, Run as administrator."
+                "cannot reach the service control manager: {}.{hint}",
+                why(e)
             ))
         })
     }
@@ -213,27 +254,74 @@ mod platform {
             account_name: None, // LocalSystem
             account_password: None,
         };
-        let service = m
-            .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
-            .map_err(|e| Error::Config(format!("cannot register the service: {e}")))?;
+        // A service that is already there is the ordinary case, not a failure: reinstalling
+        // over the top, repairing, upgrading. Failing here left the first installer saying
+        // "could not be registered" about a machine that was already set up correctly.
+        let existing = m.open_service(
+            SERVICE_NAME,
+            ServiceAccess::CHANGE_CONFIG | ServiceAccess::START | ServiceAccess::QUERY_STATUS,
+        );
+        let service = match existing {
+            Ok(service) => {
+                // Take the new paths and the new address: an upgrade that kept the old
+                // command line would run yesterday's executable from a directory that may
+                // no longer exist.
+                service
+                    .change_config(&info)
+                    .map_err(|e| Error::Config(format!("cannot update the service: {}", why(e))))?;
+                service
+            }
+            Err(e) if os_code(&e) == Some(ERROR_SERVICE_MARKED_FOR_DELETE) => {
+                return Err(Error::Config(
+                    concat!(
+                        "the service is being removed and Windows will not finish until ",
+                        "everything holding it lets go. Close services.msc and the Services ",
+                        "tab in Task Manager, then try again; a restart always clears it."
+                    )
+                    .into(),
+                ));
+            }
+            Err(_) => m
+                .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
+                .map_err(|e| {
+                    let hint = if os_code(&e) == Some(ERROR_ACCESS_DENIED) {
+                        " This needs administrator rights."
+                    } else {
+                        ""
+                    };
+                    Error::Config(format!("cannot register the service: {}.{hint}", why(e)))
+                })?,
+        };
         let _ = service.set_description(DESCRIPTION);
+        // Already running after an update is success, not an error to report.
+        match service.start::<OsString>(&[]) {
+            Ok(()) => Ok(()),
+            Err(_) if service_is_running(&service) => Ok(()),
+            Err(e) => Err(Error::Config(format!(
+                "it is registered, but did not start: {}. \
+                 The log beside the record says why.",
+                why(e)
+            ))),
+        }
+    }
+
+    fn service_is_running(service: &windows_service::service::Service) -> bool {
         service
-            .start::<OsString>(&[])
-            .map_err(|e| Error::Config(format!("registered, but could not start it: {e}")))?;
-        Ok(())
+            .query_status()
+            .is_ok_and(|s| s.current_state == ServiceState::Running)
     }
 
     pub fn uninstall() -> Result<()> {
         let m = manager(ServiceManagerAccess::CONNECT)?;
         let service = m
             .open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)
-            .map_err(|e| Error::Config(format!("cannot open the service: {e}")))?;
+            .map_err(|e| Error::Config(format!("cannot open the service: {}", why(e))))?;
         // Stop first, ignoring "already stopped": deleting a running service leaves it
         // marked for deletion until reboot, which looks like the command did nothing.
         let _ = service.stop();
         service
             .delete()
-            .map_err(|e| Error::Config(format!("cannot remove the service: {e}")))?;
+            .map_err(|e| Error::Config(format!("cannot remove the service: {}", why(e))))?;
         Ok(())
     }
 
@@ -246,15 +334,15 @@ mod platform {
         };
         let service = m
             .open_service(SERVICE_NAME, access)
-            .map_err(|e| Error::Config(format!("cannot open the service: {e}")))?;
+            .map_err(|e| Error::Config(format!("cannot open the service: {}", why(e))))?;
         if start {
             service
                 .start::<OsString>(&[])
-                .map_err(|e| Error::Config(format!("cannot start it: {e}")))?;
+                .map_err(|e| Error::Config(format!("cannot start it: {}", why(e))))?;
         } else {
             service
                 .stop()
-                .map_err(|e| Error::Config(format!("cannot stop it: {e}")))?;
+                .map_err(|e| Error::Config(format!("cannot stop it: {}", why(e))))?;
         }
         Ok(())
     }
@@ -265,13 +353,14 @@ mod platform {
             .open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS)
             .map_err(|e| {
                 Error::Config(format!(
-                    "the service is not registered ({e}). Install it with \
-                     `cyberbrain hub service install`, or tick the box in the installer."
+                    "the service is not registered ({}). Install it with \
+                     `cyberbrain hub service install`, or tick the box in the installer.",
+                    why(e)
                 ))
             })?;
         let s = service
             .query_status()
-            .map_err(|e| Error::Config(format!("cannot read the status: {e}")))?;
+            .map_err(|e| Error::Config(format!("cannot read the status: {}", why(e))))?;
         Ok(match s.current_state {
             ServiceState::Running => "running".into(),
             ServiceState::Stopped => "stopped".into(),

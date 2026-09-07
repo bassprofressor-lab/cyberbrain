@@ -1127,3 +1127,39 @@ fn the_same_licence_twice_is_not_news() {
     std::fs::write(dir.path().join("licence.txt"), "something else entirely").unwrap();
     assert!(super::service::adopt_dropped_licence(&hub, dir.path()).is_some());
 }
+
+// ---- what a failed service registration says ----
+//
+// The first person to tick the installer's hub box got:
+//
+//     cannot register the service: IO error in winapi call
+//
+// which names nothing, suggests nothing, and cannot be looked up. The wrapper's Display
+// says that; the operating system's message and number are one level down in `source()`.
+
+#[test]
+fn an_os_error_is_reported_with_its_number() {
+    // 5 is ERROR_ACCESS_DENIED on Windows and EIO here; the number is the point, not which
+    // number this machine happens to give it.
+    let io = std::io::Error::from_raw_os_error(5);
+    let said = super::service::describe_os_error(&io);
+    assert!(
+        said.contains("(Windows error 5)"),
+        "the number a person can look up is missing: {said}"
+    );
+    assert!(
+        said.len() > "(Windows error 5)".len(),
+        "the number without the sentence is not much better: {said}"
+    );
+    assert!(
+        !said.contains("winapi"),
+        "this is the layer that told nobody anything: {said}"
+    );
+}
+
+#[test]
+fn an_error_without_a_number_still_says_something() {
+    let io = std::io::Error::other("the pipe went away");
+    let said = super::service::describe_os_error(&io);
+    assert_eq!(said, "the pipe went away");
+}

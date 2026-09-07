@@ -14,6 +14,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Fixed
 
+- **A failed service registration said nothing usable.** `cannot register the service: IO
+  error in winapi call` was the whole message: `windows_service::Error::Winapi` displays like
+  that and keeps the operating system's sentence and number one level down in `source()`.
+  Every message from this module now carries both, so it can be looked up and quoted, and
+  access denied and "being removed" each say what to do about them.
+- **Installing over an existing service failed instead of updating it.** Reinstalling,
+  repairing and upgrading are the ordinary way this gets run, and all three hit it. An
+  existing registration is now updated to the new paths and address and started — an upgrade
+  that kept the old command line would run yesterday's executable from a directory that may
+  no longer exist. Already running counts as started.
+
 - **The installer CI offers for testing had no web page in it.** That job built
   `--no-default-features`, which is a supported build and is not the product: clicking the
   Start menu entry opened a browser on `{"code":"not-found"}` where a program should have
