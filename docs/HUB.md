@@ -147,6 +147,34 @@ WantedBy=multi-user.target
 
 A licence dropped at `/var/lib/cyberbrain/licence.txt` is picked up on start here too.
 
+## The hub's own page
+
+`http://localhost:7788/` on the machine the hub runs on. It answers the three questions
+somebody has on the day they install one: is this machine a hub, was the licence accepted,
+and is anything reporting.
+
+- **Licence** — collecting or not, the customer, the end date, and the warning inside the
+  last thirty days. A licence file lying next to the record is offered as one button; there
+  is a box to paste one into as well. Nothing is sent anywhere: the signature is checked
+  against a key built into the program.
+- **Devices** — the same list `hub fleet` prints, trouble first, and a form that registers a
+  machine and writes its invitation next to the record.
+
+**Loopback only.** The page shows who is on the network and can install a licence, and the
+hub deliberately binds an address the whole network can reach. Rather than invent a sign-in
+for this slice, the rule is that you have to be at the machine: a rule with an obvious shape
+that cannot be misconfigured. `/api/v1/fleet` is under the same rule — device names and
+last-seen times are not row content, but they are still a picture of an organisation, and it
+had no authentication at all. `/health` and `/api/v1/ingest` are unchanged; delivery is what
+the network side is for.
+
+A networked view can come later behind the `admin` role that already exists, without taking
+any of this back.
+
+It is server-rendered and has no JavaScript. The store's web UI is a built bundle behind a
+feature flag and building it needs node; none of that may be the price of finding out whether
+a licence was accepted.
+
 ## Delivering to it
 
 On the client, once:

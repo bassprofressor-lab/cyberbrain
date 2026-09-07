@@ -28,6 +28,7 @@ pub mod access;
 pub mod api;
 pub mod client;
 pub mod licence;
+pub mod page;
 pub mod report;
 pub mod service;
 pub mod store;

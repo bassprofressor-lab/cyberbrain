@@ -88,35 +88,62 @@ pub fn where_it_looked(data_dir: &Path) -> String {
     )
 }
 
-/// Take a licence file sitting next to the record, if there is one and it is usable.
+/// What the licence file in the data directory turned out to be.
 ///
-/// Returns what happened, for the log. Deliberately quiet about a missing file: not having
-/// dropped one in is the normal state of a hub that was licensed months ago.
-pub fn adopt_dropped_licence(hub: &super::HubStore, data_dir: &Path) -> Option<String> {
-    let path = find_licence_file(data_dir)?;
-    let text = std::fs::read_to_string(&path).ok()?;
+/// Four answers, not two, because "nothing happened" hides three different situations and
+/// each has a different fix. The first version returned an `Option` and a hub with no
+/// licence at all logged nothing about where it had looked.
+#[derive(Debug, PartialEq)]
+pub enum Dropped {
+    /// No file under any of the names. Says so only when the hub has no licence anyway.
+    None,
+    /// Taken and installed.
+    Installed(String),
+    /// The same text that is already installed. The usual state, and silent.
+    Unchanged,
+    /// A file is there and could not be used. Always worth saying: somebody put it there.
+    Problem(String),
+}
+
+/// Take a licence file sitting next to the record, if there is one and it is usable.
+pub fn adopt_dropped_licence(hub: &super::HubStore, data_dir: &Path) -> Dropped {
+    let Some(path) = find_licence_file(data_dir) else {
+        return Dropped::None;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        // Reached mostly by "Save as > Unicode" in Notepad, which writes UTF-16 and leaves
+        // a file that looks right in every way a person can check. Silence here sent
+        // somebody looking in the wrong place.
+        Err(e) => {
+            return Dropped::Problem(format!(
+                "{} cannot be read: {e}. If it was saved from an editor, save it again as \
+                 UTF-8 or plain text, not Unicode/UTF-16.",
+                path.display()
+            ));
+        }
+    };
     // Compared before it is parsed, not after. The file is meant to be left where it was
     // copied, so the ordinary case is one that is already installed: that should cost
     // nothing and say nothing, on every restart, for years.
     if hub.licence_text().ok().flatten().as_deref() == Some(text.as_str()) {
-        return None;
+        return Dropped::Unchanged;
     }
     match super::licence::parse(&text) {
         Ok(signed) => match hub.set_licence(&text) {
-            Ok(()) => Some(format!(
+            Ok(()) => Dropped::Installed(format!(
                 "licence picked up from {}: {}, {} seat(s), until {}",
                 path.display(),
                 signed.licence().customer,
                 signed.licence().seats,
                 signed.licence().valid_until
             )),
-            Err(e) => Some(format!(
+            Err(e) => Dropped::Problem(format!(
                 "could not store the licence from {}: {e}",
                 path.display()
             )),
         },
-        // A bad file is worth saying out loud: somebody put it there on purpose.
-        Err(e) => Some(format!(
+        Err(e) => Dropped::Problem(format!(
             "the licence at {} is not usable: {e}",
             path.display()
         )),

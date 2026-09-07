@@ -634,19 +634,17 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     // having to ask a second command.
                     let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
                     let licence_line = state.line();
+                    use hub::service::Dropped;
                     match note {
-                        Some(note) => hub::service::log(&note),
+                        Dropped::Installed(m) | Dropped::Problem(m) => hub::service::log(&m),
                         // Silence is fine for a hub that was licensed months ago. For one
                         // that has no licence at all it is the opposite of fine: that is
                         // exactly the reader who needs to know where it looked.
-                        None if state == hub::LicenceState::Missing => {
+                        Dropped::None if state == hub::LicenceState::Missing => {
                             hub::service::log(&hub::service::where_it_looked(dir));
                         }
-                        None => {}
+                        Dropped::None | Dropped::Unchanged => {}
                     }
-                    let state = std::sync::Arc::new(hub::api::HubState {
-                        hub: std::sync::Mutex::new(store),
-                    });
                     let path = path.clone();
                     runtime()?.block_on(async move {
                         let listener = tokio::net::TcpListener::bind(addr)
@@ -655,6 +653,15 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         let bound = listener.local_addr().map_err(|e| {
                             Error::Config(format!("cannot read the bound address: {e}"))
                         })?;
+                        // Built after binding, so the address the page suggests for
+                        // invitations is the one actually being listened on rather than the
+                        // one that was asked for.
+                        let state = std::sync::Arc::new(hub::api::HubState {
+                            hub: std::sync::Mutex::new(store),
+                            record: path.clone(),
+                            port: bound.port(),
+                            flash: std::sync::Mutex::new(None),
+                        });
                         let hello = format!(
                             "cyberbrain hub: http://{bound}/  (record: {}; devices \
                              authenticate with a bearer token)",
@@ -664,15 +671,21 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         println!("{licence_line}");
                         hub::service::log(&hello);
                         hub::service::log(&licence_line);
-                        axum::serve(listener, hub::api::router(state))
-                            // The stop signal arrives on a plain channel from the service
-                            // control handler, which is not async and must answer at once.
-                            .with_graceful_shutdown(async move {
-                                let _ = tokio::task::spawn_blocking(move || stop.recv()).await;
-                                hub::service::log("stop requested; closing the listener");
-                            })
-                            .await
-                            .map_err(|e| Error::Config(format!("hub: {e}")))
+                        // With connect info, because the page and the fleet view are shown
+                        // only to the machine the hub runs on.
+                        axum::serve(
+                            listener,
+                            hub::api::router(state)
+                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
+                        )
+                        // The stop signal arrives on a plain channel from the service
+                        // control handler, which is not async and must answer at once.
+                        .with_graceful_shutdown(async move {
+                            let _ = tokio::task::spawn_blocking(move || stop.recv()).await;
+                            hub::service::log("stop requested; closing the listener");
+                        })
+                        .await
+                        .map_err(|e| Error::Config(format!("hub: {e}")))
                     })
                 })
             };

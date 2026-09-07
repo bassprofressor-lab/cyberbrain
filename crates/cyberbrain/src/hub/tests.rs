@@ -1134,7 +1134,7 @@ fn no_licence_file_is_not_worth_a_word() {
     // teach whoever reads the log to skip it.
     assert_eq!(
         super::service::adopt_dropped_licence(&hub, dir.path()),
-        None
+        super::service::Dropped::None
     );
 }
 
@@ -1146,8 +1146,11 @@ fn an_unusable_licence_file_is_named_and_changes_nothing() {
         .unwrap();
     std::fs::write(dir.path().join("licence.txt"), "not a licence at all").unwrap();
 
-    let note = super::service::adopt_dropped_licence(&hub, dir.path())
-        .expect("somebody put that file there on purpose; silence would be the wrong answer");
+    let super::service::Dropped::Problem(note) =
+        super::service::adopt_dropped_licence(&hub, dir.path())
+    else {
+        panic!("somebody put that file there on purpose; silence would be the wrong answer");
+    };
     assert!(note.contains("not usable"), "{note}");
     assert!(
         note.contains("licence.txt"),
@@ -1170,13 +1173,16 @@ fn the_same_licence_twice_is_not_news() {
     // Left in place after the first start, as people do.
     assert_eq!(
         super::service::adopt_dropped_licence(&hub, dir.path()),
-        None
+        super::service::Dropped::Unchanged
     );
 
     // Calibration: the same call does speak up when the file is not what is installed, so
     // the silence above comes from the comparison and not from the function being mute.
     std::fs::write(dir.path().join("licence.txt"), "something else entirely").unwrap();
-    assert!(super::service::adopt_dropped_licence(&hub, dir.path()).is_some());
+    assert!(matches!(
+        super::service::adopt_dropped_licence(&hub, dir.path()),
+        super::service::Dropped::Problem(_)
+    ));
 }
 
 // ---- what a failed service registration says ----
@@ -1213,4 +1219,157 @@ fn an_error_without_a_number_still_says_something() {
     let io = std::io::Error::other("the pipe went away");
     let said = super::service::describe_os_error(&io);
     assert_eq!(said, "the pipe went away");
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_not_the_same_as_no_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::in_memory().unwrap();
+    // What "Save as > Unicode" in Notepad produces: UTF-16, which is not valid UTF-8 and
+    // looks entirely correct in every way the person who saved it can check.
+    std::fs::write(dir.path().join("licence.txt"), [0xff, 0xfe, 0x7b, 0x00]).unwrap();
+
+    let said = super::service::adopt_dropped_licence(&hub, dir.path());
+    let super::service::Dropped::Problem(msg) = said else {
+        panic!("a file that is there but unreadable must not read as no file: {said:?}");
+    };
+    assert!(msg.contains("licence.txt"), "{msg}");
+    assert!(msg.contains("UTF-8"), "it has to say what to do: {msg}");
+}
+
+// ---- the hub's own page ----
+
+use super::page::{self, View};
+
+fn view_of(
+    hub: &HubStore,
+    record: &str,
+    flash: Option<std::result::Result<String, String>>,
+) -> View {
+    View::gather(
+        hub,
+        std::path::Path::new(record),
+        7788,
+        NOW.parse().unwrap(),
+        flash,
+    )
+}
+
+#[test]
+fn the_page_is_only_for_the_machine_the_hub_runs_on() {
+    let yes = ["127.0.0.1:51000", "[::1]:51000"];
+    let no = ["192.168.1.20:51000", "10.0.0.5:51000", "[2001:db8::1]:443"];
+    for a in yes {
+        assert!(
+            super::api::at_the_machine(&a.parse().unwrap()),
+            "{a} is the machine itself"
+        );
+    }
+    // It shows who is on the network and it can install a licence, on a port the whole
+    // network can reach. Getting this backwards is the difference between a status page and
+    // an open console.
+    for a in no {
+        assert!(!super::api::at_the_machine(&a.parse().unwrap()), "{a}");
+    }
+}
+
+#[test]
+fn an_unlicensed_hub_says_so_where_a_person_is_looking() {
+    let hub = HubStore::in_memory().unwrap();
+    let html = page::render(&view_of(&hub, "/var/lib/cyberbrain/hub.db", None));
+    assert!(html.contains("not licensed"), "{html}");
+    assert!(html.contains("accepts nothing"));
+    // And offers the way out on the same screen, opened, rather than behind a command.
+    assert!(html.contains("<details open"), "the form should be open");
+    assert!(html.contains("action=\"/licence\""));
+}
+
+#[test]
+fn a_collecting_hub_shows_the_seats() {
+    // Built by hand rather than from a real licence file: only the issuer can sign one, and
+    // a test that skips itself when the key is absent is a test that passes by agreeing
+    // with itself on every machine but one.
+    let v = View {
+        version: "0.3.0".into(),
+        record: "C:\\ProgramData\\Cyberbrain\\hub.db".into(),
+        licence: LicenceState::Valid {
+            customer: "Beispiel GmbH".into(),
+            seats: 5,
+            valid_until: "2027-01-01T00:00:00Z".into(),
+            warning: None,
+        },
+        seats: Some((2, 5)),
+        fleet: Vec::new(),
+        found_file: None,
+        suggested_url: "http://hub:7788".into(),
+        flash: None,
+    };
+    let html = page::render(&v);
+    assert!(html.contains("collecting"), "{html}");
+    assert!(html.contains("Beispiel GmbH"));
+    assert!(
+        html.contains("<strong>2</strong> of <strong>5</strong>"),
+        "{html}"
+    );
+    // A hub that is already collecting should not be shouting a form at anybody.
+    assert!(!html.contains("<details open"));
+}
+
+#[test]
+fn a_licence_about_to_run_out_says_it_on_the_page() {
+    let v = View {
+        version: "0.3.0".into(),
+        record: "hub.db".into(),
+        licence: LicenceState::Valid {
+            customer: "Beispiel GmbH".into(),
+            seats: 5,
+            valid_until: "2026-10-01T00:00:00Z".into(),
+            warning: Some(
+                "the licence for Beispiel GmbH ends on 2026-10-01 — 24 day(s) left.".into(),
+            ),
+        },
+        seats: Some((5, 5)),
+        fleet: Vec::new(),
+        found_file: None,
+        suggested_url: "http://hub:7788".into(),
+        flash: None,
+    };
+    let html = page::render(&v);
+    // The warning replaces the calm line rather than sitting beside it: the whole point of
+    // the thirty days is that somebody acts inside them.
+    assert!(html.contains("24 day(s) left"), "{html}");
+}
+
+#[test]
+fn a_device_name_cannot_carry_markup_into_the_page() {
+    let hub = HubStore::in_memory().unwrap();
+    // Device names arrive from whoever registers one and are shown back on this page.
+    hub.add_device("<script>alert(1)</script>", NOW).unwrap();
+    let html = page::render(&view_of(&hub, "hub.db", None));
+    assert!(
+        !html.contains("<script>alert"),
+        "unescaped name in the page"
+    );
+    assert!(
+        html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "{html}"
+    );
+}
+
+#[test]
+fn a_licence_file_that_is_already_installed_is_not_offered_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::in_memory().unwrap();
+    let text = "whatever is installed";
+    std::fs::write(dir.path().join("licence.txt"), text).unwrap();
+    let record = dir.path().join("hub.db");
+
+    // Before: there is something to click.
+    let before = View::gather(&hub, &record, 7788, NOW.parse().unwrap(), None);
+    assert!(before.found_file.is_some());
+
+    // After: the file is still lying there, as files do, and the button is gone.
+    hub.set_licence(text).unwrap();
+    let after = View::gather(&hub, &record, 7788, NOW.parse().unwrap(), None);
+    assert_eq!(after.found_file, None);
 }

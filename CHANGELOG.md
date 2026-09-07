@@ -12,7 +12,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [0.3.0] — 2026-09-07
 
+### Added
+
+- **The hub has a page.** `http://localhost:7788/` on the machine it runs on, answering the
+  three questions somebody has the day they install one: is this a hub, was the licence
+  accepted, is anything reporting. A licence file lying next to the record is one button; a
+  box to paste one into is there as well; registering a machine writes its invitation next to
+  the record and says where. Everything on it was already answerable by typing, and that was
+  the problem — a product whose state can only be read at a prompt has no state as far as its
+  owner is concerned.
+
+  Loopback only: it shows who is on the network and can install a licence, on a port the
+  whole network can reach. Rather than invent a sign-in for this slice, the rule is that you
+  have to be at the machine. `/api/v1/fleet` is now under the same rule, where it previously
+  had no authentication at all. `/health` and `/api/v1/ingest` are unchanged.
+
+  Server-rendered, no JavaScript: the store's web UI is a built bundle behind a feature flag
+  and building it needs node, which must not be the price of finding out whether a licence
+  was accepted.
+
 ### Fixed
+
+- **A byte order mark stopped a licence from being accepted.** Notepad and a good many mail
+  clients write one when they save UTF-8. It is invisible, it sits three bytes in front of
+  the JSON, and it turned a perfectly good licence into `first line is not a licence`. The
+  signature covers the canonical line, which never included the mark, so removing it restores
+  the bytes that were signed rather than excusing anything. CRLF needed no help.
+- **A licence file that could not be read looked exactly like no licence file at all.**
+  "Save as > Unicode" writes UTF-16, and the read failed silently — so the hub reported that
+  nothing had been dropped in, next to a file the person could see. It now says which file it
+  could not read and what to save it as.
 
 - **A hub with no licence did not say where it had looked for one.** The log said `no licence
   installed` and stopped, which leaves the reader unable to tell whether the file was looked

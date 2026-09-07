@@ -145,6 +145,13 @@ pub fn parse(text: &str) -> Result<SignedLicence> {
 
 pub fn parse_with_key(text: &str, issuer_hex: &str) -> Result<SignedLicence> {
     let bad = |m: String| Error::Config(format!("licence: {m}"));
+    // Notepad and a good many mail clients write a byte order mark when they save UTF-8.
+    // It is invisible, it is three bytes in front of the JSON, and without this it turns a
+    // perfectly good licence into "first line is not a licence". The signature covers the
+    // canonical line, which never included the mark, so removing it restores the bytes that
+    // were signed rather than excusing something.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+    // CRLF needs no help: `str::lines` drops the carriage return.
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
     let canonical = lines
         .next()
@@ -345,5 +352,36 @@ mod tests {
         for text in ["", "not json\nsig\n", "{\"version\":1}\n", "{}\nzz\n"] {
             assert!(parse_with_key(text, &public).is_err(), "{text:?} parsed");
         }
+    }
+}
+
+#[cfg(test)]
+mod file_shape_tests {
+    use super::*;
+
+    /// A licence that has been through Windows: a byte order mark in front, CRLF endings,
+    /// a trailing blank line. None of that is the customer's fault and all of it happens.
+    #[test]
+    fn a_licence_saved_by_notepad_still_verifies() {
+        let (private, public) = generate_key().unwrap();
+        let l = Licence {
+            version: 1,
+            id: "lic_shape".into(),
+            customer: "Beispiel GmbH".into(),
+            seats: 3,
+            valid_from: "2026-01-01T00:00:00Z".into(),
+            valid_until: "2027-01-01T00:00:00Z".into(),
+            issued_at: "2026-01-01T00:00:00Z".into(),
+        };
+        let clean = issue(&l, &private).unwrap().render();
+
+        let mangled = format!("\u{feff}{}", clean.replace('\n', "\r\n"));
+        let parsed = parse_with_key(&mangled, &public).expect("a saved copy is still a licence");
+        assert_eq!(parsed.licence().customer, "Beispiel GmbH");
+
+        // Calibration: the signature is still being checked, so this is tolerance about the
+        // file's shape and not about its contents.
+        let tampered = mangled.replace("Beispiel GmbH", "Jemand Anderes");
+        assert!(parse_with_key(&tampered, &public).is_err());
     }
 }
