@@ -77,6 +77,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   are inclusive: timestamps have millisecond resolution and rows can share one, and an export
   should take a row too many rather than one too few.
 
+### Fixed
+
+- **SPEC §12.1 described a TLS arrangement this program does not have.** It said no root
+  store was available and that `https://` failed closed unless the operator supplied a CA;
+  the client has been using the platform's certificate store all along, and a public HTTPS
+  host answers on the first try. The section now says what is true, and says why it is the
+  better property: the store is the one an organisation already maintains, so a CA it removes
+  there stops being trusted here too, which a compiled-in bundle would not do. It also states
+  the control that actually limits where bytes go — the register, not the certificate store.
+  `cyberbrain policy egress` prints the same sentence, so the question can be answered from
+  the program, and a test compares all three so they cannot drift apart again.
+
 ### Changed
 
 - The hub's record migrates in place. `CREATE TABLE IF NOT EXISTS` does nothing to a table

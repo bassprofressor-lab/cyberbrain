@@ -78,6 +78,19 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
     }
 }
 
+/// Where TLS trust comes from, in one sentence, for anyone who asks.
+///
+/// A question a customer asks before signing something, and it should be answerable from the
+/// program rather than from a document that can drift — which is exactly what happened once:
+/// SPEC §12.1 claimed no trust anchors were available at all, while the client had been
+/// using the platform's store all along.
+pub const TLS_TRUST: &str = concat!(
+    "TLS trust: the operating system's certificate store. No bundle is compiled into this ",
+    "binary, so a CA your organisation adds or removes there applies here too. It decides ",
+    "which certificate is acceptable for a destination, never which destinations are allowed ",
+    "— that is this register."
+);
+
 /// The register, computed from the configuration. Exhaustive on purpose.
 pub fn register(cfg: &PolicyConfig) -> Vec<EgressEntry> {
     PURPOSES.iter().map(|p| describe(*p, cfg)).collect()

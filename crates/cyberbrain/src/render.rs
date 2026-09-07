@@ -437,6 +437,7 @@ pub fn egress(entries: &[EgressEntry]) -> String {
         );
     }
     s.push_str("That is the entire list. Telemetry does not exist.\n");
+    let _ = writeln!(s, "{}", cyberbrain_policy::egress::TLS_TRUST);
     s
 }
 

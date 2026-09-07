@@ -644,10 +644,22 @@ two cases are indistinguishable from the address alone, so they get their own sw
 whose name misdescribes what the operator is agreeing to is a consent failure, not a
 convenience.
 
-**HTTPS to a local endpoint is off by default.** No root certificate store is compiled in, so
-`https://` fails closed unless the operator supplies a CA. Local inference is plain HTTP over
-loopback or a private network, and shipping a root store to serve an unusual case would put
-a trust anchor in the binary for no benefit.
+**TLS trust comes from the operating system, not from this binary.** No certificate bundle is
+compiled in; the client uses the platform's own certificate store, which is the store the
+operator already maintains — through a group policy, an MDM profile, or
+`/usr/local/share/ca-certificates`. That is deliberately better than shipping a bundle: a CA
+the organisation removes there stops being trusted here too, whereas a compiled-in list would
+keep trusting it until the next release.
+
+This is not what limits where bytes may go. **The register does that**, and it is the
+stronger control: it decides which destinations may be contacted at all, checks every address
+each hostname resolves to for its place on the network, pins those addresses for the
+connection, and refuses proxies and redirects. The certificate store only decides which
+certificate is acceptable for a destination that is *already* permitted; it widens nothing.
+
+Local inference is plain HTTP over loopback or a private network, so none of this applies to
+it. `cyberbrain policy egress` states where TLS trust comes from, so the question can be
+answered from the program rather than from this document.
 
 ### 12.2 Erasure (GDPR Art. 17)
 
