@@ -25,6 +25,7 @@ use cyberbrain_policy::bundle;
 use std::path::PathBuf;
 
 pub mod api;
+pub mod licence;
 pub mod store;
 
 #[cfg(test)]
@@ -47,6 +48,102 @@ pub struct Accepted {
     pub total_rows: i64,
 }
 
+/// What the licence says about this moment, for every caller that has to act on it.
+///
+/// One place decides, so the CLI, the API and the fleet view cannot drift into three
+/// different opinions about whether a hub may still collect.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LicenceState {
+    /// No licence installed. The hub runs read-only from the start.
+    Missing,
+    /// Installed and unreadable, or signed by somebody else.
+    Invalid(String),
+    /// Good, with a warning to show when the end is close.
+    Valid {
+        customer: String,
+        seats: usize,
+        valid_until: String,
+        warning: Option<String>,
+    },
+    /// Past its end date. Collection stops; nothing else does.
+    Expired {
+        customer: String,
+        valid_until: String,
+    },
+}
+
+impl LicenceState {
+    /// Read the installed licence and judge it against `now`.
+    pub fn read(hub: &HubStore, now: jiff::Timestamp) -> Self {
+        let Ok(Some(text)) = hub.licence_text() else {
+            return LicenceState::Missing;
+        };
+        match licence::parse(&text) {
+            Err(e) => LicenceState::Invalid(e.to_string()),
+            Ok(l) if l.not_yet_valid(now) => LicenceState::Invalid(format!(
+                "the licence for {} does not start until {}",
+                l.licence().customer,
+                l.licence().valid_from
+            )),
+            Ok(l) if l.expired(now) => LicenceState::Expired {
+                customer: l.licence().customer.clone(),
+                valid_until: l.licence().valid_until.clone(),
+            },
+            Ok(l) => LicenceState::Valid {
+                customer: l.licence().customer.clone(),
+                seats: l.licence().seats,
+                valid_until: l.licence().valid_until.clone(),
+                warning: l.warning(now),
+            },
+        }
+    }
+
+    /// May the hub take new rows right now?
+    pub fn may_collect(&self) -> bool {
+        matches!(self, LicenceState::Valid { .. })
+    }
+
+    /// Seats, when there are any. `None` means no limit is in force because no licence is.
+    pub fn seats(&self) -> Option<usize> {
+        match self {
+            LicenceState::Valid { seats, .. } => Some(*seats),
+            _ => None,
+        }
+    }
+
+    /// One line for a person, always — including "everything is fine", because a status
+    /// display that says nothing when things are good teaches people to ignore it.
+    pub fn line(&self) -> String {
+        match self {
+            LicenceState::Missing => concat!(
+                "no licence installed: the hub will not accept rows. ",
+                "Install one with `cyberbrain hub licence install <file>`."
+            )
+            .to_string(),
+            LicenceState::Invalid(why) => format!("licence not usable: {why}"),
+            LicenceState::Expired {
+                customer,
+                valid_until,
+            } => format!(
+                concat!(
+                    "licence for {} ended on {}. New rows are not accepted; the record ",
+                    "stays readable and exportable, and clients keep buffering."
+                ),
+                customer, valid_until
+            ),
+            LicenceState::Valid {
+                customer,
+                seats,
+                valid_until,
+                warning,
+            } => match warning {
+                Some(w) => format!("⚠ {w}"),
+                None => format!("licence: {customer}, {seats} seat(s), until {valid_until}"),
+            },
+        }
+    }
+}
+
 /// Why a delivery was refused. Kept apart from the message so the caller can map it to a
 /// status code without matching on prose.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,6 +154,8 @@ pub enum Refusal {
     BadBundle(String),
     /// The chain is fine but does not continue this device's.
     WrongAnchor { expected: String, got: String },
+    /// The licence does not currently allow collecting. Nothing is wrong with the delivery.
+    NotCollecting(String),
 }
 
 impl std::fmt::Display for Refusal {
@@ -69,6 +168,7 @@ impl std::fmt::Display for Refusal {
                 "this device's chain is at {expected}, the delivery starts at {got}: \
                  something is missing between them, or this was already delivered"
             ),
+            Refusal::NotCollecting(m) => write!(f, "{m}"),
         }
     }
 }
@@ -81,11 +181,26 @@ impl std::fmt::Display for Refusal {
 /// because that comparison is only meaningful once the chain inside the file is known good.
 pub fn ingest(
     hub: &mut HubStore,
+    licence: &LicenceState,
     token: Option<&str>,
     body: &str,
     version: Option<&str>,
     now: &str,
 ) -> std::result::Result<Accepted, Refusal> {
+    // The licence is judged by the caller and handed in. Deciding whether a hub may collect
+    // and deciding whether one delivery is sound are two jobs, and a function that does both
+    // could only be tested by whoever holds the issuer's private key.
+    //
+    // It is checked before anything else, because the answer is the same for every sender
+    // and is not about them — and the wording matters: a sender that is told "not now"
+    // should keep what it has rather than throw it away.
+    if !licence.may_collect() {
+        return Err(Refusal::NotCollecting(format!(
+            "{} Keep buffering: nothing is lost, and a renewed licence takes what you held.",
+            licence.line()
+        )));
+    }
+
     let token = token.ok_or_else(|| {
         Refusal::NotAuthorised("no device token; send it as `Authorization: Bearer …`".into())
     })?;

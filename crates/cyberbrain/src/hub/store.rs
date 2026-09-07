@@ -106,7 +106,14 @@ impl HubStore {
                  BEFORE DELETE ON entries
                  BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;
 
-             CREATE INDEX IF NOT EXISTS entries_by_ts ON entries(ts);",
+             CREATE INDEX IF NOT EXISTS entries_by_ts ON entries(ts);
+
+             -- One row, holding the licence text. In the record rather than a file beside
+             -- it so that moving the hub moves its licence with it.
+             CREATE TABLE IF NOT EXISTS settings (
+                 key   TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             );",
         ))
     }
 
@@ -232,6 +239,40 @@ impl HubStore {
             out.push(ix(r)?);
         }
         Ok(out)
+    }
+
+    /// The installed licence text, if there is one.
+    pub fn licence_text(&self) -> Result<Option<String>> {
+        ix(self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'licence'",
+                [],
+                |r| r.get(0),
+            )
+            .optional())
+    }
+
+    pub fn set_licence(&self, text: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES ('licence', ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![text],
+        ))
+        .map(|_| ())
+    }
+
+    /// Devices that count against the seat limit: everything not revoked.
+    ///
+    /// Revoked devices are excluded on purpose — a seat freed by someone leaving should be
+    /// usable, and their rows stay either way.
+    pub fn active_device_count(&self) -> Result<usize> {
+        ix(self.conn.query_row(
+            "SELECT count(*) FROM devices WHERE revoked_at IS NULL",
+            [],
+            |r| r.get::<_, i64>(0),
+        ))
+        .map(|n| n as usize)
     }
 
     pub fn total_entries(&self) -> Result<i64> {

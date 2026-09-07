@@ -370,6 +370,23 @@ pub enum HubCommand {
         name: String,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
+        /// Write an invitation file for this device instead of printing the token loose.
+        /// It carries everything the machine needs, so nobody assembles it by hand.
+        #[arg(long, value_name = "PATH")]
+        invite: Option<PathBuf>,
+        /// Address the device should deliver to, for the invitation.
+        #[arg(long, value_name = "URL")]
+        hub_url: Option<String>,
+        /// Address of the shared inference endpoint, if there is one. This is the setting
+        /// from docs/SHARED-INFERENCE.md, carried along so it is not typed into every store
+        /// by hand.
+        #[arg(long, value_name = "URL")]
+        inference_url: Option<String>,
+    },
+    /// Install, inspect or issue a licence.
+    Licence {
+        #[command(subcommand)]
+        command: LicenceCommand,
     },
     /// Devices, when they were last heard from, and how far their chain has come.
     Fleet {
@@ -381,5 +398,44 @@ pub enum HubCommand {
         id: String,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum LicenceCommand {
+    /// Put a licence into this hub's record.
+    Install {
+        path: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// What the installed licence says, and how long it has left.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Make a key pair. The issuer keeps the private half; the public half belongs in the
+    /// binary, which means a rebuild — that is the point of a trust anchor.
+    Keygen,
+    /// Sign a licence. Needs the private key, so this is the issuer's command, not a
+    /// customer's.
+    Issue {
+        /// File holding the signing key as hex. Never passed on the command line, where it
+        /// would end up in the shell history and in `ps`.
+        #[arg(long, value_name = "PATH")]
+        key_file: PathBuf,
+        #[arg(long)]
+        customer: String,
+        #[arg(long)]
+        seats: usize,
+        /// RFC 3339. Defaults to now.
+        #[arg(long, value_name = "TIMESTAMP")]
+        from: Option<String>,
+        /// RFC 3339, inclusive.
+        #[arg(long, value_name = "TIMESTAMP")]
+        until: String,
+        /// Where to write it. Prints to stdout when absent.
+        #[arg(long, value_name = "PATH")]
+        out: Option<PathBuf>,
     },
 }

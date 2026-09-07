@@ -10,6 +10,46 @@ authenticate because there is no remote access. It can also read, write, delete 
 retention — opening its bind would hand that to everyone on the network. The hub
 authenticates, and the only thing it can do is take rows.
 
+## The licence
+
+A hub needs one, and without it nothing can be registered and nothing is collected. It is a
+signed file, checked against a key compiled into the binary — **no call home**, because the
+networks this runs on are often deliberately closed and because a licence server is a way for
+somebody else's outage to stop your evidence.
+
+```console
+$ cyberbrain hub licence install licence.txt --data /var/lib/cyberbrain/hub.db
+installed: Beispiel GmbH — 3 seat(s), until 2027-01-01T00:00:00Z
+
+$ cyberbrain hub licence show --data /var/lib/cyberbrain/hub.db
+licence: Beispiel GmbH, 3 seat(s), until 2027-01-01T00:00:00Z
+seats: 2 of 3 in use
+```
+
+`licence show` exits non-zero when the hub is not collecting, so a monitoring check is one
+line.
+
+### Seats are devices
+
+Counted at enrolment, not at delivery: a device that was allowed to enrol and is then refused
+every night looks registered and collects nothing, which is the worst of both. Revoking frees
+a seat — the rows stay, the person left.
+
+### When it expires
+
+From 30 days out, everything that shows state says so, with the days remaining. After the end
+date the hub **stops accepting rows and does nothing else**:
+
+- the record stays readable and exportable, nothing is deleted or locked
+- devices keep working locally, exactly as before
+- clients buffer, and deliveries come back `503` with an explanation — not `402`, because the
+  sender did nothing wrong and should retry later, which is what that code tells every
+  retrying client there is
+- renewing takes what they held, and the chain closes without a gap
+
+That last point is tested, not just intended: a delivery refused during a lapse arrives in
+full once a new licence is installed.
+
 ## Running one
 
 ```console
@@ -23,6 +63,22 @@ $ cyberbrain hub serve --addr 0.0.0.0:7788 --data /var/lib/cyberbrain/hub.db
 cyberbrain hub: http://0.0.0.0:7788/  (record: /var/lib/cyberbrain/hub.db; devices
 authenticate with a bearer token)
 ```
+
+### Invitations
+
+Rather than printing a token loose, `hub add` can write an invitation carrying everything the
+machine needs — including the shared inference endpoint from
+[`docs/SHARED-INFERENCE.md`](SHARED-INFERENCE.md), so that address is not typed into every
+store by hand:
+
+```console
+$ cyberbrain hub add "ws-021" --data hub.db --invite ws-021.json \
+    --hub-url https://hub.example.internal:7788 \
+    --inference-url http://192.168.1.50:11434/v1
+```
+
+The file carries the token: hand it over the way you would a password, and delete it once the
+machine is set up. Reading it on the client is the next slice.
 
 Meant to run as a service — `systemd` on Linux, a Windows service on Windows Server. A hub
 that is up only while somebody is logged in makes silence useless as a signal: you could
@@ -90,7 +146,6 @@ Revoking stops a device from sending; its rows stay, because revoking is not a d
 
 - **The client does not send by itself.** Deliveries are made by hand or by a cron entry
   wrapping the two commands above.
-- **No licence.** Any registered device may send; seat counting and expiry come with it.
 - **No TLS of its own.** Put it behind a reverse proxy inside your network, or wait for the
   slice that gives the hub a certificate and pins it at enrolment. Do not expose it to the
   internet as it stands.

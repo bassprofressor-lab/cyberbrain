@@ -268,7 +268,11 @@ impl EgressGate for DenyAllEgress {
         Err(crate::Error::PolicyRefusal {
             profile: "no-gate".into(),
             reason: format!(
-                "{purpose:?} towards {destination} was refused because no egress gate is                  wired in; this is a wiring bug, not a configuration choice"
+                concat!(
+                    "{:?} towards {} was refused because no egress gate is wired in; ",
+                    "this is a wiring bug, not a configuration choice"
+                ),
+                purpose, destination
             ),
         })
     }

@@ -22,6 +22,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   heard from — state, not activity. The record is append-only in the database, like the
   store's own audit log. See [`docs/HUB.md`](docs/HUB.md).
 
+- **Licences.** A hub collects only with a current one: signed, checked offline against a key
+  compiled into the binary, no call home. Seats are devices and are counted at enrolment.
+  From 30 days out every view that shows state says so; after the end date the hub stops
+  accepting rows **and does nothing else** — the record stays readable and exportable,
+  clients buffer, deliveries get a `503` that says to keep buffering, and renewing takes what
+  they held with the chain unbroken. `hub licence keygen` and `issue` are the issuer's side.
+- **Invitations.** `hub add --invite` writes a file with the token, the hub address and the
+  shared inference endpoint, so a machine is set up from one file instead of three settings
+  typed by hand.
+
   This is a second surface, not `serve` with its bind opened: `serve` stays loopback and
   unauthenticated because there is nothing remote to authenticate (SPEC §8.2), and it can
   read, write and delete notes. The hub authenticates and can only take rows — it has no

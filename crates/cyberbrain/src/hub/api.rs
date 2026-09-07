@@ -3,7 +3,7 @@
 //! Deliberately not the store's API: no recall, no notes, no retention, nothing that can
 //! change a note anywhere. What a client may do here is hand over rows and say hello.
 
-use super::{HubStore, Refusal, ingest};
+use super::{HubStore, LicenceState, Refusal, ingest};
 use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, header};
 use axum::response::{IntoResponse, Response};
@@ -66,7 +66,18 @@ async fn post_ingest(
         }
     };
 
-    match ingest(&mut hub, token.as_deref(), &body, version.as_deref(), &now) {
+    // Read per request, not at startup: a licence that lapses while the service runs has to
+    // take effect without somebody remembering to restart it.
+    let licence = LicenceState::read(&hub, jiff::Timestamp::now());
+
+    match ingest(
+        &mut hub,
+        &licence,
+        token.as_deref(),
+        &body,
+        version.as_deref(),
+        &now,
+    ) {
         Ok(a) => (StatusCode::OK, Json(json!(a))).into_response(),
         Err(refusal) => {
             // The status code carries the difference the sender has to act on: fix your
@@ -75,6 +86,9 @@ async fn post_ingest(
                 Refusal::NotAuthorised(_) => StatusCode::UNAUTHORIZED,
                 Refusal::BadBundle(_) => StatusCode::BAD_REQUEST,
                 Refusal::WrongAnchor { .. } => StatusCode::CONFLICT,
+                // 503, not 402: the sender did nothing wrong and should try again later,
+                // which is exactly what this code tells every retrying client on earth.
+                Refusal::NotCollecting(_) => StatusCode::SERVICE_UNAVAILABLE,
             };
             let mut body = json!({ "error": refusal.to_string() });
             if let Refusal::WrongAnchor { expected, got } = &refusal {

@@ -307,6 +307,146 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
     Ok(0)
 }
 
+/// Licence handling. `keygen` and `issue` are the issuer's side; the rest is a customer's.
+fn run_licence(command: &cli::LicenceCommand, out: Out) -> Result<i32> {
+    use cli::LicenceCommand;
+
+    match command {
+        LicenceCommand::Install { path, data } => {
+            let text = std::fs::read_to_string(path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            // Checked before it is stored: an unreadable licence in the record would turn
+            // every later command into the same complaint about a file nobody can fix.
+            let signed = hub::licence::parse(&text)?;
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            store.set_licence(&text)?;
+            let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
+            out.emit(
+                &serde_json::json!({
+                    "licence": signed.licence(),
+                    "state": state.line(),
+                    "collecting": state.may_collect(),
+                }),
+                |v| {
+                    format!(
+                        "installed: {} — {} seat(s), until {}\n{}\n",
+                        v["licence"]["customer"].as_str().unwrap_or_default(),
+                        v["licence"]["seats"].as_u64().unwrap_or_default(),
+                        v["licence"]["valid_until"].as_str().unwrap_or_default(),
+                        v["state"].as_str().unwrap_or_default()
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+
+        LicenceCommand::Show { data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
+            let devices = store.active_device_count()?;
+            out.emit(
+                &serde_json::json!({
+                    "state": state.line(),
+                    "collecting": state.may_collect(),
+                    "seats": state.seats(),
+                    "devices_in_use": devices,
+                }),
+                |v| {
+                    let mut s = format!("{}\n", v["state"].as_str().unwrap_or_default());
+                    if let Some(seats) = v["seats"].as_u64() {
+                        s.push_str(&format!(
+                            "seats: {} of {} in use\n",
+                            v["devices_in_use"].as_u64().unwrap_or_default(),
+                            seats
+                        ));
+                    }
+                    s
+                },
+            )?;
+            // Non-zero when the hub is not collecting, so a monitoring check is one line.
+            Ok(if state.may_collect() { 0 } else { 1 })
+        }
+
+        LicenceCommand::Keygen => {
+            let (private, public) = hub::licence::generate_key()?;
+            out.emit(
+                &serde_json::json!({ "private_key": private, "public_key": public }),
+                |v| {
+                    format!(
+                        "private key (keep it, never commit it, back it up):\n  {}\n\n\
+                         public key (belongs in ISSUER_PUBLIC_KEY, needs a rebuild):\n  {}\n\n\
+                         Whoever holds the private key can issue licences for this product.\n\
+                         Losing it means no new licences; leaking it means anyone can make them.\n",
+                        v["private_key"].as_str().unwrap_or_default(),
+                        v["public_key"].as_str().unwrap_or_default()
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+
+        LicenceCommand::Issue {
+            key_file,
+            customer,
+            seats,
+            from,
+            until,
+            out: out_path,
+        } => {
+            let key = std::fs::read_to_string(key_file)
+                .map_err(|e| Error::Io {
+                    path: key_file.clone(),
+                    source: e,
+                })?
+                .trim()
+                .to_string();
+            let now = jiff::Timestamp::now();
+            let valid_from = from.clone().unwrap_or_else(|| now.to_string());
+            // Parsed here so a typo is caught while issuing, not by the customer's hub.
+            for (what, value) in [("--from", &valid_from), ("--until", until)] {
+                value.parse::<jiff::Timestamp>().map_err(|e| {
+                    Error::Config(format!(
+                        "{what}: {value:?} is not an RFC 3339 timestamp: {e}"
+                    ))
+                })?;
+            }
+            let licence = hub::licence::Licence {
+                version: 1,
+                id: format!("lic_{}", cyberbrain_core::NoteId::generate()),
+                customer: customer.clone(),
+                seats: *seats,
+                valid_from,
+                valid_until: until.clone(),
+                issued_at: now.to_string(),
+            };
+            let signed = hub::licence::issue(&licence, &key)?;
+            let text = signed.render();
+            match out_path {
+                Some(p) => {
+                    std::fs::write(p, &text).map_err(|e| Error::Io {
+                        path: p.clone(),
+                        source: e,
+                    })?;
+                    out.emit(&serde_json::json!({ "licence": licence, "path": p }), |v| {
+                        format!(
+                            "issued {} for {} ({} seats, until {}) -> {}\n",
+                            v["licence"]["id"].as_str().unwrap_or_default(),
+                            v["licence"]["customer"].as_str().unwrap_or_default(),
+                            v["licence"]["seats"].as_u64().unwrap_or_default(),
+                            v["licence"]["valid_until"].as_str().unwrap_or_default(),
+                            v["path"].as_str().unwrap_or_default()
+                        )
+                    })?;
+                }
+                None => print!("{text}"),
+            }
+            Ok(0)
+        }
+    }
+}
+
 /// The hub's commands. None of them opens a store.
 fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
     use cli::HubCommand;
@@ -316,6 +456,9 @@ fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
         HubCommand::Serve { addr, data } => {
             let path = hub::data_path(data.clone());
             let store = hub::HubStore::open(&path)?;
+            // Read once at startup and printed, so the person who starts the service sees
+            // the state without having to ask a second command.
+            let licence_line = hub::LicenceState::read(&store, jiff::Timestamp::now()).line();
             let addr = hub::parse_addr(addr)?;
             let state = std::sync::Arc::new(hub::api::HubState {
                 hub: std::sync::Mutex::new(store),
@@ -332,6 +475,7 @@ fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
                      a bearer token)",
                     path.display()
                 );
+                println!("{licence_line}");
                 axum::serve(listener, hub::api::router(state))
                     .await
                     .map_err(|e| Error::Config(format!("hub: {e}")))
@@ -339,9 +483,73 @@ fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
             Ok(0)
         }
 
-        HubCommand::Add { name, data } => {
+        HubCommand::Add {
+            name,
+            data,
+            invite,
+            hub_url,
+            inference_url,
+        } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            // Seats are checked here rather than at delivery time. A device that was allowed
+            // to enrol and is then refused every night is the worst of both: it looks
+            // registered and collects nothing.
+            let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
+            match state.seats() {
+                None => {
+                    return Err(Error::Config(format!(
+                        "{}\nNo device can be registered without one.",
+                        state.line()
+                    )));
+                }
+                Some(seats) => {
+                    let active = store.active_device_count()?;
+                    if active >= seats {
+                        return Err(Error::Config(format!(
+                            "the licence covers {seats} seat(s) and {active} are in use. \
+                             Revoke a device that is gone, or extend the licence — its rows \
+                             are kept either way."
+                        )));
+                    }
+                }
+            }
             let (device, token) = store.add_device(name, &now())?;
+
+            if let Some(path) = invite {
+                let invitation = serde_json::json!({
+                    "kind": "cyberbrain.hub.invitation",
+                    "version": 1,
+                    "device": device.id,
+                    "name": device.name,
+                    "token": token,
+                    "hub_url": hub_url,
+                    "inference_url": inference_url,
+                });
+                let text = serde_json::to_string_pretty(&invitation)
+                    .map_err(|e| Error::Config(format!("invitation does not serialise: {e}")))?;
+                std::fs::write(path, format!("{text}\n")).map_err(|e| Error::Io {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                out.emit(&invitation, |v| {
+                    format!(
+                        "device {} registered as {:?}\ninvitation written to {}\n\n\
+                         It carries the token. Hand it over the way you would a password, \
+                         and delete it once the machine has been set up.\n{}",
+                        v["device"].as_str().unwrap_or_default(),
+                        v["name"].as_str().unwrap_or_default(),
+                        path.display(),
+                        if v["hub_url"].is_null() {
+                            "\nNo --hub-url was given, so the device still has to be told \
+                             where to deliver.\n"
+                        } else {
+                            ""
+                        }
+                    )
+                })?;
+                return Ok(0);
+            }
+
             out.emit(
                 &serde_json::json!({ "device": device, "token": token }),
                 |v| {
@@ -357,12 +565,20 @@ fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
             Ok(0)
         }
 
+        HubCommand::Licence { command } => run_licence(command, out),
+
         HubCommand::Fleet { data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let devices = store.devices()?;
             let total = store.total_entries()?;
+            let licence = hub::LicenceState::read(&store, jiff::Timestamp::now());
             out.emit(
-                &serde_json::json!({ "devices": devices, "total_rows": total }),
+                &serde_json::json!({
+                    "devices": devices,
+                    "total_rows": total,
+                    "licence": licence.line(),
+                    "collecting": licence.may_collect(),
+                }),
                 |v| {
                     let list = v["devices"].as_array().cloned().unwrap_or_default();
                     if list.is_empty() {
@@ -391,8 +607,9 @@ fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
                         ));
                     }
                     s.push_str(&format!(
-                        "\n{} row(s) in the record\n",
-                        v["total_rows"].as_i64().unwrap_or_default()
+                        "\n{} row(s) in the record\n{}\n",
+                        v["total_rows"].as_i64().unwrap_or_default(),
+                        v["licence"].as_str().unwrap_or_default()
                     ));
                     s
                 },

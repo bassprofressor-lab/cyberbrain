@@ -28,6 +28,12 @@ axum = "0.8.9"
 # cyberbrain-index, and blake3 through the audit chain; neither is new C or a new licence.
 blake3 = "1.8.7"
 clap = { version = "4.6.6", features = ["derive", "env"] }
+# Licence signatures. Ed25519 in pure Rust: no C toolchain, and the public half is a
+# compile-time constant so a hub checks a licence with nothing but itself.
+ed25519-dalek = "3.0.0"
+# Only for the one place a key pair is generated. Already in the tree; named here because a
+# dependency used through somebody else's re-export is one nobody can find later.
+getrandom = "0.4.3"
 cyberbrain-code.workspace = true
 cyberbrain-core.workspace = true
 cyberbrain-embed.workspace = true
