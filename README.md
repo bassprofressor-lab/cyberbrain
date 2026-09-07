@@ -233,14 +233,14 @@ behaviour.
 
 ## Status
 
-**v0.2.0, and young.** 461 tests, seven crates on crates.io plus the Windows launcher,
+**v0.2.1, and young.** 465 tests, seven crates on crates.io plus the Windows launcher,
 clippy and rustfmt clean. Binaries for Linux and Windows on the release page, and an
 installer beside them. It has been run against one operator's real corpus — 1,086 notes
 across five projects — and not much else. Expect rough edges, report them.
 
 The desktop launcher is the newest part and the least worn in: CI builds it, packages it and
 runs the store through the binary it ships, but it had not yet been installed on anyone's
-desktop when 0.2.0 went out. If it misbehaves on yours, that is worth an issue.
+desktop when 0.2.1 went out. If it misbehaves on yours, that is worth an issue.
 
 Cyberbrain is an original work. It shares no source code with any other memory tool; §0 of
 [`docs/SPEC.md`](docs/SPEC.md) records the boundary it was built under, and the commit
