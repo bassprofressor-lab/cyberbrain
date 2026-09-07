@@ -237,10 +237,16 @@ kein Verhalten.
 
 ## Stand
 
-**v0.1.0, und jung.** 447 Tests, sieben Pakete, clippy und rustfmt sauber. Auf crates.io
-veröffentlicht, mit Binärdateien für Linux und Windows am Release. Gelaufen ist es gegen den
-echten Korpus eines einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht
-viel. Mit Kanten ist zu rechnen, melde sie.
+**v0.2.0, und jung.** 461 Tests, sieben Pakete auf crates.io und dazu der Windows-Starter,
+clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux und Windows und ein
+Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines einzigen
+Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist zu
+rechnen, melde sie.
+
+Der Desktop-Starter ist der jüngste und am wenigsten eingelaufene Teil: die CI baut ihn,
+packt ihn und lässt einen Store durch die Binärdatei laufen, die dabei ausgeliefert wird —
+installiert hatte ihn zum Erscheinen von 0.2.0 aber noch niemand. Wenn er sich auf deinem
+Rechner danebenbenimmt, ist das einen Fehlerbericht wert.
 
 Cyberbrain ist ein eigenständiges Werk. Es teilt keinen Quelltext mit irgendeinem anderen
 Gedächtnis-Werkzeug; §0 von [`docs/SPEC.md`](docs/SPEC.md) hält die Grenze fest, unter der es
