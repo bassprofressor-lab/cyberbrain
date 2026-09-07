@@ -24,7 +24,12 @@ $ cargo test --workspace 2>&1 | grep -c '^test result: ok'   # the README states
                                               # checks. Update README.md to match.
 $ (cd ui && npm ci && npm run build && npm run licenses)
 $ cp -r ui/dist crates/cyberbrain/ui-dist     # the step that cannot be skipped
-$ cargo package -p cyberbrain --list | grep -c '^ui-dist/'   # must not be 0
+$ cargo package -p cyberbrain --list --allow-dirty | grep -c '^ui-dist/'  # must not be 0
+                                              # --allow-dirty because ui-dist is gitignored:
+                                              # without it the command refuses, prints nothing
+                                              # to stdout, and the check reads 0 — the same
+                                              # answer it gives for the failure it exists to
+                                              # catch.
 ```
 
 Update `CHANGELOG.md`: move `Unreleased` under the new version with the date it actually
