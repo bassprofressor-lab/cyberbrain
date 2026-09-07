@@ -628,13 +628,17 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
 
         HubCommand::Fleet { data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
-            let devices = store.devices()?;
+            let version = env!("CARGO_PKG_VERSION");
+            let rows = hub::report::fleet(&store, jiff::Timestamp::now(), version)?;
             let total = store.total_entries()?;
             let licence = hub::LicenceState::read(&store, jiff::Timestamp::now());
+            let troubled = rows.iter().filter(|r| !r.concerns.is_empty()).count();
+
             out.emit(
                 &serde_json::json!({
-                    "devices": devices,
+                    "devices": rows,
                     "total_rows": total,
+                    "needs_attention": troubled,
                     "licence": licence.line(),
                     "collecting": licence.may_collect(),
                 }),
@@ -646,33 +650,108 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     }
                     let mut s = String::new();
                     for d in list {
-                        // The state is what a person scans for, so it comes before the
-                        // numbers: a device that never reported and one that was revoked are
-                        // both "not sending", for opposite reasons.
-                        let state = if d["revoked_at"].is_string() {
-                            "revoked"
-                        } else if d["last_seen"].is_string() {
-                            "seen"
+                        let concerns: Vec<String> = d["concerns"]
+                            .as_array()
+                            .map(|c| {
+                                c.iter()
+                                    .filter_map(|x| {
+                                        serde_json::from_value::<hub::report::Concern>(x.clone())
+                                            .ok()
+                                    })
+                                    .map(|c| c.line())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        // The marker is the first thing on the line, so a screen of devices
+                        // can be scanned down one column.
+                        let marker = if d["revoked_at"].is_string() {
+                            "-"
+                        } else if concerns.is_empty() {
+                            "ok"
                         } else {
-                            "never reported"
+                            "!!"
                         };
                         s.push_str(&format!(
-                            "{:<14} {:<28} {:>8} rows  last seen {}  version {}\n",
-                            state,
+                            "{:<3} {:<22} {:>8} rows  {}\n",
+                            marker,
                             d["name"].as_str().unwrap_or_default(),
                             d["rows"].as_i64().unwrap_or_default(),
-                            d["last_seen"].as_str().unwrap_or("never"),
-                            d["version"].as_str().unwrap_or("unknown"),
+                            if d["revoked_at"].is_string() {
+                                "revoked".to_string()
+                            } else if concerns.is_empty() {
+                                format!("last seen {}", d["last_seen"].as_str().unwrap_or("never"))
+                            } else {
+                                concerns.join("; ")
+                            }
                         ));
                     }
                     s.push_str(&format!(
-                        "\n{} row(s) in the record\n{}\n",
+                        "\n{} row(s) in the record, {} device(s) need attention\n{}\n",
                         v["total_rows"].as_i64().unwrap_or_default(),
+                        v["needs_attention"].as_i64().unwrap_or_default(),
                         v["licence"].as_str().unwrap_or_default()
                     ));
                     s
                 },
             )?;
+            Ok(0)
+        }
+
+        HubCommand::Verify { data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let report = hub::report::verify(&store)?;
+            let ok = report.ok;
+            // Rendered from the JSON shape rather than the struct so the text and `--json`
+            // cannot describe two different things.
+            let as_json = serde_json::to_value(&report)
+                .map_err(|e| Error::Index(format!("verify report does not serialise: {e}")))?;
+            out.emit(&as_json, |v| {
+                let mut s = String::new();
+                for d in v["devices"].as_array().cloned().unwrap_or_default() {
+                    let verdict = match d["chain"].get("Ok") {
+                        Some(n) => format!("chain holds over {} row(s)", n),
+                        None => format!(
+                            "BROKEN: {}",
+                            d["chain"]["Err"].as_str().unwrap_or("unknown")
+                        ),
+                    };
+                    s.push_str(&format!(
+                        "{:<24} {}\n",
+                        d["name"].as_str().unwrap_or_default(),
+                        verdict
+                    ));
+                }
+                s.push_str(&format!(
+                    "\n{} row(s) checked; {}\n",
+                    v["rows"].as_i64().unwrap_or_default(),
+                    if v["ok"].as_bool().unwrap_or(false) {
+                        "everything the hub holds is as it arrived"
+                    } else {
+                        "AT LEAST ONE CHAIN DOES NOT HOLD"
+                    }
+                ));
+                s
+            })?;
+            Ok(if ok { 0 } else { 1 })
+        }
+
+        HubCommand::Report {
+            out_dir,
+            from,
+            to,
+            data,
+        } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let tool = concat!("cyberbrain hub ", env!("CARGO_PKG_VERSION"));
+            let report =
+                hub::report::write_report(&store, out_dir, from.as_deref(), to.as_deref(), tool)?;
+            out.emit(&report, |v| {
+                format!(
+                    "{}\nwritten to {}\n",
+                    v["summary"].as_str().unwrap_or_default(),
+                    v["directory"].as_str().unwrap_or_default()
+                )
+            })?;
             Ok(0)
         }
 

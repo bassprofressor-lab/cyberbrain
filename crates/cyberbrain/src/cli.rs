@@ -400,8 +400,28 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: LicenceCommand,
     },
-    /// Devices, when they were last heard from, and how far their chain has come.
+    /// Devices, when they were last heard from, and what is wrong with any of them.
     Fleet {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Re-check every chain the hub holds, against the rows as they are on disk now.
+    ///
+    /// Exits non-zero when a chain does not hold. Meant for a nightly job: the arrival
+    /// check cannot answer whether the database was replaced afterwards.
+    Verify {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Write a period as evidence: one verifiable file per device, plus a summary.
+    Report {
+        /// Directory to write into. Created if it does not exist.
+        #[arg(long, value_name = "PATH")]
+        out_dir: PathBuf,
+        #[arg(long, value_name = "TIMESTAMP")]
+        from: Option<String>,
+        #[arg(long, value_name = "TIMESTAMP")]
+        to: Option<String>,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },

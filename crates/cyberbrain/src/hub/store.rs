@@ -28,6 +28,9 @@ pub struct Device {
     pub rows: i64,
     /// Version this device last reported. `None` until it has sent one.
     pub version: Option<String>,
+    /// Why this device's last delivery was turned away, if one was.
+    pub last_refusal: Option<String>,
+    pub last_refusal_at: Option<String>,
 }
 
 impl Device {
@@ -82,7 +85,14 @@ impl HubStore {
                  last_seen   TEXT,
                  anchor      TEXT NOT NULL,
                  rows        INTEGER NOT NULL DEFAULT 0,
-                 version     TEXT
+                 version     TEXT,
+                 -- The last delivery this device made that was turned away, and why.
+                 -- Without it a gap is invisible: a delivery that does not continue the
+                 -- chain is refused, so it leaves no rows — and the fleet view would show a
+                 -- device that simply went quiet, which is a different problem with a
+                 -- different fix.
+                 last_refusal    TEXT,
+                 last_refusal_at TEXT
              );
 
              CREATE TABLE IF NOT EXISTS entries (
@@ -114,7 +124,43 @@ impl HubStore {
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
              );",
-        ))
+        ))?;
+        self.add_missing_columns()
+    }
+
+    /// Bring an existing record up to the current shape.
+    ///
+    /// `CREATE TABLE IF NOT EXISTS` does nothing to a table that already exists, so a hub
+    /// upgraded in place would keep the columns it was created with and fail on the first
+    /// query that names a new one. This record is meant to hold a decade of evidence;
+    /// upgrading the program must not mean starting it over.
+    fn add_missing_columns(&self) -> Result<()> {
+        let mut have = std::collections::BTreeSet::new();
+        {
+            let mut stmt = ix(self.conn.prepare("PRAGMA table_info(devices)"))?;
+            let names = ix(stmt.query_map([], |r| r.get::<_, String>(1)))?;
+            for n in names {
+                have.insert(ix(n)?);
+            }
+        }
+        // Only ever additive, and only with a NULL default: a migration that rewrites rows
+        // in an append-only record is a contradiction.
+        for (name, ddl) in [
+            ("version", "ALTER TABLE devices ADD COLUMN version TEXT"),
+            (
+                "last_refusal",
+                "ALTER TABLE devices ADD COLUMN last_refusal TEXT",
+            ),
+            (
+                "last_refusal_at",
+                "ALTER TABLE devices ADD COLUMN last_refusal_at TEXT",
+            ),
+        ] {
+            if !have.contains(name) {
+                ix(self.conn.execute(ddl, []))?;
+            }
+        }
+        Ok(())
     }
 
     /// Register a device. Returns it with the plaintext token, which is the only time that
@@ -132,6 +178,8 @@ impl HubStore {
             anchor: GENESIS.to_string(),
             rows: 0,
             version: None,
+            last_refusal: None,
+            last_refusal_at: None,
         };
         ix(self.conn.execute(
             "INSERT INTO devices (id, name, token_hash, created_at, anchor)
@@ -146,7 +194,8 @@ impl HubStore {
         ix(self
             .conn
             .query_row(
-                "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version
+                "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
+                        last_refusal, last_refusal_at
                  FROM devices WHERE token_hash = ?",
                 params![hash],
                 row_to_device,
@@ -156,7 +205,8 @@ impl HubStore {
 
     pub fn devices(&self) -> Result<Vec<Device>> {
         let mut stmt = ix(self.conn.prepare(
-            "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version
+            "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
+                    last_refusal, last_refusal_at
              FROM devices ORDER BY created_at, id",
         ))?;
         let rows = ix(stmt.query_map([], row_to_device))?;
@@ -212,13 +262,27 @@ impl HubStore {
             ))?;
         }
         ix(tx.execute(
+            // A successful delivery clears the refusal: the device is not in that state any
+            // more, and a stale complaint in the fleet view is worse than none.
             "UPDATE devices SET anchor = ?, rows = ?, last_seen = ?,
-                 version = coalesce(?, version)
+                 version = coalesce(?, version),
+                 last_refusal = NULL, last_refusal_at = NULL
              WHERE id = ?",
             params![new_anchor, seq, now, version, device.id],
         ))?;
         ix(tx.commit())?;
         Ok(seq)
+    }
+
+    /// Record that a delivery was turned away. Also counts as contact: the device did
+    /// reach us, it just could not be taken.
+    pub fn note_refusal(&self, device: &str, reason: &str, now: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "UPDATE devices SET last_refusal = ?, last_refusal_at = ?, last_seen = ?
+             WHERE id = ?",
+            params![reason, now, now, device],
+        ))
+        .map(|_| ())
     }
 
     /// Rows of one device, oldest first: sequence, timestamp and action, never the detail.
@@ -275,6 +339,42 @@ impl HubStore {
         .map(|n| n as usize)
     }
 
+    /// One device's rows, rebuilt as audit events in the order they were accepted.
+    ///
+    /// The detail column holds the row's JSON exactly as it arrived, `_chain` included, so
+    /// what comes back out is what the client signed into its chain — which is the only
+    /// reason a report can be re-verified by somebody else.
+    pub fn rows_of(&self, device: &str) -> Result<Vec<AuditEvent>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT ts, actor, action, subject, detail FROM entries
+             WHERE device = ? ORDER BY seq",
+        ))?;
+        let rows = ix(stmt.query_map(params![device], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+            ))
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            let (ts, actor, action, subject, detail) = ix(r)?;
+            out.push(AuditEvent {
+                ts: ts
+                    .parse()
+                    .map_err(|e| Error::Index(format!("hub store: stored ts {ts:?}: {e}")))?,
+                actor,
+                action,
+                subject,
+                detail: serde_json::from_str(&detail)
+                    .map_err(|e| Error::Index(format!("hub store: stored detail: {e}")))?,
+            });
+        }
+        Ok(out)
+    }
+
     pub fn total_entries(&self) -> Result<i64> {
         ix(self
             .conn
@@ -292,6 +392,8 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         anchor: r.get(5)?,
         rows: r.get(6)?,
         version: r.get(7)?,
+        last_refusal: r.get(8)?,
+        last_refusal_at: r.get(9)?,
     })
 }
 

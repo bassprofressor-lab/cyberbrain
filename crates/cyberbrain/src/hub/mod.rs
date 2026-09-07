@@ -27,6 +27,7 @@ use std::path::PathBuf;
 pub mod api;
 pub mod client;
 pub mod licence;
+pub mod report;
 pub mod store;
 
 #[cfg(test)]
@@ -216,8 +217,16 @@ pub fn ingest(
         )));
     }
 
+    // From here on the sender is known, so a refusal can be recorded against it. Anything
+    // above this line has no device to record against, which is also why it cannot be shown
+    // in the fleet view: an unknown token is not a device having trouble.
+    let note = |r: Refusal| -> Refusal {
+        let _ = hub.note_refusal(&device.id, &r.to_string(), now);
+        r
+    };
+
     let (report, rows) =
-        bundle::verify_rows(body).map_err(|e| Refusal::BadBundle(e.to_string()))?;
+        bundle::verify_rows(body).map_err(|e| note(Refusal::BadBundle(e.to_string())))?;
 
     // Where in this delivery does the part the hub does not have yet begin?
     //
@@ -234,10 +243,10 @@ pub fn ingest(
     {
         &rows[i + 1..]
     } else {
-        return Err(Refusal::WrongAnchor {
+        return Err(note(Refusal::WrongAnchor {
             expected: device.anchor.clone(),
             got: report.anchor,
-        });
+        }));
     };
 
     // An empty delivery still counts as contact: it moves `last_seen`, so a device that has

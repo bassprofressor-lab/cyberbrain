@@ -527,3 +527,325 @@ fn a_warning_is_not_a_stop() {
     let line = warned.line();
     assert!(line.contains("nothing is deleted"), "{line}");
 }
+
+// ---- what the hub can tell an administrator, and what it can hand an auditor (slice 6) ----
+
+use super::report::{self, Concern};
+
+const HUB_VERSION: &str = "0.2.1";
+
+fn now_ts() -> jiff::Timestamp {
+    NOW.parse().unwrap()
+}
+
+/// The case the refusal record exists for. A gap is refused, so it leaves no rows — without
+/// remembering the refusal, the fleet view would show a device that merely went quiet, which
+/// is a different problem with a different fix.
+#[test]
+fn a_refused_delivery_shows_up_as_a_concern() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    client.act("b"); // never delivered
+    client.act("c");
+    assert!(
+        ingest(
+            &mut hub,
+            &collecting(),
+            Some(&token),
+            &client.bundle_from(2),
+            None,
+            NOW
+        )
+        .is_err()
+    );
+
+    let rows = report::fleet(&hub, now_ts(), HUB_VERSION).unwrap();
+    let concerns = &rows[0].concerns;
+    assert!(
+        concerns
+            .iter()
+            .any(|c| matches!(c, Concern::Refused { .. })),
+        "{concerns:?}"
+    );
+    let line = concerns[0].line();
+    assert!(line.contains("refused"), "{line}");
+}
+
+/// And a later good delivery clears it: a stale complaint is worse than none.
+#[test]
+fn a_successful_delivery_clears_the_concern() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client.act("b");
+    assert!(
+        ingest(
+            &mut hub,
+            &collecting(),
+            Some(&token),
+            &client.bundle_from(1),
+            None,
+            NOW
+        )
+        .is_err()
+    );
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let rows = report::fleet(&hub, now_ts(), HUB_VERSION).unwrap();
+    assert!(rows[0].concerns.is_empty(), "{:?}", rows[0].concerns);
+}
+
+#[test]
+fn silence_becomes_a_concern_after_the_threshold() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let soon = now_ts() + std::time::Duration::from_secs(3600);
+    assert!(
+        report::fleet(&hub, soon, HUB_VERSION).unwrap()[0]
+            .concerns
+            .is_empty(),
+        "an hour is not silence"
+    );
+
+    let later = now_ts() + std::time::Duration::from_secs(72 * 3600);
+    let concerns = &report::fleet(&hub, later, HUB_VERSION).unwrap()[0].concerns;
+    assert!(
+        matches!(concerns.first(), Some(Concern::Quiet { hours }) if *hours >= 48),
+        "{concerns:?}"
+    );
+}
+
+#[test]
+fn an_older_client_is_named_and_a_newer_or_odd_one_is_not() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        Some("0.1.0"),
+        NOW,
+    )
+    .unwrap();
+    let concerns = &report::fleet(&hub, now_ts(), HUB_VERSION).unwrap()[0].concerns;
+    assert!(
+        concerns.iter().any(|c| matches!(c, Concern::Behind { .. })),
+        "{concerns:?}"
+    );
+
+    // A client ahead of the hub, and one with a version nobody can parse, are both left
+    // alone: nagging about either would train people to ignore the column.
+    for v in ["9.9.9", "my-build"] {
+        let (mut hub, _, token) = hub_with_device();
+        let client = Client::new();
+        client.act("a");
+        ingest(
+            &mut hub,
+            &collecting(),
+            Some(&token),
+            &client.all(),
+            Some(v),
+            NOW,
+        )
+        .unwrap();
+        let concerns = &report::fleet(&hub, now_ts(), HUB_VERSION).unwrap()[0].concerns;
+        assert!(
+            !concerns.iter().any(|c| matches!(c, Concern::Behind { .. })),
+            "{v} was called behind: {concerns:?}"
+        );
+    }
+}
+
+#[test]
+fn a_revoked_device_is_not_a_problem_to_solve() {
+    let (mut hub, device, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+    hub.revoke(&device.id, NOW).unwrap();
+
+    let much_later = now_ts() + std::time::Duration::from_secs(500 * 3600);
+    let rows = report::fleet(&hub, much_later, HUB_VERSION).unwrap();
+    assert!(
+        rows[0].concerns.is_empty(),
+        "a decision somebody made is not an alert: {:?}",
+        rows[0].concerns
+    );
+}
+
+#[test]
+fn devices_that_need_attention_come_first() {
+    let hub = HubStore::in_memory().unwrap();
+    let (_, quiet_token) = hub.add_device("zzz-quiet", "2026-09-07T00:00:00Z").unwrap();
+    let (_, fine_token) = hub.add_device("aaa-fine", "2026-09-07T00:00:00Z").unwrap();
+    let mut hub = hub;
+
+    for token in [&quiet_token, &fine_token] {
+        let c = Client::new();
+        c.act("a");
+        ingest(&mut hub, &collecting(), Some(token), &c.all(), None, NOW).unwrap();
+    }
+    // One of them then fails a delivery.
+    let c = Client::new();
+    c.act("x");
+    c.act("y");
+    let _ = ingest(
+        &mut hub,
+        &collecting(),
+        Some(&quiet_token),
+        &c.bundle_from(1),
+        None,
+        NOW,
+    );
+
+    let rows = report::fleet(&hub, now_ts(), HUB_VERSION).unwrap();
+    assert_eq!(
+        rows[0].device.name, "zzz-quiet",
+        "trouble sorts above a name that would come first alphabetically"
+    );
+}
+
+#[test]
+fn verify_re_derives_the_chains_from_what_is_on_disk() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client.act("b");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let r = report::verify(&hub).unwrap();
+    assert!(r.ok);
+    assert_eq!(r.rows, 2);
+    assert_eq!(r.devices[0].chain.as_ref().unwrap(), &2);
+}
+
+#[test]
+fn a_period_comes_out_as_a_bundle_that_verifies_on_its_own() {
+    let (mut hub, device, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client.act("b");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let (text, n) = report::device_bundle(&hub, &device.id, None, None, "test").unwrap();
+    assert_eq!(n, 2);
+    // The same check an outsider runs, over rows that made a round trip through the hub's
+    // database. If storage lost or reordered anything, this is where it shows.
+    let verdict = cyberbrain_policy::bundle::verify(&text).unwrap();
+    assert_eq!(verdict.rows, 2);
+}
+
+#[test]
+fn a_device_with_nothing_in_the_period_still_gets_a_file() {
+    let (mut hub, _, token) = hub_with_device();
+    let (silent, _) = hub.add_device("silent", "2026-09-07T00:00:00Z").unwrap();
+    let client = Client::new();
+    client.act("a");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = report::write_report(&hub, dir.path(), None, None, "test").unwrap();
+    let files = out["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2, "both devices, including the silent one");
+    let quiet_file = dir.path().join(format!("{}.jsonl", silent.id));
+    assert!(quiet_file.is_file());
+    // "This machine did nothing that week" is a finding, and it verifies like any other.
+    let text = std::fs::read_to_string(&quiet_file).unwrap();
+    assert_eq!(cyberbrain_policy::bundle::verify(&text).unwrap().rows, 0);
+    assert!(dir.path().join("summary.txt").is_file());
+}
+
+/// A record created by an older build must keep working when the program is upgraded.
+#[test]
+fn an_older_record_gains_the_new_columns() {
+    let file = tempfile::NamedTempFile::new().unwrap();
+    {
+        // The devices table as an earlier version wrote it: no version, no refusal columns.
+        let conn = rusqlite::Connection::open(file.path()).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE devices (
+                 id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL, revoked_at TEXT, last_seen TEXT,
+                 anchor TEXT NOT NULL, rows INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO devices (id, name, token_hash, created_at, anchor)
+             VALUES ('dev_old', 'from-an-older-build', 'hash', '2026-01-01T00:00:00Z', 'genesis');",
+        )
+        .unwrap();
+    }
+
+    let hub = HubStore::open(file.path()).unwrap();
+    let devices = hub.devices().unwrap();
+    assert_eq!(
+        devices.len(),
+        1,
+        "the row from the old build is still there"
+    );
+    assert_eq!(devices[0].name, "from-an-older-build");
+    assert_eq!(devices[0].version, None);
+    assert_eq!(devices[0].last_refusal, None);
+}

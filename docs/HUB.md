@@ -167,18 +167,66 @@ It holds the same rows the client's own audit log holds: timestamp, actor, actio
 and the detail as written. **It has no notes**, no index and no search — what a note *said*
 never leaves the machine that holds it.
 
-`cyberbrain hub fleet` shows devices, not activity:
+`cyberbrain hub fleet` shows devices, not activity — and shows the ones with something wrong
+first, because a list that reads the same whether or not there is a problem gets skimmed:
 
 ```console
 $ cyberbrain hub fleet --data /var/lib/cyberbrain/hub.db
-seen           laptop-anna       8 rows  last seen 2026-09-07T15:17:29Z  version 0.2.1
-never reported build-01          0 rows  last seen never                 version unknown
-revoked        laptop-old       31 rows  last seen 2026-08-02T09:11:02Z  version 0.1.0
+!!  build-01                      0 rows  never reported
+!!  ws-014                    4 511 rows  last delivery refused at 2026-09-05T02:11:04Z: this device's chain is at 4005a9b0…
+!!  ws-007                   15 902 rows  quiet for 71 h; version 0.1.0, hub runs 0.2.1
+ok  laptop-anna              12 480 rows  last seen 2026-09-07T15:17:29Z
+-   laptop-old                   31 rows  revoked
 
-8 row(s) in the record
+32 924 row(s) in the record, 3 device(s) need attention
+licence: Beispiel GmbH, 5 seat(s), until 2027-01-01T00:00:00Z
 ```
 
-Revoking stops a device from sending; its rows stay, because revoking is not a deletion.
+**A refused delivery is remembered.** Without that, a gap would be invisible here: a delivery
+that does not continue the chain is turned away, so it leaves no rows, and the device would
+look merely quiet — a different problem with a different fix. A later good delivery clears
+the note, because a stale complaint is worse than none.
+
+A revoked device raises nothing: that is a decision somebody made, not a fault. Its rows stay,
+because revoking is not a deletion.
+
+## Checking what the hub holds
+
+```console
+$ cyberbrain hub verify --data /var/lib/cyberbrain/hub.db
+laptop-anna              chain holds over 12480 row(s)
+ws-007                   chain holds over 15902 row(s)
+
+28382 row(s) checked; everything the hub holds is as it arrived
+```
+
+Each delivery was checked as it arrived, so this asks a different question: is what is on
+disk *now* still what arrived? That is what a restored backup, a disk fault or a helpful
+administrator raises, and the append-only triggers do not answer it — they stop the database
+being *asked* to change, not being replaced. Exits non-zero on a broken chain, so a nightly
+job is one line.
+
+## A report for a period
+
+```console
+$ cyberbrain hub report --from 2026-01-01T00:00:00Z --to 2026-03-31T23:59:59Z \
+    --out-dir q1-2026 --data /var/lib/cyberbrain/hub.db
+```
+
+A directory, not a file: a bundle is one chain and the hub holds one per device, so merging
+them would produce something that verifies as nothing. Each device gets a `.jsonl` in the
+format from [`docs/AUDIT-EXPORT.md`](AUDIT-EXPORT.md), plus a `summary.txt` naming what is in
+each one.
+
+Every file verifies on its own, with this program or without it:
+
+```console
+$ cyberbrain verify-export q1-2026/dev_01M1Y9….jsonl
+$ python3 scripts/verify-audit-export.py q1-2026/dev_01M1Y9….jsonl
+```
+
+**A device with nothing in the period still gets a file.** "This machine did nothing that
+week" is a finding, and its absence would read as an oversight.
 
 ## What is not in this slice
 

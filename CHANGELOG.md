@@ -28,6 +28,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   accepting rows **and does nothing else** — the record stays readable and exportable,
   clients buffer, deliveries get a `503` that says to keep buffering, and renewing takes what
   they held with the chain unbroken. `hub licence keygen` and `issue` are the issuer's side.
+- **A fleet view that leads with what is wrong, a check of the whole record, and a report
+  you can hand over.** `hub fleet` sorts devices with concerns first and names them: never
+  reported, quiet for so many hours, last delivery refused, running an older version than the
+  hub. Refused deliveries are remembered, without which a gap would be invisible — it leaves
+  no rows, so the device would look merely quiet. `hub verify` re-derives every chain from
+  the rows as they are on disk now, which is the question a restored backup raises and the
+  append-only triggers do not answer. `hub report --out-dir` writes one verifiable file per
+  device for a period, plus a summary; each file is checked as it is written and verifies
+  with `verify-export` or the Python script.
 - **`audit-sync`, the third registered egress purpose, and the client side that uses it.**
   `cyberbrain hub enrol <invitation>` points a store at a hub; `cyberbrain hub push` delivers
   its audit rows, meant for a timer. The path appears in `cyberbrain policy egress` whether
@@ -60,6 +69,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Changed
 
+- The hub's record migrates in place. `CREATE TABLE IF NOT EXISTS` does nothing to a table
+  that already exists, so an upgraded hub would have kept the columns it was created with
+  and failed on the first query naming a new one. Found by upgrading a hub that had been
+  running for an afternoon; a record meant to hold a decade cannot start over on an upgrade.
 - A test now fails when a message carries the indentation it was written with. `rustfmt`
   collapses a multi-line `format!` string onto one line and keeps the continuation's spaces,
   which is how `no egress gate is                  wired in` reached a shipped error message.
