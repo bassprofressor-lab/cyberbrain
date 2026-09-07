@@ -48,7 +48,44 @@ pub fn default_data_dir() -> PathBuf {
 /// exactly the sort of step that turns into a support call. Copy the file in, restart the
 /// service, done — and the service says in its log which licence it found.
 pub fn licence_drop_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("licence.txt")
+    data_dir.join(LICENCE_NAMES[0])
+}
+
+/// The name to use, and the ones people actually end up with.
+///
+/// `licence.txt.txt` because Explorer hides known extensions by default, so saving an
+/// attachment as "licence.txt" produces that and shows it as "licence.txt". `license` because
+/// half the world spells it that way and our own documentation is the odd one out. Accepting
+/// them costs nothing; refusing them costs a support call over a file the person cannot even
+/// see the real name of. The log always says which one it took.
+pub const LICENCE_NAMES: [&str; 4] = [
+    "licence.txt",
+    "licence.txt.txt",
+    "license.txt",
+    "license.txt.txt",
+];
+
+/// The licence file lying in the data directory, whichever spelling it arrived under.
+pub fn find_licence_file(data_dir: &Path) -> Option<PathBuf> {
+    LICENCE_NAMES
+        .iter()
+        .map(|n| data_dir.join(n))
+        .find(|p| p.is_file())
+}
+
+/// What to write in the log when the hub has no licence and no file was found.
+///
+/// The first version of this said nothing at all in that case, on the grounds that a hub
+/// licensed months ago has no file lying about. True, and useless the one time it matters:
+/// the log said "no licence installed" and left the reader with no way to tell whether the
+/// file had been looked for, looked for somewhere else, or found and rejected.
+pub fn where_it_looked(data_dir: &Path) -> String {
+    format!(
+        "no licence file in {}. Put the one you were sent there as {} and restart this \
+         service.",
+        data_dir.display(),
+        LICENCE_NAMES[0]
+    )
 }
 
 /// Take a licence file sitting next to the record, if there is one and it is usable.
@@ -56,7 +93,7 @@ pub fn licence_drop_path(data_dir: &Path) -> PathBuf {
 /// Returns what happened, for the log. Deliberately quiet about a missing file: not having
 /// dropped one in is the normal state of a hub that was licensed months ago.
 pub fn adopt_dropped_licence(hub: &super::HubStore, data_dir: &Path) -> Option<String> {
-    let path = licence_drop_path(data_dir);
+    let path = find_licence_file(data_dir)?;
     let text = std::fs::read_to_string(&path).ok()?;
     // Compared before it is parsed, not after. The file is meant to be left where it was
     // copied, so the ordinary case is one that is already installed: that should cost

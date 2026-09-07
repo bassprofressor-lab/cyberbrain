@@ -101,7 +101,10 @@ machines are clients and on those it would open a port for nothing. Ticking it:
 
 Then **licensing it is copying a file**: save the licence you were sent as
 `C:\ProgramData\Cyberbrain\licence.txt` and restart the service. It is picked up on start
-and what it found is written to `hub-service.log` beside it. Nobody has to open a command
+and what it found is written to `hub-service.log` beside it — including the case where it
+found nothing, which says where it looked. `licence.txt.txt` and `license.txt` are taken too:
+Explorer hides known extensions, so somebody saving an attachment as `licence.txt` gets the
+first of those and is shown the name they intended, with no way to see what went wrong. Nobody has to open a command
 prompt to put a hub into service, which is the whole point — the moment a setup needs one,
 the person who needed the product most is the person who stops.
 

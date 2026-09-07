@@ -1076,6 +1076,57 @@ fn the_licence_is_dropped_next_to_the_record() {
 }
 
 #[test]
+fn the_names_people_actually_end_up_with_are_taken_too() {
+    // Explorer hides known extensions, so saving the attachment as "licence.txt" produces
+    // licence.txt.txt and shows it as licence.txt. There is no way for the person to see
+    // what went wrong, so refusing it would be a support call about an invisible character.
+    for name in [
+        "licence.txt",
+        "licence.txt.txt",
+        "license.txt",
+        "license.txt.txt",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(name), "x").unwrap();
+        assert_eq!(
+            super::service::find_licence_file(dir.path()),
+            Some(dir.path().join(name)),
+            "{name} was not found"
+        );
+    }
+    // Calibration: it is not simply returning the first thing it sees.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("HOW-TO-LICENCE.txt"), "x").unwrap();
+    std::fs::write(dir.path().join("notes.txt"), "x").unwrap();
+    assert_eq!(super::service::find_licence_file(dir.path()), None);
+}
+
+#[test]
+fn the_documented_name_wins_over_the_typo() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("licence.txt.txt"), "the accident").unwrap();
+    std::fs::write(dir.path().join("licence.txt"), "the one that was meant").unwrap();
+    assert_eq!(
+        super::service::find_licence_file(dir.path()),
+        Some(dir.path().join("licence.txt"))
+    );
+}
+
+#[test]
+fn a_hub_with_no_licence_is_told_where_it_looked() {
+    let said = super::service::where_it_looked(std::path::Path::new("C:\\ProgramData\\Cyberbrain"));
+    // The log line that was missing said only "no licence installed", which leaves the
+    // reader unable to tell whether the file was looked for, looked for somewhere else,
+    // or found and rejected.
+    assert!(said.contains("C:\\ProgramData\\Cyberbrain"), "{said}");
+    assert!(said.contains("licence.txt"), "{said}");
+    assert!(
+        said.contains("restart"),
+        "it has to say what to do next: {said}"
+    );
+}
+
+#[test]
 fn no_licence_file_is_not_worth_a_word() {
     let dir = tempfile::tempdir().unwrap();
     let hub = HubStore::in_memory().unwrap();

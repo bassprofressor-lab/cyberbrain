@@ -629,13 +629,21 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     // A licence dropped next to the record is taken on start, so licensing a
                     // hub is copying a file rather than typing a command with a path in it.
                     let dir = path.parent().unwrap_or(std::path::Path::new("."));
-                    if let Some(note) = hub::service::adopt_dropped_licence(&store, dir) {
-                        hub::service::log(&note);
-                    }
+                    let note = hub::service::adopt_dropped_licence(&store, dir);
                     // Read once at startup, so whoever starts the hub sees the state without
                     // having to ask a second command.
-                    let licence_line =
-                        hub::LicenceState::read(&store, jiff::Timestamp::now()).line();
+                    let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
+                    let licence_line = state.line();
+                    match note {
+                        Some(note) => hub::service::log(&note),
+                        // Silence is fine for a hub that was licensed months ago. For one
+                        // that has no licence at all it is the opposite of fine: that is
+                        // exactly the reader who needs to know where it looked.
+                        None if state == hub::LicenceState::Missing => {
+                            hub::service::log(&hub::service::where_it_looked(dir));
+                        }
+                        None => {}
+                    }
                     let state = std::sync::Arc::new(hub::api::HubState {
                         hub: std::sync::Mutex::new(store),
                     });

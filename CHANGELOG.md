@@ -14,6 +14,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Fixed
 
+- **A hub with no licence did not say where it had looked for one.** The log said `no licence
+  installed` and stopped, which leaves the reader unable to tell whether the file was looked
+  for, looked for in another directory, or found and rejected. It now names the directory and
+  the filename when there is no licence at all, while staying quiet for a hub that was
+  licensed months ago and has no file lying about.
+- **`licence.txt.txt` and `license.txt` are accepted.** Explorer hides known extensions, so
+  saving an attachment as `licence.txt` produces the first of those and displays it as the
+  name that was intended — the mistake is invisible to the person making it. The log always
+  says which name was used, and the documented one still wins when both are present.
+
 - **A failed service registration said nothing usable.** `cannot register the service: IO
   error in winapi call` was the whole message: `windows_service::Error::Winapi` displays like
   that and keeps the operating system's sentence and number one level down in `source()`.
