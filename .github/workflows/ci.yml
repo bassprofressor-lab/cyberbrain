@@ -177,4 +177,8 @@ jobs:
       # SPEC §15's budgets are only real if something measures them. Debug builds are
       # 15x slower and would either fail always or need a meaningless limit, so these
       # run in release and are #[ignore]d elsewhere.
-      - run: cargo test --workspace --release --no-default-features -- --ignored
+      #
+      # `--nocapture` because a green tick hides how close it was. The budget test may
+      # measure a series up to three times, and one that quietly needs all three on every
+      # run is a slow drift nobody would see without the numbers in the log.
+      - run: cargo test --workspace --release --no-default-features -- --ignored --nocapture
