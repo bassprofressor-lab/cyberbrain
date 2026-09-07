@@ -49,6 +49,8 @@ jobs:
           fi
           export PATH="/c/Program Files (x86)/NSIS:$PATH"
           staging="$(pwd)/target/release"
+          cp crates/cyberbrain-desktop/assets/cyberbrain.ico "$staging/"
+          cp LICENSE.md "$staging/LICENSE.txt"
           cd packaging/windows
           makensis -DVERSION=0.0.0-ci "-DSOURCE=$staging" cyberbrain.nsi
           test -f cyberbrain-setup-0.0.0-ci.exe

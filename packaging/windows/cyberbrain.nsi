@@ -45,12 +45,16 @@ VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "CompanyName" "${PUBLISHER}"
 VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}"
 
-!define ICON "../../crates/cyberbrain-desktop/assets/cyberbrain.ico"
+; Both of these are copied into SOURCE by the build. Referring to them by a relative path
+; out of this directory works with makensis on Linux and not with makensis on Windows,
+; which is a difference nobody wants to rediscover at release time.
+!define ICON "${SOURCE}\cyberbrain.ico"
+!define LICENSE "${SOURCE}\LICENSE.txt"
 !define MUI_ICON "${ICON}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
 
-!insertmacro MUI_PAGE_LICENSE "../../LICENSE.md"
+!insertmacro MUI_PAGE_LICENSE "${LICENSE}"
 ; The optional desktop shortcut is a choice, so there is a page on which to make it.
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
@@ -79,7 +83,7 @@ Section "Cyberbrain" SecMain
   File "${SOURCE}\cyberbrain.exe"
   File "${SOURCE}\cyberbrain-desktop.exe"
   File "/oname=cyberbrain.ico" "${ICON}"
-  File "/oname=LICENSE.txt" "../../LICENSE.md"
+  File "/oname=LICENSE.txt" "${LICENSE}"
 
   CreateDirectory "$SMPROGRAMS\${NAME}"
   CreateShortcut "$SMPROGRAMS\${NAME}\${NAME}.lnk" "$INSTDIR\cyberbrain-desktop.exe" "" "$INSTDIR\cyberbrain.ico" 0

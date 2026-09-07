@@ -97,6 +97,8 @@ jobs:
           version=$(cargo metadata --no-deps --format-version 1 \
             | python -c "import json,sys; print(next(p['version'] for p in json.load(sys.stdin)['packages'] if p['name']=='cyberbrain'))")
           staging="$(pwd)/target/release"
+          cp crates/cyberbrain-desktop/assets/cyberbrain.ico "$staging/"
+          cp LICENSE.md "$staging/LICENSE.txt"
           cd packaging/windows
           makensis "-DVERSION=$version" "-DSOURCE=$staging" cyberbrain.nsi
           mv "cyberbrain-setup-$version.exe" "$GITHUB_WORKSPACE/"
