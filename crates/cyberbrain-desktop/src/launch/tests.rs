@@ -167,22 +167,46 @@ fn stopping_it_actually_stops_it() {
 }
 
 #[test]
-fn an_address_that_answers_is_told_apart_from_one_that_does_not() {
+fn the_address_a_real_server_reports_is_accepted() {
     let server = server_binary();
     let tmp = tempfile::tempdir().unwrap();
     init_store(&server, tmp.path()).unwrap();
     let mut running = start(&server, tmp.path()).unwrap();
-    let url = running.url.clone();
-    assert!(responds(&url), "a live server did not answer at {url}");
+    assert_eq!(
+        loopback_url(&running.url).as_deref(),
+        Some(running.url.as_str()),
+        "the launcher would refuse an address it produced itself"
+    );
     running.stop();
-    assert!(!responds(&url), "a dead server still answered at {url}");
 }
 
 #[test]
-fn nonsense_addresses_do_not_answer() {
-    for url in ["", "http://", "http://127.0.0.1:0/", "not-an-address"] {
-        assert!(!responds(url), "{url:?} answered");
+fn only_loopback_survives_the_instance_file() {
+    // The point of the check: someone able to write the state file must not be able to send
+    // the browser anywhere they like.
+    for url in [
+        "http://example.com:80/",
+        "http://10.0.0.5:7777/",
+        "http://127.0.0.1.example.com:80/",
+        "https://127.0.0.1:7777/",
+        "file:///etc/passwd",
+        "http://127.0.0.1:0/",
+        "http://127.0.0.1:notaport/",
+        "http://127.0.0.1/",
+        "http://",
+        "",
+    ] {
+        assert!(loopback_url(url).is_none(), "{url:?} was accepted");
     }
+    assert_eq!(
+        loopback_url("http://127.0.0.1:54312/").as_deref(),
+        Some("http://127.0.0.1:54312/")
+    );
+    // With or without the trailing slash, and with whitespace a file might carry.
+    assert_eq!(
+        loopback_url(" http://127.0.0.1:54312 ").as_deref(),
+        Some("http://127.0.0.1:54312/")
+    );
 }
 
 #[test]

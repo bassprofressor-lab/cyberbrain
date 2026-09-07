@@ -16,9 +16,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 - Starting the Windows launcher while it is already running no longer gives you a second
   tray icon and a second server on a second port. The one that is running leaves its address
-  behind; the second one opens your browser at it and gets out of the way, after checking
-  that something still answers there — so a file left by a launcher that crashed, or one from
-  before a reboot, cannot send you to a dead port.
+  behind, and the second one opens your browser at it and exits. That address is used only if
+  it is loopback: it comes from a file in your own profile, and anything able to write there
+  would otherwise get to choose where the browser goes.
 
 ## [0.2.0] — 2026-09-07
 

@@ -139,18 +139,19 @@ pub fn run() {
 
 /// A second launcher's whole job: open the browser at the one that is already running.
 ///
-/// It deliberately does not ask the first instance for anything. The address it left behind
-/// is checked by connecting to it, so a file from a launcher that crashed, or from before a
-/// reboot, cannot send anyone to a dead port.
+/// It deliberately does not ask the first instance for anything: the address it left behind
+/// is enough. Liveness needs no check here — we only got this far because the mutex is held,
+/// and a launcher that died is not holding it, so its leftover file is never read.
 fn show_the_one_that_is_running(instance_path: Option<&Path>) {
     if let Some(instance) = instance_path.and_then(settings::read_instance)
-        && launch::responds(&instance.url)
+        && let Some(url) = launch::loopback_url(&instance.url)
     {
-        sys::open_in_browser(&instance.url);
+        sys::open_in_browser(&url);
         return;
     }
-    // The mutex says a launcher exists, but it has no live address: it is still starting,
-    // or it is stuck. Saying so beats a second icon appearing for no visible reason.
+    // The mutex says a launcher exists, but it has left no usable address: it is still
+    // starting up, or something rewrote the file. Saying so beats a second icon appearing
+    // for no visible reason.
     sys::error_box(
         APP,
         "Cyberbrain is already running.\n\nIf no window opened, it is still starting up — \

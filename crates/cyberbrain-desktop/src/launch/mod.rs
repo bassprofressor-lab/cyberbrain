@@ -6,7 +6,6 @@
 //! half — the tray, the job object, the dialogs — is in `win`.
 
 use std::io::{BufRead, BufReader};
-use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -23,10 +22,6 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Keep the tail of the child's output for the error dialog, not all of it.
 const DIAG_LIMIT: usize = 8 * 1024;
-
-/// How long the check for an already-running launcher waits. Loopback: either it answers
-/// immediately or there is nothing there.
-const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum StartError {
@@ -231,18 +226,28 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
     }
 }
 
-/// Whether something is still listening at an address a previous launcher left behind.
+/// An address left behind by a running launcher, accepted only if it is loopback.
 ///
-/// The file outlives the process that wrote it — a crash, a reboot, a kill — so the address
-/// in it is a claim to check, not a fact. A connection that opens is enough: this asks
-/// whether the port is alive, not what is on the other end, and on loopback in the second
-/// after a launcher started, nothing else plausibly is.
-pub fn responds(url: &str) -> bool {
-    let hostport = url.trim_start_matches("http://").trim_end_matches('/');
-    let Ok(mut addrs) = hostport.to_socket_addrs() else {
-        return false;
-    };
-    addrs.any(|a| std::net::TcpStream::connect_timeout(&a, PROBE_TIMEOUT).is_ok())
+/// The file this comes from sits in the user's own profile, so anything able to write there
+/// could point it somewhere else — and the caller hands the result to the browser. Whatever
+/// wrote it, what comes back from here is `http://127.0.0.1:<port>/` or nothing.
+///
+/// Liveness deliberately is not checked here. The mutex already answers that question: a
+/// launcher that crashed does not hold it, so a file it left behind is never read in the
+/// first place.
+pub fn loopback_url(raw: &str) -> Option<String> {
+    let rest = raw.trim().strip_prefix("http://")?;
+    let hostport = rest.strip_suffix('/').unwrap_or(rest);
+    let (host, port) = hostport.rsplit_once(':')?;
+    if host != "127.0.0.1" {
+        return None;
+    }
+    // A port is a number, and 0 is not one you can connect to.
+    let port: u16 = port.parse().ok()?;
+    if port == 0 {
+        return None;
+    }
+    Some(format!("http://{host}:{port}/"))
 }
 
 fn command(server: &Path, project_dir: &Path) -> Command {
