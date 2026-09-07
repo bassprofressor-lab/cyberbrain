@@ -155,7 +155,16 @@ token stored at ~/.config/cyberbrain/hub-tokens/4a920a2c….token
 inference endpoint set to http://192.168.1.50:11434/v1
 ```
 
-Then, on a timer — once an hour is plenty:
+On Windows, neither of those is a command anybody has to find. The tray menu has **Connect
+to the company hub…**, which takes the invitation file, and after that the launcher delivers
+by itself: half a minute after it starts, then every quarter of an hour, and once more on the
+way out. It asks a store exactly once whether it belongs to a hub — most do not — and it says
+nothing when a delivery fails, because a train or a hotel wifi is not news and a dialog on
+every one of them teaches people to dismiss dialogs. A hub that stops hearing from a machine
+sees that in its own fleet view, which is where it belongs.
+
+Everywhere else, and for machines that are not running the launcher, on a timer — once an
+hour is plenty:
 
 ```console
 $ cyberbrain hub push

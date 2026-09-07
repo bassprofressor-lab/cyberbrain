@@ -250,6 +250,41 @@ pub fn loopback_url(raw: &str) -> Option<String> {
     Some(format!("http://{host}:{port}/"))
 }
 
+/// What came of one delivery attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pushed {
+    /// Rows went up, or there were none to send. Either way the hub heard from us.
+    Delivered,
+    /// This store belongs to nobody's hub. Nothing to do, now or later.
+    NotEnrolled,
+    /// A hub that is enrolled and did not answer. Normal on a train; never a dialog.
+    Failed,
+}
+
+/// Deliver this store's audit rows to the hub it was enrolled with.
+///
+/// The CLI is meant for a timer, and on a workstation the launcher *is* the timer: it is
+/// running exactly when the person is working, which is when there is anything to deliver.
+/// Without this an enrolled machine would collect nothing centrally until somebody set up a
+/// scheduled task — which is the command prompt coming back in through the window.
+///
+/// Nothing is reported to the user. A hub that stops hearing from a machine sees that in its
+/// fleet view, which is the whole design; a dialog on every tunnel and hotel wifi would
+/// teach people to dismiss dialogs.
+pub fn push(server: &Path, project_dir: &Path) -> Pushed {
+    let Ok(out) = command(server, project_dir).arg("hub").arg("push").output() else {
+        return Pushed::Failed;
+    };
+    if out.status.success() {
+        return Pushed::Delivered;
+    }
+    if String::from_utf8_lossy(&out.stderr).contains("not enrolled") {
+        Pushed::NotEnrolled
+    } else {
+        Pushed::Failed
+    }
+}
+
 /// Enrol this project's store with a company hub, from an invitation file.
 ///
 /// The CLI already does this; what the launcher adds is that nobody has to find a prompt to
@@ -306,6 +341,108 @@ fn append(buf: &Arc<Mutex<String>>, line: &str) {
         b.push_str(line);
         b.push('\n');
     }
+}
+
+/// How often an enrolled machine delivers, in ticks of the one-second message loop.
+///
+/// A quarter of an hour: often enough that the fleet view's two-day silence threshold means
+/// something, rare enough to be invisible. The first one comes sooner, because a laptop that
+/// was shut all weekend has the most to say and the least time to say it in.
+const PUSH_EVERY: u32 = 15 * 60;
+const FIRST_PUSH_AFTER: u32 = 30;
+
+/// The delivery timer, and what it learned about this store.
+///
+/// A push can take over two minutes in the worst case the transport allows, and this loop is
+/// the window message pump: doing it here would freeze the tray icon and the menu. So the
+/// work goes to a thread and the answer is collected on a later tick.
+#[derive(Default)]
+pub struct Delivery {
+    ticks: u32,
+    next: Option<u32>,
+    /// Set once the CLI says this store belongs to no hub. Then there is nothing to retry:
+    /// most machines are not enrolled, and spawning a process every quarter hour to be told
+    /// so again is work nobody asked for.
+    enrolled: Option<bool>,
+    /// The delivery in flight, if there is one. At most one: a slow hub must not end up
+    /// with a queue of pushes started while it was not answering.
+    running: Option<std::sync::mpsc::Receiver<Pushed>>,
+}
+
+impl Delivery {
+    /// A timer that fires on the next tick.
+    pub fn now() -> Self {
+        Delivery {
+            next: Some(0),
+            ..Default::default()
+        }
+    }
+
+    pub fn tick(&mut self, server_exe: &Path, project_dir: &Path) {
+        self.tick_with(|| spawn_push(server_exe, project_dir));
+    }
+
+    /// The schedule itself, with what starts a delivery handed in so a test can watch the
+    /// clock without running anything.
+    fn tick_with(&mut self, start: impl FnOnce() -> std::sync::mpsc::Receiver<Pushed>) {
+        self.collect();
+        if self.enrolled == Some(false) || self.running.is_some() {
+            return;
+        }
+        self.ticks = self.ticks.saturating_add(1);
+        if self.ticks < self.next.unwrap_or(FIRST_PUSH_AFTER) {
+            return;
+        }
+        self.next = Some(self.ticks.saturating_add(PUSH_EVERY));
+        self.running = Some(start());
+    }
+
+    /// Take the answer if there is one. Never waits: this runs inside the message pump.
+    fn collect(&mut self) {
+        let Some(rx) = &self.running else { return };
+        match rx.try_recv() {
+            Ok(p) => {
+                self.note(p);
+                self.running = None;
+            }
+            // The thread went away without answering. Treat it as a failed attempt rather
+            // than as a permanent verdict, and let the next tick start a new one.
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.running = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    fn note(&mut self, p: Pushed) {
+        match p {
+            Pushed::Delivered => self.enrolled = Some(true),
+            Pushed::NotEnrolled => self.enrolled = Some(false),
+            // A hub that did not answer is still a hub. Try again next time, say nothing.
+            Pushed::Failed => self.enrolled = Some(true),
+        }
+    }
+
+    /// On the way out, and only for a store we know is enrolled — asking the question for
+    /// the first time while the user waits for the program to close is the wrong moment.
+    ///
+    /// Bounded, because quitting must stay quick: what does not go now is still in the
+    /// local audit log, and the next start sends it along with everything since.
+    pub fn final_push(&mut self, server_exe: &Path, project_dir: &Path) {
+        if self.enrolled != Some(true) {
+            return;
+        }
+        let rx = spawn_push(server_exe, project_dir);
+        let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+    }
+}
+
+fn spawn_push(server_exe: &Path, project_dir: &Path) -> std::sync::mpsc::Receiver<Pushed> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let exe = server_exe.to_path_buf();
+    let dir = project_dir.to_path_buf();
+    std::thread::spawn(move || {
+        let _ = tx.send(push(&exe, &dir));
+    });
+    rx
 }
 
 #[cfg(test)]

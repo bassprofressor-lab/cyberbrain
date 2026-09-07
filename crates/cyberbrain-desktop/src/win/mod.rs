@@ -99,6 +99,10 @@ pub fn run() {
         quit: quit.id().clone(),
     };
 
+    // Delivery to the company hub, if this store belongs to one. The loop already wakes
+    // once a second; this rides on that rather than bringing a thread of its own.
+    let mut delivery = launch::Delivery::default();
+
     // A message loop, because that is what a tray icon needs to exist at all. Menu clicks
     // arrive as window messages first and reach us on the channel after dispatch.
     sys::pump_messages(|| {
@@ -117,11 +121,17 @@ pub fn run() {
                     sys::open_in_browser(&server.url);
                 }
             } else if event.id == ids.enrol {
-                connect_to_hub(&server_exe, &server.project_dir);
+                if connect_to_hub(&server_exe, &server.project_dir) {
+                    // Deliver on the next tick rather than in a quarter of an hour: the
+                    // person who just enrolled is the one who wants to see it arrive.
+                    delivery = launch::Delivery::now();
+                }
             } else if event.id == ids.quit {
                 return sys::Pump::Stop;
             }
         }
+
+        delivery.tick(&server_exe, &server.project_dir);
 
         // The server going away on its own is not something to hide: without it the tray
         // icon is a button that does nothing.
@@ -134,6 +144,9 @@ pub fn run() {
         }
         sys::Pump::Continue
     });
+
+    // One last delivery on the way out, so a day's rows do not wait for tomorrow's login.
+    delivery.final_push(&server_exe, &server.project_dir);
 
     server.stop();
     if let Some(path) = instance_path.as_deref() {
@@ -214,23 +227,29 @@ fn open_project(
 ///
 /// One dialog, one answer. The alternative is a paragraph of instructions ending in a
 /// command, and the people this is for do not get to the end of that paragraph.
-fn connect_to_hub(server_exe: &Path, project_dir: &Path) {
+fn connect_to_hub(server_exe: &Path, project_dir: &Path) -> bool {
     let Some(file) = rfd::FileDialog::new()
         .set_title("Open the invitation file you were sent")
         .add_filter("Invitation", &["json"])
         .pick_file()
     else {
-        return; // Cancelled. Nothing happened, so nothing is said.
+        return false; // Cancelled. Nothing happened, so nothing is said.
     };
     match launch::enrol(server_exe, project_dir, &file) {
-        Ok(said) => sys::info_box(
-            APP,
-            &format!(
-                "{said}\n\nThis machine will now deliver its audit trail to that hub. \
-                 Your notes stay here: what a note says never leaves this computer."
-            ),
-        ),
-        Err(why) => sys::error_box(APP, &format!("The invitation was not accepted.\n\n{why}")),
+        Ok(said) => {
+            sys::info_box(
+                APP,
+                &format!(
+                    "{said}\n\nThis machine will now deliver its audit trail to that hub. \
+                     Your notes stay here: what a note says never leaves this computer."
+                ),
+            );
+            true
+        }
+        Err(why) => {
+            sys::error_box(APP, &format!("The invitation was not accepted.\n\n{why}"));
+            false
+        }
     }
 }
 

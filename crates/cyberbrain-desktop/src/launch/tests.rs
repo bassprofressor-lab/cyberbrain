@@ -233,3 +233,87 @@ fn without_one_beside_us_the_path_is_searched() {
         assert!(p.is_file());
     }
 }
+
+// ---- the delivery schedule ----
+//
+// Whether an enrolled machine actually sends anything is a matter of arithmetic in a loop
+// that ticks once a second, and arithmetic in a loop that ticks once a second is exactly
+// the sort of thing that quietly never fires. So the clock is testable without a hub, a
+// network or Windows: what starts a delivery is handed in.
+
+fn primed(p: Pushed) -> std::sync::mpsc::Receiver<Pushed> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(p).unwrap();
+    rx
+}
+
+/// Run `n` ticks, counting how many deliveries were started, each answering `answer`.
+fn ticks(d: &mut Delivery, n: u32, answer: Pushed) -> u32 {
+    let mut started = 0;
+    for _ in 0..n {
+        d.tick_with(|| {
+            started += 1;
+            primed(answer.clone())
+        });
+    }
+    started
+}
+
+#[test]
+fn a_fresh_launcher_delivers_soon_and_then_every_quarter_hour() {
+    let mut d = Delivery::default();
+    // The first half minute is quiet: the store is still opening.
+    assert_eq!(ticks(&mut d, 29, Pushed::Delivered), 0);
+    // Then one, and not a second one straight after it.
+    assert_eq!(ticks(&mut d, 1, Pushed::Delivered), 1);
+    assert_eq!(ticks(&mut d, 60, Pushed::Delivered), 0);
+    // A quarter of an hour after the first, the next.
+    assert_eq!(ticks(&mut d, 15 * 60, Pushed::Delivered), 1);
+}
+
+#[test]
+fn a_store_that_belongs_to_no_hub_is_asked_once() {
+    let mut d = Delivery::default();
+    assert_eq!(ticks(&mut d, 30, Pushed::NotEnrolled), 1);
+    // Most machines are not enrolled. Spawning a process every quarter hour for the rest of
+    // the day to be told so again is work nobody asked for.
+    assert_eq!(ticks(&mut d, 4 * 60 * 60, Pushed::NotEnrolled), 0);
+}
+
+#[test]
+fn a_hub_that_did_not_answer_is_tried_again() {
+    let mut d = Delivery::default();
+    assert_eq!(ticks(&mut d, 30, Pushed::Failed), 1);
+    // A train, a hotel wifi, a server being patched. None of those mean "not enrolled",
+    // and a launcher that gave up on the first failure would deliver nothing all week.
+    assert_eq!(ticks(&mut d, 15 * 60, Pushed::Failed), 1);
+}
+
+#[test]
+fn enrolling_from_the_menu_delivers_at_once() {
+    let mut d = Delivery::now();
+    // The person who just clicked Connect is the one who wants to see it arrive, so this
+    // does not wait for the next quarter hour — or even the first half minute.
+    assert_eq!(ticks(&mut d, 1, Pushed::Delivered), 1);
+}
+
+#[test]
+fn a_slow_delivery_does_not_start_a_second_one() {
+    let mut d = Delivery::default();
+    // The sender stays alive for the whole test, so this receiver is "in flight" rather
+    // than "the thread died" — the two are different and the code treats them differently.
+    let (_hold, never) = std::sync::mpsc::channel::<Pushed>();
+    let mut never = Some(never);
+    let mut started = 0;
+    // Half a minute to the first attempt, then an hour of ticks while it hangs. Still one
+    // attempt: a hub that stopped answering must not collect a queue of pushes aimed at it.
+    for _ in 0..(30 + 3600) {
+        d.tick_with(|| {
+            started += 1;
+            never
+                .take()
+                .expect("only the first tick may start a delivery here")
+        });
+    }
+    assert_eq!(started, 1);
+}

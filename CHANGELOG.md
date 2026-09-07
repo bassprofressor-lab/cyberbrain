@@ -35,10 +35,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   remember, and no second binary to drift from the first. Uninstalling removes the service
   and the firewall rule and **leaves the record alone** — deleting the software must never
   delete the evidence it was collecting.
-- **"Connect to the company hub…" in the desktop launcher's menu.** The invitation arrives as
-  an email attachment; this opens it and enrols the machine, and says afterwards that notes
-  stay local. The CLI did this already — what is new is that nobody has to find a command
-  prompt to run it.
+- **"Connect to the company hub…" in the desktop launcher's menu, and delivery without a
+  scheduled task.** The invitation arrives as an email attachment; this opens it and enrols
+  the machine, and says afterwards that notes stay local. After that the launcher delivers on
+  its own — half a minute after it starts, every quarter of an hour, and once on the way out
+  — off the message pump, one attempt at a time, and silently: a train or a hotel wifi is not
+  news, and the hub's fleet view is where a machine that stopped reporting shows up. A store
+  that belongs to no hub is asked once and then left alone. Without this, enrolling from the
+  menu would have collected nothing until somebody set up a scheduled task, which is the
+  command prompt coming back in through the window.
 
 ### Added
 
