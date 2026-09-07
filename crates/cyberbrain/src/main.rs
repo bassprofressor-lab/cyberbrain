@@ -11,6 +11,7 @@ mod audit_bridge;
 mod cli;
 mod hook;
 mod hostload;
+mod hub;
 mod import;
 mod mcp;
 mod render;
@@ -164,6 +165,10 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             return Ok(0);
         }
 
+        // No store either: the hub keeps its own record of other machines' rows, and the
+        // notes on this machine are none of its business.
+        Command::Hub { ref command } => return run_hub(command, out),
+
         // No store: the point of this one is that a person who was handed a file can check
         // it with nothing but the binary. Opening a store first would make it useless
         // exactly where it is needed.
@@ -294,11 +299,120 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         | Command::Hook { .. }
         | Command::Serve { .. }
         | Command::Mcp
+        | Command::Hub { .. }
         | Command::VerifyExport { .. } => {
             unreachable!("handled before the store was opened")
         }
     }
     Ok(0)
+}
+
+/// The hub's commands. None of them opens a store.
+fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
+    use cli::HubCommand;
+    let now = || jiff::Timestamp::now().to_string();
+
+    match command {
+        HubCommand::Serve { addr, data } => {
+            let path = hub::data_path(data.clone());
+            let store = hub::HubStore::open(&path)?;
+            let addr = hub::parse_addr(addr)?;
+            let state = std::sync::Arc::new(hub::api::HubState {
+                hub: std::sync::Mutex::new(store),
+            });
+            runtime()?.block_on(async move {
+                let listener = tokio::net::TcpListener::bind(addr)
+                    .await
+                    .map_err(|e| Error::Config(format!("cannot bind {addr}: {e}")))?;
+                let bound = listener
+                    .local_addr()
+                    .map_err(|e| Error::Config(format!("cannot read the bound address: {e}")))?;
+                println!(
+                    "cyberbrain hub: http://{bound}/  (record: {}; devices authenticate with \
+                     a bearer token)",
+                    path.display()
+                );
+                axum::serve(listener, hub::api::router(state))
+                    .await
+                    .map_err(|e| Error::Config(format!("hub: {e}")))
+            })?;
+            Ok(0)
+        }
+
+        HubCommand::Add { name, data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let (device, token) = store.add_device(name, &now())?;
+            out.emit(
+                &serde_json::json!({ "device": device, "token": token }),
+                |v| {
+                    format!(
+                        "device {} registered as {:?}\ntoken: {}\n\nThis is the only time the \
+                         token is shown. The record keeps a hash of it.\n",
+                        v["device"]["id"].as_str().unwrap_or_default(),
+                        v["device"]["name"].as_str().unwrap_or_default(),
+                        v["token"].as_str().unwrap_or_default()
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+
+        HubCommand::Fleet { data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let devices = store.devices()?;
+            let total = store.total_entries()?;
+            out.emit(
+                &serde_json::json!({ "devices": devices, "total_rows": total }),
+                |v| {
+                    let list = v["devices"].as_array().cloned().unwrap_or_default();
+                    if list.is_empty() {
+                        return "no devices registered yet; `cyberbrain hub add <name>`\n"
+                            .to_string();
+                    }
+                    let mut s = String::new();
+                    for d in list {
+                        // The state is what a person scans for, so it comes before the
+                        // numbers: a device that never reported and one that was revoked are
+                        // both "not sending", for opposite reasons.
+                        let state = if d["revoked_at"].is_string() {
+                            "revoked"
+                        } else if d["last_seen"].is_string() {
+                            "seen"
+                        } else {
+                            "never reported"
+                        };
+                        s.push_str(&format!(
+                            "{:<14} {:<28} {:>8} rows  last seen {}  version {}\n",
+                            state,
+                            d["name"].as_str().unwrap_or_default(),
+                            d["rows"].as_i64().unwrap_or_default(),
+                            d["last_seen"].as_str().unwrap_or("never"),
+                            d["version"].as_str().unwrap_or("unknown"),
+                        ));
+                    }
+                    s.push_str(&format!(
+                        "\n{} row(s) in the record\n",
+                        v["total_rows"].as_i64().unwrap_or_default()
+                    ));
+                    s
+                },
+            )?;
+            Ok(0)
+        }
+
+        HubCommand::Revoke { id, data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let done = store.revoke(id, &now())?;
+            out.emit(&serde_json::json!({ "revoked": done, "device": id }), |v| {
+                if v["revoked"].as_bool().unwrap_or(false) {
+                    format!("{id} may no longer send; its rows are kept\n")
+                } else {
+                    format!("{id} is unknown or was already revoked\n")
+                }
+            })?;
+            Ok(0)
+        }
+    }
 }
 
 fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {

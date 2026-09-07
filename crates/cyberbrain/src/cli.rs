@@ -175,6 +175,13 @@ pub enum Command {
         command: PolicyCommand,
     },
 
+    /// Collect audit rows from other machines (SPEC §8.2 does not apply: this is a
+    /// different surface with its own, authenticated access).
+    Hub {
+        #[command(subcommand)]
+        command: HubCommand,
+    },
+
     /// Check an audit export somebody handed you.
     ///
     /// Needs no store, no configuration and no network: everything the check uses is in the
@@ -344,4 +351,35 @@ mod tests {
     fn all_six_hook_events_exist() {
         assert_eq!(HookEvent::value_variants().len(), 6);
     }
+}
+
+#[derive(Debug, Subcommand)]
+pub enum HubCommand {
+    /// Run the collector. Unlike `serve`, the address is a parameter — a hub only its own
+    /// machine can reach is not a hub, which is why this surface authenticates.
+    Serve {
+        #[arg(long, default_value = "127.0.0.1:7788")]
+        addr: String,
+        /// Where the record lives.
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Register a machine and print its token. The token is shown once and stored only as a
+    /// hash, so a copy of the record is not a set of working credentials.
+    Add {
+        name: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Devices, when they were last heard from, and how far their chain has come.
+    Fleet {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Stop a device from sending. Its rows stay: revoking is not a deletion.
+    Revoke {
+        id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
 }

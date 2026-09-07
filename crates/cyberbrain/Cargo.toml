@@ -24,6 +24,9 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+# The hub's own record and its device tokens. SQLite is already in the tree through
+# cyberbrain-index, and blake3 through the audit chain; neither is new C or a new licence.
+blake3 = "1.8.7"
 clap = { version = "4.6.6", features = ["derive", "env"] }
 cyberbrain-code.workspace = true
 cyberbrain-core.workspace = true
@@ -35,6 +38,7 @@ jiff = { version = "0.2.35", features = ["serde"] }
 mime_guess = { version = "2.0.5", optional = true }
 rust-embed = { version = "8.12.0", optional = true, features = ["interpolate-folder-path"] }
 serde = { version = "1.0.229", features = ["derive"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "io-util", "io-std", "sync"] }
 toml = "1.1.5"
@@ -54,7 +58,6 @@ default = ["ui"]
 ui = ["dep:rust-embed", "dep:mime_guess"]
 
 [dev-dependencies]
-rusqlite = { version = "0.40.2", features = ["bundled"] }
 tempfile = "3.27.0"
 
 # Tests build a tiny synthetic model2vec artefact so the vector path is exercised end to

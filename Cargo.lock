@@ -454,6 +454,7 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "axum",
+ "blake3",
  "clap",
  "cyberbrain-code",
  "cyberbrain-core",

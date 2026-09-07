@@ -603,6 +603,14 @@ pub mod bundle {
     /// Everything it needs is in the file, which is the property that has to survive the
     /// next ten years.
     pub fn verify(text: &str) -> Result<Report> {
+        verify_rows(text).map(|(report, _)| report)
+    }
+
+    /// [`verify`], and the rows it checked.
+    ///
+    /// A receiver needs both: the verdict to decide whether to accept, and the rows to keep
+    /// if it does. Parsing twice would be two chances to disagree with itself.
+    pub fn verify_rows(text: &str) -> Result<(Report, Vec<AuditEvent>)> {
         let bad = |m: String| Error::Index(format!("audit export: {m}"));
 
         let mut lines = text.lines().filter(|l| !l.trim().is_empty());
@@ -668,15 +676,18 @@ pub mod bundle {
             ));
         }
 
-        Ok(Report {
-            rows: verified,
-            anchor: header.anchor,
-            from: header.from,
-            to: header.to,
-            last_hash,
-            tool: header.tool,
-            exported_at: header.exported_at,
-        })
+        Ok((
+            Report {
+                rows: verified,
+                anchor: header.anchor,
+                from: header.from,
+                to: header.to,
+                last_hash,
+                tool: header.tool,
+                exported_at: header.exported_at,
+            },
+            rows,
+        ))
     }
 }
 

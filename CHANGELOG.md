@@ -14,6 +14,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Added
 
+- **`cyberbrain hub`: one machine collects the audit rows of the others.** Register a device
+  and it gets a token; it delivers the bundles from `policy audit --export`, and the hub
+  checks each one against the chain it already has from that device before keeping it. A
+  delivery that overlaps is fine and contributes only what is new; one that skips rows is
+  refused with both hashes named. `hub fleet` shows devices, versions and when each was last
+  heard from — state, not activity. The record is append-only in the database, like the
+  store's own audit log. See [`docs/HUB.md`](docs/HUB.md).
+
+  This is a second surface, not `serve` with its bind opened: `serve` stays loopback and
+  unauthenticated because there is nothing remote to authenticate (SPEC §8.2), and it can
+  read, write and delete notes. The hub authenticates and can only take rows — it has no
+  notes, no index and no search.
+
 - **A period of the audit log as a file somebody else can check.**
   `cyberbrain policy audit --since … --until … --export period.jsonl` writes the rows with an
   anchor and a footer, and `cyberbrain verify-export period.jsonl` checks one with no store,
