@@ -52,7 +52,7 @@ jobs:
           cp crates/cyberbrain-desktop/assets/cyberbrain.ico "$staging/"
           cp LICENSE.md "$staging/LICENSE.txt"
           cd packaging/windows
-          makensis -DVERSION=0.0.0-ci "-DSOURCE=$staging" cyberbrain.nsi
+          makensis -DVERSION=0.0.0-ci -DVIVERSION=0.0.0 "-DSOURCE=$staging" cyberbrain.nsi
           test -f cyberbrain-setup-0.0.0-ci.exe
 
   # SPEC §9.1: the Windows hook has to survive cmd.exe. A job that only compiles proves

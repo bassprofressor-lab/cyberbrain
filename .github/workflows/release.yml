@@ -100,7 +100,8 @@ jobs:
           cp crates/cyberbrain-desktop/assets/cyberbrain.ico "$staging/"
           cp LICENSE.md "$staging/LICENSE.txt"
           cd packaging/windows
-          makensis "-DVERSION=$version" "-DSOURCE=$staging" cyberbrain.nsi
+          # Four numbers for the version resource, so a pre-release suffix cannot break it.
+          makensis "-DVERSION=$version" "-DVIVERSION=${version%%-*}" "-DSOURCE=$staging" cyberbrain.nsi
           mv "cyberbrain-setup-$version.exe" "$GITHUB_WORKSPACE/"
           echo "INSTALLER=cyberbrain-setup-$version.exe" >> "$GITHUB_ENV"
 

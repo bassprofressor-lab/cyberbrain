@@ -22,6 +22,12 @@ Unicode true
 !ifndef SOURCE
   !define SOURCE "."
 !endif
+; VIProductVersion takes four numbers and nothing else, so a version like 0.2.0-rc.1 has to
+; arrive with its suffix already cut off. The build passes it; this default keeps a manual
+; makensis run working.
+!ifndef VIVERSION
+  !define VIVERSION "0.0.0"
+!endif
 
 !define NAME "Cyberbrain"
 !define PUBLISHER "Krynex Labs"
@@ -37,7 +43,7 @@ InstallDirRegKey HKLM "Software\${NAME}" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
-VIProductVersion "${VERSION}.0"
+VIProductVersion "${VIVERSION}.0"
 VIAddVersionKey "ProductName" "${NAME}"
 VIAddVersionKey "FileDescription" "${NAME} installer"
 VIAddVersionKey "FileVersion" "${VERSION}"
