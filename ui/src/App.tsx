@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { api } from "@/api/client";
+import { HubLine } from "@/components/HubLine";
 import { ShortcutHelp } from "@/components/ShortcutHelp";
 import { Kbd } from "@/components/ui";
 import { LANG_NAME, setLang, useLang, useT } from "@/lib/i18n";
@@ -64,6 +65,7 @@ export function App() {
           ) : (
             <div>{t.app.connected("/api/v1")}</div>
           )}
+          <HubLine />
           <div className="flex items-center gap-1.5">
             <button className="btn btn-sm min-w-0 flex-1 justify-start truncate" onClick={theme.cycle} title={t.app.themeTitle}>
               {theme.choice === "system" ? t.app.themeSystem(theme.effective === "dark" ? t.app.themeDark : t.app.themeLight) : theme.choice === "dark" ? t.app.themeDark : t.app.themeLight}

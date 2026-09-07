@@ -87,6 +87,7 @@ pub fn router(app: Arc<App>) -> Router {
     });
     let api = Router::new()
         .route("/status", get(ops::status))
+        .route("/hub", get(ops::hub_status))
         .route("/recall", get(ops::recall))
         .route("/recall/{citation}", get(ops::expand))
         .route("/notes", get(notes::list_notes).post(notes::post_note))

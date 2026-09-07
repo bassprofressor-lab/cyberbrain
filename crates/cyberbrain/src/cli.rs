@@ -354,6 +354,19 @@ mod tests {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum AdminCommand {
+    /// Forget the password. The next visit from the hub's own machine sets a new one.
+    ///
+    /// The way back in when somebody leaves or a password is lost. It needs access to the
+    /// record, which is to say access to the machine — the same thing that would let anyone
+    /// read the record with a SQLite tool, so this hands out nothing new.
+    Reset {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ServiceCommand {
     /// Register the service and start it. Needs an elevated prompt.
     Install {
@@ -405,6 +418,11 @@ pub enum HubCommand {
         /// by hand.
         #[arg(long, value_name = "URL")]
         inference_url: Option<String>,
+    },
+    /// The administrator account for the hub's page.
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
     },
     /// Register the hub as a Windows service, or control the one that is registered.
     ///

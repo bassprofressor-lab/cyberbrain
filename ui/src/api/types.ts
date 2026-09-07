@@ -1136,11 +1136,29 @@ export interface UsageReport {
   days: DayBucket[];
 }
 
+/**
+ * Whether this machine reports its audit trail to a company hub.
+ *
+ * `GET /api/v1/hub`. Small on purpose: the dashboard asks on every load, and the question
+ * the person has ("does anything leave this machine, and when did it last") is not worth
+ * walking the whole store for.
+ */
+export interface HubStatus {
+  enrolled: boolean;
+  /** Base URL of the hub. Present when enrolled. */
+  hub?: string;
+  /** The id this store believes it is. The token is what authenticates, not this. */
+  device?: string | null;
+  /** RFC 3339, or null when nothing has been delivered yet. */
+  last_delivery?: string | null;
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
 
   status(): Promise<StatusReport>;
+  hubStatus(): Promise<HubStatus>;
   /** `days` of history for the daily buckets, 1 to 365; the server defaults to 30. */
   usage(days?: number): Promise<UsageReport>;
   recall(params: RecallParams): Promise<RecallResult>;

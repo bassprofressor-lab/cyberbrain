@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 
 pub struct HubState {
     pub hub: Mutex<HubStore>,
+    /// Who is signed in. In memory, so a restart signs everybody out.
+    pub sessions: super::admin::Sessions,
     /// The port it is listening on, so the page can suggest an address for invitations.
     pub port: u16,
     /// Where the record lives, so the page can say so and find a licence beside it.
@@ -26,6 +28,10 @@ pub struct HubState {
 pub fn router(state: Arc<HubState>) -> Router {
     Router::new()
         .route("/", get(page))
+        .route("/claim", post(claim))
+        .route("/login", post(login))
+        .route("/logout", get(logout))
+        .route("/password", post(change_password))
         .route("/licence", post(install_licence))
         .route("/devices", post(add_device))
         .route("/health", get(health))
@@ -44,15 +50,70 @@ pub(crate) fn at_the_machine(who: &std::net::SocketAddr) -> bool {
     who.ip().is_loopback()
 }
 
-const ELSEWHERE: &str = "This page is shown only on the machine the hub runs on. \
-     Open http://localhost:7788/ there. Devices deliver to /api/v1/ingest as usual.";
+const ELSEWHERE: &str = "This hub has not been set up yet. Open it on the machine it runs \
+     on to set the administrator password. Devices deliver to /api/v1/ingest as usual.";
+
+/// What a caller is allowed to see.
+enum Who {
+    /// Signed in, or at the machine before anybody has claimed it.
+    Admin,
+    /// Nobody has set a password yet and this caller is at the machine.
+    MayClaim,
+    /// Not signed in. Show the door.
+    Stranger,
+    /// Nobody has set a password and this caller is not at the machine.
+    TooEarly,
+}
+
+fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Who {
+    let claimed = {
+        match state.hub.lock() {
+            Ok(hub) => super::admin::is_claimed(&hub),
+            Err(_) => true, // fail towards asking for a password
+        }
+    };
+    if !claimed {
+        // Before there is a password, being at the machine is the credential. Whoever is at
+        // the console can read the record with any SQLite tool, so this grants nothing that
+        // was not already theirs.
+        return if at_the_machine(from) {
+            Who::MayClaim
+        } else {
+            Who::TooEarly
+        };
+    }
+    let cookie =
+        super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+    match cookie {
+        Some(t) if state.sessions.holds(&t, jiff::Timestamp::now()) => Who::Admin,
+        _ => Who::Stranger,
+    }
+}
+
+fn html(body: String) -> Response {
+    Html(body).into_response()
+}
+
+/// A failed password costs this much time. Not a lockout: locking out the administrator is
+/// a way to take a hub away from its own operator. Enough that guessing over a network is
+/// hopeless, little enough that a typo is not a punishment.
+async fn stumble() {
+    tokio::time::sleep(std::time::Duration::from_millis(
+        super::admin::FAILURE_DELAY_MS,
+    ))
+    .await;
+}
 
 async fn page(
     State(state): State<Arc<HubState>>,
-    ConnectInfo(who): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
-    if !at_the_machine(&who) {
-        return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
+    match who(&state, &headers, &from) {
+        Who::Admin => {}
+        Who::MayClaim => return html(super::page::claim_page(None)),
+        Who::TooEarly => return (StatusCode::FORBIDDEN, ELSEWHERE).into_response(),
+        Who::Stranger => return html(super::page::login_page(None)),
     }
     let hub = match state.hub.lock() {
         Ok(h) => h,
@@ -77,6 +138,127 @@ async fn page(
 }
 
 #[derive(serde::Deserialize)]
+pub struct ClaimForm {
+    password: String,
+    again: String,
+}
+
+/// Set the first password, from the machine itself.
+async fn claim(
+    State(state): State<Arc<HubState>>,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<ClaimForm>,
+) -> Response {
+    if !at_the_machine(&from) {
+        return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
+    }
+    let hub = match state.hub.lock() {
+        Ok(h) => h,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    // Checked again here and not only in the browser: a form is a suggestion, and the
+    // second field exists so a typo does not lock somebody out of their own hub.
+    if super::admin::is_claimed(&hub) {
+        return html(super::page::login_page(Some(
+            "This hub already has a password.",
+        )));
+    }
+    if form.password != form.again {
+        return html(super::page::claim_page(Some("The two did not match.")));
+    }
+    match super::admin::set_password(&hub, &form.password) {
+        Ok(()) => {
+            drop(hub);
+            let token = state.sessions.open(jiff::Timestamp::now());
+            // Straight in, rather than showing the sign-in form to somebody who has just
+            // proved who they are twice.
+            (
+                [(header::SET_COOKIE, super::admin::set_cookie(&token))],
+                Redirect::to("/"),
+            )
+                .into_response()
+        }
+        Err(e) => html(super::page::claim_page(Some(&e))),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct LoginForm {
+    password: String,
+}
+
+async fn login(State(state): State<Arc<HubState>>, Form(form): Form<LoginForm>) -> Response {
+    let ok = match state.hub.lock() {
+        Ok(hub) => super::admin::verify(&hub, &form.password),
+        Err(_) => false,
+    };
+    if !ok {
+        stumble().await;
+        return html(super::page::login_page(Some("That is not the password.")));
+    }
+    let token = state.sessions.open(jiff::Timestamp::now());
+    (
+        [(header::SET_COOKIE, super::admin::set_cookie(&token))],
+        Redirect::to("/"),
+    )
+        .into_response()
+}
+
+async fn logout(State(state): State<Arc<HubState>>, headers: HeaderMap) -> Response {
+    if let Some(t) =
+        super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))
+    {
+        state.sessions.close(&t);
+    }
+    (
+        [(header::SET_COOKIE, super::admin::clear_cookie())],
+        Redirect::to("/"),
+    )
+        .into_response()
+}
+
+#[derive(serde::Deserialize)]
+pub struct PasswordForm {
+    current: String,
+    password: String,
+    again: String,
+}
+
+async fn change_password(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<PasswordForm>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = {
+        let hub = match state.hub.lock() {
+            Ok(h) => h,
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        };
+        // The current one, even though the session already proves who this is: a cookie left
+        // open on a shared machine should not be enough to change the password on it.
+        if !super::admin::verify(&hub, &form.current) {
+            Err("The current password is not right.".to_string())
+        } else if form.password != form.again {
+            Err("The two new ones did not match.".to_string())
+        } else {
+            super::admin::set_password(&hub, &form.password)
+                .map(|()| "The password has been changed.".to_string())
+        }
+    };
+    if outcome.is_err() {
+        stumble().await;
+    }
+    if let Ok(mut f) = state.flash.lock() {
+        *f = Some(outcome);
+    }
+    Redirect::to("/").into_response()
+}
+
+#[derive(serde::Deserialize)]
 pub struct LicenceForm {
     #[serde(default)]
     text: String,
@@ -87,11 +269,12 @@ pub struct LicenceForm {
 /// Install a licence from the page: the file lying next to the record, or pasted text.
 async fn install_licence(
     State(state): State<Arc<HubState>>,
-    ConnectInfo(who): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
     Form(form): Form<LicenceForm>,
 ) -> Response {
-    if !at_the_machine(&who) {
-        return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
     }
     let outcome = {
         let hub = match state.hub.lock() {
@@ -137,11 +320,12 @@ pub struct DeviceForm {
 /// where it went; copying a file is something anybody can do.
 async fn add_device(
     State(state): State<Arc<HubState>>,
-    ConnectInfo(who): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
     Form(form): Form<DeviceForm>,
 ) -> Response {
-    if !at_the_machine(&who) {
-        return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
     }
     let outcome = {
         let hub = match state.hub.lock() {
@@ -317,13 +501,17 @@ async fn post_ingest(
 /// second question has its own path, and in the design it needs two people to walk it.
 async fn get_fleet(
     State(state): State<Arc<HubState>>,
-    ConnectInfo(who): ConnectInfo<std::net::SocketAddr>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
 ) -> Response {
     // Device names and when each was last heard from are not row content, but they are still
-    // a picture of an organisation, and this had no authentication at all. Same rule as the
-    // page until there is a sign-in to put in front of it.
-    if !at_the_machine(&who) {
-        return (StatusCode::FORBIDDEN, Json(json!({ "error": ELSEWHERE }))).into_response();
+    // a picture of an organisation, and this had no authentication at all.
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "sign in at / first" })),
+        )
+            .into_response();
     }
     let hub = match state.hub.lock() {
         Ok(h) => h,

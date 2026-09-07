@@ -31,6 +31,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   and building it needs node, which must not be the price of finding out whether a licence
   was accepted.
 
+- **A sign-in for the hub's page, and the page reachable from a desk.** The account is
+  `admin` and there is no default password: the first visit from the machine the hub runs on
+  sets one, which is safe unauthenticated because whoever is at that console could read the
+  record with any SQLite tool anyway. After that the page and `/api/v1/fleet` are reachable
+  from anywhere on the network. `cyberbrain hub admin reset` is the way back in when somebody
+  leaves. argon2 with a per-hub salt, sessions in memory so a restart signs everybody out, and
+  a fixed delay on a wrong password rather than a lockout — locking out an administrator is a
+  way to take a hub away from the person who runs it. It is not the roles model: nothing
+  reachable with this password can read an activity row.
+
+- **The dashboard says whether this machine reports to a hub.** A line in the sidebar: either
+  "this machine keeps everything to itself", or the hub it delivers to, when it last did, and
+  a link to it. Somebody installing a hub asked how to tell any of that from the dashboard,
+  and the honest answer was that you could not — the answer was a command, which is no answer
+  for the person the collection is *about*. The last delivery is read out of the store's own
+  audit log rather than a note kept on the side, so the two cannot disagree.
+  `GET /api/v1/hub` is the route.
+
 ### Fixed
 
 - **A byte order mark stopped a licence from being accepted.** Notepad and a good many mail

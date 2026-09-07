@@ -83,8 +83,10 @@ Rechner, der die Nachweise der übrigen einsammelt. Häkchen bei *Hub service (c
 trägt einen Windows-Dienst ein, öffnet den Port und legt einen Ordner an, in den die
 Lizenzdatei kommt. Mehr nicht, und keine Kommandozeile. Auf den Arbeitsplätzen nimmt
 *Connect to the company hub…* im Infobereich die Einladungsdatei entgegen, die sie bekommen
-haben. Die Zentraleinheit selbst hat eine Seite unter `http://localhost:7788/`, die nur auf
-ihrem eigenen Rechner angezeigt wird: Lizenz, Plätze, und welche Maschinen melden. Was eine
+haben. Die Zentraleinheit selbst hat eine Seite unter `http://localhost:7788/`: Lizenz, Plätze, und
+welche Maschinen melden. Der erste Aufruf auf ihrem eigenen Rechner setzt das
+Verwalterkennwort — ein Standardkennwort gibt es nicht — danach geht sie von jedem
+Schreibtisch aus auf. Was eine
 Notiz **sagt**, verlässt auf keiner der beiden Seiten den Rechner, auf dem sie liegt. Das
 ganze Bild steht in [`docs/HUB.md`](docs/HUB.md).
 
@@ -252,7 +254,7 @@ kein Verhalten.
 
 ## Stand
 
-**v0.3.0, und jung.** 564 Tests, sieben Pakete auf crates.io und dazu der Windows-Starter,
+**v0.3.0, und jung.** 574 Tests, sieben Pakete auf crates.io und dazu der Windows-Starter,
 clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux und Windows und ein
 Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines einzigen
 Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist zu

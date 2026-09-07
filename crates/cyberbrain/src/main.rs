@@ -660,6 +660,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             hub: std::sync::Mutex::new(store),
                             record: path.clone(),
                             port: bound.port(),
+                            sessions: Default::default(),
                             flash: std::sync::Mutex::new(None),
                         });
                         let hello = format!(
@@ -705,6 +706,21 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         }
 
         HubCommand::Service { command } => run_hub_service(command, out),
+
+        HubCommand::Admin { command } => {
+            let cli::AdminCommand::Reset { data } = command;
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            store.set_setting("admin_password", "")?;
+            out.emit(&serde_json::json!({ "admin": "reset" }), |_| {
+                concat!(
+                    "The administrator password is cleared. Open the hub's page on this ",
+                    "machine to set a new one; from anywhere else it now says the hub has ",
+                    "not been set up.\n"
+                )
+                .to_string()
+            })?;
+            Ok(0)
+        }
 
         HubCommand::Add {
             name,

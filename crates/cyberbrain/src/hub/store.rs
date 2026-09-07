@@ -356,6 +356,27 @@ impl HubStore {
         Ok(out)
     }
 
+    /// One row of the settings table, for the things that are not the licence.
+    pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        ix(self
+            .conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?",
+                params![key],
+                |r| r.get(0),
+            )
+            .optional())
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        ))
+        .map(|_| ())
+    }
+
     /// The installed licence text, if there is one.
     pub fn licence_text(&self) -> Result<Option<String>> {
         ix(self

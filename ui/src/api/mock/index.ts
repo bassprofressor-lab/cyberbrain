@@ -14,6 +14,7 @@
  * bytes. They are only meaningful within a page load.
  */
 import {
+  type HubStatus,
   ApiError,
   type AuditAction,
   type AuditPage,
@@ -660,6 +661,18 @@ export const mockClient: CyberbrainApi = {
         };
       }),
       loaded_models: [{ name: "qwen2.5:7b-instruct", size: 5_062_566_870, size_vram: 0, context_length: 4096, parameter_size: "7.6B", quantization_level: "Q4_K_M", expires_at: new Date(NOW + 240_000).toISOString() }],
+    };
+  },
+
+  async hubStatus(): Promise<HubStatus> {
+    // The mock shows a machine that reports to a hub, because the interesting half of this
+    // line is the one with something in it — an empty state that is always empty teaches
+    // nobody what the screen looks like when it matters.
+    return {
+      enrolled: true,
+      hub: "https://hub.example.internal:7788",
+      device: "dev_01M1Y70BYZM68NWYVE03ZF09YM",
+      last_delivery: new Date(NOW - 11 * 60_000).toISOString(),
     };
   },
 

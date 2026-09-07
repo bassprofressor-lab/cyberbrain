@@ -1373,3 +1373,129 @@ fn a_licence_file_that_is_already_installed_is_not_offered_again() {
     let after = View::gather(&hub, &record, 7788, NOW.parse().unwrap(), None);
     assert_eq!(after.found_file, None);
 }
+
+// ---- the administrator account ----
+//
+// One account for the machine's administration, which is what the fleet view is. It is not
+// the roles model: nothing reachable with this password can read an activity row.
+
+use super::admin;
+
+#[test]
+fn a_hub_starts_unclaimed_and_the_first_visit_claims_it() {
+    let hub = HubStore::in_memory().unwrap();
+    assert!(!admin::is_claimed(&hub));
+    admin::set_password(&hub, "korrektpferd1").unwrap();
+    assert!(admin::is_claimed(&hub));
+}
+
+#[test]
+fn there_is_no_password_to_look_up_before_one_is_set() {
+    let hub = HubStore::in_memory().unwrap();
+    // The point of having no default: nothing works until somebody at the machine chooses.
+    for guess in ["", "admin", "password", "cyberbrain", "changeme"] {
+        assert!(!admin::verify(&hub, guess), "{guess:?} was accepted");
+    }
+}
+
+#[test]
+fn a_short_password_is_refused_with_the_reason() {
+    let hub = HubStore::in_memory().unwrap();
+    let e = admin::set_password(&hub, "kurz").unwrap_err();
+    assert!(e.contains("10 characters"), "{e}");
+    assert!(
+        !admin::is_claimed(&hub),
+        "a refused password must not be stored"
+    );
+}
+
+#[test]
+fn the_password_is_checked_and_not_stored() {
+    let hub = HubStore::in_memory().unwrap();
+    admin::set_password(&hub, "korrektpferd1").unwrap();
+    assert!(admin::verify(&hub, "korrektpferd1"));
+    assert!(!admin::verify(&hub, "korrektpferd2"));
+    // What is kept is a PHC string: the algorithm, its parameters, a salt and the hash.
+    // The password itself is nowhere in the record, which is the whole point of the hashing.
+    let stored = hub.setting("admin_password").unwrap().unwrap();
+    assert!(stored.starts_with("$argon2"), "{stored}");
+    assert!(!stored.contains("korrektpferd1"));
+}
+
+#[test]
+fn two_hubs_with_the_same_password_store_different_hashes() {
+    let (a, b) = (
+        HubStore::in_memory().unwrap(),
+        HubStore::in_memory().unwrap(),
+    );
+    admin::set_password(&a, "korrektpferd1").unwrap();
+    admin::set_password(&b, "korrektpferd1").unwrap();
+    // A salt, in other words. Without one, one stolen record would answer for every hub
+    // whose administrator picked the same thing.
+    assert_ne!(
+        a.setting("admin_password").unwrap(),
+        b.setting("admin_password").unwrap()
+    );
+}
+
+#[test]
+fn resetting_puts_the_hub_back_to_its_first_run() {
+    let hub = HubStore::in_memory().unwrap();
+    admin::set_password(&hub, "korrektpferd1").unwrap();
+    hub.set_setting("admin_password", "").unwrap();
+    assert!(!admin::is_claimed(&hub));
+    assert!(!admin::verify(&hub, "korrektpferd1"));
+}
+
+#[test]
+fn a_session_lasts_until_it_is_closed() {
+    let s = admin::Sessions::default();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let token = s.open(now);
+    assert!(s.holds(&token, now));
+    assert!(
+        !s.holds("something else", now),
+        "an unknown cookie is not a session"
+    );
+    s.close(&token);
+    assert!(!s.holds(&token, now), "signing out has to mean something");
+}
+
+#[test]
+fn a_session_does_not_last_forever_and_using_it_keeps_it_alive() {
+    let s = admin::Sessions::default();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let token = s.open(now);
+    let day = now + jiff::Span::new().hours(24);
+    // Untouched for a day: gone.
+    assert!(!s.holds(&token, day));
+
+    // Used every few hours: still there a day later, because each use pushes it out.
+    let token = s.open(now);
+    let mut t = now;
+    for _ in 0..6 {
+        t += jiff::Span::new().hours(4);
+        assert!(s.holds(&token, t), "a session in use was dropped at {t}");
+    }
+}
+
+#[test]
+fn two_sessions_are_not_the_same_string() {
+    let s = admin::Sessions::default();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let (a, b) = (s.open(now), s.open(now));
+    assert_ne!(a, b);
+    assert_eq!(a.len(), 64, "32 bytes of randomness, hex");
+}
+
+#[test]
+fn our_cookie_is_found_among_other_peoples() {
+    assert_eq!(
+        admin::cookie_from(Some("theme=dark; cyberbrain_hub=abc123; other=1")),
+        Some("abc123".to_string())
+    );
+    assert_eq!(admin::cookie_from(Some("theme=dark")), None);
+    assert_eq!(admin::cookie_from(None), None);
+    // Not a prefix match: a cookie called cyberbrain_hub_something is not ours.
+    assert_eq!(admin::cookie_from(Some("cyberbrain_hub_x=abc")), None);
+}

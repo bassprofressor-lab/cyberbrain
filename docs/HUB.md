@@ -160,16 +160,39 @@ and is anything reporting.
 - **Devices** — the same list `hub fleet` prints, trouble first, and a form that registers a
   machine and writes its invitation next to the record.
 
-**Loopback only.** The page shows who is on the network and can install a licence, and the
-hub deliberately binds an address the whole network can reach. Rather than invent a sign-in
-for this slice, the rule is that you have to be at the machine: a rule with an obvious shape
-that cannot be misconfigured. `/api/v1/fleet` is under the same rule — device names and
-last-seen times are not row content, but they are still a picture of an organisation, and it
-had no authentication at all. `/health` and `/api/v1/ingest` are unchanged; delivery is what
-the network side is for.
+### Signing in
 
-A networked view can come later behind the `admin` role that already exists, without taking
-any of this back.
+The account is `admin`. **There is no default password**, because a default on something that
+listens to the whole network is the thing that gets found, and "change it afterwards" is a
+sentence people read after the change was needed.
+
+Instead the first visit **from the machine the hub runs on** asks you to set one. That is
+safe without a password in front of it: whoever is at that console could read the record with
+any SQLite tool. After that the page is reachable from any desk on the network, and
+`/api/v1/fleet` with it. Until it is set, the hub still collects — evidence must not wait for
+an administrator.
+
+Forgotten it, or the person who set it has left:
+
+```console
+$ cyberbrain hub admin reset --data /var/lib/cyberbrain/hub.db
+```
+
+The next visit from the hub's own machine sets a new one. It needs access to the record,
+which is access to the machine, which is the same thing that would let anyone read the record
+directly — so this hands out nothing that was not already there.
+
+The password is stored as an argon2 hash with its own salt, sessions live in memory (a restart
+signs everybody out, which is what you want after an upgrade), and a wrong password costs a
+fixed delay rather than a lockout: locking out an administrator is a way to take a hub away
+from the person who runs it.
+
+**This is not the roles model.** It is one account for the machine's administration, which is
+what the fleet view is. Nothing reachable with it can read an activity row — that still needs
+an auditor, a reason and a countersignature, further down this page.
+
+`/health` and `/api/v1/ingest` are unchanged: delivery is what the network side is for, and
+devices authenticate with their own tokens.
 
 It is server-rendered and has no JavaScript. The store's web UI is a built bundle behind a
 feature flag and building it needs node; none of that may be the price of finding out whether

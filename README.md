@@ -79,8 +79,9 @@ The same installer can set up **the hub** — the one machine in a team that col
 others' audit trail. Tick *Hub service (collector)*: it registers a Windows service, opens
 the port, and makes a folder to drop the licence file into. Nothing else, and no command
 prompt. On the client machines, *Connect to the company hub…* in the tray menu takes the
-invitation file they were sent. The hub itself has a page at `http://localhost:7788/`, shown
-only on the machine it runs on: licence, seats, and which machines are reporting. What a note
+invitation file they were sent. The hub itself has a page at `http://localhost:7788/`: licence, seats, and
+which machines are reporting. The first visit from the hub's own machine sets the
+administrator password — there is no default one — and after that it opens from any desk. What a note
 **says** never leaves the machine that holds it, on either side.
 [`docs/HUB.md`](docs/HUB.md) has the whole picture.
 
@@ -243,7 +244,7 @@ behaviour.
 
 ## Status
 
-**v0.3.0, and young.** 564 tests, seven crates on crates.io plus the Windows launcher,
+**v0.3.0, and young.** 574 tests, seven crates on crates.io plus the Windows launcher,
 clippy and rustfmt clean. Binaries for Linux and Windows on the release page, and an
 installer beside them. It has been run against one operator's real corpus — 1,086 notes
 across five projects — and not much else. Expect rough edges, report them.

@@ -2182,6 +2182,37 @@ impl App {
         Ok(inference_url.map(str::to_owned))
     }
 
+    /// What this machine is, as far as a company hub is concerned.
+    ///
+    /// The dashboard's own question. Somebody looking at their notes cannot tell from that
+    /// screen whether this machine reports to anybody, and "check with `cyberbrain hub
+    /// push`" is not an answer for the person the delivery is *about*.
+    ///
+    /// The last delivery is read out of this store's own audit log, not from a note kept on
+    /// the side: the audit log is what was actually sent, so the two cannot disagree.
+    pub fn hub_status(&self) -> Result<serde_json::Value> {
+        let Some(url) = self.config.hub.url.clone() else {
+            return Ok(serde_json::json!({ "enrolled": false }));
+        };
+        let filter = cyberbrain_policy::AuditFilter {
+            action: Some("egress.completed".into()),
+            contains: Some("audit-sync".into()),
+            ..Default::default()
+        };
+        let last = self
+            .policy
+            .audit()
+            .read(&filter)
+            .ok()
+            .and_then(|rows| rows.last().map(|e| e.ts.to_string()));
+        Ok(serde_json::json!({
+            "enrolled": true,
+            "hub": url,
+            "device": self.config.hub.device,
+            "last_delivery": last,
+        }))
+    }
+
     /// Deliver audit rows to the hub this store was enrolled with.
     ///
     /// Returns the report and the exit code. A hub that is not collecting, and a gap it can

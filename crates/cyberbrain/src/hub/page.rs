@@ -105,13 +105,65 @@ fn esc(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// The screen shown before anything else, when nobody has claimed this hub yet.
+///
+/// Reachable only from the machine itself, which is what makes it safe to have no password
+/// in front of it: whoever is at the console could read the record with any SQLite tool
+/// anyway. Everything after this is reachable from a desk.
+pub fn claim_page(problem: Option<&str>) -> String {
+    let mut h = String::from(HEAD);
+    h.push_str("<header><h1>Cyberbrain Hub</h1><p class=sub>first run</p></header>");
+    if let Some(p) = problem {
+        h.push_str(&format!("<p class=\"flash bad\">{}</p>", esc(p)));
+    }
+    h.push_str(&format!(
+        "<section class=card><h2>Set the administrator password</h2>\
+         <p>The account is <code>{}</code>. There is no default password to change later: a \
+         default on something that listens to the network is the thing that gets found.</p>\
+         <form method=post action=\"/claim\">\
+         <label>Password <input type=password name=password minlength={} required autofocus></label>\
+         <label>Again <input type=password name=again minlength={} required></label>\
+         <button type=submit>Set it</button></form>\
+         <p class=note>At least {} characters. Until this is set, the page is shown only on \
+         this machine — the hub itself collects normally either way, because evidence must \
+         not wait for an administrator.</p></section></main>",
+        super::admin::USER,
+        super::admin::MIN_PASSWORD,
+        super::admin::MIN_PASSWORD,
+        super::admin::MIN_PASSWORD
+    ));
+    h
+}
+
+/// The sign-in screen.
+pub fn login_page(problem: Option<&str>) -> String {
+    let mut h = String::from(HEAD);
+    h.push_str("<header><h1>Cyberbrain Hub</h1></header>");
+    if let Some(p) = problem {
+        h.push_str(&format!("<p class=\"flash bad\">{}</p>", esc(p)));
+    }
+    h.push_str(&format!(
+        "<section class=card><h2>Sign in</h2>\
+         <form method=post action=\"/login\">\
+         <label>User <input name=user value=\"{}\" readonly></label>\
+         <label>Password <input type=password name=password required autofocus></label>\
+         <button type=submit>Sign in</button></form>\
+         <p class=note>Forgotten it? On the machine the hub runs on, \
+         <code>cyberbrain hub admin reset</code> clears it and the next visit from that \
+         machine sets a new one.</p></section></main>",
+        super::admin::USER
+    ));
+    h
+}
+
 /// The whole page, as one string.
 pub fn render(v: &View) -> String {
     let mut h = String::with_capacity(8192);
     h.push_str(HEAD);
 
     h.push_str(&format!(
-        "<header><h1>Cyberbrain Hub</h1><p class=sub>version {} · record <code>{}</code></p></header>",
+        "<header><h1>Cyberbrain Hub</h1><p class=sub>version {} · record <code>{}</code> \
+         <a href=\"/logout\">sign out</a></p></header>",
         esc(&v.version),
         esc(&v.record.display().to_string())
     ));
@@ -128,8 +180,21 @@ pub fn render(v: &View) -> String {
     h.push_str(&fleet_card(v));
 
     h.push_str(&format!(
-        "<footer><p>This page is served only to the machine the hub runs on. \
+        "<section class=card><h2>Administration</h2>\
+         <details><summary>Change the password</summary>\
+         <form method=post action=\"/password\">\
+         <label>Current <input type=password name=current required></label>\
+         <label>New <input type=password name=password minlength={} required></label>\
+         <label>Again <input type=password name=again minlength={} required></label>\
+         <button type=submit>Change it</button></form></details></section>",
+        super::admin::MIN_PASSWORD,
+        super::admin::MIN_PASSWORD
+    ));
+
+    h.push_str(&format!(
+        "<footer><p>Signed in as <code>{}</code>. \
          The log is <code>{}</code>.</p></footer>",
+        super::admin::USER,
         esc(&v
             .record
             .parent()
@@ -333,5 +398,6 @@ input{display:block;width:100%;margin-top:.2rem;font:inherit;padding:.4rem .5rem
 .flash{padding:.7rem 1rem;border-radius:8px;margin:0 0 1rem}
 .flash.ok{color:var(--ok);background:var(--okbg)} .flash.bad{color:var(--bad);background:var(--badbg)}
 footer{color:var(--dim);font-size:.85rem;margin-top:1.4rem}
+.sub a{color:var(--dim);margin-left:.5rem}
 </style>
 <main>"#;

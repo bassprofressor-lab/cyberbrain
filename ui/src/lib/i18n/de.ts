@@ -15,6 +15,12 @@ export const de: Dict = {
     themeDark: "dunkel",
     themeLight: "hell",
     languageTitle: "Sprache: English → Deutsch",
+    hubAlone: "Dieser Rechner behält alles für sich.",
+    hubAloneWhy: "Es wird nichts irgendwohin geliefert. Notizen verlassen ohnehin keinen Rechner; was eine Zentraleinheit sammelt, ist der Nachweis über Vorgänge, nicht das Geschriebene.",
+    hubReports: "Meldet an",
+    hubLastDelivery: (when: string) => `zuletzt ${when} geliefert`,
+    hubNothingYet: "noch nichts geliefert",
+    hubWhatLeaves: "Was rausgeht: der Nachweis — welcher Rechner wann was für eine Art Vorgang hatte. Nie der Inhalt einer Notiz.",
   },
   nav: {
     status: "Status",

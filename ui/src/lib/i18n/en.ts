@@ -17,6 +17,12 @@ export const en = {
     themeDark: "dark",
     themeLight: "light",
     languageTitle: "Language: English → Deutsch",
+    hubAlone: "This machine keeps everything to itself.",
+    hubAloneWhy: "Nothing is delivered anywhere. Notes never leave a machine either way; what a company hub collects is the record of what happened, not what was written.",
+    hubReports: "Reporting to",
+    hubLastDelivery: (when: string) => `last delivered ${when}`,
+    hubNothingYet: "nothing delivered yet",
+    hubWhatLeaves: "What leaves: the audit trail — which machine did what kind of thing, when. Never the content of a note.",
   },
   nav: {
     status: "Status",

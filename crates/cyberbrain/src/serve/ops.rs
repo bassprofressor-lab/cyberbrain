@@ -163,6 +163,14 @@ fn backend_name(b: Backend) -> &'static str {
     }
 }
 
+/// Whether this machine reports to a company hub, and when it last did.
+///
+/// One small answer rather than folding it into `status`: it is read on every page load of
+/// the dashboard, and `status` walks the whole tree.
+pub async fn hub_status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<serde_json::Value>> {
+    blocking(move || Ok(Json(st.app.hub_status()?))).await
+}
+
 pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusReport>> {
     let probed_at = jiff::Timestamp::now();
     let s = st.app.status().await?;
