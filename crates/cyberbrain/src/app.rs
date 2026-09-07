@@ -2151,6 +2151,16 @@ impl App {
 
     /// The audit log, rendered. Reading through `export` records the export itself
     /// (SPEC §12.6), after the rows were rendered.
+    /// A period of the log as a self-checking bundle, for somebody outside to verify.
+    ///
+    /// The tool string goes in the header for the reader's benefit; nothing in the check
+    /// depends on it, which is the point — a file that only this version can verify would
+    /// not survive the retention period it exists for.
+    pub fn export_audit_bundle(&self, filter: &AuditFilter) -> Result<String> {
+        let tool = concat!("cyberbrain ", env!("CARGO_PKG_VERSION"));
+        self.policy.export_audit_bundle(filter, tool)
+    }
+
     pub fn policy_audit(
         &self,
         filter: &AuditFilter,

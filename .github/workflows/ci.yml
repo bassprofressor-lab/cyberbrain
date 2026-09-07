@@ -29,6 +29,12 @@ jobs:
       # builds the page first. Running the default features here would fail in the build
       # script on a checkout, where `ui/dist` does not exist.
       - run: cargo clippy --workspace --all-targets --no-default-features -- -D warnings
+      # The audit export format claims to be checkable without this program, and
+      # `scripts/verify-audit-export.py` is the second implementation that proves it. Without
+      # blake3 that test skips itself — loudly, but it skips — so one job installs it and
+      # actually runs the comparison.
+      - if: matrix.os == 'ubuntu-latest'
+        run: pip install --break-system-packages blake3
       - run: cargo test --workspace --no-default-features
 
   # The installer is the only artefact nobody can try on the machine that writes it, so it

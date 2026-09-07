@@ -1139,3 +1139,167 @@ fn a_hook_resolves_the_store_the_session_names_not_the_one_it_was_started_in() {
         "it must not fall back to the directory it was started in: {stdout}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// Audit export (SPEC §12.6): the file a person hands to somebody else.
+
+/// The claim the format makes is that the file stands on its own. This is the end-to-end
+/// version of that: write rows, export a bundle, and check it with a *second* process that
+/// is given the file and nothing else — no store, no configuration, no working directory
+/// that means anything.
+#[test]
+fn an_exported_bundle_verifies_with_nothing_but_the_file() {
+    let cb = Cb::new();
+    for i in 0..3 {
+        let out = cb.run(&[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            &format!("note-{i}"),
+            "--body",
+            "Body of the note.",
+        ]);
+        assert!(out.status.success());
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("export.jsonl");
+    let out = cb.run(&["policy", "audit", "--export", file.to_str().unwrap()]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(file.is_file());
+
+    // A different process, a different directory, no --store.
+    let check = Cb::bin()
+        .current_dir(dir.path())
+        .arg("verify-export")
+        .arg(&file)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&check.stdout);
+    assert!(check.status.success(), "{stdout}");
+    assert!(stdout.contains("chain holds over"), "{stdout}");
+}
+
+#[test]
+fn a_tampered_bundle_is_refused_with_a_non_zero_exit() {
+    let cb = Cb::new();
+    assert!(
+        cb.run(&[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "n",
+            "--body",
+            "b"
+        ])
+        .status
+        .success()
+    );
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("export.jsonl");
+    assert!(
+        cb.run(&["policy", "audit", "--export", file.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    // Edit one row's subject, the way somebody would who wanted an event to look like a
+    // different one. Everything else about the file stays valid JSON and the right length.
+    let text = std::fs::read_to_string(&file).unwrap();
+    let tampered: String = text
+        .lines()
+        .map(|l| {
+            if l.contains("\"action\":\"note.write\"") {
+                l.replace("note.write", "note.reads")
+            } else {
+                l.to_string()
+            }
+        })
+        .map(|l| format!("{l}\n"))
+        .collect();
+    let bad = dir.path().join("tampered.jsonl");
+    std::fs::write(&bad, tampered).unwrap();
+
+    let check = Cb::bin().arg("verify-export").arg(&bad).output().unwrap();
+    assert!(!check.status.success(), "a tampered file verified");
+    let stderr = String::from_utf8_lossy(&check.stderr);
+    assert!(stderr.contains("chain broken"), "{stderr}");
+}
+
+/// The format is meant to outlive this program, so the check has to be writable by someone
+/// else. `scripts/verify-audit-export.py` is that second implementation, and this test runs
+/// it against a real bundle: if the two ever disagree, one of them is wrong about the rule.
+///
+/// Skipped, loudly, where python or the blake3 module is missing — a silent skip would turn
+/// "we cannot check this here" into "this passed".
+#[test]
+fn the_independent_python_checker_agrees() {
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/verify-audit-export.py")
+        .canonicalize()
+        .expect("the script is in the repository");
+
+    let probe = Command::new("python3")
+        .args(["-c", "import blake3"])
+        .output();
+    match probe {
+        Ok(o) if o.status.success() => {}
+        _ => {
+            eprintln!(
+                "SKIPPED the_independent_python_checker_agrees: python3 with the blake3 \
+                 module is not available here (pip install blake3)"
+            );
+            return;
+        }
+    }
+
+    let cb = Cb::new();
+    for i in 0..3 {
+        assert!(
+            cb.run(&[
+                "write",
+                "--ring",
+                "2",
+                "--kind",
+                "knowledge",
+                "--name",
+                &format!("n{i}"),
+                "--body",
+                "Body with a \"quote\" and a Ümlaut, because the hash covers the detail.",
+            ])
+            .status
+            .success()
+        );
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("export.jsonl");
+    assert!(
+        cb.run(&["policy", "audit", "--export", file.to_str().unwrap()])
+            .status
+            .success()
+    );
+
+    let out = Command::new("python3")
+        .arg(&script)
+        .arg(&file)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "the independent checker rejected a bundle this binary wrote:\n{stdout}"
+    );
+    assert!(stdout.contains("chain holds over 4 row(s)"), "{stdout}");
+}

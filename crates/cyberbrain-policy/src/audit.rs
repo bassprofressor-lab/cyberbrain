@@ -179,6 +179,9 @@ impl AuditEvent {
 pub struct AuditFilter {
     /// Inclusive lower bound.
     pub since: Option<jiff::Timestamp>,
+    /// Inclusive upper bound. With `since`, this is how a period is asked for — and a
+    /// period is what an auditor asks about, never "everything since the beginning".
+    pub until: Option<jiff::Timestamp>,
     /// Exact match on `action`.
     pub action: Option<String>,
     /// Exact match on `subject`.
@@ -193,6 +196,11 @@ impl AuditFilter {
     pub fn matches(&self, e: &AuditEvent) -> bool {
         if let Some(s) = self.since
             && e.ts < s
+        {
+            return false;
+        }
+        if let Some(u) = self.until
+            && e.ts > u
         {
             return false;
         }
@@ -431,6 +439,29 @@ impl AuditLog {
         verify_chain(&rows)
     }
 
+    /// A period of the log as a self-checking bundle: header with the anchor, the rows, a
+    /// footer. See [`bundle`] for the format and why it exists.
+    ///
+    /// Recorded like the plain export, and for the same reason — an extract is an access,
+    /// and an access that leaves no trace is the one nobody can ask about later.
+    pub fn export_bundle(&self, actor: &Actor, filter: &AuditFilter, tool: &str) -> Result<String> {
+        let rows = self.sink.read(filter)?;
+        let out = bundle::render(
+            &rows,
+            filter.since.map(|t| t.to_string()),
+            filter.until.map(|t| t.to_string()),
+            tool,
+            &jiff::Timestamp::now().to_string(),
+        );
+        self.record(
+            actor,
+            AuditAction::AuditExport,
+            "audit",
+            json!({ "rows": rows.len(), "format": "bundle" }),
+        )?;
+        Ok(out)
+    }
+
     /// Export the log (SPEC §12.6). The export itself is recorded, after the rows have been
     /// rendered, so the rendered output does not contain its own row.
     pub fn export(
@@ -448,6 +479,204 @@ impl AuditLog {
             json!({ "rows": rows.len(), "format": format.as_str() }),
         )?;
         Ok(out)
+    }
+}
+
+/// A period of the log, in a form somebody else can check (SPEC §12.6).
+///
+/// # Why this is not just the rows
+///
+/// Rows on their own are not evidence. `verify_chain` starts at the genesis marker, and an
+/// extract from the middle of a log has no genesis in it — so a bare export can be checked
+/// for internal consistency and nothing else, and the check that matters ("is this the log
+/// that machine actually wrote") has nowhere to start.
+///
+/// The bundle adds the two things that make it checkable: the **anchor**, which is the hash
+/// the first row points back at, and a **footer** naming the count and the last hash, so a
+/// truncated file is a failed check rather than a shorter answer.
+///
+/// # The format, which is the point
+///
+/// One JSON object per line, in this order: header, rows, footer. Nothing is nested, no
+/// field is computed from another file, and the hash is blake3 over
+/// `prev \n at \n actor \n action \n subject \n detail-without-_chain`. Ten years is longer
+/// than most programs live; anyone should be able to rewrite the check in an afternoon, in
+/// whatever language is normal by then. `scripts/verify-audit-export.py` is that check,
+/// written once as proof it can be.
+pub mod bundle {
+    use super::{AuditEvent, GENESIS, verify_chain_from};
+    use cyberbrain_core::{Error, Result};
+    use serde::{Deserialize, Serialize};
+
+    pub const KIND: &str = "cyberbrain.audit.export";
+    pub const KIND_END: &str = "cyberbrain.audit.export.end";
+    pub const VERSION: u32 = 1;
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct Header {
+        pub kind: String,
+        pub version: u32,
+        /// What wrote the file. Informational: nothing in the check depends on it.
+        pub tool: String,
+        pub exported_at: String,
+        /// Requested period. `None` on either side means unbounded there.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub from: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub to: Option<String>,
+        /// Hash the first row points back at, or `genesis` when the extract starts at the
+        /// beginning of the log.
+        pub anchor: String,
+        pub rows: usize,
+    }
+
+    #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+    pub struct Footer {
+        pub kind: String,
+        pub rows: usize,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub first_hash: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub last_hash: Option<String>,
+    }
+
+    /// What a check found. `rows` is what it verified, not what the file claimed.
+    #[derive(Debug, Clone, Serialize, PartialEq)]
+    pub struct Report {
+        pub rows: usize,
+        pub anchor: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub from: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub to: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub last_hash: Option<String>,
+        pub tool: String,
+        pub exported_at: String,
+    }
+
+    /// Render rows as a bundle. `tool` names the writer, `exported_at` is its own timestamp.
+    pub fn render(
+        rows: &[AuditEvent],
+        from: Option<String>,
+        to: Option<String>,
+        tool: &str,
+        exported_at: &str,
+    ) -> String {
+        // The anchor comes out of the first row rather than a second read of the log: a row
+        // already carries the hash it follows. One source, no chance of the two disagreeing.
+        let anchor = rows
+            .first()
+            .and_then(|r| r.chain_prev())
+            .unwrap_or(GENESIS)
+            .to_string();
+        let header = Header {
+            kind: KIND.to_string(),
+            version: VERSION,
+            tool: tool.to_string(),
+            exported_at: exported_at.to_string(),
+            from,
+            to,
+            anchor,
+            rows: rows.len(),
+        };
+        let footer = Footer {
+            kind: KIND_END.to_string(),
+            rows: rows.len(),
+            first_hash: rows.first().and_then(|r| r.chain_hash()).map(str::to_owned),
+            last_hash: rows.last().and_then(|r| r.chain_hash()).map(str::to_owned),
+        };
+
+        let mut s = serde_json::to_string(&header).expect("header serialises");
+        s.push('\n');
+        for r in rows {
+            s.push_str(&serde_json::to_string(r).expect("AuditEvent serialises"));
+            s.push('\n');
+        }
+        s.push_str(&serde_json::to_string(&footer).expect("footer serialises"));
+        s.push('\n');
+        s
+    }
+
+    /// Check a bundle on its own: no store, no configuration, no network.
+    ///
+    /// Everything it needs is in the file, which is the property that has to survive the
+    /// next ten years.
+    pub fn verify(text: &str) -> Result<Report> {
+        let bad = |m: String| Error::Index(format!("audit export: {m}"));
+
+        let mut lines = text.lines().filter(|l| !l.trim().is_empty());
+        let header_line = lines.next().ok_or_else(|| bad("file is empty".into()))?;
+        let header: Header = serde_json::from_str(header_line)
+            .map_err(|e| bad(format!("first line is not a header: {e}")))?;
+        if header.kind != KIND {
+            return Err(bad(format!(
+                "first line is {:?}, expected {KIND:?}",
+                header.kind
+            )));
+        }
+        if header.version != VERSION {
+            return Err(bad(format!(
+                "format version {} is not {VERSION}; use a reader that knows it",
+                header.version
+            )));
+        }
+
+        let rest: Vec<&str> = lines.collect();
+        let (footer_line, row_lines) = rest
+            .split_last()
+            .ok_or_else(|| bad("no footer; the file is truncated".into()))?;
+        let footer: Footer = serde_json::from_str(footer_line)
+            .map_err(|e| bad(format!("last line is not a footer: {e}")))?;
+        if footer.kind != KIND_END {
+            return Err(bad(format!(
+                "last line is {:?}, expected {KIND_END:?}; the file is truncated",
+                footer.kind
+            )));
+        }
+
+        let mut rows = Vec::with_capacity(row_lines.len());
+        for (i, l) in row_lines.iter().enumerate() {
+            rows.push(
+                serde_json::from_str::<AuditEvent>(l)
+                    .map_err(|e| bad(format!("row {} is not an audit row: {e}", i + 1)))?,
+            );
+        }
+
+        // Three claims, checked in the order in which a mismatch is most informative.
+        if header.rows != rows.len() {
+            return Err(bad(format!(
+                "header says {} rows, file carries {}",
+                header.rows,
+                rows.len()
+            )));
+        }
+        if footer.rows != rows.len() {
+            return Err(bad(format!(
+                "footer says {} rows, file carries {}",
+                footer.rows,
+                rows.len()
+            )));
+        }
+        let verified = verify_chain_from(&header.anchor, &rows)?;
+
+        let last_hash = rows.last().and_then(|r| r.chain_hash()).map(str::to_owned);
+        if footer.last_hash != last_hash {
+            return Err(bad(
+                "footer's last hash is not the last row's hash; rows were removed from the end"
+                    .into(),
+            ));
+        }
+
+        Ok(Report {
+            rows: verified,
+            anchor: header.anchor,
+            from: header.from,
+            to: header.to,
+            last_hash,
+            tool: header.tool,
+            exported_at: header.exported_at,
+        })
     }
 }
 
@@ -498,7 +727,18 @@ impl cyberbrain_llm::AuditSink for AuditLog {
 /// strip `_chain` from an edited row. See the report: the index writes unchained rows into
 /// the same table, so a mixed log verifies only up to the first of those.
 pub fn verify_chain(rows: &[AuditEvent]) -> Result<usize> {
-    let mut prev = GENESIS.to_string();
+    verify_chain_from(GENESIS, rows)
+}
+
+/// [`verify_chain`], starting from a hash other than the genesis marker.
+///
+/// This is what makes an extract checkable. A period taken out of the middle of a log has no
+/// genesis in it; what it has is the hash its first row points back at. Hand that in as the
+/// anchor and the arithmetic works exactly as it does over the whole log — with one honest
+/// limit: it proves the extract is internally intact and starts where it says it does. That
+/// the anchor itself belongs to the real history is a question only the full log answers.
+pub fn verify_chain_from(anchor: &str, rows: &[AuditEvent]) -> Result<usize> {
+    let mut prev = anchor.to_string();
     for (i, row) in rows.iter().enumerate() {
         // The reader counts from one, and so does every listing this number is compared
         // against; a zero-based index here sent someone looking at the wrong row. Not
@@ -582,6 +822,164 @@ pub fn render(rows: &[AuditEvent], format: ExportFormat) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---- the export bundle (SPEC §12.6) ----
+
+    /// Three rows, and the hash the second one follows — the shape of every extract.
+    fn three_rows() -> (Vec<AuditEvent>, String) {
+        let (log, sink) = AuditLog::in_memory();
+        for (i, subject) in ["a", "b", "c"].into_iter().enumerate() {
+            log.record(
+                &Actor::Operator,
+                AuditAction::NoteWrite,
+                subject,
+                json!({ "n": i }),
+            )
+            .unwrap();
+        }
+        let rows = sink.rows();
+        let anchor = rows[0].chain_hash().unwrap().to_string();
+        (rows, anchor)
+    }
+
+    fn bundle_of(rows: &[AuditEvent]) -> String {
+        bundle::render(rows, None, None, "test", "2026-09-07T00:00:00Z")
+    }
+
+    #[test]
+    fn a_whole_log_exports_and_verifies() {
+        let (rows, _) = three_rows();
+        let text = bundle_of(&rows);
+        let report = bundle::verify(&text).unwrap();
+        assert_eq!(report.rows, 3);
+        assert_eq!(report.anchor, GENESIS, "a full export starts at genesis");
+        assert_eq!(report.last_hash.as_deref(), rows[2].chain_hash());
+    }
+
+    /// The case the anchor exists for: a period out of the middle, with no genesis in it.
+    #[test]
+    fn an_extract_from_the_middle_verifies_against_its_anchor() {
+        let (rows, anchor) = three_rows();
+        let text = bundle_of(&rows[1..]);
+        let report = bundle::verify(&text).unwrap();
+        assert_eq!(report.rows, 2);
+        assert_eq!(report.anchor, anchor);
+        // And the same rows without the header do not verify as a whole log would: the
+        // anchor is the only thing standing between "an extract" and "unverifiable".
+        assert!(verify_chain(&rows[1..]).is_err());
+    }
+
+    #[test]
+    fn an_edited_row_breaks_the_bundle() {
+        let (mut rows, _) = three_rows();
+        rows[1].subject = "edited".into();
+        let err = bundle::verify(&bundle_of(&rows)).unwrap_err().to_string();
+        assert!(err.contains("row 2"), "{err}");
+        assert!(err.contains("does not match its hash"), "{err}");
+    }
+
+    #[test]
+    fn a_removed_row_breaks_the_bundle_even_with_the_counts_adjusted() {
+        let (rows, _) = three_rows();
+        let kept = [rows[0].clone(), rows[2].clone()];
+        // Counts are consistent with the file, so only the chain can catch this.
+        let err = bundle::verify(&bundle_of(&kept)).unwrap_err().to_string();
+        assert!(err.contains("was removed, reordered or inserted"), "{err}");
+    }
+
+    #[test]
+    fn a_truncated_file_is_not_a_shorter_answer() {
+        let (rows, _) = three_rows();
+        let text = bundle_of(&rows);
+        let without_footer: String = text
+            .lines()
+            .take(text.lines().count() - 1)
+            .map(|l| format!("{l}\n"))
+            .collect();
+        let err = bundle::verify(&without_footer).unwrap_err().to_string();
+        assert!(err.contains("footer"), "{err}");
+    }
+
+    #[test]
+    fn a_forged_anchor_does_not_help() {
+        let (rows, _) = three_rows();
+        let text = bundle_of(&rows[1..]).replace(
+            &format!("\"anchor\":\"{}\"", rows[0].chain_hash().unwrap()),
+            "\"anchor\":\"0000000000000000000000000000000000000000000000000000000000000000\"",
+        );
+        let err = bundle::verify(&text).unwrap_err().to_string();
+        assert!(err.contains("row 1"), "{err}");
+    }
+
+    #[test]
+    fn a_header_that_undercounts_is_refused() {
+        let (rows, _) = three_rows();
+        let text = bundle_of(&rows).replace("\"rows\":3", "\"rows\":2");
+        let err = bundle::verify(&text).unwrap_err().to_string();
+        assert!(err.contains("rows"), "{err}");
+    }
+
+    #[test]
+    fn a_future_format_version_is_refused_rather_than_guessed() {
+        let (rows, _) = three_rows();
+        let text = bundle_of(&rows).replace("\"version\":1", "\"version\":99");
+        let err = bundle::verify(&text).unwrap_err().to_string();
+        assert!(err.contains("version 99"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_period_is_a_valid_bundle() {
+        // "Nothing happened in that week" is an answer an auditor may need, and it has to
+        // be checkable like any other.
+        let text = bundle_of(&[]);
+        let report = bundle::verify(&text).unwrap();
+        assert_eq!(report.rows, 0);
+        assert_eq!(report.last_hash, None);
+    }
+
+    #[test]
+    fn a_period_selects_by_both_ends() {
+        // Stamped by hand rather than by the clock: three rows written in a loop can share
+        // a timestamp — the column is milliseconds — and a period test whose rows are not
+        // distinguishable measures nothing. That collision is real, and it is why both
+        // bounds are inclusive: an export takes one row too many rather than one too few.
+        let (mut rows, _) = three_rows();
+        for (i, r) in rows.iter_mut().enumerate() {
+            r.ts = format!("2026-09-0{}T00:00:00Z", i + 1).parse().unwrap();
+        }
+        let f = AuditFilter {
+            since: Some(rows[1].ts),
+            until: Some(rows[1].ts),
+            ..Default::default()
+        };
+        let selected: Vec<_> = rows.iter().filter(|r| f.matches(r)).collect();
+        assert_eq!(
+            selected.len(),
+            1,
+            "both bounds are inclusive and both apply"
+        );
+        assert_eq!(selected[0].subject, "b");
+
+        let open_ended = AuditFilter {
+            since: Some(rows[1].ts),
+            ..Default::default()
+        };
+        assert_eq!(rows.iter().filter(|r| open_ended.matches(r)).count(), 2);
+    }
+
+    #[test]
+    fn exporting_a_bundle_is_itself_recorded() {
+        let (log, sink) = AuditLog::in_memory();
+        log.record(&Actor::Operator, AuditAction::NoteWrite, "a", json!({}))
+            .unwrap();
+        let text = log
+            .export_bundle(&Actor::Operator, &AuditFilter::default(), "test")
+            .unwrap();
+        // The row for the export is written after the rows are rendered, so the file does
+        // not contain its own export row — but the log does.
+        assert_eq!(sink.actions(), ["note.write", "audit.export"]);
+        assert_eq!(bundle::verify(&text).unwrap().rows, 1);
+    }
 
     #[test]
     fn rows_chain_and_verify() {

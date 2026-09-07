@@ -39,7 +39,8 @@ pub mod subject;
 pub mod write_gate;
 
 pub use audit::{
-    Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, AuditSink, ExportFormat, MemoryAuditSink,
+    Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, AuditSink, ExportFormat,
+    MemoryAuditSink, bundle,
 };
 pub use config::PolicyConfig;
 pub use egress::{Egress, EgressEntry, EgressTicket, Locality};

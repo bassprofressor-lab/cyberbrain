@@ -10,6 +10,27 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A period of the audit log as a file somebody else can check.**
+  `cyberbrain policy audit --since … --until … --export period.jsonl` writes the rows with an
+  anchor and a footer, and `cyberbrain verify-export period.jsonl` checks one with no store,
+  no configuration and no network. The format and the hash rule are written down in
+  [`docs/AUDIT-EXPORT.md`](docs/AUDIT-EXPORT.md), and `scripts/verify-audit-export.py` is a
+  second implementation of the check — eighty lines, run by CI against a real bundle, because
+  evidence that only one program can verify is not evidence for very long.
+- `--since` and `--until` on `policy audit`, so a period can be asked for at all. Both bounds
+  are inclusive: timestamps have millisecond resolution and rows can share one, and an export
+  should take a row too many rather than one too few.
+
+### Changed
+
+- `policy audit --limit` no longer defaults to 50 for an export. The listing keeps the
+  default; a file without an explicit limit covers the whole period, because a silently
+  truncated period is the one mistake its recipient cannot see.
+
 ## [0.2.1] — 2026-09-07
 
 ### Changed

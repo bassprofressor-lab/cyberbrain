@@ -174,6 +174,15 @@ pub enum Command {
         #[command(subcommand)]
         command: PolicyCommand,
     },
+
+    /// Check an audit export somebody handed you.
+    ///
+    /// Needs no store, no configuration and no network: everything the check uses is in the
+    /// file. Exits non-zero when the chain does not hold.
+    VerifyExport {
+        #[arg(value_name = "PATH")]
+        path: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -184,8 +193,11 @@ pub enum PolicyCommand {
     Obligations,
     /// The audit log.
     Audit {
-        #[arg(long, default_value_t = 50)]
-        limit: usize,
+        /// Most rows to show. Defaults to 50 for the listing; an export without this flag
+        /// covers the whole period, because a silently truncated period is the one mistake
+        /// an auditor cannot see in the file.
+        #[arg(long)]
+        limit: Option<usize>,
         #[arg(long)]
         action: Option<String>,
         #[arg(long)]
@@ -193,6 +205,16 @@ pub enum PolicyCommand {
         /// Verify the hash chain and name the first altered row.
         #[arg(long)]
         verify: bool,
+        /// Start of the period, inclusive. RFC 3339, e.g. 2026-01-01T00:00:00Z.
+        #[arg(long, value_name = "TIMESTAMP")]
+        since: Option<String>,
+        /// End of the period, inclusive.
+        #[arg(long, value_name = "TIMESTAMP")]
+        until: Option<String>,
+        /// Write the selected rows to a file as a self-checking bundle, for somebody else
+        /// to verify. Implies no limit unless --limit is given explicitly.
+        #[arg(long, value_name = "PATH")]
+        export: Option<PathBuf>,
     },
     /// Everything stored about an identifier (GDPR Art. 15).
     Subject { identifier: String },

@@ -172,6 +172,11 @@ impl Policy {
         self.audit.export(&self.actor, filter, format)
     }
 
+    /// A period as a self-checking bundle (SPEC §12.6). Recorded like any other export.
+    pub fn export_audit_bundle(&self, filter: &AuditFilter, tool: &str) -> Result<String> {
+        self.audit.export_bundle(&self.actor, filter, tool)
+    }
+
     pub fn verify_audit(&self) -> Result<usize> {
         self.audit.verify()
     }

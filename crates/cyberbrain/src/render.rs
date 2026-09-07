@@ -551,6 +551,33 @@ pub fn find(r: &FindReport) -> String {
     o
 }
 
+/// The verdict on an audit export, for a person who was handed a file.
+///
+/// Written to be readable by someone who did not make the file and may not know the tool:
+/// what was checked, over which period, and the anchor it started from.
+pub fn verify_export(r: &cyberbrain_policy::bundle::Report) -> String {
+    let mut s = String::new();
+    s.push_str(&format!("chain holds over {} row(s)\n", r.rows));
+    let period = match (&r.from, &r.to) {
+        (Some(f), Some(t)) => format!("{f} to {t}"),
+        (Some(f), None) => format!("{f} onwards"),
+        (None, Some(t)) => format!("up to {t}"),
+        (None, None) => "the whole log".to_string(),
+    };
+    s.push_str(&format!("period:   {period}\n"));
+    s.push_str(&format!("anchor:   {}\n", r.anchor));
+    if let Some(h) = &r.last_hash {
+        s.push_str(&format!("last row: {h}\n"));
+    }
+    s.push_str(&format!("written:  {} by {}\n", r.exported_at, r.tool));
+    s.push_str(
+        "\nThis says the file is internally intact and starts where it says it does.\n\
+         Whether the anchor belongs to that machine's real history is a question only the\n\
+         full log answers.\n",
+    );
+    s
+}
+
 #[cfg(test)]
 mod tests {
     //! The one property every renderer shares: a path reaches the reader with forward

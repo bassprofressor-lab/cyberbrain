@@ -164,6 +164,19 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             return Ok(0);
         }
 
+        // No store: the point of this one is that a person who was handed a file can check
+        // it with nothing but the binary. Opening a store first would make it useless
+        // exactly where it is needed.
+        Command::VerifyExport { ref path } => {
+            let text = std::fs::read_to_string(path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            let report = cyberbrain_policy::bundle::verify(&text)?;
+            out.emit(&report, render::verify_export)?;
+            return Ok(0);
+        }
+
         _ => {}
     }
 
@@ -277,7 +290,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             }
         }
         Command::Policy { command } => return run_policy(&app, command, out),
-        Command::Init { .. } | Command::Hook { .. } | Command::Serve { .. } | Command::Mcp => {
+        Command::Init { .. }
+        | Command::Hook { .. }
+        | Command::Serve { .. }
+        | Command::Mcp
+        | Command::VerifyExport { .. } => {
             unreachable!("handled before the store was opened")
         }
     }
@@ -299,13 +316,50 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             action,
             subject,
             verify,
+            since,
+            until,
+            export,
         } => {
+            let stamp = |s: Option<String>, what: &str| -> Result<Option<jiff::Timestamp>> {
+                s.map(|v| {
+                    v.parse::<jiff::Timestamp>().map_err(|e| {
+                        Error::Config(format!("--{what}: {v:?} is not an RFC 3339 timestamp: {e}"))
+                    })
+                })
+                .transpose()
+            };
             let filter = AuditFilter {
                 action,
                 subject,
-                limit: Some(limit),
+                since: stamp(since, "since")?,
+                until: stamp(until, "until")?,
+                // An export answers "what happened in this period", and a limit silently
+                // cutting that short is the one failure an auditor cannot see. The listing
+                // keeps its default; the file does not get one unless it was asked for.
+                limit: if export.is_some() {
+                    limit
+                } else {
+                    Some(limit.unwrap_or(50))
+                },
                 ..Default::default()
             };
+            if let Some(path) = export {
+                let text = app.export_audit_bundle(&filter)?;
+                std::fs::write(&path, &text).map_err(|e| Error::Io {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                let report = cyberbrain_policy::bundle::verify(&text)?;
+                out.emit(&report, |r| {
+                    format!(
+                        "wrote {} row(s) to {}\nchecked as written: chain holds from anchor {}\n",
+                        r.rows,
+                        path.display(),
+                        &r.anchor[..r.anchor.len().min(12)]
+                    )
+                })?;
+                return Ok(0);
+            }
             let format = if out.json {
                 cyberbrain_policy::ExportFormat::Json
             } else {
