@@ -55,6 +55,13 @@ jobs:
           makensis -DVERSION=0.0.0-ci -DVIVERSION=0.0.0 "-DSOURCE=$staging" cyberbrain.nsi
           test -f cyberbrain-setup-0.0.0-ci.exe
 
+      # The one artefact nobody here can click. Uploading it from every push is how a
+      # person with a Windows machine gets to try the current state without a release.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: windows-installer
+          path: packaging/windows/cyberbrain-setup-0.0.0-ci.exe
+
   # SPEC §9.1: the Windows hook has to survive cmd.exe. A job that only compiles proves
   # nothing about quoting, spaces in paths, or the absence of a POSIX shell — the failures
   # this is here to catch all happen at invocation, not at build.
