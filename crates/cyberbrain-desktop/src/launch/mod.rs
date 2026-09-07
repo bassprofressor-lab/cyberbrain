@@ -29,6 +29,9 @@ pub enum StartError {
     NoStore { dir: PathBuf },
     /// It started and said nothing we could use, or it died. Carries what it printed.
     Failed { message: String, output: String },
+    /// The `cyberbrain` beside us was built without its web page. There is nothing for this
+    /// program to open, so it says so instead of pointing a browser at a JSON error.
+    NoPage,
 }
 
 impl std::fmt::Display for StartError {
@@ -38,6 +41,14 @@ impl std::fmt::Display for StartError {
                 write!(f, "no {STORE_DIR} store in {}", dir.display())
             }
             StartError::Failed { message, .. } => write!(f, "{message}"),
+            StartError::NoPage => write!(
+                f,
+                concat!(
+                    "this copy of cyberbrain was built without its web page ",
+                    "(--no-default-features), and the page is the whole of what this ",
+                    "launcher opens"
+                )
+            ),
         }
     }
 }
@@ -180,11 +191,16 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
     let stdout = child.stdout.take().expect("stdout was piped");
     let d = Arc::clone(&diag);
     std::thread::spawn(move || {
-        let mut found = false;
+        let mut said = false;
         for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            if !found && let Some(url) = parse_serve_url(&line) {
-                found = true;
-                let _ = tx.send(url);
+            if !said {
+                if line.trim() == NO_PAGE_MARKER {
+                    said = true;
+                    let _ = tx.send(Signal::NoPage);
+                } else if let Some(url) = parse_serve_url(&line) {
+                    said = true;
+                    let _ = tx.send(Signal::Url(url));
+                }
             }
             append(&d, &line);
         }
@@ -199,11 +215,18 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
     });
 
     match rx.recv_timeout(START_TIMEOUT) {
-        Ok(url) => Ok(Server {
+        Ok(Signal::Url(url)) => Ok(Server {
             child,
             url,
             project_dir: project_dir.to_path_buf(),
         }),
+        // The marker comes before the address, so this is decided before a browser is
+        // opened rather than after somebody has read a JSON error.
+        Ok(Signal::NoPage) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(StartError::NoPage)
+        }
         Err(_) => {
             let _ = child.kill();
             let _ = child.wait();
@@ -225,6 +248,20 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
         }
     }
 }
+
+/// What the reader thread found on `serve`'s stdout, whichever came first.
+enum Signal {
+    Url(String),
+    NoPage,
+}
+
+/// The line `cyberbrain serve` prints when its build has no page.
+///
+/// Duplicated from `cyberbrain::serve::NO_PAGE_MARKER` because these are two programs, not
+/// two modules: the launcher runs whichever `cyberbrain.exe` is beside it, which may have
+/// been built from a different tree. A shared constant would be a compile-time promise about
+/// a runtime relationship. `the_marker_matches_what_serve_prints` checks the real binary.
+pub const NO_PAGE_MARKER: &str = "cyberbrain serve: no web page in this build";
 
 /// An address left behind by a running launcher, accepted only if it is loopback.
 ///

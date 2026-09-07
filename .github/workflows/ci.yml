@@ -45,9 +45,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release -p cyberbrain -p cyberbrain-desktop --no-default-features
+
+      # The page, before the binary. This job used to build --no-default-features, which is
+      # a supported build and is not the product: the installer it produced put a Start menu
+      # entry on a browser tab reading `"code": "not-found"`. An artefact offered for people
+      # to try has to be the thing they would get.
+      - name: build the embedded page
+        run: npm ci && npm run build
+        working-directory: ui
+
+      - run: cargo build --release -p cyberbrain -p cyberbrain-desktop
       - shell: bash
         run: |
           if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then

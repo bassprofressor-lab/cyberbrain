@@ -317,3 +317,80 @@ fn a_slow_delivery_does_not_start_a_second_one() {
     }
     assert_eq!(started, 1);
 }
+
+// ---- a cyberbrain that has no page to open ----
+//
+// `--no-default-features` builds a working CLI with no web UI in it. That is a supported
+// build, and the CI installer was made from one: clicking the Start menu entry opened a
+// browser on a JSON error where a program should have been. The launcher's whole job is to
+// open that page, so it has to notice and say so.
+
+#[test]
+fn the_marker_matches_what_serve_prints() {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../cyberbrain/src/serve/mod.rs");
+    let Ok(text) = std::fs::read_to_string(&src) else {
+        // Built on its own, without its neighbour in the tree. Nothing to compare against,
+        // and inventing a pass would be worse than not looking.
+        return;
+    };
+    // These are two programs, not two modules: the launcher runs whichever cyberbrain.exe
+    // is beside it. A shared constant would be a compile-time promise about a runtime
+    // relationship, so the promise is checked here instead.
+    let want = format!("NO_PAGE_MARKER: &str = {NO_PAGE_MARKER:?}");
+    assert!(
+        text.contains(&want),
+        "serve no longer prints what the launcher listens for.\nlauncher expects: {want}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_without_a_page_is_reported_instead_of_opened() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".cyberbrain/notes")).unwrap();
+
+    // A stand-in for a cyberbrain built without its page: it says so, then prints an
+    // address exactly as the real one would. The address must not win.
+    let fake = tmp.path().join("cyberbrain");
+    std::fs::write(
+        &fake,
+        format!(
+            "#!/bin/sh\necho '{NO_PAGE_MARKER}'\n\
+             echo 'cyberbrain serve: http://127.0.0.1:44444/  (loopback only)'\n\
+             sleep 20\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    match start(&fake, tmp.path()) {
+        Err(StartError::NoPage) => {}
+        Err(other) => panic!("expected the missing page to be reported, got {other}"),
+        Ok(mut running) => {
+            running.stop();
+            panic!("the launcher opened a browser at a build with no page");
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ordinary_build_is_still_opened() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join(".cyberbrain/notes")).unwrap();
+    // The same stand-in without the marker. Calibration for the test above: if the launcher
+    // had simply started refusing to open anything, this would fail too.
+    let fake = tmp.path().join("cyberbrain");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\necho 'cyberbrain serve: http://127.0.0.1:44444/  (loopback only)'\nsleep 20\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut running = start(&fake, tmp.path()).expect("an address, and no complaint");
+    assert_eq!(running.url, "http://127.0.0.1:44444/");
+    running.stop();
+}

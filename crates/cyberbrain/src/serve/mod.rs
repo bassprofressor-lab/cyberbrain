@@ -134,6 +134,12 @@ pub fn router(app: Arc<App>) -> Router {
 ///
 /// `open` belongs here rather than in the caller for one reason: with `--port 0` the
 /// address does not exist until the bind returns, and the caller has nothing to open.
+/// Printed on stdout when this build carries no web page, before the address line.
+///
+/// Matched by the desktop launcher, so the wording is part of the interface between the two
+/// programs rather than a message. `no_page_marker_is_a_promise` in the tests says so.
+pub const NO_PAGE_MARKER: &str = "cyberbrain serve: no web page in this build";
+
 pub async fn serve(app: Arc<App>, port: u16, open: bool) -> Result<()> {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let listener = tokio::net::TcpListener::bind(addr)
@@ -143,6 +149,11 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool) -> Result<()> {
         .local_addr()
         .map_err(|e| Error::Config(format!("cannot read the bound address: {e}")))?;
     if !assets::bundle_present() {
+        // On stdout, because the desktop launcher reads this stream and matches on it. Its
+        // whole job is to open the page; without one, the browser gets a JSON error where a
+        // program should be. The address line below is already a contract between the two
+        // binaries — this is the same contract saying there is nothing here to open.
+        println!("{NO_PAGE_MARKER}");
         eprintln!(
             "cyberbrain serve: the web UI bundle is not embedded (ui/dist was missing at build time); the API works, the page will 404"
         );

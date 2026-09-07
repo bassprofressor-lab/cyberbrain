@@ -12,6 +12,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [0.3.0] — 2026-09-07
 
+### Fixed
+
+- **The installer CI offers for testing had no web page in it.** That job built
+  `--no-default-features`, which is a supported build and is not the product: clicking the
+  Start menu entry opened a browser on `{"code":"not-found"}` where a program should have
+  been. It builds the page now, like the release workflow does. An artefact put in front of
+  people to try has to be the thing they would get.
+- **The launcher opened a browser at a build with no page.** Even with the above fixed, that
+  build exists — `cargo install --no-default-features` is documented. `serve` now says so on
+  the stream the launcher already reads, before the address, and the launcher stops with a
+  sentence naming the cause instead of pointing a browser at a JSON error. The two constants
+  live in two programs on purpose, because the launcher runs whichever `cyberbrain` is beside
+  it; a test compares them so they cannot drift.
+
 ### Added
 
 - **The hub runs as a Windows service, and setting it up is a tick box.** The installer has

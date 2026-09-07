@@ -218,6 +218,7 @@ fn open_project(
             // A remembered folder that no longer works is worth one dialog, then the
             // question everyone would ask next: which folder, then?
             Started::Rejected => {}
+            Started::Impossible => return None,
         }
     }
     choose_project(server_exe, settings, settings_path, job)
@@ -292,15 +293,18 @@ fn choose_project(
                 return Some(server);
             }
             Started::Rejected => continue,
+            Started::Impossible => return None,
         }
     }
 }
 
 enum Started {
     Ok(Server),
-    /// It did not start and the user has been told; ask again. Giving up is not a variant:
-    /// cancelling the folder dialog ends `choose_project` at the `?` and never gets here.
+    /// It did not start and the user has been told; ask again.
     Rejected,
+    /// Nothing about this installation can work, so asking for another folder would only
+    /// be the same dialog again with a different path in it.
+    Impossible,
 }
 
 /// One attempt at a folder, including the offer to create a store where there is none.
@@ -332,6 +336,19 @@ fn try_start(server_exe: &Path, dir: &Path, job: &sys::JobObject) -> Started {
                     Started::Rejected
                 }
             }
+        }
+        // Not a folder problem, so there is no folder to try next: this copy of cyberbrain
+        // has no page, and opening a page is all this program does.
+        Err(e @ StartError::NoPage) => {
+            sys::error_box(
+                APP,
+                &format!(
+                    "Cyberbrain cannot open:\n\n{e}.\n\nInstall the release build from \
+                     the Cyberbrain website, which has the page built in. The command-line \
+                     tool beside it works either way."
+                ),
+            );
+            Started::Impossible
         }
         Err(e @ StartError::Failed { .. }) => {
             let detail = match &e {
