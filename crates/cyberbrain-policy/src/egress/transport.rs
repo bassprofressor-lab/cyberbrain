@@ -55,6 +55,7 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
     match purpose {
         EgressPurpose::ModelDownload => Error::Embed(msg),
         EgressPurpose::LocalInference => Error::Llm(msg),
+        EgressPurpose::AuditSync => Error::Index(msg),
     }
 }
 
@@ -144,6 +145,35 @@ pub async fn get(ticket: &EgressTicket, url: &str) -> Result<Response> {
         .send()
         .await
         .map_err(|e| err_for(ticket.purpose(), format!("GET {}: {e}", redact(url))))?;
+    finish(ticket, resp).await
+}
+
+/// HTTP POST with a bearer token. The URL must be covered by the ticket.
+///
+/// Used by audit delivery, which is the one path that sends a body of its own rather than
+/// asking for one. The token goes in a header and never into the URL: query strings end up
+/// in logs, and the audit row for this call records the URL.
+pub async fn post_bearer(
+    ticket: &EgressTicket,
+    url: &str,
+    token: &str,
+    headers: &[(&str, &str)],
+    body: String,
+) -> Result<Response> {
+    let u = check(ticket, url)?;
+    let c = client(ticket)?;
+    let mut req = c
+        .post(u)
+        .bearer_auth(token)
+        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson");
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let resp = req
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| err_for(ticket.purpose(), format!("POST {}: {e}", redact(url))))?;
     finish(ticket, resp).await
 }
 

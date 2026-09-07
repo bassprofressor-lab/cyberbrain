@@ -167,7 +167,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
 
         // No store either: the hub keeps its own record of other machines' rows, and the
         // notes on this machine are none of its business.
-        Command::Hub { ref command } => return run_hub(command, out),
+        Command::Hub { ref command } => return run_hub(command, cli.store.as_deref(), out),
 
         // No store: the point of this one is that a person who was handed a file can check
         // it with nothing but the binary. Opening a store first would make it useless
@@ -447,12 +447,71 @@ fn run_licence(command: &cli::LicenceCommand, out: Out) -> Result<i32> {
     }
 }
 
-/// The hub's commands. None of them opens a store.
-fn run_hub(command: &cli::HubCommand, out: Out) -> Result<i32> {
+/// The hub's commands. Most run a hub and open no store; `enrol` and `push` are the
+/// client's side of the same feature and do open one, which is why the store path comes in
+/// here rather than being reached for globally.
+fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out) -> Result<i32> {
     use cli::HubCommand;
     let now = || jiff::Timestamp::now().to_string();
 
     match command {
+        HubCommand::Enrol { invitation } => {
+            let text = std::fs::read_to_string(invitation).map_err(|e| Error::Io {
+                path: invitation.clone(),
+                source: e,
+            })?;
+            let inv = hub::client::parse_invitation(&text)?;
+            let hub_url = inv.hub_url.clone().expect("checked while parsing");
+
+            let app = App::open(store, Actor::Operator)?;
+            let token_at = hub::client::save_token(&hub_url, &inv.token)?;
+            let inference =
+                app.enrol_with_hub(&hub_url, &inv.device, inv.inference_url.as_deref())?;
+
+            out.emit(
+                &serde_json::json!({
+                    "hub": hub_url,
+                    "device": inv.device,
+                    "token_stored_at": token_at,
+                    "inference_endpoint": inference,
+                }),
+                |v| {
+                    let mut s = format!(
+                        "enrolled with {} as {}\ntoken stored at {}\n",
+                        v["hub"].as_str().unwrap_or_default(),
+                        v["device"].as_str().unwrap_or_default(),
+                        v["token_stored_at"].as_str().unwrap_or_default()
+                    );
+                    if let Some(e) = v["inference_endpoint"].as_str() {
+                        s.push_str(&format!("inference endpoint set to {e}\n"));
+                    }
+                    s.push_str(
+                        "\nDelete the invitation file: it carries the token.\n\
+                         Deliver with `cyberbrain hub push`, on a timer.\n",
+                    );
+                    s
+                },
+            )?;
+            Ok(0)
+        }
+
+        HubCommand::Push { since } => {
+            let app = App::open(store, Actor::Operator)?;
+            let since = since
+                .as_ref()
+                .map(|s| {
+                    s.parse::<jiff::Timestamp>().map_err(|e| {
+                        Error::Config(format!("--since {s:?} is not an RFC 3339 timestamp: {e}"))
+                    })
+                })
+                .transpose()?;
+            let (report, code) = runtime()?.block_on(app.push_to_hub(since))?;
+            out.emit(&report, |v| {
+                format!("{}\n", v["message"].as_str().unwrap_or_default())
+            })?;
+            Ok(code)
+        }
+
         HubCommand::Serve { addr, data } => {
             let path = hub::data_path(data.clone());
             let store = hub::HubStore::open(&path)?;

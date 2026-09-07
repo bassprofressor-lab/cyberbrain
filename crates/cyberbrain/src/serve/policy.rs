@@ -84,6 +84,9 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
                     .clone()
                     .unwrap_or_else(|| "none configured".into()),
                 EgressPurpose::LocalInference => cfg.inference.base_url.clone(),
+                EgressPurpose::AuditSync => {
+                    cfg.hub.url.clone().unwrap_or_else(|| "not enrolled".into())
+                }
             };
             register_text.push_str(&format!("{name}|{}|{}\n", entry.data, entry.requires));
             paths.push(EgressPath {

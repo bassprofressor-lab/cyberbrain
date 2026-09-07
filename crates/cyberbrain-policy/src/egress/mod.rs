@@ -43,8 +43,11 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 2] =
-    [EgressPurpose::ModelDownload, EgressPurpose::LocalInference];
+pub const PURPOSES: [EgressPurpose; 3] = [
+    EgressPurpose::ModelDownload,
+    EgressPurpose::LocalInference,
+    EgressPurpose::AuditSync,
+];
 
 /// One line of `cyberbrain policy egress`. Plain data so the CLI and the UI print the same
 /// thing.
@@ -71,6 +74,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
     match p {
         EgressPurpose::ModelDownload => "model-download",
         EgressPurpose::LocalInference => "local-inference",
+        EgressPurpose::AuditSync => "audit-sync",
     }
 }
 
@@ -184,6 +188,75 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 requires: "every address the endpoint resolves to is loopback or private-range, \
                            or the operator set allow_overlay_network (100.64/10) or \
                            allow_public_endpoint",
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
+            }
+        }
+        EgressPurpose::AuditSync => {
+            let (enabled, state) = match &cfg.hub_endpoint {
+                None => (
+                    false,
+                    "disabled: this store is not enrolled with a hub".to_string(),
+                ),
+                Some(url) => match Destination::parse(url) {
+                    Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
+                    Ok(d) => match d.literal_locality() {
+                        Some(Locality::Public) if !cfg.allow_public_hub => (
+                            false,
+                            format!(
+                                "disabled: {} is a public address and allow_public_hub is false",
+                                d.host
+                            ),
+                        ),
+                        Some(Locality::Public) => (
+                            true,
+                            format!(
+                                concat!(
+                                    "enabled WITH allow_public_hub: {} is public; ",
+                                    "audit rows leave this network"
+                                ),
+                                url
+                            ),
+                        ),
+                        Some(Locality::Overlay) if !cfg.allow_overlay_network => (
+                            false,
+                            format!(
+                                concat!(
+                                    "disabled: {} is in 100.64.0.0/10 and ",
+                                    "allow_overlay_network is false"
+                                ),
+                                d.host
+                            ),
+                        ),
+                        Some(Locality::NotUnicast) => (
+                            false,
+                            format!("disabled: {} is not a unicast address", d.host),
+                        ),
+                        _ => (true, format!("enabled: delivering to {url}")),
+                    },
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: format!(
+                    concat!(
+                        "the hub this store was enrolled with ({}); DNS lookup of its ",
+                        "hostname via the OS resolver if it is not an IP literal"
+                    ),
+                    cfg.hub_endpoint.as_deref().unwrap_or("none configured")
+                ),
+                // The distinction this whole path is built around, stated where somebody
+                // reading the register will see it.
+                data: concat!(
+                    "HTTP POST of audit rows: timestamp, actor, action, subject and the ",
+                    "chain hashes. What a note said is not in them"
+                ),
+                carries_note_content: false,
+                requires: concat!(
+                    "the store was enrolled with a hub, and the hub is loopback or ",
+                    "private-range unless allow_public_hub is set"
+                ),
                 permitted_by: ALL_PROFILES,
                 enabled,
                 state,
@@ -597,6 +670,26 @@ impl Egress {
                     return Err("inference requests do not follow redirects".into());
                 }
             }
+            EgressPurpose::AuditSync => {
+                if via.is_some() {
+                    return Err("audit deliveries do not follow redirects".into());
+                }
+                let Some(hub) = &self.cfg.hub_endpoint else {
+                    return Err("this store is not enrolled with a hub".into());
+                };
+                // The destination has to be the hub this store enrolled with, not merely
+                // some address that passes the locality test. Otherwise the ticket would
+                // permit delivering the audit trail to whatever host a config edit named.
+                let configured = Destination::parse(hub)
+                    .map_err(|e| format!("configured hub endpoint is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the hub this store is enrolled with ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
         }
 
         dest.addrs = self
@@ -610,7 +703,17 @@ impl Egress {
             ));
         }
 
-        if purpose == EgressPurpose::LocalInference {
+        // The same locality rule for both outbound paths, with the setting that relaxes it
+        // named per purpose: one says "note text may go to a public endpoint", the other
+        // "audit rows may leave this network". They are different decisions.
+        if matches!(
+            purpose,
+            EgressPurpose::LocalInference | EgressPurpose::AuditSync
+        ) {
+            let allow_public = match purpose {
+                EgressPurpose::AuditSync => self.cfg.allow_public_hub,
+                _ => self.cfg.allow_public_endpoint,
+            };
             for a in &dest.addrs {
                 match locality(*a) {
                     Locality::Loopback | Locality::Private => {}
@@ -626,9 +729,10 @@ impl Egress {
                             dest.host
                         ));
                     }
-                    Locality::Public if self.cfg.allow_public_endpoint => {
+                    Locality::Public if allow_public => {
                         notes.push(format!(
-                            "{a} is PUBLIC, permitted by allow_public_endpoint; this call is a transfer of note content off this machine"
+                            "{a} is PUBLIC, permitted by the setting for {}; this call is a transfer off this machine",
+                            purpose_name(purpose)
                         ));
                     }
                     Locality::Public => {
@@ -890,15 +994,26 @@ mod tests {
         let names: Vec<&str> = reg.iter().map(|e| purpose_name(e.purpose)).collect();
         assert_eq!(
             names,
-            ["model-download", "local-inference"],
-            "SPEC §12.1: that is the entire list"
+            ["model-download", "local-inference", "audit-sync"],
+            "the register is the whole list; adding a purpose is a decision, not a detail"
         );
         for e in &reg {
             // Exhaustive: a new core variant stops this compiling.
             match e.purpose {
-                EgressPurpose::ModelDownload | EgressPurpose::LocalInference => {}
+                EgressPurpose::ModelDownload
+                | EgressPurpose::LocalInference
+                | EgressPurpose::AuditSync => {}
             }
         }
+        // Audit sync is off until a store is enrolled — a path that exists is not a path
+        // that is open. (Local inference is "enabled" by default in the sense that loopback
+        // is permitted; whether anything answers there is a different question.)
+        let sync = reg
+            .iter()
+            .find(|e| e.purpose == EgressPurpose::AuditSync)
+            .expect("audit sync is in the register");
+        assert!(!sync.enabled, "not enrolled means nothing is sent");
+        assert!(!sync.carries_note_content, "rows only, never note text");
     }
 
     #[test]

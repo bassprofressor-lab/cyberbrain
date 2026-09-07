@@ -28,6 +28,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   accepting rows **and does nothing else** — the record stays readable and exportable,
   clients buffer, deliveries get a `503` that says to keep buffering, and renewing takes what
   they held with the chain unbroken. `hub licence keygen` and `issue` are the issuer's side.
+- **`audit-sync`, the third registered egress purpose, and the client side that uses it.**
+  `cyberbrain hub enrol <invitation>` points a store at a hub; `cyberbrain hub push` delivers
+  its audit rows, meant for a timer. The path appears in `cyberbrain policy egress` whether
+  or not a store is enrolled, states that it carries no note content, and the gate refuses
+  any destination that is not the hub this store enrolled with — so editing the URL produces
+  a refusal, which is itself an audited row.
+
+  The token is kept outside the store, because `cyberbrain.toml` lives in a repository.
+  Nothing is buffered separately either: the audit log already holds every row in order, so
+  a failed delivery changes nothing and the next one covers the same ground.
 - **Invitations.** `hub add --invite` writes a file with the token, the hub address and the
   shared inference endpoint, so a machine is set up from one file instead of three settings
   typed by hand.
@@ -50,6 +60,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Changed
 
+- A test now fails when a message carries the indentation it was written with. `rustfmt`
+  collapses a multi-line `format!` string onto one line and keeps the continuation's spaces,
+  which is how `no egress gate is                  wired in` reached a shipped error message.
+  It happened three more times in an afternoon, so it is checked rather than remembered.
 - `policy audit --limit` no longer defaults to 50 for an export. The listing keeps the
   default; a file without an explicit limit covers the whole period, because a silently
   truncated period is the one mistake its recipient cannot see.

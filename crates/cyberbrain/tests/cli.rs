@@ -745,10 +745,21 @@ fn policy_subcommands_work_over_a_real_store() {
     ]);
     cb.write("3", "fresh-session", "gamma");
 
-    // Egress register: exactly the spec's two purposes, both disabled/enabled with a reason.
+    // Egress register: the three registered purposes, each enabled or disabled with a
+    // reason. An unenrolled store lists audit sync as disabled rather than hiding it.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.len(), 3);
+    let sync = &entries[2];
+    assert_eq!(sync["purpose"], "audit-sync");
+    assert_eq!(sync["enabled"], false);
+    assert!(
+        sync["state"]
+            .as_str()
+            .unwrap()
+            .contains("not enrolled with a hub"),
+        "{sync}"
+    );
     assert_eq!(entries[0]["purpose"], "model-download");
     assert_eq!(entries[0]["enabled"], false);
     assert!(

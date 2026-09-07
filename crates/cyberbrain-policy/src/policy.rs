@@ -262,7 +262,11 @@ mod tests {
         let s = p.status();
         assert_eq!(s.profile, Profile::Ch);
         assert!(s.pii_scan_active);
-        assert_eq!(s.egress.len(), 2);
+        assert_eq!(
+            s.egress.len(),
+            3,
+            "model download, local inference, audit sync"
+        );
         assert!(s.disclaimer.contains("seatbelt"));
         let g = p.gate();
         assert!(

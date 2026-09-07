@@ -221,6 +221,9 @@ pub enum EgressPurpose {
     ModelDownload,
     /// A request to an inference endpoint on loopback or a private range.
     LocalInference,
+    /// Audit rows to a collecting hub, so a team can hold its own compliance evidence in
+    /// one place. Rows only: the request carries what happened, never what a note said.
+    AuditSync,
 }
 
 impl EgressPurpose {
@@ -229,6 +232,10 @@ impl EgressPurpose {
             EgressPurpose::ModelDownload => {
                 "downloads a model artefact from the configured source, once, after you agree"
             }
+            EgressPurpose::AuditSync => concat!(
+                "sends this store's audit rows to the hub you enrolled with; rows describe ",
+                "what happened, never what a note said"
+            ),
             EgressPurpose::LocalInference => {
                 "sends note text to the configured inference endpoint on your own network"
             }

@@ -60,6 +60,26 @@ pub struct Config {
     pub embedding: EmbeddingConfig,
     pub inference: InferenceConfig,
     pub policy: PolicyConfig,
+    pub hub: HubConfig,
+}
+
+/// Where this store delivers its audit rows, if anywhere.
+///
+/// The token is deliberately **not** here. This file sits inside the store, and a store is
+/// meant to live in a repository — a credential in it would be committed by the second
+/// person who ran `git add .`. It goes in the user's own configuration directory instead,
+/// or in `CYBERBRAIN_HUB_TOKEN`.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HubConfig {
+    /// Base URL of the hub. `None` means this store was never enrolled and sends nothing.
+    pub url: Option<String>,
+    /// The hub must be loopback or private-range unless this is set, the same rule as the
+    /// inference endpoint and for the same reason.
+    pub allow_public_hub: bool,
+    /// Device id, for the operator's benefit when reading the file. The token is what
+    /// authenticates; this only says which device this store believes it is.
+    pub device: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -164,6 +184,7 @@ impl Default for Config {
             embedding: EmbeddingConfig::default(),
             inference: InferenceConfig::default(),
             policy: PolicyConfig::default(),
+            hub: HubConfig::default(),
         }
     }
 }
@@ -284,6 +305,13 @@ timeout_ms = 30000
 # this is the wait a person notices. Over budget, the hits come back with a caveat saying
 # the check did not run. 0 waits as long as timeout_ms.
 contradiction_budget_ms = 3000
+
+[hub]
+# Set by `cyberbrain hub enrol <invitation>`. Without a url this store sends nothing, and
+# `audit-sync` shows as disabled in `cyberbrain policy egress`. The device token is not
+# here on purpose: this file lives in the store, and a store lives in a repository.
+# url = "https://hub.example.internal:7788"
+allow_public_hub = false
 
 [policy]
 # eu | ch | off. "off" compiles the checks in and disables them.

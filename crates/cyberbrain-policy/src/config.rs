@@ -37,6 +37,15 @@ pub struct PolicyConfig {
     /// overlays). Its own switch, never folded into `allow_public_endpoint`.
     pub allow_overlay_network: bool,
 
+    /// Where this store delivers its audit rows, if it was enrolled with a hub. `None`
+    /// means `AuditSync` is disabled: there is nowhere registered to send to.
+    pub hub_endpoint: Option<String>,
+
+    /// The hub must be loopback or private-range unless the operator says otherwise, the
+    /// same rule and the same reasoning as the inference endpoint: a collector on the public
+    /// internet is a transfer off the premises, and it should take a deliberate act.
+    pub allow_public_hub: bool,
+
     /// Where model artefacts come from. `None` means `ModelDownload` is disabled: there is
     /// nowhere registered to fetch from.
     pub model_source: Option<String>,
@@ -53,6 +62,8 @@ impl Default for PolicyConfig {
             inference_endpoint: DEFAULT_INFERENCE_ENDPOINT.to_string(),
             allow_public_endpoint: false,
             allow_overlay_network: false,
+            hub_endpoint: None,
+            allow_public_hub: false,
             model_source: None,
             model_download_consent: false,
         }
@@ -68,6 +79,8 @@ impl PolicyConfig {
             inference_endpoint: cfg.inference.base_url.clone(),
             allow_public_endpoint: cfg.inference.allow_public_endpoint,
             allow_overlay_network: cfg.inference.allow_overlay_network,
+            hub_endpoint: cfg.hub.url.clone(),
+            allow_public_hub: cfg.hub.allow_public_hub,
             ..Self::default()
         }
     }

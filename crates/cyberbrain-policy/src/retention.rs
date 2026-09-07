@@ -214,9 +214,14 @@ pub fn render(q: &RetentionQueue) -> String {
     );
     for i in &q.items {
         let line = match &i.status {
-            RetentionStatus::Due { expired_at } => format!("DUE      expired {expired_at}"),
-            RetentionStatus::Pending { expires_at } => format!("pending  expires {expires_at}"),
-            RetentionStatus::Invalid { reason } => format!("INVALID  {reason}"),
+            // Aligned with a width rather than hand-counted spaces: the columns stay put
+            // when a status is renamed, and a string full of spaces is the shape rustfmt
+            // produces by accident (see tests/message_strings.rs).
+            RetentionStatus::Due { expired_at } => format!("{:<8} expired {expired_at}", "DUE"),
+            RetentionStatus::Pending { expires_at } => {
+                format!("{:<8} expires {expires_at}", "pending")
+            }
+            RetentionStatus::Invalid { reason } => format!("{:<8} {reason}", "INVALID"),
         };
         s.push_str(&format!(
             "  {line}  {} ({}, created {}, retention {})\n",

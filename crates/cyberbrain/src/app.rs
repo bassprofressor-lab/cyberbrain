@@ -553,7 +553,10 @@ enum LlmState {
 /// its rows can be shown without being kept.
 enum PolicyRef<'a> {
     Real(&'a Policy),
-    Dry(Policy, Arc<MemoryAuditSink>),
+    // Boxed because the owned `Policy` dwarfs the reference in the other variant, and every
+    // value of this enum would otherwise carry that much stack whether or not it is a dry
+    // run. It grew past the threshold when the policy config took the hub endpoint.
+    Dry(Box<Policy>, Arc<MemoryAuditSink>),
 }
 
 impl PolicyRef<'_> {
@@ -834,7 +837,7 @@ impl App {
                 index: Box::new(NoopIndexWriter {
                     index: self.index.clone(),
                 }),
-                policy: PolicyRef::Dry(policy, sink),
+                policy: PolicyRef::Dry(Box::new(policy), sink),
             }
         } else {
             Writers {
@@ -2151,6 +2154,109 @@ impl App {
 
     /// The audit log, rendered. Reading through `export` records the export itself
     /// (SPEC §12.6), after the rows were rendered.
+    /// Point this store at a hub, from an invitation. Returns the inference endpoint if the
+    /// invitation carried one.
+    pub fn enrol_with_hub(
+        &self,
+        hub_url: &str,
+        device: &str,
+        inference_url: Option<&str>,
+    ) -> Result<Option<String>> {
+        let path = self.store.config_path();
+        let text = std::fs::read_to_string(&path).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        let mut updated = crate::hub::client::set_hub_in_config(&text, hub_url, device);
+        if let Some(url) = inference_url {
+            updated = crate::hub::client::set_inference_url(&updated, url);
+        }
+        // Parsed before it is written: a config file this command broke would leave the
+        // store unusable, and the person would have no idea what changed.
+        cyberbrain_core::config::Config::parse(&updated, &self.root)
+            .map_err(|e| Error::Config(format!("enrolment would break the config file: {e}")))?;
+        std::fs::write(&path, updated).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        Ok(inference_url.map(str::to_owned))
+    }
+
+    /// Deliver audit rows to the hub this store was enrolled with.
+    ///
+    /// Returns the report and the exit code. A hub that is not collecting, and a gap it can
+    /// still close, are **not** failures of this command: they are states a timer should see
+    /// and carry on from. Only something the operator has to fix exits non-zero.
+    pub async fn push_to_hub(
+        &self,
+        since: Option<jiff::Timestamp>,
+    ) -> Result<(serde_json::Value, i32)> {
+        use crate::hub::client::{self, Reply};
+
+        let hub_url = self.config.hub.url.clone().ok_or_else(|| {
+            Error::Config(
+                "this store is not enrolled with a hub; run `cyberbrain hub enrol <invitation>`"
+                    .into(),
+            )
+        })?;
+        let token = client::token_for(&hub_url)?;
+        let version = env!("CARGO_PKG_VERSION");
+
+        let filter = cyberbrain_policy::AuditFilter {
+            since,
+            ..Default::default()
+        };
+        let bundle = self.export_audit_bundle(&filter)?;
+
+        let egress = self.policy.egress();
+        let actor = cyberbrain_policy::Actor::Operator;
+        let reply = client::deliver(egress, &actor, &hub_url, &token, version, bundle).await?;
+
+        Ok(match reply {
+            Reply::Ok(d) => (
+                serde_json::json!({
+                    "state": "delivered",
+                    "accepted": d.accepted,
+                    "total_rows": d.total_rows,
+                    "hub": d.hub,
+                    "message": format!(
+                        "delivered {} new row(s) to {}; the hub now holds {}",
+                        d.accepted, d.hub, d.total_rows
+                    ),
+                }),
+                0,
+            ),
+            Reply::NotCollecting(m) => (
+                serde_json::json!({
+                    "state": "not-collecting",
+                    "message": format!("{m}\nNothing was lost; this store keeps its rows."),
+                }),
+                0,
+            ),
+            Reply::Gap { expected } => (
+                serde_json::json!({
+                    "state": "gap",
+                    "expected_anchor": expected,
+                    "message": format!(
+                        "the hub is at {} and this delivery did not reach back that far. \
+                         Send a wider period: `cyberbrain hub push` without --since covers \
+                         everything.",
+                        &expected[..expected.len().min(12)]
+                    ),
+                }),
+                0,
+            ),
+            Reply::Refused { status, message } => (
+                serde_json::json!({
+                    "state": "refused",
+                    "status": status,
+                    "message": format!("the hub refused the delivery ({status}): {message}"),
+                }),
+                1,
+            ),
+        })
+    }
+
     /// A period of the log as a self-checking bundle, for somebody outside to verify.
     ///
     /// The tool string goes in the header for the reader's benefit; nothing in the check

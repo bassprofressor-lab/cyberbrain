@@ -1122,8 +1122,17 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     assert!(e["register_hash"].as_str().unwrap().starts_with("b3:"));
     assert_eq!(e["refused_total"], 0);
     let paths = e["paths"].as_array().unwrap();
-    assert_eq!(paths.len(), 2);
+    assert_eq!(
+        paths.len(),
+        3,
+        "model download, local inference, audit sync"
+    );
     assert_eq!(paths[0]["purpose"], "model-download");
+    // Audit sync is in the register whether or not the store is enrolled, and says which
+    // it is. A path that only appears once it is in use is a path nobody audits.
+    assert_eq!(paths[2]["purpose"], "audit-sync");
+    assert_eq!(paths[2]["enabled"], false);
+    assert_eq!(paths[2]["carries_note_content"], false);
     assert_eq!(paths[0]["enabled"], false);
     assert!(
         paths[0]["disabled_reason"]

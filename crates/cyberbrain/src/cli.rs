@@ -383,6 +383,18 @@ pub enum HubCommand {
         #[arg(long, value_name = "URL")]
         inference_url: Option<String>,
     },
+    /// Set this store up to deliver to a hub, from an invitation file.
+    Enrol { invitation: PathBuf },
+    /// Deliver this store's audit rows to the hub it was enrolled with.
+    ///
+    /// Nothing is buffered separately: the audit log is the buffer, and a failed delivery
+    /// changes nothing here. Meant for a timer — once an hour is plenty.
+    Push {
+        /// Send rows from this point rather than the whole log. The hub skips what it
+        /// already has, so a generous window costs bandwidth and nothing else.
+        #[arg(long, value_name = "TIMESTAMP")]
+        since: Option<String>,
+    },
     /// Install, inspect or issue a licence.
     Licence {
         #[command(subcommand)]

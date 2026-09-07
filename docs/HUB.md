@@ -86,15 +86,53 @@ never tell whether the hub was asleep or the client had stopped.
 
 ## Delivering to it
 
-Today, by hand — the client does not send by itself yet. That is the next slice, and the
-shape it will use is this one:
+On the client, once:
 
 ```console
-$ cyberbrain policy audit --export period.jsonl        # on the client
+$ cyberbrain hub enrol ws-021.json
+enrolled with https://hub.example.internal:7788 as dev_01M1Y9…
+token stored at ~/.config/cyberbrain/hub-tokens/4a920a2c….token
+inference endpoint set to http://192.168.1.50:11434/v1
+```
+
+Then, on a timer — once an hour is plenty:
+
+```console
+$ cyberbrain hub push
+delivered 11 new row(s) to https://hub.example.internal:7788; the hub now holds 11
+```
+
+**The token is not in the store.** `cyberbrain.toml` lives inside the store, a store is meant
+to live in a repository, and a credential there gets committed by the second person who runs
+`git add .`. It goes into the user's configuration directory instead, one file per hub, or
+into `CYBERBRAIN_HUB_TOKEN` for a service account.
+
+**Nothing is buffered separately.** The audit log *is* the buffer: it already holds every row
+in order, and the hub says where it stopped. A failed delivery changes nothing locally — the
+next one covers the same ground plus whatever happened since.
+
+`hub push` exits non-zero only for something an operator has to fix. A hub that is not
+collecting (an expired licence) and a gap that a wider period would close are states a timer
+should see and carry on from, and they exit 0 with an explanation.
+
+Every delivery is itself audited, so a push writes two or three rows of its own — which the
+next one carries. On a quiet machine that is the heartbeat: rows keep arriving, so silence
+means the client stopped rather than the person did.
+
+### The path is in the register
+
+`audit-sync` is a registered egress purpose, which means `cyberbrain policy egress` lists it
+whether or not this store is enrolled, says whether it is enabled, and states in as many
+words that it does not carry note content. The gate refuses any destination that is not the
+hub this store enrolled with, so editing the URL in the config file does not redirect a
+company's audit trail — it produces a refusal, and the refusal is itself a row.
+
+### By hand, if you prefer
+
+```console
+$ cyberbrain policy audit --export period.jsonl
 $ curl -X POST https://hub.example.internal:7788/api/v1/ingest \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "x-cyberbrain-version: 0.2.1" \
-    --data-binary @period.jsonl
+    -H "Authorization: Bearer $TOKEN" --data-binary @period.jsonl
 {"accepted":4,"device":"dev_01M1…","next_anchor":"d1e0359c…","total_rows":8}
 ```
 
@@ -144,8 +182,6 @@ Revoking stops a device from sending; its rows stay, because revoking is not a d
 
 ## What is not in this slice
 
-- **The client does not send by itself.** Deliveries are made by hand or by a cron entry
-  wrapping the two commands above.
 - **No TLS of its own.** Put it behind a reverse proxy inside your network, or wait for the
   slice that gives the hub a certificate and pins it at enrolment. Do not expose it to the
   internet as it stands.

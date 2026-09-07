@@ -25,6 +25,7 @@ use cyberbrain_policy::bundle;
 use std::path::PathBuf;
 
 pub mod api;
+pub mod client;
 pub mod licence;
 pub mod store;
 
