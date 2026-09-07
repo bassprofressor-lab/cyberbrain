@@ -32,10 +32,13 @@ jobs:
             name: windows-x86_64
             bin: cyberbrain.exe
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # From v5 the action caches on its own. The lock file is in ui/, not at the root, so
+      # that lookup would fail; the page is small enough that no cache is the honest default.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
 
@@ -79,7 +82,7 @@ jobs:
           if command -v sha256sum > /dev/null; then sha256sum * > "SHA256SUMS-${{ matrix.name }}"; else shasum -a 256 * > "SHA256SUMS-${{ matrix.name }}"; fi
           cat "SHA256SUMS-${{ matrix.name }}"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.name }}
           path: dist/*
@@ -90,7 +93,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
       - name: one directory, one checksum file
@@ -101,7 +104,7 @@ jobs:
           ls -la out
       # A draft, not a publish: the release notes are written by a person, and the tag
       # existing is not the same as the release being ready to read.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           draft: true
           files: out/*

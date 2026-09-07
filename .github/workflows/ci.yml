@@ -18,7 +18,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
@@ -38,7 +38,7 @@ jobs:
     name: windows hook through cmd.exe
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p cyberbrain --no-default-features
@@ -62,7 +62,7 @@ jobs:
     name: release binary runs on a bare image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p cyberbrain --no-default-features
@@ -75,7 +75,7 @@ jobs:
     name: licences and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       # The action runs in its own container without our pinned toolchain, and
       # `rust-toolchain.toml` would make it try to fetch one it does not need: cargo-deny
@@ -86,9 +86,12 @@ jobs:
         with:
           command: check
       - run: mv rust-toolchain.toml.off rust-toolchain.toml
-      - uses: actions/setup-node@v4
+      # From v5 the action caches on its own. The lock file is in ui/, not at the root, so
+      # that lookup would fail; the page is small enough that no cache is the honest default.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       # SPEC §2 applies to the JS tree as well: one AGPL dependency anywhere and the
       # project's own licence becomes a claim it cannot keep.
       - run: npm ci && npm run licenses
@@ -100,7 +103,7 @@ jobs:
     name: build-time C footprint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo tree --workspace --edges normal,build --prefix none --format "{p}" | sort -u > /tmp/deps.txt
       - name: refuse cmake, aws-lc-sys, openssl-sys, native-tls
@@ -114,10 +117,13 @@ jobs:
     name: ui builds and typechecks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      # From v5 the action caches on its own. The lock file is in ui/, not at the root, so
+      # that lookup would fail; the page is small enough that no cache is the honest default.
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
+          package-manager-cache: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
@@ -134,7 +140,7 @@ jobs:
     name: performance budgets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # SPEC §15's budgets are only real if something measures them. Debug builds are
