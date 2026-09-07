@@ -6,6 +6,7 @@
 //! half — the tray, the job object, the dialogs — is in `win`.
 
 use std::io::{BufRead, BufReader};
+use std::net::ToSocketAddrs;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
@@ -22,6 +23,10 @@ const START_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Keep the tail of the child's output for the error dialog, not all of it.
 const DIAG_LIMIT: usize = 8 * 1024;
+
+/// How long the check for an already-running launcher waits. Loopback: either it answers
+/// immediately or there is nothing there.
+const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub enum StartError {
@@ -224,6 +229,20 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
             })
         }
     }
+}
+
+/// Whether something is still listening at an address a previous launcher left behind.
+///
+/// The file outlives the process that wrote it — a crash, a reboot, a kill — so the address
+/// in it is a claim to check, not a fact. A connection that opens is enough: this asks
+/// whether the port is alive, not what is on the other end, and on loopback in the second
+/// after a launcher started, nothing else plausibly is.
+pub fn responds(url: &str) -> bool {
+    let hostport = url.trim_start_matches("http://").trim_end_matches('/');
+    let Ok(mut addrs) = hostport.to_socket_addrs() else {
+        return false;
+    };
+    addrs.any(|a| std::net::TcpStream::connect_timeout(&a, PROBE_TIMEOUT).is_ok())
 }
 
 fn command(server: &Path, project_dir: &Path) -> Command {

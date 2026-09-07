@@ -15,6 +15,14 @@ mod sys;
 const APP: &str = "Cyberbrain";
 
 pub fn run() {
+    // Before anything else, and held for the whole run: two launchers would mean two tray
+    // icons, two servers and two ports, with no way to tell which icon belongs to which.
+    let instance_path = settings::instance_path();
+    let Some(_single) = sys::SingleInstance::acquire() else {
+        show_the_one_that_is_running(instance_path.as_deref());
+        return;
+    };
+
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
@@ -44,6 +52,7 @@ pub fn run() {
     else {
         return; // The user cancelled the folder dialog. Nothing to run, nothing to say.
     };
+    publish_instance(instance_path.as_deref(), &server);
     sys::open_in_browser(&server.url);
 
     let menu = Menu::new();
@@ -100,6 +109,7 @@ pub fn run() {
                     choose_project(&server_exe, &mut settings, settings_path.as_deref(), &job)
                 {
                     server = next;
+                    publish_instance(instance_path.as_deref(), &server);
                     let _ = tray.set_tooltip(Some(tooltip(&server)));
                     sys::open_in_browser(&server.url);
                 }
@@ -121,7 +131,45 @@ pub fn run() {
     });
 
     server.stop();
+    if let Some(path) = instance_path.as_deref() {
+        settings::clear_instance(path);
+    }
     drop(job); // Belt as well as braces: the job takes anything the child left behind.
+}
+
+/// A second launcher's whole job: open the browser at the one that is already running.
+///
+/// It deliberately does not ask the first instance for anything. The address it left behind
+/// is checked by connecting to it, so a file from a launcher that crashed, or from before a
+/// reboot, cannot send anyone to a dead port.
+fn show_the_one_that_is_running(instance_path: Option<&Path>) {
+    if let Some(instance) = instance_path.and_then(settings::read_instance)
+        && launch::responds(&instance.url)
+    {
+        sys::open_in_browser(&instance.url);
+        return;
+    }
+    // The mutex says a launcher exists, but it has no live address: it is still starting,
+    // or it is stuck. Saying so beats a second icon appearing for no visible reason.
+    sys::error_box(
+        APP,
+        "Cyberbrain is already running.\n\nIf no window opened, it is still starting up — \
+         give it a moment, then use the Cyberbrain icon in the notification area.",
+    );
+}
+
+fn publish_instance(path: Option<&Path>, server: &Server) {
+    // Not worth a dialog if it fails. The cost is that a second launch says "already
+    // running" instead of opening the page, and the first one keeps working either way.
+    if let Some(path) = path {
+        let _ = settings::write_instance(
+            path,
+            &settings::Instance {
+                url: server.url.clone(),
+                project_dir: server.project_dir.clone(),
+            },
+        );
+    }
 }
 
 struct Ids {

@@ -68,6 +68,9 @@ project to open, starts the server on a port Windows picks, opens your browser a
 sits in the notification area until you quit it — right-click for the project folder, a
 different project, or Quit. Closing it stops the server.
 
+Starting it again while it is running does not give you a second icon: the second launch
+opens your browser at the one already serving, and exits.
+
 It is not signed, so SmartScreen will warn on first run: More info, then Run anyway. The
 installer deliberately does not touch your `PATH`; if you want `cyberbrain` on the command
 line as well, add `C:\Program Files\Cyberbrain` yourself, or `cargo install cyberbrain`.

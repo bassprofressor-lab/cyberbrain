@@ -10,6 +10,16 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Starting the Windows launcher while it is already running no longer gives you a second
+  tray icon and a second server on a second port. The one that is running leaves its address
+  behind; the second one opens your browser at it and gets out of the way, after checking
+  that something still answers there — so a file left by a launcher that crashed, or one from
+  before a reboot, cannot send you to a dead port.
+
 ## [0.2.0] — 2026-09-07
 
 ### Added

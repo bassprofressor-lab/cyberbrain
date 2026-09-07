@@ -167,6 +167,25 @@ fn stopping_it_actually_stops_it() {
 }
 
 #[test]
+fn an_address_that_answers_is_told_apart_from_one_that_does_not() {
+    let server = server_binary();
+    let tmp = tempfile::tempdir().unwrap();
+    init_store(&server, tmp.path()).unwrap();
+    let mut running = start(&server, tmp.path()).unwrap();
+    let url = running.url.clone();
+    assert!(responds(&url), "a live server did not answer at {url}");
+    running.stop();
+    assert!(!responds(&url), "a dead server still answered at {url}");
+}
+
+#[test]
+fn nonsense_addresses_do_not_answer() {
+    for url in ["", "http://", "http://127.0.0.1:0/", "not-an-address"] {
+        assert!(!responds(url), "{url:?} answered");
+    }
+}
+
+#[test]
 fn the_binary_beside_us_wins_over_one_on_the_path() {
     let tmp = tempfile::tempdir().unwrap();
     let name = if cfg!(windows) {

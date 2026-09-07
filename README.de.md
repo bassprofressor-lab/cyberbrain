@@ -70,6 +70,9 @@ Port, den Windows aussucht, öffnet den Browser darauf und bleibt danach im Info
 Rechtsklick für den Projektordner, ein anderes Projekt oder Beenden. Wird der Starter
 beendet, endet auch der Server.
 
+Ein zweiter Start, während er schon läuft, bringt kein zweites Symbol: der zweite Aufruf
+öffnet den Browser auf dem bereits laufenden und beendet sich.
+
 Signiert ist die Datei nicht, SmartScreen warnt deshalb beim ersten Start: Weitere
 Informationen, dann Trotzdem ausführen. Den `PATH` fasst das Installationsprogramm bewusst
 nicht an; wer `cyberbrain` auch auf der Kommandozeile will, trägt

@@ -7,12 +7,13 @@ use crate::launch::Server;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
 };
+use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, IDYES, KillTimer, MB_ICONERROR, MB_ICONQUESTION,
@@ -158,6 +159,52 @@ impl Drop for JobObject {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// A named mutex that only one launcher can hold.
+///
+/// `Local\\` rather than `Global\\` on purpose: the scope is the logon session. Two people
+/// signed in to the same machine each get their own launcher, which is right — they have
+/// their own projects, their own settings file and their own idea of what "already running"
+/// means.
+pub struct SingleInstance {
+    handle: HANDLE,
+}
+
+impl SingleInstance {
+    /// `None` when another launcher already holds it.
+    ///
+    /// A mutex that cannot be created at all counts as free. Refusing to start because the
+    /// check itself failed would trade a duplicate tray icon for a program that does not
+    /// run, which is the worse of the two.
+    pub fn acquire() -> Option<Self> {
+        let name = wide("Local\\cyberbrain-desktop-single-instance");
+        let handle = unsafe { CreateMutexW(std::ptr::null(), 1, name.as_ptr()) };
+        if handle.is_null() {
+            return Some(Self {
+                handle: std::ptr::null_mut(),
+            });
+        }
+        // GetLastError right after the call, before anything else can overwrite it: the
+        // handle comes back valid either way, and this is the only thing that says whether
+        // we made the mutex or merely opened someone else's.
+        if unsafe { GetLastError() } == ERROR_ALREADY_EXISTS {
+            unsafe { CloseHandle(handle) };
+            return None;
+        }
+        Some(Self { handle })
+    }
+}
+
+impl Drop for SingleInstance {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe {
+                ReleaseMutex(self.handle);
+                CloseHandle(self.handle);
+            }
         }
     }
 }
