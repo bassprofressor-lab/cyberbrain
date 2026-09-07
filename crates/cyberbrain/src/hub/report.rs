@@ -262,3 +262,82 @@ pub fn write_report(
         "summary": summary,
     }))
 }
+
+// ---------------------------------------------------------------------------------------
+// Disclosure: the only route to activity rows, and it needs two people.
+
+use super::access::{AccessRequest, Denied, Principal, RequestState, Role};
+
+/// Hand out the rows an approved request covers.
+///
+/// Everything this checks is a separate way the rule could be got round, and each one is its
+/// own answer rather than a shared "denied": the auditor role, that the request exists, that
+/// somebody else approved it, and that the window is still open. The disclosure is recorded
+/// before the rows are written, so a crash halfway leaves the record saying more happened
+/// than did — which is the safe direction for a log about who looked at what.
+pub fn disclose(
+    hub: &HubStore,
+    token: Option<&str>,
+    request_id: &str,
+    dir: &std::path::Path,
+    now: jiff::Timestamp,
+    tool: &str,
+) -> std::result::Result<serde_json::Value, Denied> {
+    let who: Principal = hub.principal_for(token, Role::Auditor)?;
+    let req: AccessRequest = hub
+        .request(request_id)
+        .map_err(|e| Denied::NotAuthorised(e.to_string()))?
+        .ok_or_else(|| Denied::NotApproved(request_id.to_string()))?;
+
+    match req.state(now) {
+        RequestState::Pending => return Err(Denied::NotApproved(req.id)),
+        RequestState::Closed => return Err(Denied::WindowClosed(req.id)),
+        RequestState::Open => {}
+    }
+    // The person who asked is the person who may read. A second auditor with the same role
+    // is still a different person, and the request names who it was for.
+    if req.requester != who.id {
+        return Err(Denied::NotAuthorised(format!(
+            "request {} was made by {}, not by you",
+            req.id, req.requester_name
+        )));
+    }
+
+    let devices: Vec<String> = match &req.device {
+        Some(d) => vec![d.clone()],
+        None => hub
+            .devices()
+            .map_err(|e| Denied::NotAuthorised(e.to_string()))?
+            .into_iter()
+            .map(|d| d.id)
+            .collect(),
+    };
+
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Denied::NotAuthorised(format!("cannot write to {}: {e}", dir.display())))?;
+
+    let mut files = Vec::new();
+    let mut total = 0usize;
+    for id in &devices {
+        let (text, n) = device_bundle(hub, id, req.from.as_deref(), req.to.as_deref(), tool)
+            .map_err(|e| Denied::NotAuthorised(e.to_string()))?;
+        let name = format!("{id}.jsonl");
+        std::fs::write(dir.join(&name), &text)
+            .map_err(|e| Denied::NotAuthorised(format!("cannot write {name}: {e}")))?;
+        total += n;
+        files.push(name);
+    }
+
+    let _ = hub.note_disclosure(&req.id, &who.id, total, &now.to_string());
+
+    Ok(serde_json::json!({
+        "request": req.id,
+        "auditor": who.name,
+        "approved_by": req.approved_by_name,
+        "devices": devices.len(),
+        "rows": total,
+        "files": files,
+        "directory": dir,
+        "expires_at": req.expires_at,
+    }))
+}

@@ -405,6 +405,61 @@ pub enum HubCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+    /// People and their roles: who administers, who may ask to see activity, who approves.
+    Principal {
+        #[command(subcommand)]
+        command: PrincipalCommand,
+    },
+    /// Ask to see activity. Needs an auditor credential, and somebody else to approve it.
+    Request {
+        /// Why. The countersigner reads this and nothing else decides for them.
+        #[arg(long)]
+        reason: String,
+        /// One device, or all of them when omitted.
+        #[arg(long, value_name = "DEVICE")]
+        device: Option<String>,
+        #[arg(long, value_name = "TIMESTAMP")]
+        from: Option<String>,
+        #[arg(long, value_name = "TIMESTAMP")]
+        to: Option<String>,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Countersign a request. Needs a countersigner credential, and cannot be your own.
+    Approve {
+        request: String,
+        /// How long the window stays open.
+        #[arg(long, default_value_t = crate::hub::access::DEFAULT_WINDOW_HOURS)]
+        hours: i64,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Every request ever made, and what became of it.
+    Requests {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Read the activity an approved request covers, into a directory.
+    Disclose {
+        request: String,
+        #[arg(long, value_name = "PATH")]
+        out_dir: PathBuf,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// The hub's own log: roles granted, requests, approvals, disclosures.
+    AccessLog {
+        #[arg(long, default_value_t = 50)]
+        limit: usize,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// Re-check every chain the hub holds, against the rows as they are on disk now.
     ///
     /// Exits non-zero when a chain does not hold. Meant for a nightly job: the arrival
@@ -469,5 +524,27 @@ pub enum LicenceCommand {
         /// Where to write it. Prints to stdout when absent.
         #[arg(long, value_name = "PATH")]
         out: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PrincipalCommand {
+    /// Register a person and print their credential once.
+    Add {
+        name: String,
+        /// admin | auditor | countersigner
+        #[arg(long)]
+        role: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    List {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    Revoke {
+        id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
     },
 }

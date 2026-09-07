@@ -24,6 +24,7 @@ use cyberbrain_core::{Error, Result};
 use cyberbrain_policy::bundle;
 use std::path::PathBuf;
 
+pub mod access;
 pub mod api;
 pub mod client;
 pub mod licence;

@@ -28,6 +28,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   accepting rows **and does nothing else** — the record stays readable and exportable,
   clients buffer, deliveries get a `503` that says to keep buffering, and renewing takes what
   they held with the chain unbroken. `hub licence keygen` and `issue` are the issuer's side.
+- **Roles, and a two-person rule for reading activity.** An administrator sees state and
+  never activity; an auditor may ask, naming a reason; a countersigner — the works council or
+  a named second person — approves, and cannot approve their own request. Approval opens a
+  window that closes itself, and extending means asking again so the reason is stated again.
+  Every step is a row in the hub's own hash chain: `hub access-log` answers who looked, why,
+  who approved it, and whether anything was removed afterwards.
+
+  What it enforces is the route. It does not defend against someone with file access to the
+  hub's database, and the documentation says so: a works agreement should describe this as a
+  procedure supported by software, not a guarantee made by it.
 - **A fleet view that leads with what is wrong, a check of the whole record, and a report
   you can hand over.** `hub fleet` sorts devices with concerns first and names them: never
   reported, quiet for so many hours, last delivery refused, running an older version than the

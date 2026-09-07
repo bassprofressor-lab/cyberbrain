@@ -697,6 +697,215 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(0)
         }
 
+        HubCommand::Principal { command } => {
+            use cli::PrincipalCommand;
+            match command {
+                PrincipalCommand::Add { name, role, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let role = hub::access::Role::parse(role)?;
+                    let (who, token) = store.add_principal(name, role, &now())?;
+                    out.emit(
+                        &serde_json::json!({ "principal": who, "token": token }),
+                        |v| {
+                            format!(
+                                "{} registered as {} ({})\ncredential: {}\n\n\
+                                 Shown once; the record keeps a hash. Granting a role is \
+                                 itself an entry in the hub's log.\n",
+                                v["principal"]["name"].as_str().unwrap_or_default(),
+                                v["principal"]["role"].as_str().unwrap_or_default(),
+                                v["principal"]["id"].as_str().unwrap_or_default(),
+                                v["token"].as_str().unwrap_or_default()
+                            )
+                        },
+                    )?;
+                    Ok(0)
+                }
+                PrincipalCommand::List { data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let people = store.principals()?;
+                    out.emit(&serde_json::json!({ "principals": people }), |v| {
+                        let list = v["principals"].as_array().cloned().unwrap_or_default();
+                        if list.is_empty() {
+                            return "nobody registered yet\n".to_string();
+                        }
+                        let mut s = String::new();
+                        for p in list {
+                            s.push_str(&format!(
+                                "{:<16} {:<24} {}\n",
+                                p["role"].as_str().unwrap_or_default(),
+                                p["name"].as_str().unwrap_or_default(),
+                                if p["revoked_at"].is_string() {
+                                    "revoked"
+                                } else {
+                                    p["id"].as_str().unwrap_or_default()
+                                }
+                            ));
+                        }
+                        s
+                    })?;
+                    Ok(0)
+                }
+                PrincipalCommand::Revoke { id, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let done = store.revoke_principal(id, &now())?;
+                    out.emit(
+                        &serde_json::json!({ "revoked": done, "principal": id }),
+                        |v| {
+                            if v["revoked"].as_bool().unwrap_or(false) {
+                                format!("{id} may no longer act\n")
+                            } else {
+                                format!("{id} is unknown or was already revoked\n")
+                            }
+                        },
+                    )?;
+                    Ok(0)
+                }
+            }
+        }
+
+        HubCommand::Request {
+            reason,
+            device,
+            from,
+            to,
+            as_,
+            data,
+        } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let who = store
+                .principal_for(as_.as_deref(), hub::access::Role::Auditor)
+                .map_err(|d| Error::Config(d.to_string()))?;
+            let req = store.create_request(
+                &who,
+                device.as_deref(),
+                from.as_deref(),
+                to.as_deref(),
+                reason,
+                &now(),
+            )?;
+            let id = req.id.clone();
+            out.emit(&req, move |r| {
+                format!(
+                    "request {} recorded\n\nIt gives access to nothing until somebody else \
+                     countersigns it:\n  cyberbrain hub approve {} --as <countersigner>\n",
+                    r.id, id
+                )
+            })?;
+            Ok(0)
+        }
+
+        HubCommand::Approve {
+            request,
+            hours,
+            as_,
+            data,
+        } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let who = store
+                .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                .map_err(|d| Error::Config(d.to_string()))?;
+            let expires = (jiff::Timestamp::now()
+                + std::time::Duration::from_secs((*hours).max(1) as u64 * 3600))
+            .to_string();
+            let req = store
+                .approve_request(request, &who, &expires, &now())
+                .map_err(|d| Error::Config(d.to_string()))?;
+            let name = who.name.clone();
+            out.emit(&req, move |r| {
+                format!(
+                    "request {} countersigned by {}\nopen until {}\n",
+                    r.id,
+                    name,
+                    r.expires_at.as_deref().unwrap_or("unknown")
+                )
+            })?;
+            Ok(0)
+        }
+
+        HubCommand::Requests { data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let reqs = store.requests()?;
+            let now_ts = jiff::Timestamp::now();
+            let text: String = reqs.iter().map(|r| r.line(now_ts)).collect();
+            out.emit(&serde_json::json!({ "requests": reqs }), move |_| {
+                if text.is_empty() {
+                    "no requests have been made\n".to_string()
+                } else {
+                    text.clone()
+                }
+            })?;
+            Ok(0)
+        }
+
+        HubCommand::Disclose {
+            request,
+            out_dir,
+            as_,
+            data,
+        } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let tool = concat!("cyberbrain hub ", env!("CARGO_PKG_VERSION"));
+            let result = hub::report::disclose(
+                &store,
+                as_.as_deref(),
+                request,
+                out_dir,
+                jiff::Timestamp::now(),
+                tool,
+            )
+            .map_err(|d| Error::Config(d.to_string()))?;
+            out.emit(&result, |v| {
+                format!(
+                    "{} row(s) from {} device(s) written to {}\n\n\
+                     This disclosure is in the hub's log: request {}, read by {}, approved \
+                     by {}.\n",
+                    v["rows"].as_i64().unwrap_or_default(),
+                    v["devices"].as_i64().unwrap_or_default(),
+                    v["directory"].as_str().unwrap_or_default(),
+                    v["request"].as_str().unwrap_or_default(),
+                    v["auditor"].as_str().unwrap_or_default(),
+                    v["approved_by"].as_str().unwrap_or("nobody")
+                )
+            })?;
+            Ok(0)
+        }
+
+        HubCommand::AccessLog { limit, data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let events = store.hub_events(*limit)?;
+            let chain = store.verify_hub_chain().map_err(|e| e.to_string());
+            out.emit(
+                &serde_json::json!({
+                    "events": events,
+                    "chain": match &chain {
+                        Ok(n) => serde_json::json!({ "rows": n }),
+                        Err(e) => serde_json::json!({ "broken": e }),
+                    },
+                }),
+                |v| {
+                    let mut s = String::new();
+                    for e in v["events"].as_array().cloned().unwrap_or_default() {
+                        s.push_str(&format!(
+                            "{}  {:<18} {}  {}\n",
+                            e["ts"].as_str().unwrap_or_default(),
+                            e["action"].as_str().unwrap_or_default(),
+                            e["actor"].as_str().unwrap_or_default(),
+                            e["detail"]
+                        ));
+                    }
+                    match v["chain"]["rows"].as_i64() {
+                        Some(n) => s.push_str(&format!("\nchain holds over {n} entr(ies)\n")),
+                        None => s.push_str(&format!(
+                            "\nCHAIN BROKEN: {}\n",
+                            v["chain"]["broken"].as_str().unwrap_or_default()
+                        )),
+                    }
+                    s
+                },
+            )?;
+            Ok(if chain.is_ok() { 0 } else { 1 })
+        }
+
         HubCommand::Verify { data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let report = hub::report::verify(&store)?;

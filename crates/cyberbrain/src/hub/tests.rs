@@ -849,3 +849,214 @@ fn an_older_record_gains_the_new_columns() {
     assert_eq!(devices[0].version, None);
     assert_eq!(devices[0].last_refusal, None);
 }
+
+// ---- the two-person rule (slice 7) ----
+
+use super::access::{Denied, RequestState, Role};
+
+fn people(hub: &HubStore) -> (String, String, String) {
+    let (_, auditor) = hub.add_principal("M. Kraus", Role::Auditor, NOW).unwrap();
+    let (_, council) = hub
+        .add_principal("Works council", Role::Countersigner, NOW)
+        .unwrap();
+    let (_, admin) = hub.add_principal("A. Weber", Role::Admin, NOW).unwrap();
+    (auditor, council, admin)
+}
+
+/// A hub with one device that has delivered, and the three roles.
+fn hub_with_activity() -> (HubStore, String, String, String, String) {
+    let (mut hub, device, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client.act("b");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+    let (auditor, council, admin) = people(&hub);
+    (hub, device.id, auditor, council, admin)
+}
+
+fn tmpdir() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
+}
+
+#[test]
+fn activity_cannot_be_read_without_a_countersignature() {
+    let (hub, device, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+
+    let dir = tmpdir();
+    let err =
+        report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test").unwrap_err();
+    assert!(matches!(err, Denied::NotApproved(_)), "{err:?}");
+    assert!(err.to_string().contains("somebody else approves"), "{err}");
+    assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn the_administrator_cannot_read_activity_at_all() {
+    let (hub, _, _, _, admin) = hub_with_activity();
+    // Not "no approved request" — the wrong role, which is a different sentence and a
+    // different fix.
+    let err = hub.principal_for(Some(&admin), Role::Auditor).unwrap_err();
+    assert!(
+        matches!(err, Denied::WrongRole { .. }),
+        "an administrator asking for activity: {err:?}"
+    );
+}
+
+#[test]
+fn an_auditor_cannot_countersign() {
+    let (hub, _, auditor, _, _) = hub_with_activity();
+    let err = hub
+        .principal_for(Some(&auditor), Role::Countersigner)
+        .unwrap_err();
+    assert!(matches!(err, Denied::WrongRole { .. }), "{err:?}");
+}
+
+/// Defence in depth: roles make this unreachable today, because one principal has one role
+/// and only an auditor can create a request. If roles ever become plural, this is the check
+/// that still holds — so it is tested at the level where it lives.
+#[test]
+fn a_request_cannot_be_approved_by_the_person_who_made_it() {
+    let (hub, device, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+
+    let err = hub
+        .approve_request(&req.id, &who, "2099-01-01T00:00:00Z", NOW)
+        .unwrap_err();
+    assert_eq!(err, Denied::SamePerson);
+    assert!(err.to_string().contains("not an obstacle to work around"));
+}
+
+#[test]
+fn an_approved_request_opens_a_window_that_closes_itself() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let signer = hub
+        .principal_for(Some(&council), Role::Countersigner)
+        .unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    assert_eq!(req.state(now_ts()), RequestState::Pending);
+
+    let expires = (now_ts() + std::time::Duration::from_secs(3600)).to_string();
+    let approved = hub
+        .approve_request(&req.id, &signer, &expires, NOW)
+        .unwrap();
+    assert_eq!(approved.state(now_ts()), RequestState::Open);
+
+    // Inside the window it works.
+    let dir = tmpdir();
+    let out =
+        report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test").unwrap();
+    assert_eq!(out["rows"].as_i64(), Some(2));
+
+    // Two hours later it does not, and the message says to ask again rather than extend.
+    let later = now_ts() + std::time::Duration::from_secs(2 * 3600);
+    assert_eq!(approved.state(later), RequestState::Closed);
+    let err =
+        report::disclose(&hub, Some(&auditor), &req.id, dir.path(), later, "test").unwrap_err();
+    assert!(matches!(err, Denied::WindowClosed(_)), "{err:?}");
+    assert!(err.to_string().contains("Make a new request"), "{err}");
+}
+
+#[test]
+fn another_auditor_cannot_collect_somebody_elses_approval() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let (_, second) = hub
+        .add_principal("second auditor", Role::Auditor, NOW)
+        .unwrap();
+
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let signer = hub
+        .principal_for(Some(&council), Role::Countersigner)
+        .unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    hub.approve_request(&req.id, &signer, "2099-01-01T00:00:00Z", NOW)
+        .unwrap();
+
+    let dir = tmpdir();
+    let err =
+        report::disclose(&hub, Some(&second), &req.id, dir.path(), now_ts(), "test").unwrap_err();
+    assert!(err.to_string().contains("not by you"), "{err}");
+}
+
+/// The record the works council reads. Every step of the procedure is in it, in order, and
+/// the chain says nothing was removed afterwards.
+#[test]
+fn every_step_is_in_the_hubs_own_chain() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let signer = hub
+        .principal_for(Some(&council), Role::Countersigner)
+        .unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "why we looked", NOW)
+        .unwrap();
+    hub.approve_request(&req.id, &signer, "2099-01-01T00:00:00Z", NOW)
+        .unwrap();
+    let dir = tmpdir();
+    report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test").unwrap();
+
+    let events = hub.hub_events(100).unwrap();
+    let actions: Vec<&str> = events.iter().map(|e| e.action.as_str()).collect();
+    assert_eq!(
+        actions,
+        [
+            "role.granted",
+            "role.granted",
+            "role.granted",
+            "access.requested",
+            "access.approved",
+            "access.disclosed",
+        ]
+    );
+    // The reason is in the record, not only in somebody's memory of the conversation.
+    let requested = &events[3];
+    assert_eq!(requested.detail["reason"], "why we looked");
+    assert_eq!(hub.verify_hub_chain().unwrap(), 6);
+}
+
+#[test]
+fn the_hubs_own_chain_notices_an_edited_entry() {
+    let (hub, _, _, _, _) = hub_with_activity();
+    assert!(hub.verify_hub_chain().is_ok());
+
+    // The triggers stop an UPDATE, so a tamperer would have to rebuild the table. This is
+    // what the chain is for: the row count still adds up, and the arithmetic does not.
+    hub.conn
+        .execute_batch(
+            "DROP TRIGGER hub_audit_no_update;
+             UPDATE hub_audit SET action = 'role.revoked' WHERE seq = 1;",
+        )
+        .unwrap();
+    let err = hub.verify_hub_chain().unwrap_err().to_string();
+    assert!(err.contains("was edited"), "{err}");
+}
+
+#[test]
+fn a_revoked_credential_stops_working_immediately() {
+    let (hub, _, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    assert!(hub.revoke_principal(&who.id, NOW).unwrap());
+    let err = hub
+        .principal_for(Some(&auditor), Role::Auditor)
+        .unwrap_err();
+    assert!(err.to_string().contains("revoked"), "{err}");
+}

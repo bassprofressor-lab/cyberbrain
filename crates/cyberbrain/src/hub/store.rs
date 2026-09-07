@@ -40,7 +40,13 @@ impl Device {
 }
 
 pub struct HubStore {
+    // Private, except to the tests in this module, which need to simulate the one attack
+    // the triggers cannot stop: dropping them and rewriting a row. That is exactly the
+    // shape the chain exists to catch, so it has to be reachable to prove it.
+    #[cfg(not(test))]
     conn: Connection,
+    #[cfg(test)]
+    pub(super) conn: Connection,
 }
 
 fn ix<T>(r: rusqlite::Result<T>) -> Result<T> {
@@ -123,7 +129,52 @@ impl HubStore {
              CREATE TABLE IF NOT EXISTS settings (
                  key   TEXT PRIMARY KEY,
                  value TEXT NOT NULL
-             );",
+             );
+
+             -- People, as opposed to machines. Same token discipline as devices.
+             CREATE TABLE IF NOT EXISTS principals (
+                 id         TEXT PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 role       TEXT NOT NULL,
+                 token_hash TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL,
+                 revoked_at TEXT
+             );
+
+             -- Requests to read activity, and what became of them.
+             CREATE TABLE IF NOT EXISTS access_requests (
+                 id           TEXT PRIMARY KEY,
+                 requester    TEXT NOT NULL REFERENCES principals(id),
+                 device       TEXT,
+                 from_ts      TEXT,
+                 to_ts        TEXT,
+                 reason       TEXT NOT NULL,
+                 created_at   TEXT NOT NULL,
+                 approved_by  TEXT REFERENCES principals(id),
+                 approved_at  TEXT,
+                 expires_at   TEXT,
+                 disclosures  INTEGER NOT NULL DEFAULT 0
+             );
+
+             -- The hub own events: roles granted, requests made, approvals, disclosures.
+             -- Its own chain, because these are the hub actions rather than any device
+             -- rows, and asking who looked -- and whether anyone removed that afterwards --
+             -- needs the same answer as every other row here.
+             CREATE TABLE IF NOT EXISTS hub_audit (
+                 seq    INTEGER PRIMARY KEY AUTOINCREMENT,
+                 ts     TEXT NOT NULL,
+                 actor  TEXT NOT NULL,
+                 action TEXT NOT NULL,
+                 detail TEXT NOT NULL,
+                 prev   TEXT NOT NULL,
+                 hash   TEXT NOT NULL
+             );
+             CREATE TRIGGER IF NOT EXISTS hub_audit_no_update
+                 BEFORE UPDATE ON hub_audit
+                 BEGIN SELECT raise(ABORT, 'the hub audit is append-only'); END;
+             CREATE TRIGGER IF NOT EXISTS hub_audit_no_delete
+                 BEFORE DELETE ON hub_audit
+                 BEGIN SELECT raise(ABORT, 'the hub audit is append-only'); END;",
         ))?;
         self.add_missing_columns()
     }
@@ -467,4 +518,376 @@ mod tests {
             .to_string();
         assert!(delete.contains("append-only"), "{delete}");
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// People, requests, and the hub's own chain (slice 7).
+
+use super::access::{AccessRequest, Denied, Principal, Role};
+
+/// One event in the hub's own audit chain.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct HubEvent {
+    pub seq: i64,
+    pub ts: String,
+    pub actor: String,
+    pub action: String,
+    pub detail: serde_json::Value,
+    pub hash: String,
+}
+
+impl HubStore {
+    /// Append to the hub's own chain. Every call in this file that changes who may see what
+    /// goes through here, so "it happened but was not recorded" is not a reachable state.
+    pub fn record(
+        &self,
+        actor: &str,
+        action: &str,
+        detail: serde_json::Value,
+        now: &str,
+    ) -> Result<String> {
+        let prev = self.last_hub_hash()?;
+        let detail_text = detail.to_string();
+        // Same rule as the store's audit chain: prev, timestamp, actor, action, detail,
+        // each terminated, so a reader can recompute it without knowing this code.
+        let mut h = blake3::Hasher::new();
+        for part in [prev.as_str(), now, actor, action] {
+            h.update(part.as_bytes());
+            h.update(b"\n");
+        }
+        h.update(detail_text.as_bytes());
+        let hash = h.finalize().to_hex().to_string();
+        ix(self.conn.execute(
+            "INSERT INTO hub_audit (ts, actor, action, detail, prev, hash)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![now, actor, action, detail_text, prev, hash],
+        ))?;
+        Ok(hash)
+    }
+
+    fn last_hub_hash(&self) -> Result<String> {
+        ix(self
+            .conn
+            .query_row(
+                "SELECT hash FROM hub_audit ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get::<_, String>(0),
+            )
+            .optional())
+        .map(|h| h.unwrap_or_else(|| GENESIS.to_string()))
+    }
+
+    /// The hub's own events, oldest first.
+    pub fn hub_events(&self, limit: usize) -> Result<Vec<HubEvent>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT seq, ts, actor, action, detail, hash FROM hub_audit ORDER BY seq LIMIT ?",
+        ))?;
+        let rows = ix(stmt.query_map(params![limit as i64], |r| {
+            Ok(HubEvent {
+                seq: r.get(0)?,
+                ts: r.get(1)?,
+                actor: r.get(2)?,
+                action: r.get(3)?,
+                detail: serde_json::from_str(&r.get::<_, String>(4)?)
+                    .unwrap_or(serde_json::Value::Null),
+                hash: r.get(5)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Recompute the hub's own chain. Same question as `hub verify` asks of device rows.
+    pub fn verify_hub_chain(&self) -> Result<usize> {
+        let mut stmt = ix(self
+            .conn
+            .prepare("SELECT ts, actor, action, detail, prev, hash FROM hub_audit ORDER BY seq"))?;
+        let rows = ix(stmt.query_map([], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+            ))
+        }))?;
+        let mut prev = GENESIS.to_string();
+        let mut n = 0usize;
+        for row in rows {
+            let (ts, actor, action, detail, stored_prev, stored_hash) = ix(row)?;
+            n += 1;
+            if stored_prev != prev {
+                return Err(Error::Index(format!(
+                    "hub audit chain broken at row {n} ({action}): a row was removed, \
+                     reordered or inserted"
+                )));
+            }
+            let mut h = blake3::Hasher::new();
+            for part in [prev.as_str(), &ts, &actor, &action] {
+                h.update(part.as_bytes());
+                h.update(b"\n");
+            }
+            h.update(detail.as_bytes());
+            let want = h.finalize().to_hex().to_string();
+            if want != stored_hash {
+                return Err(Error::Index(format!(
+                    "hub audit chain broken at row {n} ({action}): the row was edited"
+                )));
+            }
+            prev = stored_hash;
+        }
+        Ok(n)
+    }
+
+    pub fn add_principal(&self, name: &str, role: Role, now: &str) -> Result<(Principal, String)> {
+        let id = format!("who_{}", cyberbrain_core::NoteId::generate());
+        let token = format!("cbp_{}", cyberbrain_core::NoteId::generate());
+        ix(self.conn.execute(
+            "INSERT INTO principals (id, name, role, token_hash, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+            params![id, name, role.as_str(), token_hash(&token), now],
+        ))?;
+        self.record(
+            "hub",
+            "role.granted",
+            serde_json::json!({ "principal": id, "name": name, "role": role.as_str() }),
+            now,
+        )?;
+        Ok((
+            Principal {
+                id,
+                name: name.to_string(),
+                role,
+                created_at: now.to_string(),
+                revoked_at: None,
+            },
+            token,
+        ))
+    }
+
+    pub fn principal_by_token(&self, token: &str) -> Result<Option<Principal>> {
+        let hash = token_hash(token);
+        ix(self
+            .conn
+            .query_row(
+                "SELECT id, name, role, created_at, revoked_at FROM principals
+                 WHERE token_hash = ?",
+                params![hash],
+                row_to_principal,
+            )
+            .optional())
+    }
+
+    pub fn principals(&self) -> Result<Vec<Principal>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, name, role, created_at, revoked_at FROM principals
+             ORDER BY created_at, id",
+        ))?;
+        let rows = ix(stmt.query_map([], row_to_principal))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    pub fn revoke_principal(&self, id: &str, now: &str) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "UPDATE principals SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            params![now, id],
+        ))?;
+        if n > 0 {
+            self.record(
+                "hub",
+                "role.revoked",
+                serde_json::json!({ "principal": id }),
+                now,
+            )?;
+        }
+        Ok(n > 0)
+    }
+
+    /// Authenticate a person and check their role in one step, so no caller can do the
+    /// first and forget the second.
+    pub fn principal_for(
+        &self,
+        token: Option<&str>,
+        need: Role,
+    ) -> std::result::Result<Principal, Denied> {
+        let token = token.ok_or_else(|| {
+            Denied::NotAuthorised(
+                "no credential; pass --as <token> or set CYBERBRAIN_HUB_PRINCIPAL_TOKEN".into(),
+            )
+        })?;
+        let who = self
+            .principal_by_token(token)
+            .map_err(|e| Denied::NotAuthorised(format!("cannot check the credential: {e}")))?
+            .ok_or_else(|| Denied::NotAuthorised("unknown credential".into()))?;
+        if !who.is_active() {
+            return Err(Denied::NotAuthorised(format!("{} was revoked", who.name)));
+        }
+        if who.role != need {
+            return Err(Denied::WrongRole {
+                need,
+                has: who.role,
+            });
+        }
+        Ok(who)
+    }
+
+    pub fn create_request(
+        &self,
+        requester: &Principal,
+        device: Option<&str>,
+        from: Option<&str>,
+        to: Option<&str>,
+        reason: &str,
+        now: &str,
+    ) -> Result<AccessRequest> {
+        let id = format!("req_{}", cyberbrain_core::NoteId::generate());
+        ix(self.conn.execute(
+            "INSERT INTO access_requests (id, requester, device, from_ts, to_ts, reason, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![id, requester.id, device, from, to, reason, now],
+        ))?;
+        self.record(
+            &requester.id,
+            "access.requested",
+            serde_json::json!({
+                "request": id, "device": device, "from": from, "to": to, "reason": reason,
+            }),
+            now,
+        )?;
+        Ok(AccessRequest {
+            id,
+            requester: requester.id.clone(),
+            requester_name: requester.name.clone(),
+            device: device.map(str::to_owned),
+            from: from.map(str::to_owned),
+            to: to.map(str::to_owned),
+            reason: reason.to_string(),
+            created_at: now.to_string(),
+            approved_by: None,
+            approved_by_name: None,
+            approved_at: None,
+            expires_at: None,
+            disclosures: 0,
+        })
+    }
+
+    pub fn request(&self, id: &str) -> Result<Option<AccessRequest>> {
+        ix(self
+            .conn
+            .query_row(
+                "SELECT r.id, r.requester, p.name, r.device, r.from_ts, r.to_ts, r.reason,
+                        r.created_at, r.approved_by, q.name, r.approved_at, r.expires_at,
+                        r.disclosures
+                 FROM access_requests r
+                 JOIN principals p ON p.id = r.requester
+                 LEFT JOIN principals q ON q.id = r.approved_by
+                 WHERE r.id = ?",
+                params![id],
+                row_to_request,
+            )
+            .optional())
+    }
+
+    pub fn requests(&self) -> Result<Vec<AccessRequest>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT r.id, r.requester, p.name, r.device, r.from_ts, r.to_ts, r.reason,
+                    r.created_at, r.approved_by, q.name, r.approved_at, r.expires_at,
+                    r.disclosures
+             FROM access_requests r
+             JOIN principals p ON p.id = r.requester
+             LEFT JOIN principals q ON q.id = r.approved_by
+             ORDER BY r.created_at DESC",
+        ))?;
+        let rows = ix(stmt.query_map([], row_to_request))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Countersign. The caller has already checked the role; this enforces the part that is
+    /// about identity rather than permission.
+    pub fn approve_request(
+        &self,
+        id: &str,
+        by: &Principal,
+        expires_at: &str,
+        now: &str,
+    ) -> std::result::Result<AccessRequest, Denied> {
+        let req = self
+            .request(id)
+            .map_err(|e| Denied::NotAuthorised(e.to_string()))?
+            .ok_or_else(|| Denied::NotApproved(id.to_string()))?;
+        if req.requester == by.id {
+            return Err(Denied::SamePerson);
+        }
+        self.conn
+            .execute(
+                "UPDATE access_requests SET approved_by = ?, approved_at = ?, expires_at = ?
+                 WHERE id = ? AND approved_at IS NULL",
+                params![by.id, now, expires_at, id],
+            )
+            .map_err(|e| Denied::NotAuthorised(format!("cannot record the approval: {e}")))?;
+        let _ = self.record(
+            &by.id,
+            "access.approved",
+            serde_json::json!({ "request": id, "expires_at": expires_at }),
+            now,
+        );
+        self.request(id)
+            .map_err(|e| Denied::NotAuthorised(e.to_string()))?
+            .ok_or_else(|| Denied::NotApproved(id.to_string()))
+    }
+
+    /// Note that rows were handed out under a request.
+    pub fn note_disclosure(&self, id: &str, by: &str, rows: usize, now: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "UPDATE access_requests SET disclosures = disclosures + 1 WHERE id = ?",
+            params![id],
+        ))?;
+        self.record(
+            by,
+            "access.disclosed",
+            serde_json::json!({ "request": id, "rows": rows }),
+            now,
+        )?;
+        Ok(())
+    }
+}
+
+fn row_to_principal(r: &rusqlite::Row<'_>) -> rusqlite::Result<Principal> {
+    Ok(Principal {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        role: Role::parse(&r.get::<_, String>(2)?).unwrap_or(Role::Admin),
+        created_at: r.get(3)?,
+        revoked_at: r.get(4)?,
+    })
+}
+
+fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccessRequest> {
+    Ok(AccessRequest {
+        id: r.get(0)?,
+        requester: r.get(1)?,
+        requester_name: r.get(2)?,
+        device: r.get(3)?,
+        from: r.get(4)?,
+        to: r.get(5)?,
+        reason: r.get(6)?,
+        created_at: r.get(7)?,
+        approved_by: r.get(8)?,
+        approved_by_name: r.get(9)?,
+        approved_at: r.get(10)?,
+        expires_at: r.get(11)?,
+        disclosures: r.get(12)?,
+    })
 }

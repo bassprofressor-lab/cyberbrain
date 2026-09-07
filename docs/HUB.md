@@ -190,6 +190,76 @@ the note, because a stale complaint is worse than none.
 A revoked device raises nothing: that is a decision somebody made, not a fault. Its rows stay,
 because revoking is not a deletion.
 
+## Who may see what
+
+Two questions that tend to land on one screen, kept apart: *is the collection working* is
+daily administration, *what did this person do* is a procedure. The second is modelled on how
+works agreements handle access to video recordings — not forbidden, but never alone and never
+unnoticed.
+
+| Role | Sees | Does not see |
+|---|---|---|
+| **admin** | devices, gaps, versions, seats, licence | activity rows |
+| **auditor** | activity — only inside an approved window | anything without a countersignature |
+| **countersigner** | every request, with its reason; the whole access log | rows, unless also an auditor |
+
+```console
+$ cyberbrain hub principal add "M. Kraus" --role auditor
+$ cyberbrain hub principal add "Works council" --role countersigner
+```
+
+Credentials are shown once and stored as a hash, like device tokens. Granting a role is
+itself an entry in the hub's log.
+
+### One request, two people
+
+```console
+# the auditor asks, naming a reason
+$ cyberbrain hub request --device dev_01M1Y9… --reason "Revision query of 5 Sept" --as $AUDITOR
+request req_01M1YB… recorded
+It gives access to nothing until somebody else countersigns it.
+
+# the works council reads the reason and decides
+$ cyberbrain hub approve req_01M1YB… --hours 2 --as $COUNCIL
+open until 2026-09-07T18:30:10Z
+
+# only now, and only until the window closes
+$ cyberbrain hub disclose req_01M1YB… --out-dir case-2026-09 --as $AUDITOR
+14 row(s) from 1 device(s) written to case-2026-09
+```
+
+Each refusal on the way says something different, because the fixes differ: reading without
+approval, an administrator asking for activity, an auditor trying to countersign, a second
+auditor collecting somebody else's approval, and a window that has closed. That last one says
+to make a new request rather than extend the old one — so the reason is stated again.
+
+### The record the works council reads
+
+```console
+$ cyberbrain hub access-log
+… role.granted       hub   {"name":"M. Kraus","role":"auditor",…}
+… access.requested   who_… {"reason":"Revision query of 5 Sept","device":"dev_…",…}
+… access.approved    who_… {"expires_at":"2026-09-07T18:30:10Z",…}
+… access.disclosed   who_… {"request":"req_…","rows":14}
+
+chain holds over 6 entr(ies)
+```
+
+The hub keeps its own hash chain for these, separate from the device chains, with the same
+append-only triggers. Who looked, why, who approved it, and whether anyone removed that
+afterwards — all four have an answer.
+
+### What this does not do
+
+It enforces the **route**. Through this program, activity is unreachable without a request
+somebody else approved, inside a window that closes itself, and every step is recorded.
+
+It does **not** defend against someone with file access to the hub's database: they can open
+it with any SQLite tool, and reading leaves no trace anywhere. That is why the hub belongs on
+a machine with controlled access — and why a works agreement should describe this as a
+procedure supported by software, not as a guarantee made by it. The chain does cover the
+other half: rows cannot be changed or removed without it showing.
+
 ## Checking what the hub holds
 
 ```console
@@ -233,6 +303,3 @@ week" is a finding, and its absence would read as an oversight.
 - **No TLS of its own.** Put it behind a reverse proxy inside your network, or wait for the
   slice that gives the hub a certificate and pins it at enrolment. Do not expose it to the
   internet as it stands.
-- **Roles are not implemented.** The design has an administrator who sees state and gaps,
-  and activity rows only through a two-person request. Today `hub fleet` is state only,
-  which is the safe half of that.
