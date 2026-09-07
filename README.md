@@ -147,7 +147,8 @@ ring wins and the conflict is reported rather than silently resolved.
 **Local-first.** Embeddings are computed on your machine. The core performs no network I/O
 at all. Optional local inference over any OpenAI-compatible endpoint — Ollama, LM Studio,
 llama.cpp, or NVIDIA PAIR spreading the work across an RTX box, a DGX Spark and an Apple M4
-Mac.
+Mac. That endpoint may sit on another machine in your own network, so one box with a GPU can
+serve a whole team: [`docs/SHARED-INFERENCE.md`](docs/SHARED-INFERENCE.md).
 
 <details>
 <summary>What the web UI shows (screenshots)</summary>

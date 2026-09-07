@@ -151,7 +151,9 @@ Blöcke, gewinnt der niedrigere Ring, und der Konflikt wird gemeldet statt still
 **Lokal zuerst.** Die Einbettungen werden auf deinem Rechner gerechnet. Der Kern macht
 überhaupt kein Netzwerk-I/O. Inferenz ist optional und läuft gegen jeden OpenAI-kompatiblen
 Endpunkt, also Ollama, LM Studio, llama.cpp, oder NVIDIA PAIR, das die Arbeit über eine
-RTX-Maschine, einen DGX Spark und einen Apple M4 Mac verteilt.
+RTX-Maschine, einen DGX Spark und einen Apple M4 Mac verteilt. Dieser Endpunkt darf auf einer
+anderen Maschine im eigenen Netz liegen — eine Maschine mit Grafikkarte kann damit ein ganzes
+Team bedienen: [`docs/SHARED-INFERENCE.md`](docs/SHARED-INFERENCE.md).
 
 <details>
 <summary>Was die Weboberfläche zeigt (Screenshots)</summary>
