@@ -250,6 +250,39 @@ pub fn loopback_url(raw: &str) -> Option<String> {
     Some(format!("http://{host}:{port}/"))
 }
 
+/// Enrol this project's store with a company hub, from an invitation file.
+///
+/// The CLI already does this; what the launcher adds is that nobody has to find a prompt to
+/// run it. On the machines this product is for, the invitation arrives as an email
+/// attachment and the person who has to act on it does not know what a working directory is.
+///
+/// `Ok` carries what the CLI said, which names the hub and where the token was put.
+pub fn enrol(
+    server: &Path,
+    project_dir: &Path,
+    invitation: &Path,
+) -> std::result::Result<String, String> {
+    let out = command(server, project_dir)
+        .arg("hub")
+        .arg("enrol")
+        .arg(invitation)
+        .output()
+        .map_err(|e| format!("cyberbrain could not be started: {e}"))?;
+    let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    if out.status.success() {
+        Ok(text(&out.stdout))
+    } else {
+        // Its own words, not ours: the CLI knows why an invitation was refused, and a
+        // paraphrase here would be one more thing to keep in step.
+        let msg = text(&out.stderr);
+        Err(if msg.is_empty() {
+            format!("enrolment failed ({})", out.status)
+        } else {
+            msg
+        })
+    }
+}
+
 fn command(server: &Path, project_dir: &Path) -> Command {
     let mut c = Command::new(server);
     // The working directory is how the store is chosen: the CLI walks up from here, so a

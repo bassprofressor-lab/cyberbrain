@@ -29,6 +29,7 @@ pub mod api;
 pub mod client;
 pub mod licence;
 pub mod report;
+pub mod service;
 pub mod store;
 
 #[cfg(test)]

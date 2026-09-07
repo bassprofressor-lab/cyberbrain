@@ -354,6 +354,29 @@ mod tests {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ServiceCommand {
+    /// Register the service and start it. Needs an elevated prompt.
+    Install {
+        /// Where the record lives. Defaults to %PROGRAMDATA%\\Cyberbrain\\hub.db — outside
+        /// the install directory, because the record outlives the program.
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+        /// What to listen on. The default reaches the network: a hub only its own machine
+        /// can talk to collects nothing.
+        #[arg(long, default_value = "0.0.0.0:7788")]
+        addr: String,
+    },
+    /// Stop the service and remove the registration. The record is left alone.
+    Uninstall,
+    /// Start it now. It starts by itself on boot; this is for after a licence was dropped in.
+    Start,
+    /// Stop it. The record stays, and clients buffer until it is back.
+    Stop,
+    /// Whether it is registered and what it is doing.
+    Status,
+}
+
+#[derive(Debug, Subcommand)]
 pub enum HubCommand {
     /// Run the collector. Unlike `serve`, the address is a parameter — a hub only its own
     /// machine can reach is not a hub, which is why this surface authenticates.
@@ -382,6 +405,15 @@ pub enum HubCommand {
         /// by hand.
         #[arg(long, value_name = "URL")]
         inference_url: Option<String>,
+    },
+    /// Register the hub as a Windows service, or control the one that is registered.
+    ///
+    /// The installer does this on its own when the box is ticked. It is here for
+    /// administrators who would rather see the command than a wizard, and because an
+    /// unattended rollout needs something to call.
+    Service {
+        #[command(subcommand)]
+        command: ServiceCommand,
     },
     /// Set this store up to deliver to a hub, from an invitation file.
     Enrol { invitation: PathBuf },

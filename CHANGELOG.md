@@ -10,7 +10,35 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.0] — 2026-09-07
+
+### Added
+
+- **The hub runs as a Windows service, and setting it up is a tick box.** The installer has
+  an optional **Hub service (collector)** component — off by default, because most machines
+  are clients and there it would open a port for nothing. Ticking it creates
+  `C:\ProgramData\Cyberbrain\`, registers the service to start automatically on
+  `0.0.0.0:7788`, opens that port in Windows Firewall (without which the hub listens and
+  nothing ever arrives, which looks exactly like every client being broken), and adds a
+  Start menu shortcut to the folder.
+
+  **Licensing it is copying a file**: save the licence as
+  `C:\ProgramData\Cyberbrain\licence.txt` and restart the service. It is read on start and
+  what it found goes into `hub-service.log` beside the record — a service has no console, so
+  anything printed to stdout is a message nobody will ever read, including the one saying why
+  it will not start. `cyberbrain hub service install|uninstall|start|stop|status` is the same
+  thing for administrators who would rather see a command; `status` exits non-zero when the
+  service is not running.
+
+  `hub serve` is one executable in both roles: started by the service control manager it
+  behaves as a service, started from a prompt it is an ordinary console server. No flag to
+  remember, and no second binary to drift from the first. Uninstalling removes the service
+  and the firewall rule and **leaves the record alone** — deleting the software must never
+  delete the evidence it was collecting.
+- **"Connect to the company hub…" in the desktop launcher's menu.** The invitation arrives as
+  an email attachment; this opens it and enrols the machine, and says afterwards that notes
+  stay local. The CLI did this already — what is new is that nobody has to find a command
+  prompt to run it.
 
 ### Added
 
@@ -176,4 +204,4 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/main...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.0...HEAD

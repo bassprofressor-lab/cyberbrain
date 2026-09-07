@@ -59,6 +59,7 @@ pub fn run() {
     let open = MenuItem::new("Open Cyberbrain", true, None);
     let folder = MenuItem::new("Open project folder", true, None);
     let choose = MenuItem::new("Choose project…", true, None);
+    let enrol = MenuItem::new("Connect to the company hub…", true, None);
     let quit = MenuItem::new("Quit", true, None);
     if menu
         .append_items(&[
@@ -66,6 +67,7 @@ pub fn run() {
             &folder,
             &PredefinedMenuItem::separator(),
             &choose,
+            &enrol,
             &PredefinedMenuItem::separator(),
             &quit,
         ])
@@ -93,6 +95,7 @@ pub fn run() {
         open: open.id().clone(),
         folder: folder.id().clone(),
         choose: choose.id().clone(),
+        enrol: enrol.id().clone(),
         quit: quit.id().clone(),
     };
 
@@ -113,6 +116,8 @@ pub fn run() {
                     let _ = tray.set_tooltip(Some(tooltip(&server)));
                     sys::open_in_browser(&server.url);
                 }
+            } else if event.id == ids.enrol {
+                connect_to_hub(&server_exe, &server.project_dir);
             } else if event.id == ids.quit {
                 return sys::Pump::Stop;
             }
@@ -177,6 +182,7 @@ struct Ids {
     open: MenuId,
     folder: MenuId,
     choose: MenuId,
+    enrol: MenuId,
     quit: MenuId,
 }
 
@@ -202,6 +208,30 @@ fn open_project(
         }
     }
     choose_project(server_exe, settings, settings_path, job)
+}
+
+/// Take the invitation file the company sent and enrol this store with their hub.
+///
+/// One dialog, one answer. The alternative is a paragraph of instructions ending in a
+/// command, and the people this is for do not get to the end of that paragraph.
+fn connect_to_hub(server_exe: &Path, project_dir: &Path) {
+    let Some(file) = rfd::FileDialog::new()
+        .set_title("Open the invitation file you were sent")
+        .add_filter("Invitation", &["json"])
+        .pick_file()
+    else {
+        return; // Cancelled. Nothing happened, so nothing is said.
+    };
+    match launch::enrol(server_exe, project_dir, &file) {
+        Ok(said) => sys::info_box(
+            APP,
+            &format!(
+                "{said}\n\nThis machine will now deliver its audit trail to that hub. \
+                 Your notes stay here: what a note says never leaves this computer."
+            ),
+        ),
+        Err(why) => sys::error_box(APP, &format!("The invitation was not accepted.\n\n{why}")),
+    }
 }
 
 /// Ask for a folder and start there, until it works or the user gives up.

@@ -16,9 +16,9 @@ use windows_sys::Win32::System::JobObjects::{
 use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DispatchMessageW, GetMessageW, IDYES, KillTimer, MB_ICONERROR, MB_ICONQUESTION,
-    MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MSG, MessageBoxW, PostQuitMessage, SW_SHOWNORMAL,
-    SetTimer, TranslateMessage,
+    DispatchMessageW, GetMessageW, IDYES, KillTimer, MB_ICONERROR, MB_ICONINFORMATION,
+    MB_ICONQUESTION, MB_SETFOREGROUND, MB_TOPMOST, MB_YESNO, MSG, MessageBoxW, PostQuitMessage,
+    SW_SHOWNORMAL, SetTimer, TranslateMessage,
 };
 
 /// What the caller wants after handling whatever just arrived.
@@ -46,6 +46,20 @@ pub fn error_box(title: &str, text: &str) {
             t.as_ptr(),
             c.as_ptr(),
             MB_ICONERROR | MB_SETFOREGROUND | MB_TOPMOST,
+        );
+    }
+}
+
+/// Something worked, and the person who clicked deserves to be told so in the same place
+/// they would have been told it had not.
+pub fn info_box(title: &str, text: &str) {
+    let (t, c) = (wide(text), wide(title));
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            t.as_ptr(),
+            c.as_ptr(),
+            MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
         );
     }
 }

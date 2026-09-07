@@ -4,6 +4,12 @@
 ; starts it without a terminal. The Start menu entry points at the launcher, because that is
 ; the way in this installer exists to provide.
 ;
+; It can also register the hub as a Windows service. That is off by default — most machines
+; are clients, not the collector — but when it is ticked, everything the hub needs is done
+; here: the data directory, the service, the firewall rule, and a folder shortcut to drop
+; the licence into. A customer who has to open a command prompt to finish an installation is
+; a customer who stops.
+;
 ; Deliberately NOT done here: putting the install directory on the PATH. NSIS truncates
 ; strings at 1024 characters in its default build, and a system PATH is often longer than
 ; that, so the "helpful" version of this feature silently eats the end of someone's PATH.
@@ -118,15 +124,65 @@ Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\${NAME}.lnk" "$INSTDIR\cyberbrain-desktop.exe" "" "$INSTDIR\cyberbrain.ico" 0
 SectionEnd
 
+
+; ---------------------------------------------------------------------------------------
+; The hub, for the one machine that collects. Off by default: on a client it would open a
+; port for nothing.
+
+Section /o "Hub service (collector)" SecHub
+  CreateDirectory "$COMMONPROGRAMDATA\${NAME}"
+
+  ; Written before the service is registered, so the folder is never empty and confusing.
+  FileOpen $0 "$COMMONPROGRAMDATA\${NAME}\HOW-TO-LICENCE.txt" w
+  FileWrite $0 "This folder is the hub's record.$\r$\n$\r$\n"
+  FileWrite $0 "To license the hub, save the licence file you were sent here, next to$\r$\n"
+  FileWrite $0 "this note, under the name:  licence.txt$\r$\n$\r$\n"
+  FileWrite $0 "Then restart the service (Services > ${NAME} Hub > Restart).$\r$\n"
+  FileWrite $0 "Without a licence the hub runs but collects nothing.$\r$\n$\r$\n"
+  FileWrite $0 "hub.db is the record itself. Back this folder up; it is the evidence.$\r$\n"
+  FileWrite $0 "hub-service.log says what the service did on each start.$\r$\n"
+  FileClose $0
+
+  DetailPrint "Registering the ${NAME} hub service..."
+  nsExec::ExecToStack '"$INSTDIR\cyberbrain.exe" hub service install --data "$COMMONPROGRAMDATA\${NAME}\hub.db" --addr 0.0.0.0:7788'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    ; Not fatal: the rest of the installation is fine and the command can be run again.
+    ; Saying what happened beats a silent half-installed collector.
+    MessageBox MB_ICONEXCLAMATION "The hub service could not be registered:$\r$\n$\r$\n$1$\r$\n$\r$\nEverything else was installed. You can try again later with:$\r$\n  cyberbrain hub service install"
+  ${Else}
+    DetailPrint $1
+    ; Without this the service listens and nothing ever reaches it, which looks exactly
+    ; like a broken client. The rule is removed again on uninstall.
+    nsExec::ExecToStack 'netsh advfirewall firewall add rule name="${NAME} Hub" dir=in action=allow protocol=TCP localport=7788'
+    Pop $0
+    Pop $1
+  ${EndIf}
+
+  CreateShortcut "$SMPROGRAMS\${NAME}\Hub data folder.lnk" "$COMMONPROGRAMDATA\${NAME}"
+SectionEnd
+
 LangString DESC_SecMain ${LANG_ENGLISH} "The command-line tool and the launcher that opens it without a terminal."
 LangString DESC_SecDesktop ${LANG_ENGLISH} "An icon on the desktop as well as in the Start menu."
+LangString DESC_SecHub ${LANG_ENGLISH} "Only for the one machine that collects the audit trail of the others. Registers a Windows service on port 7788, opens that port in the firewall, and creates a folder to put the licence in. Not needed on a normal workstation."
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_SecMain)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_SecDesktop)
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecHub} $(DESC_SecHub)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
+  ; The service first, while the program that can remove it is still on disk. It is quiet
+  ; about not finding one: most installations never had it.
+  nsExec::ExecToStack '"$INSTDIR\cyberbrain.exe" hub service uninstall'
+  Pop $0
+  Pop $1
+  nsExec::ExecToStack 'netsh advfirewall firewall delete rule name="${NAME} Hub"'
+  Pop $0
+  Pop $1
+
   ; The notes are the user's and live in their projects; nothing under the install
   ; directory is theirs, so this removes what it put there and stops.
   Delete "$INSTDIR\cyberbrain.exe"
@@ -138,11 +194,15 @@ Section "Uninstall"
 
   Delete "$SMPROGRAMS\${NAME}\${NAME}.lnk"
   Delete "$SMPROGRAMS\${NAME}\Uninstall ${NAME}.lnk"
+  Delete "$SMPROGRAMS\${NAME}\Hub data folder.lnk"
   RMDir "$SMPROGRAMS\${NAME}"
   Delete "$DESKTOP\${NAME}.lnk"
 
   DeleteRegKey HKLM "${REGKEY}"
   DeleteRegKey HKLM "Software\${NAME}"
+  ; The hub's record under %PROGRAMDATA%\${NAME} is left alone, deliberately and without
+  ; asking: it is the company's evidence, it is what a works agreement promises to keep,
+  ; and removing the software must never remove it.
   ; %APPDATA%\cyberbrain\desktop.toml is left alone: it is one line saying which folder was
   ; open, and a reinstall that remembers is friendlier than one that forgets.
 SectionEnd

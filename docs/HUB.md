@@ -80,9 +80,69 @@ $ cyberbrain hub add "ws-021" --data hub.db --invite ws-021.json \
 The file carries the token: hand it over the way you would a password, and delete it once the
 machine is set up. Reading it on the client is the next slice.
 
-Meant to run as a service — `systemd` on Linux, a Windows service on Windows Server. A hub
-that is up only while somebody is logged in makes silence useless as a signal: you could
-never tell whether the hub was asleep or the client had stopped.
+## As a service
+
+A hub is only as useful as it is boring, and a program that is up only while somebody is
+logged in makes silence useless as a signal: you could never tell whether the hub was asleep
+or the client had stopped. So it runs as a service — and on Windows, setting that up is a
+tick box rather than a command.
+
+### Windows
+
+Tick **Hub service (collector)** in the installer. It is off by default, because most
+machines are clients and on those it would open a port for nothing. Ticking it:
+
+- creates `C:\ProgramData\Cyberbrain\` and puts a note in it explaining what goes there
+- registers the service **Cyberbrain Hub**, set to start automatically, listening on
+  `0.0.0.0:7788`
+- opens that port in Windows Firewall — without this the hub listens and nothing ever
+  arrives, which looks exactly like every client being broken
+- adds a Start menu shortcut to the data folder
+
+Then **licensing it is copying a file**: save the licence you were sent as
+`C:\ProgramData\Cyberbrain\licence.txt` and restart the service. It is picked up on start
+and what it found is written to `hub-service.log` beside it. Nobody has to open a command
+prompt to put a hub into service, which is the whole point — the moment a setup needs one,
+the person who needed the product most is the person who stops.
+
+For administrators who would rather see the command, and for unattended rollouts, the same
+registration is one line:
+
+```console
+> cyberbrain hub service install --data C:\ProgramData\Cyberbrain\hub.db --addr 0.0.0.0:7788
+> cyberbrain hub service status
+Cyberbrain Hub is running
+```
+
+`status` exits non-zero when it is not running, so a monitoring check is one line. `start`,
+`stop` and `uninstall` do what they say; `uninstall` removes the registration and **leaves
+the record alone**, as does removing the program. Deleting the software must never delete
+the evidence it was collecting.
+
+`hub serve` is the same executable in both roles. Started by the service control manager it
+behaves as a service; started from a prompt it is an ordinary console server. There is no
+flag, because a flag is a thing to get wrong, and there is no second executable, because two
+of them drift.
+
+### Linux
+
+```ini
+# /etc/systemd/system/cyberbrain-hub.service
+[Unit]
+Description=Cyberbrain Hub
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/cyberbrain hub serve --addr 0.0.0.0:7788 --data /var/lib/cyberbrain/hub.db
+Restart=on-failure
+User=cyberbrain
+StateDirectory=cyberbrain
+
+[Install]
+WantedBy=multi-user.target
+```
+
+A licence dropped at `/var/lib/cyberbrain/licence.txt` is picked up on start here too.
 
 ## Delivering to it
 

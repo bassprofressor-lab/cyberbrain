@@ -1060,3 +1060,70 @@ fn a_revoked_credential_stops_working_immediately() {
         .unwrap_err();
     assert!(err.to_string().contains("revoked"), "{err}");
 }
+
+// ---- the licence a customer drops next to the record (0.3.0) ----
+//
+// The service route has to work without a command prompt, so licensing a hub is copying a
+// file into the data directory. These are about what that does when the file is missing or
+// wrong — the cases a support call is made of. The happy path needs the issuer's real
+// signing key, which lives outside this repository, so it is covered by the licence tests
+// against a generated key pair rather than here.
+
+#[test]
+fn the_licence_is_dropped_next_to_the_record() {
+    let p = super::service::licence_drop_path(std::path::Path::new("/var/lib/cyberbrain"));
+    assert_eq!(p, std::path::Path::new("/var/lib/cyberbrain/licence.txt"));
+}
+
+#[test]
+fn no_licence_file_is_not_worth_a_word() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::in_memory().unwrap();
+    // A hub licensed months ago has no file lying about, and a line every start would
+    // teach whoever reads the log to skip it.
+    assert_eq!(
+        super::service::adopt_dropped_licence(&hub, dir.path()),
+        None
+    );
+}
+
+#[test]
+fn an_unusable_licence_file_is_named_and_changes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::in_memory().unwrap();
+    hub.set_licence("the one that is already installed")
+        .unwrap();
+    std::fs::write(dir.path().join("licence.txt"), "not a licence at all").unwrap();
+
+    let note = super::service::adopt_dropped_licence(&hub, dir.path())
+        .expect("somebody put that file there on purpose; silence would be the wrong answer");
+    assert!(note.contains("not usable"), "{note}");
+    assert!(
+        note.contains("licence.txt"),
+        "the message has to say which file: {note}"
+    );
+    // The point: a bad file must not take away the licence the hub is running on.
+    assert_eq!(
+        hub.licence_text().unwrap().as_deref(),
+        Some("the one that is already installed")
+    );
+}
+
+#[test]
+fn the_same_licence_twice_is_not_news() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::in_memory().unwrap();
+    let text = "whatever is installed";
+    hub.set_licence(text).unwrap();
+    std::fs::write(dir.path().join("licence.txt"), text).unwrap();
+    // Left in place after the first start, as people do.
+    assert_eq!(
+        super::service::adopt_dropped_licence(&hub, dir.path()),
+        None
+    );
+
+    // Calibration: the same call does speak up when the file is not what is installed, so
+    // the silence above comes from the comparison and not from the function being mute.
+    std::fs::write(dir.path().join("licence.txt"), "something else entirely").unwrap();
+    assert!(super::service::adopt_dropped_licence(&hub, dir.path()).is_some());
+}

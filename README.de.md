@@ -78,6 +78,14 @@ Informationen, dann Trotzdem ausführen. Den `PATH` fasst das Installationsprogr
 nicht an; wer `cyberbrain` auch auf der Kommandozeile will, trägt
 `C:\Program Files\Cyberbrain` selbst ein oder nimmt `cargo install cyberbrain`.
 
+Dasselbe Installationsprogramm richtet auf Wunsch auch **die Zentraleinheit** ein — den einen
+Rechner, der die Nachweise der übrigen einsammelt. Häkchen bei *Hub service (collector)*: es
+trägt einen Windows-Dienst ein, öffnet den Port und legt einen Ordner an, in den die
+Lizenzdatei kommt. Mehr nicht, und keine Kommandozeile. Auf den Arbeitsplätzen nimmt
+*Connect to the company hub…* im Infobereich die Einladungsdatei entgegen, die sie bekommen
+haben. Was eine Notiz **sagt**, verlässt auf keiner der beiden Seiten den Rechner, auf dem sie
+liegt. Das ganze Bild steht in [`docs/HUB.md`](docs/HUB.md).
+
 <details>
 <summary>Ohne Weboberfläche, oder aus einem Checkout</summary>
 
@@ -242,16 +250,18 @@ kein Verhalten.
 
 ## Stand
 
-**v0.2.1, und jung.** 465 Tests, sieben Pakete auf crates.io und dazu der Windows-Starter,
+**v0.3.0, und jung.** 465 Tests, sieben Pakete auf crates.io und dazu der Windows-Starter,
 clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux und Windows und ein
 Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines einzigen
 Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist zu
 rechnen, melde sie.
 
-Der Desktop-Starter ist der jüngste und am wenigsten eingelaufene Teil: die CI baut ihn,
-packt ihn und lässt einen Store durch die Binärdatei laufen, die dabei ausgeliefert wird —
-installiert hatte ihn zum Erscheinen von 0.2.1 aber noch niemand. Wenn er sich auf deinem
-Rechner danebenbenimmt, ist das einen Fehlerbericht wert.
+Die Windows-Seite ist der jüngste und am wenigsten eingelaufene Teil: die CI baut Starter,
+Hub-Dienst und Installationsprogramm, packt sie und lässt einen Store durch die Binärdatei
+laufen, die dabei ausgeliefert wird — installiert hatte das zum Erscheinen von 0.3.0 aber
+noch niemand, und eingetragen als Dienst auch nicht. Der Dienstcode lässt sich nirgendwo
+außer unter Windows ausführen; er ist übersetzt und gelesen, nicht gelaufen. Wenn er sich auf
+deinem Rechner danebenbenimmt, ist das einen Fehlerbericht wert.
 
 Cyberbrain ist ein eigenständiges Werk. Es teilt keinen Quelltext mit irgendeinem anderen
 Gedächtnis-Werkzeug; §0 von [`docs/SPEC.md`](docs/SPEC.md) hält die Grenze fest, unter der es

@@ -450,6 +450,108 @@ fn run_licence(command: &cli::LicenceCommand, out: Out) -> Result<i32> {
 /// The hub's commands. Most run a hub and open no store; `enrol` and `push` are the
 /// client's side of the same feature and do open one, which is why the store path comes in
 /// here rather than being reached for globally.
+/// Register the hub as a Windows service, or control the one that is registered.
+///
+/// The installer calls `install` with the same defaults, so a customer who ticks the box and
+/// an administrator who types the command end up with exactly the same registration.
+fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
+    use cli::ServiceCommand;
+    use hub::service;
+
+    match command {
+        ServiceCommand::Install { data, addr } => {
+            // Checked before anything is registered: a service that will not start because
+            // of a typo in an address is diagnosed from services.msc, which is a bad place
+            // to find out.
+            let parsed = hub::parse_addr(addr)?;
+            let path = data
+                .clone()
+                .unwrap_or_else(|| service::default_data_dir().join("hub.db"));
+            if let Some(dir) = path.parent() {
+                std::fs::create_dir_all(dir).map_err(|e| Error::Io {
+                    path: dir.to_path_buf(),
+                    source: e,
+                })?;
+            }
+            let exe = std::env::current_exe()
+                .map_err(|e| Error::Config(format!("cannot find this program on disk: {e}")))?;
+            service::install(&exe, &path, addr)?;
+            let drop =
+                service::licence_drop_path(path.parent().unwrap_or(std::path::Path::new(".")));
+            out.emit(
+                &serde_json::json!({
+                    "service": service::SERVICE_NAME,
+                    "data": path,
+                    "addr": parsed.to_string(),
+                    "licence_drop": drop,
+                    "state": "running",
+                }),
+                |v| {
+                    format!(
+                        "{} registered and started.\nrecord:  {}\nlistens: {}\n\nPut a \
+                         licence file at {} and restart the service; without one nothing is \
+                         collected.\n",
+                        service::DISPLAY_NAME,
+                        v["data"].as_str().unwrap_or_default(),
+                        v["addr"].as_str().unwrap_or_default(),
+                        v["licence_drop"].as_str().unwrap_or_default(),
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+        ServiceCommand::Uninstall => {
+            service::uninstall()?;
+            // Said out loud because the opposite would be the surprise: removing the
+            // software must not remove the evidence it was collecting.
+            out.emit(
+                &serde_json::json!({ "service": service::SERVICE_NAME, "state": "removed" }),
+                |_| {
+                    format!(
+                        "{} removed. The record and the log are untouched.\n",
+                        service::DISPLAY_NAME
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+        ServiceCommand::Start | ServiceCommand::Stop => {
+            let start = matches!(command, ServiceCommand::Start);
+            service::set_state(start)?;
+            out.emit(
+                &serde_json::json!({
+                    "service": service::SERVICE_NAME,
+                    "state": if start { "starting" } else { "stopping" },
+                }),
+                |v| {
+                    format!(
+                        "{} {}\n",
+                        service::DISPLAY_NAME,
+                        v["state"].as_str().unwrap_or("")
+                    )
+                },
+            )?;
+            Ok(0)
+        }
+        ServiceCommand::Status => {
+            let state = service::status()?;
+            let running = state == "running";
+            out.emit(
+                &serde_json::json!({ "service": service::SERVICE_NAME, "state": state }),
+                |v| {
+                    format!(
+                        "{} is {}\n",
+                        service::DISPLAY_NAME,
+                        v["state"].as_str().unwrap_or("")
+                    )
+                },
+            )?;
+            // Non-zero when it is not running, so a monitoring check is one line.
+            Ok(if running { 0 } else { 1 })
+        }
+    }
+}
+
 fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out) -> Result<i32> {
     use cli::HubCommand;
     let now = || jiff::Timestamp::now().to_string();
@@ -514,33 +616,74 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
 
         HubCommand::Serve { addr, data } => {
             let path = hub::data_path(data.clone());
-            let store = hub::HubStore::open(&path)?;
-            // Read once at startup and printed, so the person who starts the service sees
-            // the state without having to ask a second command.
-            let licence_line = hub::LicenceState::read(&store, jiff::Timestamp::now()).line();
             let addr = hub::parse_addr(addr)?;
-            let state = std::sync::Arc::new(hub::api::HubState {
-                hub: std::sync::Mutex::new(store),
-            });
-            runtime()?.block_on(async move {
-                let listener = tokio::net::TcpListener::bind(addr)
-                    .await
-                    .map_err(|e| Error::Config(format!("cannot bind {addr}: {e}")))?;
-                let bound = listener
-                    .local_addr()
-                    .map_err(|e| Error::Config(format!("cannot read the bound address: {e}")))?;
-                println!(
-                    "cyberbrain hub: http://{bound}/  (record: {}; devices authenticate with \
-                     a bearer token)",
-                    path.display()
-                );
-                println!("{licence_line}");
-                axum::serve(listener, hub::api::router(state))
-                    .await
-                    .map_err(|e| Error::Config(format!("hub: {e}")))
-            })?;
+            // Set before anything can go wrong: started by the service control manager there
+            // is no console, so a message that only reaches stdout reaches nobody — including
+            // the one saying why the thing will not start.
+            hub::service::set_log_path(&path);
+
+            let serve: hub::service::Serve = {
+                let path = path.clone();
+                Box::new(move |stop| {
+                    let store = hub::HubStore::open(&path)?;
+                    // A licence dropped next to the record is taken on start, so licensing a
+                    // hub is copying a file rather than typing a command with a path in it.
+                    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+                    if let Some(note) = hub::service::adopt_dropped_licence(&store, dir) {
+                        hub::service::log(&note);
+                    }
+                    // Read once at startup, so whoever starts the hub sees the state without
+                    // having to ask a second command.
+                    let licence_line =
+                        hub::LicenceState::read(&store, jiff::Timestamp::now()).line();
+                    let state = std::sync::Arc::new(hub::api::HubState {
+                        hub: std::sync::Mutex::new(store),
+                    });
+                    let path = path.clone();
+                    runtime()?.block_on(async move {
+                        let listener = tokio::net::TcpListener::bind(addr)
+                            .await
+                            .map_err(|e| Error::Config(format!("cannot bind {addr}: {e}")))?;
+                        let bound = listener.local_addr().map_err(|e| {
+                            Error::Config(format!("cannot read the bound address: {e}"))
+                        })?;
+                        let hello = format!(
+                            "cyberbrain hub: http://{bound}/  (record: {}; devices \
+                             authenticate with a bearer token)",
+                            path.display()
+                        );
+                        println!("{hello}");
+                        println!("{licence_line}");
+                        hub::service::log(&hello);
+                        hub::service::log(&licence_line);
+                        axum::serve(listener, hub::api::router(state))
+                            // The stop signal arrives on a plain channel from the service
+                            // control handler, which is not async and must answer at once.
+                            .with_graceful_shutdown(async move {
+                                let _ = tokio::task::spawn_blocking(move || stop.recv()).await;
+                                hub::service::log("stop requested; closing the listener");
+                            })
+                            .await
+                            .map_err(|e| Error::Config(format!("hub: {e}")))
+                    })
+                })
+            };
+
+            // Started by the service control manager this takes over and returns when the
+            // service stops; started from a prompt it comes back false and we carry on as an
+            // ordinary console server. One binary, no flag to remember.
+            hub::service::set_serve(serve);
+            if hub::service::try_dispatch()? {
+                return Ok(0);
+            }
+            // No sender is ever used here, and `_never` holds the other end open so the
+            // shutdown future waits rather than firing on a disconnected channel.
+            let (_never, stop) = std::sync::mpsc::channel();
+            hub::service::run_serve(stop)?;
             Ok(0)
         }
+
+        HubCommand::Service { command } => run_hub_service(command, out),
 
         HubCommand::Add {
             name,

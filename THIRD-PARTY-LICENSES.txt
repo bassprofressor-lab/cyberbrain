@@ -3,15 +3,20 @@ Third-party licences
 
 Cyberbrain is licensed FSL-1.1-ALv2 (see LICENSE.md). It builds on the packages below,
 each under its own terms. Generated from cargo metadata with --all-features, so it lists
-more than a default build actually links.
+more than a default build actually links. Regenerate with:
 
-293 packages, grouped by the licence they declare.
+    python3 scripts/third-party-licences.py > THIRD-PARTY-LICENSES.txt
+
+331 packages, grouped by the licence they declare.
 
 -- (Apache-2.0 OR MIT) AND BSD-3-Clause --------------------------------------
    encoding_rs 0.8.35  https://github.com/hsivonen/encoding_rs
 
 -- (MIT OR Apache-2.0) AND Unicode-3.0 ---------------------------------------
    unicode-ident 1.0.24  https://github.com/dtolnay/unicode-ident
+
+-- 0BSD OR MIT OR Apache-2.0 -------------------------------------------------
+   adler2 2.0.1  https://github.com/oyvindln/adler2
 
 -- Apache-2.0 ----------------------------------------------------------------
    esaxx-rs 0.1.10  https://github.com/Narsil/esaxx-rs
@@ -26,6 +31,9 @@ more than a default build actually links.
 -- Apache-2.0 AND ISC --------------------------------------------------------
    ring 0.17.14  https://github.com/briansmith/ring
 
+-- Apache-2.0 AND MIT --------------------------------------------------------
+   dpi 0.1.2  https://github.com/rust-windowing/winit
+
 -- Apache-2.0 OR BSL-1.0 -----------------------------------------------------
    ryu 1.0.23  https://github.com/dtolnay/ryu
 
@@ -39,13 +47,16 @@ more than a default build actually links.
    bit-set 0.8.0  https://github.com/contain-rs/bit-set
    bit-vec 0.8.0  https://github.com/contain-rs/bit-vec
    const-oid 0.10.2  https://github.com/RustCrypto/formats
+   ed25519 3.0.0  https://github.com/RustCrypto/signatures
    equivalent 1.0.2  https://github.com/indexmap-rs/equivalent
    fastrand 2.5.0  https://github.com/smol-rs/fastrand
    idna_adapter 1.2.2  https://github.com/hsivonen/idna_adapter
    indexmap 2.14.2  https://github.com/indexmap-rs/indexmap
+   muda 0.19.3  https://github.com/tauri-apps/muda
    pin-project-lite 0.2.17  https://github.com/taiki-e/pin-project-lite
    portable-atomic 1.15.0  https://github.com/taiki-e/portable-atomic
    portable-atomic-util 0.2.8  https://github.com/taiki-e/portable-atomic-util
+   signature 3.0.0  https://github.com/RustCrypto/traits
    simd_cesu8 1.2.0  https://github.com/seancroach/simd_cesu8
    utf8_iter 1.0.4  https://github.com/hsivonen/utf8_iter
    utf8parse 0.2.2  https://github.com/alacritty/vte
@@ -70,6 +81,8 @@ more than a default build actually links.
    zerocopy-derive 0.8.56  https://github.com/google/zerocopy
 
 -- BSD-3-Clause --------------------------------------------------------------
+   curve25519-dalek 5.0.0  https://github.com/dalek-cryptography/curve25519-dalek/tree/main/curve25519-dalek
+   ed25519-dalek 3.0.0  https://github.com/dalek-cryptography/curve25519-dalek/tree/main/ed25519-dalek
    subtle 2.6.1  https://github.com/dalek-cryptography/subtle
 
 -- CC0-1.0 OR Apache-2.0 OR Apache-2.0 WITH LLVM-exception -------------------
@@ -88,6 +101,7 @@ more than a default build actually links.
 -- MIT -----------------------------------------------------------------------
    axum 0.8.9  https://github.com/tokio-rs/axum
    axum-core 0.5.6  https://github.com/tokio-rs/axum
+   block2 0.6.2  https://github.com/madsmtm/objc2
    bytes 1.12.1  https://github.com/tokio-rs/bytes
    castaway 0.2.4  https://github.com/sagebind/castaway
    combine 4.6.8  https://github.com/Marwes/combine
@@ -102,11 +116,17 @@ more than a default build actually links.
    http-range-header 0.4.2  https://github.com/MarcusGrass/parse-range-headers
    hyper 1.11.1  https://github.com/hyperium/hyper
    hyper-util 0.1.20  https://github.com/hyperium/hyper-util
+   libredox 0.1.23  https://gitlab.redox-os.org/redox-os/libredox.git
    libsqlite3-sys 0.38.2  https://github.com/rusqlite/rusqlite
    mime_guess 2.0.5  https://github.com/abonander/mime_guess
    mio 1.2.3  https://github.com/tokio-rs/mio
    nom 7.1.3  https://github.com/Geal/nom
    nu-ansi-term 0.50.3  https://github.com/nushell/nu-ansi-term
+   objc2 0.6.4  https://github.com/madsmtm/objc2
+   objc2-encode 4.1.0  https://github.com/madsmtm/objc2
+   objc2-foundation 0.3.2  https://github.com/madsmtm/objc2
+   redox_users 0.5.2  https://gitlab.redox-os.org/redox-os/users
+   rfd 0.17.2  https://github.com/PolyMeilex/rfd
    rsqlite-vfs 0.1.1
    rusqlite 0.40.2  https://github.com/rusqlite/rusqlite
    rust-embed 8.12.0  https://pyrossh.dev/repos/rust-embed
@@ -115,6 +135,7 @@ more than a default build actually links.
    schannel 0.1.29  https://github.com/steffengy/schannel-rs
    serde_yaml_ng 0.10.0  https://github.com/acatton/serde-yaml-ng
    sharded-slab 0.1.7  https://github.com/hawkw/sharded-slab
+   simd-adler32 0.3.10  https://github.com/mcountryman/simd-adler32
    slab 0.4.12  https://github.com/tokio-rs/slab
    sqlite-wasm-rs 0.5.5  https://github.com/Spxg/sqlite-wasm-rs
    strsim 0.11.1  https://github.com/rapidfuzz/strsim-rs
@@ -169,6 +190,8 @@ more than a default build actually links.
    core-foundation 0.10.1  https://github.com/servo/core-foundation-rs
    core-foundation-sys 0.8.7  https://github.com/servo/core-foundation-rs
    cpufeatures 0.3.1  https://github.com/RustCrypto/utils
+   crc32fast 1.5.1  https://github.com/srijs/rust-crc32fast
+   crossbeam-channel 0.5.17  https://github.com/crossbeam-rs/crossbeam
    crossbeam-deque 0.8.7  https://github.com/crossbeam-rs/crossbeam
    crossbeam-epoch 0.9.20  https://github.com/crossbeam-rs/crossbeam
    crossbeam-utils 0.8.22  https://github.com/crossbeam-rs/crossbeam
@@ -182,10 +205,14 @@ more than a default build actually links.
    derive_builder_core 0.20.2  https://github.com/colin-kiegel/rust-derive-builder
    derive_builder_macro 0.20.2  https://github.com/colin-kiegel/rust-derive-builder
    digest 0.11.3  https://github.com/RustCrypto/traits
+   dirs 6.0.0  https://github.com/soc/dirs-rs
+   dirs-sys 0.5.0  https://github.com/dirs-dev/dirs-sys-rs
    displaydoc 0.2.7  https://github.com/yaahc/displaydoc
    either 1.18.0  https://github.com/rayon-rs/either
    errno 0.3.14  https://github.com/lambda-fairy/rust-errno
+   fdeflate 0.3.7  https://github.com/image-rs/fdeflate
    find-msvc-tools 0.1.12  https://github.com/rust-lang/cc-rs
+   flate2 1.1.10  https://github.com/rust-lang/flate2-rs
    form_urlencoded 1.2.2  https://github.com/servo/rust-url
    futures-channel 0.3.34  https://github.com/rust-lang/futures-rs
    futures-core 0.3.34  https://github.com/rust-lang/futures-rs
@@ -213,6 +240,7 @@ more than a default build actually links.
    jni-sys 0.4.1  https://github.com/jni-rs/jni-sys
    jni-sys-macros 0.4.1  https://github.com/jni-rs/jni-sys
    js-sys 0.3.105  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/js-sys
+   keyboard-types 0.7.0  https://github.com/pyfisch/keyboard-types
    lazy_static 1.5.0  https://github.com/rust-lang-nursery/lazy-static.rs
    libc 0.2.189  https://github.com/rust-lang/libc
    log 0.4.34  https://github.com/rust-lang/log
@@ -226,6 +254,7 @@ more than a default build actually links.
    pastey 0.2.3  https://github.com/as1100k/pastey
    percent-encoding 2.3.2  https://github.com/servo/rust-url/
    pkg-config 0.3.34  https://github.com/rust-lang/pkg-config-rs
+   png 0.18.1  https://github.com/image-rs/image-png
    ppv-lite86 0.2.21  https://github.com/cryptocorrosion/cryptocorrosion
    proc-macro2 1.0.107  https://github.com/dtolnay/proc-macro2
    quote 1.0.47  https://github.com/dtolnay/quote
@@ -272,6 +301,7 @@ more than a default build actually links.
    toml_datetime 1.1.1+spec-1.1.0  https://github.com/toml-rs/toml
    toml_parser 1.1.3+spec-1.1.0  https://github.com/toml-rs/toml
    toml_writer 1.1.2+spec-1.1.0  https://github.com/toml-rs/toml
+   tray-icon 0.24.2  https://github.com/tauri-apps/tray-icon
    typenum 1.20.1  https://github.com/paholg/typenum
    unicase 2.9.0  https://github.com/seanmonstar/unicase
    unicode-segmentation 1.13.3  https://github.com/unicode-rs/unicode-segmentation
@@ -284,7 +314,9 @@ more than a default build actually links.
    wasm-bindgen-shared 0.2.128  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/shared
    web-sys 0.3.105  https://github.com/wasm-bindgen/wasm-bindgen/tree/master/crates/web-sys
    web-time 1.1.0  https://github.com/daxpedda/web-time
+   widestring 1.2.1  https://github.com/VoidStarKat/widestring-rs
    windows-link 0.2.1  https://github.com/microsoft/windows-rs
+   windows-service 0.8.1  https://github.com/mullvad/windows-service-rs
    windows-sys 0.52.0  https://github.com/microsoft/windows-rs
    windows-sys 0.61.2  https://github.com/microsoft/windows-rs
    windows-targets 0.52.6  https://github.com/microsoft/windows-rs
@@ -297,21 +329,36 @@ more than a default build actually links.
    windows_x86_64_gnullvm 0.52.6  https://github.com/microsoft/windows-rs
    windows_x86_64_msvc 0.52.6  https://github.com/microsoft/windows-rs
 
+-- MIT OR Apache-2.0 OR BSD-1-Clause -----------------------------------------
+   fiat-crypto 0.3.0  https://github.com/mit-plv/fiat-crypto
+
 -- MIT OR Apache-2.0 OR LGPL-2.1-or-later ------------------------------------
    r-efi 5.3.0  https://github.com/r-efi/r-efi
    r-efi 6.0.0  https://github.com/r-efi/r-efi
 
+-- MIT OR Apache-2.0 OR Zlib -------------------------------------------------
+   raw-window-handle 0.6.2  https://github.com/rust-windowing/raw-window-handle
+
+-- MIT OR Zlib OR Apache-2.0 -------------------------------------------------
+   miniz_oxide 0.8.9  https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
+   miniz_oxide 0.9.1  https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide
+
 -- MIT/Apache-2.0 ------------------------------------------------------------
    base64 0.13.1  https://github.com/marshallpierce/rust-base64
    bitflags 1.3.2  https://github.com/bitflags/bitflags
+   curve25519-dalek-derive 0.1.1  https://github.com/dalek-cryptography/curve25519-dalek
    fallible-iterator 0.3.0  https://github.com/sfackler/rust-fallible-iterator
    fallible-streaming-iterator 0.1.9  https://github.com/sfackler/fallible-streaming-iterator
    ident_case 1.0.1  https://github.com/TedDriggs/ident_case
    minimal-lexical 0.2.1  https://github.com/Alexhuszagh/minimal-lexical
    serde_urlencoded 0.7.1  https://github.com/nox/serde_urlencoded
+   shellexpand 3.1.2  https://gitlab.com/ijackson/rust-shellexpand
    unicode-normalization-alignments 0.1.12  https://github.com/n1t0/unicode-normalization
    vcpkg 0.2.15  https://github.com/mcgoo/vcpkg-rs
    version_check 0.9.5  https://github.com/SergioBenitez/version_check
+
+-- MPL-2.0 -------------------------------------------------------------------
+   option-ext 0.2.0  https://github.com/soc/option-ext.git
 
 -- Unicode-3.0 ---------------------------------------------------------------
    icu_collections 2.3.0  https://github.com/unicode-org/icu4x
@@ -351,4 +398,10 @@ more than a default build actually links.
 
 -- Zlib ----------------------------------------------------------------------
    foldhash 0.2.0  https://github.com/orlp/foldhash
+   zlib-rs 0.6.7  https://github.com/trifectatechfoundation/zlib-rs
 
+-- Zlib OR Apache-2.0 OR MIT -------------------------------------------------
+   dispatch2 0.3.1  https://github.com/madsmtm/objc2
+   objc2-app-kit 0.3.2  https://github.com/madsmtm/objc2
+   objc2-core-foundation 0.3.2  https://github.com/madsmtm/objc2
+   objc2-core-graphics 0.3.2  https://github.com/madsmtm/objc2

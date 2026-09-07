@@ -1,0 +1,370 @@
+//! The hub as a Windows service.
+//!
+//! # Why the same binary does both
+//!
+//! A service is started by the service control manager, which expects the process to call
+//! back into it within seconds and then answer stop requests. A console program does not do
+//! that, and a program that only does that cannot be run by hand to see what it says.
+//!
+//! So `cyberbrain hub serve` tries the service handshake first. Started by the SCM it
+//! succeeds and the process behaves as a service; started from a prompt it fails with one
+//! specific error, and the program carries on as an ordinary console server. No flag to
+//! remember, no second executable that drifts from the first.
+//!
+//! # Why installation is not a command somebody types
+//!
+//! It is, for administrators who prefer one — but the installer registers the service on its
+//! own if that box is ticked. A small company should not have to learn `sc.exe` to collect
+//! its own audit trail, and the moment a setup requires a prompt, the person who needed the
+//! product most is the one who stops.
+
+use cyberbrain_core::{Error, Result};
+use std::path::{Path, PathBuf};
+
+/// Name the service is registered under, and how it appears in services.msc.
+pub const SERVICE_NAME: &str = "CyberbrainHub";
+pub const DISPLAY_NAME: &str = "Cyberbrain Hub";
+#[cfg_attr(not(windows), allow(dead_code))]
+pub const DESCRIPTION: &str = concat!(
+    "Collects the audit rows of Cyberbrain clients on this network. ",
+    "Holds no notes: only records of what happened, in a chain that cannot be edited."
+);
+
+/// Where a service keeps its record when nobody said otherwise.
+///
+/// `%PROGRAMDATA%`, not the install directory: the record outlives the program, survives an
+/// uninstall, and is the thing a backup has to include. A database under Program Files is
+/// one Windows update away from being a surprise.
+pub fn default_data_dir() -> PathBuf {
+    std::env::var_os("PROGRAMDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("C:\\ProgramData"))
+        .join("Cyberbrain")
+}
+
+/// A licence dropped next to the record is picked up on start.
+///
+/// The alternative is telling somebody to run an install command with a path in it, which is
+/// exactly the sort of step that turns into a support call. Copy the file in, restart the
+/// service, done — and the service says in its log which licence it found.
+pub fn licence_drop_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("licence.txt")
+}
+
+/// Take a licence file sitting next to the record, if there is one and it is usable.
+///
+/// Returns what happened, for the log. Deliberately quiet about a missing file: not having
+/// dropped one in is the normal state of a hub that was licensed months ago.
+pub fn adopt_dropped_licence(hub: &super::HubStore, data_dir: &Path) -> Option<String> {
+    let path = licence_drop_path(data_dir);
+    let text = std::fs::read_to_string(&path).ok()?;
+    // Compared before it is parsed, not after. The file is meant to be left where it was
+    // copied, so the ordinary case is one that is already installed: that should cost
+    // nothing and say nothing, on every restart, for years.
+    if hub.licence_text().ok().flatten().as_deref() == Some(text.as_str()) {
+        return None;
+    }
+    match super::licence::parse(&text) {
+        Ok(signed) => match hub.set_licence(&text) {
+            Ok(()) => Some(format!(
+                "licence picked up from {}: {}, {} seat(s), until {}",
+                path.display(),
+                signed.licence().customer,
+                signed.licence().seats,
+                signed.licence().valid_until
+            )),
+            Err(e) => Some(format!(
+                "could not store the licence from {}: {e}",
+                path.display()
+            )),
+        },
+        // A bad file is worth saying out loud: somebody put it there on purpose.
+        Err(e) => Some(format!(
+            "the licence at {} is not usable: {e}",
+            path.display()
+        )),
+    }
+}
+
+/// What `hub serve` does, given something that says when to stop.
+///
+/// A boxed closure rather than a plain function because the address and the record's path
+/// are already parsed by the time we know whether we are a service, and re-parsing them in
+/// a second place is how the two routes drift apart.
+pub type Serve = Box<dyn Fn(std::sync::mpsc::Receiver<()>) -> Result<()> + Send + Sync>;
+
+static LOG_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+static SERVE: std::sync::OnceLock<Serve> = std::sync::OnceLock::new();
+
+/// Remember what serving means, before asking whether we are a service.
+///
+/// It has to be waiting rather than passed in: the service control manager calls a function
+/// with a fixed signature, on a thread of its own.
+pub fn set_serve(f: Serve) {
+    let _ = SERVE.set(f);
+}
+
+/// Run it, whoever asked. Both routes end here, so there is one server, not two that drift.
+pub fn run_serve(stop: std::sync::mpsc::Receiver<()>) -> Result<()> {
+    match SERVE.get() {
+        Some(f) => f(stop),
+        None => Err(Error::Config("nothing to serve was set up".into())),
+    }
+}
+
+/// Where the service writes what it would otherwise have printed.
+///
+/// A service has no console, so a message printed to stdout is a message nobody will ever
+/// read — including the one explaining why the thing will not start. The file sits next to
+/// the record, which is the directory an administrator already has to know about.
+pub fn set_log_path(data_db: &Path) {
+    let dir = data_db.parent().unwrap_or(Path::new("."));
+    let _ = LOG_PATH.set(dir.join("hub-service.log"));
+}
+
+/// Say something, to the log file when there is one and to stderr otherwise.
+pub fn log(msg: &str) {
+    let line = format!("{} {msg}\n", jiff::Timestamp::now());
+    match LOG_PATH.get() {
+        Some(p) => {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(p)
+            {
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
+        None => eprint!("{line}"),
+    }
+}
+
+#[cfg(not(windows))]
+mod platform {
+    use super::*;
+
+    pub fn install(_exe: &Path, _data: &Path, _addr: &str) -> Result<()> {
+        Err(unsupported())
+    }
+    pub fn uninstall() -> Result<()> {
+        Err(unsupported())
+    }
+    pub fn set_state(_start: bool) -> Result<()> {
+        Err(unsupported())
+    }
+    pub fn status() -> Result<String> {
+        Err(unsupported())
+    }
+
+    /// Nothing here launches services, so `hub serve` is always the console server.
+    pub fn try_dispatch() -> Result<bool> {
+        Ok(false)
+    }
+
+    fn unsupported() -> Error {
+        Error::Config(
+            "Windows services exist only on Windows. On Linux use a systemd unit; \
+             docs/HUB.md has one."
+                .into(),
+        )
+    }
+}
+
+#[cfg(windows)]
+mod platform {
+    use super::*;
+    use std::ffi::OsString;
+    use windows_service::service::{
+        ServiceAccess, ServiceErrorControl, ServiceInfo, ServiceStartType, ServiceState,
+        ServiceType,
+    };
+    use windows_service::service_manager::{ServiceManager, ServiceManagerAccess};
+
+    fn manager(access: ServiceManagerAccess) -> Result<ServiceManager> {
+        ServiceManager::local_computer(None::<&str>, access).map_err(|e| {
+            Error::Config(format!(
+                "cannot reach the service control manager: {e}. This needs an elevated \
+                 prompt — right-click, Run as administrator."
+            ))
+        })
+    }
+
+    pub fn install(exe: &Path, data: &Path, addr: &str) -> Result<()> {
+        let m = manager(ServiceManagerAccess::CREATE_SERVICE | ServiceManagerAccess::CONNECT)?;
+        let info = ServiceInfo {
+            name: OsString::from(SERVICE_NAME),
+            display_name: OsString::from(DISPLAY_NAME),
+            service_type: ServiceType::OWN_PROCESS,
+            // Automatic: a hub that only runs when somebody remembers to start it makes
+            // silence useless as a signal, which is the whole point of the fleet view.
+            start_type: ServiceStartType::AutoStart,
+            error_control: ServiceErrorControl::Normal,
+            executable_path: exe.to_path_buf(),
+            launch_arguments: vec![
+                OsString::from("hub"),
+                OsString::from("serve"),
+                OsString::from("--data"),
+                OsString::from(data),
+                OsString::from("--addr"),
+                OsString::from(addr),
+            ],
+            dependencies: vec![],
+            account_name: None, // LocalSystem
+            account_password: None,
+        };
+        let service = m
+            .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
+            .map_err(|e| Error::Config(format!("cannot register the service: {e}")))?;
+        let _ = service.set_description(DESCRIPTION);
+        service
+            .start::<OsString>(&[])
+            .map_err(|e| Error::Config(format!("registered, but could not start it: {e}")))?;
+        Ok(())
+    }
+
+    pub fn uninstall() -> Result<()> {
+        let m = manager(ServiceManagerAccess::CONNECT)?;
+        let service = m
+            .open_service(SERVICE_NAME, ServiceAccess::STOP | ServiceAccess::DELETE)
+            .map_err(|e| Error::Config(format!("cannot open the service: {e}")))?;
+        // Stop first, ignoring "already stopped": deleting a running service leaves it
+        // marked for deletion until reboot, which looks like the command did nothing.
+        let _ = service.stop();
+        service
+            .delete()
+            .map_err(|e| Error::Config(format!("cannot remove the service: {e}")))?;
+        Ok(())
+    }
+
+    pub fn set_state(start: bool) -> Result<()> {
+        let m = manager(ServiceManagerAccess::CONNECT)?;
+        let access = if start {
+            ServiceAccess::START
+        } else {
+            ServiceAccess::STOP
+        };
+        let service = m
+            .open_service(SERVICE_NAME, access)
+            .map_err(|e| Error::Config(format!("cannot open the service: {e}")))?;
+        if start {
+            service
+                .start::<OsString>(&[])
+                .map_err(|e| Error::Config(format!("cannot start it: {e}")))?;
+        } else {
+            service
+                .stop()
+                .map_err(|e| Error::Config(format!("cannot stop it: {e}")))?;
+        }
+        Ok(())
+    }
+
+    pub fn status() -> Result<String> {
+        let m = manager(ServiceManagerAccess::CONNECT)?;
+        let service = m
+            .open_service(SERVICE_NAME, ServiceAccess::QUERY_STATUS)
+            .map_err(|e| {
+                Error::Config(format!(
+                    "the service is not registered ({e}). Install it with \
+                     `cyberbrain hub service install`, or tick the box in the installer."
+                ))
+            })?;
+        let s = service
+            .query_status()
+            .map_err(|e| Error::Config(format!("cannot read the status: {e}")))?;
+        Ok(match s.current_state {
+            ServiceState::Running => "running".into(),
+            ServiceState::Stopped => "stopped".into(),
+            ServiceState::StartPending => "starting".into(),
+            ServiceState::StopPending => "stopping".into(),
+            other => format!("{other:?}"),
+        })
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Being a service.
+
+    use windows_service::service::{
+        ServiceControl, ServiceControlAccept, ServiceExitCode, ServiceStatus,
+    };
+    use windows_service::service_control_handler::{self, ServiceControlHandlerResult};
+    use windows_service::service_dispatcher;
+
+    /// Windows reports this when a process calls the dispatcher without having been started
+    /// as a service. It is not a fault: it is how the program learns it was run by a person.
+    const NOT_A_SERVICE: i32 = 1063; // ERROR_FAILED_SERVICE_CONTROLLER_CONNECT
+
+    windows_service::define_windows_service!(ffi_service_main, service_main);
+
+    fn service_main(_args: Vec<OsString>) {
+        // Nothing above this catches an error, so anything that goes wrong has to be
+        // written down here or it is lost with the process.
+        if let Err(e) = run_service() {
+            log(&format!("the service stopped: {e}"));
+        }
+    }
+
+    fn run_service() -> Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let handle =
+            service_control_handler::register(SERVICE_NAME, move |control| match control {
+                // Shutdown as well as Stop: a machine being turned off should close the
+                // listener the same way, not have the process killed mid-write.
+                ServiceControl::Stop | ServiceControl::Shutdown => {
+                    let _ = tx.send(());
+                    ServiceControlHandlerResult::NoError
+                }
+                ServiceControl::Interrogate => ServiceControlHandlerResult::NoError,
+                _ => ServiceControlHandlerResult::NotImplemented,
+            })
+            .map_err(|e| Error::Config(format!("cannot register the control handler: {e}")))?;
+
+        let status = |state, exit, controls| ServiceStatus {
+            service_type: ServiceType::OWN_PROCESS,
+            current_state: state,
+            controls_accepted: controls,
+            exit_code: exit,
+            checkpoint: 0,
+            wait_hint: std::time::Duration::from_secs(10),
+            process_id: None,
+        };
+
+        handle
+            .set_service_status(status(
+                ServiceState::Running,
+                ServiceExitCode::Win32(0),
+                ServiceControlAccept::STOP | ServiceControlAccept::SHUTDOWN,
+            ))
+            .map_err(|e| Error::Config(format!("cannot report Running: {e}")))?;
+
+        let outcome = super::run_serve(rx);
+
+        // Reported even when the server failed. A service that dies without saying Stopped
+        // leaves the SCM waiting, and services.msc shows "stopping" until a reboot.
+        let exit = match &outcome {
+            Ok(()) => ServiceExitCode::Win32(0),
+            Err(_) => ServiceExitCode::ServiceSpecific(1),
+        };
+        let _ = handle.set_service_status(status(
+            ServiceState::Stopped,
+            exit,
+            ServiceControlAccept::empty(),
+        ));
+        outcome
+    }
+
+    /// Try the service handshake. `Ok(false)` means this is an ordinary run from a prompt.
+    pub fn try_dispatch() -> Result<bool> {
+        match service_dispatcher::start(SERVICE_NAME, ffi_service_main) {
+            Ok(()) => Ok(true),
+            Err(windows_service::Error::Winapi(e)) if e.raw_os_error() == Some(NOT_A_SERVICE) => {
+                Ok(false)
+            }
+            Err(e) => Err(Error::Config(format!(
+                "the service control manager refused the connection: {e}"
+            ))),
+        }
+    }
+}
+
+pub use platform::{install, set_state, status, try_dispatch, uninstall};
