@@ -136,6 +136,32 @@ fn a_name_that_runs_out_of_folders_stops_rather_than_looping() {
     assert_eq!(names.len(), 2);
 }
 
+/// [`start`], retried past the one failure that is this test module's own doing.
+///
+/// The fakes below are shell scripts the tests write and then execute. On Linux a program
+/// cannot be executed while any file descriptor to it is open for writing, and with tests
+/// running in parallel one thread's `fork` inherits another thread's still-open write
+/// handle — so an unlucky run gets `ETXTBSY` from a file that is perfectly fine. It failed
+/// perhaps one run in ten, which is worse than failing always, because a flake gets blamed
+/// on whatever was being changed at the time. The launcher never writes the program it
+/// starts, so this belongs here and not in `start`. Unix only, because the two tests that
+/// write a fake are: `ETXTBSY` has no Windows counterpart.
+#[cfg(unix)]
+fn start_fake(server: &Path, dir: &Path) -> Result<Server, StartError> {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        match start(server, dir) {
+            Err(StartError::Failed { message, output })
+                if message.contains("Text file busy") && std::time::Instant::now() < deadline =>
+            {
+                let _ = output;
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            other => return other,
+        }
+    }
+}
+
 /// The binary under test, built by the same `cargo test` run that gets here.
 fn server_binary() -> PathBuf {
     // target/<profile>/deps/<test binary> -> target/<profile>/cyberbrain
@@ -154,6 +180,7 @@ fn server_binary() -> PathBuf {
         "cyberbrain is not built at {}; run `cargo build -p cyberbrain` first",
         exe.display()
     );
+
     exe
 }
 
@@ -524,7 +551,7 @@ fn a_build_without_a_page_is_reported_instead_of_opened() {
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    match start(&fake, tmp.path()) {
+    match start_fake(&fake, tmp.path()) {
         Err(StartError::NoPage) => {}
         Err(other) => panic!("expected the missing page to be reported, got {other}"),
         Ok(mut running) => {
@@ -550,7 +577,7 @@ fn an_ordinary_build_is_still_opened() {
     .unwrap();
     std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
 
-    let mut running = start(&fake, tmp.path()).expect("an address, and no complaint");
+    let mut running = start_fake(&fake, tmp.path()).expect("an address, and no complaint");
     assert_eq!(running.url, "http://127.0.0.1:44444/");
     running.stop();
 }

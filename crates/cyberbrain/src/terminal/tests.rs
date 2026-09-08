@@ -86,3 +86,62 @@ fn comparing_tokens_does_not_stop_at_the_first_difference() {
     assert!(!constant_time_eq(b"abc", b"ab"));
     assert!(constant_time_eq(b"", b""));
 }
+
+// ---------------------------------------------------------------------------------------
+// The saved list is behind the same token, and for a reason worth stating: it says which
+// machines this person connects to and under which account.
+
+use crate::app::App;
+use crate::serve::router_with;
+use axum::body::Body;
+use axum::http::{Method, Request, StatusCode};
+use cyberbrain_policy::Actor;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tower::ServiceExt;
+
+fn store() -> (tempfile::TempDir, Arc<App>) {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("store");
+    App::init(&root, &Actor::Operator).unwrap();
+    let app = Arc::new(App::open(Some(&root), Actor::Operator).unwrap());
+    (dir, app)
+}
+
+async fn get_profiles(terminal: Option<TerminalConfig>, token: Option<&str>) -> StatusCode {
+    let (_dir, app) = store();
+    let router = router_with(app, PathBuf::new(), terminal, Vec::new());
+    let mut req = Request::builder()
+        .method(Method::GET)
+        .uri("/api/v1/terminal/profiles");
+    if let Some(t) = token {
+        req = req.header("x-cyberbrain-terminal-token", t);
+    }
+    router
+        .oneshot(req.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+#[tokio::test]
+async fn the_saved_list_needs_the_token() {
+    assert_eq!(
+        get_profiles(Some(cfg()), None).await,
+        StatusCode::FORBIDDEN,
+        "no token"
+    );
+    assert_eq!(
+        get_profiles(Some(cfg()), Some("wrong")).await,
+        StatusCode::FORBIDDEN,
+        "wrong token"
+    );
+}
+
+#[tokio::test]
+async fn a_store_without_a_terminal_has_no_saved_list_either() {
+    assert_eq!(
+        get_profiles(None, Some(&"a".repeat(64))).await,
+        StatusCode::FORBIDDEN
+    );
+}

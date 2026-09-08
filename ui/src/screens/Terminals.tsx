@@ -31,6 +31,32 @@ function theme() {
   };
 }
 
+interface Saved {
+  name: string;
+  command: string;
+}
+
+/**
+ * The saved list, behind the same token as the terminal.
+ *
+ * A header rather than a query parameter: a token in a request line reaches every log that
+ * records one, and not being in one is the whole point of this token.
+ */
+async function profiles(token: string, next?: Saved[]): Promise<{ path: string | null; profiles: Saved[] }> {
+  const res = await fetch("/api/v1/terminal/profiles", {
+    method: next ? "PUT" : "GET",
+    headers: {
+      "x-cyberbrain-terminal-token": token,
+      ...(next ? { "Content-Type": "application/json" } : {}),
+    },
+    ...(next ? { body: JSON.stringify({ profile: next }) } : {}),
+    credentials: "omit",
+    cache: "no-store",
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
 interface Props {
   route: Route;
 }
@@ -43,6 +69,36 @@ export function TerminalsScreen({ route }: Props) {
   /** Each pane is a session; the key is what makes React build a fresh one. */
   const [panes, setPanes] = useState<Array<{ id: number; command: string }>>([]);
   const next = useRef(0);
+  const [saved, setSaved] = useState<Saved[]>([]);
+  const [savedPath, setSavedPath] = useState<string | null>(null);
+  const [savedWhy, setSavedWhy] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!token) return;
+    profiles(token)
+      .then((r) => {
+        setSaved(r.profiles);
+        setSavedPath(r.path);
+      })
+      // A list that will not load is worth saying out loud: it usually means the file has a
+      // typo in it, and silently showing none is how somebody concludes it was lost.
+      .catch((e) => setSavedWhy(String(e.message ?? e)));
+  }, [token]);
+
+  const write = useCallback(
+    async (list: Saved[]) => {
+      if (!token) return;
+      try {
+        const r = await profiles(token, list);
+        setSaved(r.profiles);
+        setSavedPath(r.path);
+        setSavedWhy(null);
+      } catch (e) {
+        setSavedWhy(String((e as Error).message ?? e));
+      }
+    },
+    [token],
+  );
 
   const start = useCallback(
     (line: string) => {
@@ -91,7 +147,49 @@ export function TerminalsScreen({ route }: Props) {
           >
             {t.terminals.openShell}
           </button>
+          <button
+            type="button"
+            className="text-2xs text-fg-muted hover:text-fg disabled:opacity-40"
+            disabled={command.trim() === ""}
+            onClick={() => {
+              const name = window.prompt(t.terminals.namePrompt, defaultName(command));
+              if (!name) return;
+              void write([...saved.filter((x) => x.name !== name), { name, command }]);
+            }}
+          >
+            {t.terminals.save}
+          </button>
         </form>
+
+        {saved.length > 0 || savedWhy ? (
+          <div className="mb-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-2xs text-fg-faint">{t.terminals.saved}</span>
+              {saved.map((x) => (
+                <span key={x.name} className="inline-flex items-center gap-1 border rounded px-1.5 py-0.5">
+                  <button
+                    type="button"
+                    className="text-2xs font-mono hover:text-fg"
+                    title={x.command}
+                    onClick={() => start(x.command)}
+                  >
+                    {x.name}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t.terminals.forget(x.name)}
+                    className="text-2xs text-fg-faint hover:text-danger"
+                    onClick={() => void write(saved.filter((y) => y.name !== x.name))}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            {savedWhy ? <p className="text-2xs text-danger mt-1">{savedWhy}</p> : null}
+            {savedPath ? <p className="text-2xs text-fg-faint mt-1">{t.terminals.savedIn(savedPath)}</p> : null}
+          </div>
+        ) : null}
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-3">
           {panes.length === 0 ? (
@@ -142,9 +240,8 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
     const ws = new WebSocket(url);
     ws.binaryType = "arraybuffer";
 
-    const argv = splitCommand(command);
     ws.onopen = () => {
-      ws.send(JSON.stringify({ token, cols: term.cols, rows: term.rows, command: argv }));
+      ws.send(JSON.stringify({ token, cols: term.cols, rows: term.rows, command }));
       setState("open");
       term.focus();
     };
@@ -205,41 +302,14 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
 }
 
 /**
- * Split a typed command the way the person means it, and no further.
+ * A first guess at a name: the host for an `ssh`, otherwise the program.
  *
- * Quotes group and a backslash escapes; there is no shell here, so a pipe or a semicolon is
- * an argument. Somebody who wants a pipe asks for a shell and types it there — which is
- * exactly what the "shell" button is for.
+ * A guess and not a rule — the box it goes in is editable, and somebody naming a connection
+ * "the old build server" knows better than any heuristic here.
  */
-export function splitCommand(line: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let has = false;
-  let quote: string | null = null;
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i] as string;
-    if (c === "\\" && i + 1 < line.length) {
-      cur += line[++i];
-      has = true;
-    } else if (quote && c === quote) {
-      quote = null;
-    } else if (quote) {
-      cur += c;
-      has = true;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-      has = true;
-    } else if (/\s/.test(c)) {
-      if (has) {
-        out.push(cur);
-        cur = "";
-        has = false;
-      }
-    } else {
-      cur += c;
-      has = true;
-    }
-  }
-  if (has) out.push(cur);
-  return out;
+function defaultName(command: string): string {
+  const parts = command.trim().split(/\s+/);
+  const host = parts.find((p) => p.includes("@"));
+  if (host) return host.split("@").pop() ?? host;
+  return parts[0]?.split(/[\\/]/).pop()?.replace(/\.exe$/i, "") ?? "";
 }

@@ -209,8 +209,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `windows-sys`, already here), the WebSocket costs five, and xterm.js is loaded only when
   somebody opens a terminal — the main bundle is the size it was.
 
+- **Saved command lines.** The servers you connect to and the tools you start, as buttons:
+  type a line, press Save, name it. They live in `terminals.toml` in your own configuration
+  directory, never in the store — the store travels with the repository, so a host name and
+  an account name in it would be committed on behalf of whoever clones it next. They are
+  behind the same token as the terminal, because the list says which machines this person
+  reaches and under which account.
+
+  A saved line is split by the same code that splits a line you type, so the two cannot
+  behave differently. The page had a splitter of its own for a day; it is gone, and the
+  contract lives once, on the server.
+
+
 ### Fixed
 
+- A flake in the launcher's tests, seen roughly one run in ten and misdiagnosed once before
+  it was found. The fakes those tests use are shell scripts they write and then execute, and
+  on Linux a program cannot be executed while any descriptor to it is open for writing —
+  with tests in parallel, one thread's `fork` inherits another thread's write handle and the
+  spawn fails with `ETXTBSY` on a file that is perfectly fine. It failed on whatever change
+  happened to be under test, which is the worst property a test can have.
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.
 - The launcher's WebView2 profile is kept in `%LOCALAPPDATA%\cyberbrain\WebView2`. The
   default is a folder beside the executable, and after an install that executable is under

@@ -21,7 +21,7 @@
 
 mod assets;
 pub(crate) mod command;
-mod error;
+pub(crate) mod error;
 mod extract;
 mod holds;
 mod notes;
@@ -132,6 +132,10 @@ pub fn router_with(
         .route("/scan", post(ops::scan))
         .route("/command", post(command::run))
         .route("/terminal", get(crate::terminal::open))
+        .route(
+            "/terminal/profiles",
+            get(crate::terminal::list_profiles).put(crate::terminal::put_profiles),
+        )
         .layer(axum::middleware::from_fn(no_store))
         .with_state(state);
     Router::new()

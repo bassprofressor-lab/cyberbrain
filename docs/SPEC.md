@@ -512,6 +512,21 @@ standing, and it carries three conditions. All three, every time:
 could: a process running as you can already run anything you can. The line drawn is around
 other origins and other users, which is the line worth drawing.
 
+**Saved command lines** — the servers you connect to and the tools you start — live in the
+user's own configuration directory, never in the store. The store travels with a repository,
+so a host name and an account name in it would be committed on behalf of whoever clones it
+next, and that half is exactly the half nobody wants published. `GET`/`PUT
+/api/v1/terminal/profiles` read and write them, behind the same token as the socket and for
+the same reason: the list says which machines this person reaches and under which account.
+The token goes in a header rather than a query parameter, because a token in a request line
+reaches every log that records one.
+
+The line is split by the same code that splits a line somebody types, so a saved command and
+a typed one cannot behave differently. That splitting is a contract — quotes group, a
+backslash escapes, and nothing else is a shell — and it is implemented once, on the server.
+A pipe or a semicolon is an argument; somebody who wants a shell asks for one and types it
+there.
+
 **The egress register (§12.1) does not cover what runs in a terminal**, and says so. A
 register claiming to enumerate every path bytes can take while `ssh` is one keystroke away
 would be false, and a false register is worse than an honest gap. What the register still

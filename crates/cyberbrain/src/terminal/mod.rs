@@ -24,11 +24,13 @@
 //! start a shell without asking us. The line this draws is around *other* origins and
 //! *other* users, and that is the line worth drawing.
 
+pub mod profiles;
 pub mod pty;
 #[cfg(test)]
 mod tests;
 
 use crate::serve::ServeState;
+use crate::serve::error::{ApiError, ApiResult};
 use axum::extract::State;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::http::{HeaderMap, StatusCode};
@@ -66,9 +68,14 @@ pub struct Open {
     pub cols: u16,
     #[serde(default)]
     pub rows: u16,
-    /// argv. Empty means the platform's usual shell.
+    /// The command line as typed. Empty or absent means the platform's usual shell.
+    ///
+    /// A line rather than argv, and split here rather than in the page: the splitting is a
+    /// contract (quotes group, a backslash escapes, and nothing else is a shell) and two
+    /// implementations of a contract disagree eventually. The page had one for a day; this
+    /// is the one that stays.
     #[serde(default)]
-    pub command: Vec<String>,
+    pub command: String,
 }
 
 /// Anything the client sends after that.
@@ -115,6 +122,67 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
         return false;
     }
     a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+/// The token, from the header a browser will not put there for another origin.
+///
+/// A header rather than a query parameter: a token in a request line reaches every log that
+/// records one, and the point of this token is that it does not.
+const TOKEN_HEADER: &str = "x-cyberbrain-terminal-token";
+
+fn token_of(headers: &HeaderMap) -> String {
+    headers
+        .get(TOKEN_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Saved command lines. Behind the same token as the terminal itself, because the list says
+/// which machines this person connects to and under which account, and that is not something
+/// to hand to anything that can reach the port.
+pub async fn list_profiles(
+    State(st): State<Arc<ServeState>>,
+    headers: HeaderMap,
+) -> ApiResult<axum::Json<serde_json::Value>> {
+    guard(&st, &headers)?;
+    let saved = profiles::load().map_err(|e| ApiError::internal(e.to_string()))?;
+    Ok(axum::Json(serde_json::json!({
+        "path": profiles::path().map(|p| cyberbrain_core::Slash(&p).to_string()),
+        "profiles": saved.profiles,
+    })))
+}
+
+pub async fn put_profiles(
+    State(st): State<Arc<ServeState>>,
+    headers: HeaderMap,
+    axum::Json(saved): axum::Json<profiles::Profiles>,
+) -> ApiResult<axum::Json<serde_json::Value>> {
+    guard(&st, &headers)?;
+    let path = profiles::save(&saved).map_err(|e| ApiError::bad_request(e.to_string()))?;
+    Ok(axum::Json(serde_json::json!({
+        "path": cyberbrain_core::Slash(&path).to_string(),
+        "profiles": saved.profiles,
+    })))
+}
+
+/// The same two conditions the socket applies, for the two routes beside it. The origin
+/// check is absent here on purpose and the token carries the weight: a same-origin `fetch`
+/// sends no `Origin` at all, so requiring one would refuse our own page.
+fn guard(st: &ServeState, headers: &HeaderMap) -> Result<(), ApiError> {
+    match st.terminal.as_ref() {
+        None => Err(refusal(
+            "this store is served without a terminal; `cyberbrain serve --terminal` enables it",
+        )),
+        Some(cfg) if constant_time_eq(cfg.token.as_bytes(), token_of(headers).as_bytes()) => Ok(()),
+        Some(_) => Err(refusal("that is not this session's terminal token")),
+    }
+}
+
+/// A refusal in the shape every other route here uses, so the page has one error body to
+/// understand. `403` is the taxonomy's policy refusal (SPEC §8.1), which is what this is.
+fn refusal(message: &str) -> ApiError {
+    ApiError::new(StatusCode::FORBIDDEN, "policy-refusal", message.to_string())
 }
 
 pub async fn open(
@@ -169,8 +237,15 @@ async fn session(st: Arc<ServeState>, origin: Option<String>, mut socket: WebSoc
         .parent()
         .unwrap_or_else(|| st.app.root())
         .to_path_buf();
+    let argv = match crate::serve::command::tokenise(&req.command) {
+        Ok(argv) => argv.unwrap_or_default(),
+        Err(why) => {
+            let _ = say(&mut socket, &why).await;
+            return;
+        }
+    };
     let mut pty = match Pty::spawn(Spawn {
-        command: &req.command,
+        command: &argv,
         cwd: &cwd,
         cols: req.cols.max(1),
         rows: req.rows.max(1),
