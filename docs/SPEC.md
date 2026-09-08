@@ -294,6 +294,8 @@ cyberbrain recall <query> [-n N] [--ring R] [--json]
 cyberbrain recall --id <citation>     expand a citation to its full note
 cyberbrain find <symbol>              exact line ranges from the code index
 cyberbrain write --ring R --kind K --name N [--stdin]
+cyberbrain propose --ring R --kind K --name N        offer a note for somebody to accept (§8.0.3)
+cyberbrain review [<name> --accept|--reject --reason] what is waiting, and deciding it
 cyberbrain forget <name|id> [--dry-run]   erase note, blocks, vectors, links, and say what went
 cyberbrain doctor                     dangling links, ring cap, stale index, orphan vectors
 cyberbrain status [--json]            store health, model, backend, compliance profile
@@ -370,6 +372,47 @@ be registered there, and making one reachable would contradict §12.1. It is rep
 unavailable with the reason, and no endpoint is offered. Codex CLI is configured by a TOML
 file the user writes by hand, comments and all; that file is reported and the lines to paste
 are printed, rather than reformatted by us.
+
+### 8.0.3 Propose and review
+
+Rings 0 and 1 are the operator's (§3.2), and until now that was a convention: the agent was
+told to propose text and never write it, and only the pre-tool-use hook refusing raw edits
+stood behind it. `propose` and `review` make it a mechanism.
+
+**A proposal is not a note, and it does not live in the notes tree.** It goes in
+`proposals/`, and that placement is the whole safety of this rather than a filing
+preference. `Frontmatter` does not deny unknown fields, so a state written into a note's own
+header would be read and silently ignored by every older binary — and an unapproved ring 0
+note would be injected as a live invariant, which is the exact failure this exists to
+prevent. A directory an older `scan` never walks cannot be ignored into existence.
+
+It follows, and is intended, that **a proposal is not in the index**: `recall` and `find`
+cannot return one. An agent that retrieves an unapproved invariant treats it as agreed. The
+session-start hook says how many are waiting instead, which is where a person will see it.
+
+**Who proposed it comes from the audit log, not from the file.** The `note.proposed` row
+carries the name; the chain is hashed, and a line of YAML in a file anybody can edit is not.
+A file that appears in `proposals/` without such a row is listed and cannot be accepted:
+there is nobody to check it against, and waving it through would make the rule optional for
+anyone who knows where the directory is.
+
+**A proposal cannot be reviewed by the person who made it**, in the same words the hub uses
+for a disclosure request and for the same reason. Identity comes from `CYBERBRAIN_IDENTITY`,
+then a line in the user's own configuration directory, then `git config user.email` — never
+from `cyberbrain.toml`, because that file travels with the repository and because `Config`
+denies unknown fields, so a section there would make every older binary refuse the store.
+
+**This is a workflow with a record, not an authentication.** Anyone who can write the
+identity file is anyone. What it buys is a name on an audit row and a two-person rule nobody
+walks into by accident. The hub's version of the same rule is backed by tokens; this one is
+not, and a deployment that needs enforcement rather than evidence belongs there.
+
+The gate runs at both ends: at `propose`, so the person who wrote the text answers for it,
+and again at `accept` over the same body, because the proposal may have sat for a week and
+the profile may have changed under it. Accepting a proposal for a note that changed in the
+meantime is refused unless forced — the same failure `expected_updated` prevents, over a
+longer interval. Rejecting needs a reason, and the proposal file goes; the reason is in the
+log, which is the only place the proposer will look.
 
 ### 8.1 The HTTP API
 

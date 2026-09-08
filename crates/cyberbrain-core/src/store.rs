@@ -31,6 +31,15 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 pub const NOTES_DIR: &str = "notes";
+/// Where a note waits for somebody else to accept it.
+///
+/// Deliberately **outside** `notes/`, and that is the whole safety of the review workflow
+/// rather than a filing preference. `Frontmatter` does not deny unknown fields, so a state
+/// written into a note's own header would be read and silently ignored by every older
+/// binary — which would inject an unapproved ring 0 note as a live invariant, the one
+/// failure this feature exists to prevent. A directory an older `scan` never walks cannot
+/// be ignored into existence.
+pub const PROPOSALS_DIR: &str = "proposals";
 pub const DB_FILE: &str = "cyberbrain.db";
 pub const MODELS_DIR: &str = "models";
 pub const IGNORE_FILE: &str = ".cyberbrainignore";
@@ -134,6 +143,106 @@ impl Store {
     }
     pub fn models_dir(&self) -> PathBuf {
         self.root.join(MODELS_DIR)
+    }
+    pub fn proposals_dir(&self) -> PathBuf {
+        self.root.join(PROPOSALS_DIR)
+    }
+
+    /// Where a proposal with this name lives. Validates the name for the same reason
+    /// [`note_path`](Self::note_path) does: a name must never become a path.
+    pub fn proposal_path(&self, name: &str) -> Result<PathBuf> {
+        frontmatter::validate_name(name).map_err(|why| Error::Frontmatter {
+            path: self.proposals_dir().join(format!("{name}.{NOTE_EXT}")),
+            reason: format!("name `{name}`: {why}"),
+        })?;
+        Ok(self.proposals_dir().join(format!("{name}.{NOTE_EXT}")))
+    }
+
+    /// Every proposal, oldest first, so a review list reads in the order things arrived.
+    ///
+    /// A file that does not parse is reported rather than skipped: a proposal nobody can
+    /// read is still a proposal somebody is waiting on.
+    pub fn list_proposals(&self) -> Result<Vec<Note>> {
+        let dir = self.proposals_dir();
+        let entries = match fs::read_dir(&dir) {
+            Ok(e) => e,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => {
+                return Err(Error::Io {
+                    path: dir,
+                    source: e,
+                });
+            }
+        };
+        let mut out = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some(NOTE_EXT) {
+                continue;
+            }
+            out.push(self.read_proposal_path(&path)?);
+        }
+        out.sort_by_key(|n| n.front.created);
+        Ok(out)
+    }
+
+    pub fn read_proposal(&self, name: &str) -> Result<Note> {
+        let path = self.proposal_path(name)?;
+        if !path.is_file() {
+            return Err(Error::NoSuchNote(name.to_string()));
+        }
+        self.read_proposal_path(&path)
+    }
+
+    /// Like [`read_path`](Self::read_path), but the file is checked against the proposals
+    /// directory rather than a ring directory — the ring in the frontmatter is where the
+    /// note is *destined*, not where it is.
+    fn read_proposal_path(&self, path: &Path) -> Result<Note> {
+        let text = fs::read_to_string(path).map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let parsed = frontmatter::parse(path, &text)?;
+        let expected = self.proposal_path(&parsed.front.name)?;
+        if !same_file_name(&expected, path) {
+            return Err(Error::Frontmatter {
+                path: path.to_path_buf(),
+                reason: format!(
+                    "frontmatter says name `{}`, which belongs at {}",
+                    parsed.front.name,
+                    Slash(&expected)
+                ),
+            });
+        }
+        Ok(Note {
+            front: parsed.front,
+            body: parsed.body.to_string(),
+            path: path.to_path_buf(),
+        })
+    }
+
+    pub fn write_proposal(&self, note: &Note) -> Result<PathBuf> {
+        let target = self.proposal_path(&note.front.name)?;
+        // Made here rather than at `init`, so a store created by an older version gets one
+        // the first time somebody proposes into it. An empty directory is not worth
+        // creating in every store that will never hold a proposal.
+        let dir = self.proposals_dir();
+        fs::create_dir_all(&dir).map_err(|e| Error::Io {
+            path: dir,
+            source: e,
+        })?;
+        let text = frontmatter::render(&note.front, &note.body)?;
+        write_atomic(&target, text.as_bytes())?;
+        Ok(target)
+    }
+
+    pub fn remove_proposal(&self, name: &str) -> Result<PathBuf> {
+        let path = self.proposal_path(name)?;
+        fs::remove_file(&path).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        Ok(path)
     }
 
     /// Where a note with this ring and name lives. Validates the name so that a name can

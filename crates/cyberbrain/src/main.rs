@@ -12,6 +12,7 @@ mod cli;
 mod hook;
 mod hostload;
 mod hub;
+mod identity;
 mod import;
 mod install;
 mod mcp;
@@ -292,6 +293,78 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 }
             }
         }
+        Command::Propose {
+            ring,
+            kind,
+            name,
+            body,
+            tags,
+            retention,
+            force,
+            dry_run,
+        } => {
+            let who = identity::who(app.root())?;
+            let body = match body {
+                Some(b) => b,
+                None => read_stdin()?,
+            };
+            let req = WriteRequest {
+                ring: Ring::try_from(ring)?,
+                kind: kind.into(),
+                name,
+                body,
+                tags,
+                retention,
+                force,
+                choice: None,
+                expected_updated: None,
+                dry_run,
+            };
+            let outcome = app.propose(req, &who)?;
+            out.emit(&outcome, |o| match o {
+                app::Proposed::Written(r) => render::proposed(r),
+                app::Proposed::Held { rendered, .. } => format!(
+                    "{rendered}Nothing was proposed. Re-run with --force to propose it \
+                     flagged, or edit the body.\n"
+                ),
+            })?;
+            if matches!(outcome, app::Proposed::Held { .. }) {
+                return Ok(3);
+            }
+        }
+
+        Command::Review {
+            target,
+            accept,
+            reject,
+            reason,
+            force,
+            dry_run,
+        } => {
+            let Some(name) = target else {
+                let waiting = app.proposals()?;
+                out.emit(&waiting, |w| render::proposals(w))?;
+                return Ok(0);
+            };
+            if accept == reject {
+                return Err(Error::Config(
+                    "say which: --accept or --reject. Listing what is waiting is \
+                     `cyberbrain review` with no name"
+                        .into(),
+                ));
+            }
+            let req = app::ReviewRequest {
+                name,
+                accept,
+                reason: reason.unwrap_or_default(),
+                by: identity::who(app.root())?,
+                force,
+                dry_run,
+            };
+            let r = app.review(req)?;
+            out.emit(&r, render::reviewed)?;
+        }
+
         Command::Forget { target, dry_run } => {
             let r = app.forget(&target, dry_run)?;
             out.emit(&r, cyberbrain_policy::erasure::render)?;

@@ -137,6 +137,18 @@ The page has a command line of its own, so `find`, `export` and everything else 
 screen do not mean leaving for a terminal. It runs the same binary that is serving the page,
 against that page's store, and hands back the same stdout, stderr and exit code.
 
+Rings 0 and 1 are the operator's, and `cyberbrain propose` is how everyone else offers one:
+the note goes to `proposals/`, outside the notes tree, so it is not indexed and `recall`
+cannot return it — an unapproved invariant that an agent can retrieve is an invariant nobody
+agreed to. Somebody other than the proposer accepts it with `cyberbrain review <name>
+--accept`, and the audit log names both of them.
+
+Rings 0 and 1 are the operator's, and `cyberbrain propose` is how everyone else offers one:
+the note goes to `proposals/`, outside the notes tree, so it is not indexed and `recall`
+cannot return it — an unapproved invariant that an agent can retrieve is an invariant nobody
+agreed to. Somebody other than the proposer accepts it with `cyberbrain review <name>
+--accept`, and the audit log names both of them.
+
 ## How it works
 
 ```mermaid

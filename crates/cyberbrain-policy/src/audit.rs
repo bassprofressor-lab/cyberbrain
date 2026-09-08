@@ -77,6 +77,13 @@ pub enum AuditAction {
     NoteWrite,
     NoteWriteHeld,
     NoteWriteResolved,
+    /// Written to `proposals/`, waiting for somebody else.
+    NoteProposed,
+    /// A proposal became a note. The row names both people.
+    NoteProposalAccepted,
+    /// A proposal was turned down. The reason is in the row, because it is the only place
+    /// the proposer will look for it.
+    NoteProposalRejected,
     NoteEraseRequested,
     NoteEraseCompleted,
     NoteEraseFailed,
@@ -100,6 +107,9 @@ impl AuditAction {
             AuditAction::NoteWrite => "note.write",
             AuditAction::NoteWriteHeld => "note.write.held",
             AuditAction::NoteWriteResolved => "note.write.resolved",
+            AuditAction::NoteProposed => "note.proposed",
+            AuditAction::NoteProposalAccepted => "note.proposal.accepted",
+            AuditAction::NoteProposalRejected => "note.proposal.rejected",
             AuditAction::NoteEraseRequested => "note.erase.requested",
             AuditAction::NoteEraseCompleted => "note.erase.completed",
             AuditAction::NoteEraseFailed => "note.erase.failed",

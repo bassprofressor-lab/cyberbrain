@@ -110,6 +110,58 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Write a note into `proposals/` for somebody else to accept.
+    ///
+    /// The same arguments as `write`, and the same PII gate — what differs is where it
+    /// lands. A proposal is outside the notes tree, so it is not indexed and `recall`
+    /// cannot return one: an unapproved ring 0 note that an agent could find would be an
+    /// invariant nobody agreed to.
+    Propose {
+        #[arg(long, value_parser = clap::value_parser!(u8).range(0..=4))]
+        ring: u8,
+        #[arg(long)]
+        kind: NoteKindArg,
+        #[arg(long)]
+        name: String,
+        /// The body as Markdown. Omit to read it from stdin.
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long)]
+        tags: Vec<String>,
+        #[arg(long)]
+        retention: Option<String>,
+        /// Propose despite PII findings, recording them as flagged.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// What is waiting, and accepting or rejecting it.
+    ///
+    /// A proposal cannot be reviewed by the person who made it. Who that was comes from the
+    /// audit log rather than from the file, because the log is hash-chained and the file is
+    /// a line of YAML anybody can edit. This is a workflow with a record, not an
+    /// authentication: it stops a mistake, not a determined person.
+    Review {
+        /// The proposal. Omit it to list what is waiting.
+        target: Option<String>,
+        /// Take it: the note moves into its ring and is indexed.
+        #[arg(long, conflicts_with = "reject")]
+        accept: bool,
+        /// Turn it down. Needs `--reason`, and the proposal file goes.
+        #[arg(long)]
+        reject: bool,
+        /// Why it was turned down. The only place the proposer will look for it.
+        #[arg(long)]
+        reason: Option<String>,
+        /// Accept even though the note changed after this was proposed.
+        #[arg(long)]
+        force: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Erase a note and everything derived from it (GDPR Art. 17, SPEC §12.2).
     Forget {
         /// Note name or id.

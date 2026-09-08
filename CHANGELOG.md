@@ -142,6 +142,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   The command line screen now names its project, from the store path it already knows.
   Four identical boxes next to each other is how somebody types into the wrong one.
 
+- **`propose` and `review`: a note somebody else has to accept.** Rings 0 and 1 are the
+  operator's, and until now that was a convention — the agent was told to propose text and
+  never write it, with only the pre-tool-use hook refusing raw edits behind it. It is a
+  mechanism now. `cyberbrain propose` writes into `proposals/`; somebody else runs
+  `cyberbrain review <name> --accept`, and only then does it become a note.
+
+  **A proposal is not in the index, and `recall` cannot return one.** That is the point, not
+  a side effect: an agent that retrieves an unapproved ring 0 note treats it as an invariant
+  nobody agreed to. It is also why a proposal lives outside the notes tree rather than
+  carrying a state in its own header — `Frontmatter` does not deny unknown fields, so a
+  state there would be read and ignored by every older binary, which is the failure with the
+  state in it. A directory an older `scan` never walks cannot be ignored into existence.
+
+  **A proposal cannot be reviewed by the person who made it**, in the same words the hub
+  already uses for a disclosure request. Who proposed it comes from the audit log rather than
+  the file: the chain is hashed, and a line of YAML in a file anybody can edit is not. A file
+  that turns up in `proposals/` without a `note.proposed` row is listed and cannot be
+  accepted — there is nobody to check it against.
+
+  This is a workflow with a record, not an authentication: anyone who can write the identity
+  file is anyone. It stops a mistake, not a determined person. The hub's version of the same
+  rule is backed by tokens, and a deployment that needs enforcement rather than evidence
+  belongs there.
+
+  Identity comes from `CYBERBRAIN_IDENTITY`, then a line in the user's own configuration
+  directory, then `git config user.email`. Deliberately never from `cyberbrain.toml`: that
+  file travels with the repository, so a name in it is committed on behalf of whoever clones
+  it next — and `Config` denies unknown fields, so a new section there would make every older
+  binary refuse the store outright.
+
+  The PII gate runs at both ends, at `propose` so the author answers for their own text and
+  again at `accept` because the proposal may have sat for a week. Accepting a proposal for a
+  note that changed in the meantime is refused unless forced. Rejecting needs a reason.
+  Session-start says how many are waiting, since a proposal nobody is told about is a file in
+  a folder.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.

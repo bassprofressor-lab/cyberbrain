@@ -312,6 +312,31 @@ fn digest(
             if res.other_files == 1 { "y" } else { "ies" }
         ));
     }
+    // Proposals, because a proposal nobody is told about is a file in a folder. Counted
+    // from the directory rather than the index — they are deliberately not in it — and a
+    // directory read is cheap enough for a hook with a 150 ms budget.
+    if let Ok(waiting) = store.list_proposals()
+        && !waiting.is_empty()
+    {
+        let names: Vec<&str> = waiting
+            .iter()
+            .map(|n| n.front.name.as_str())
+            .take(5)
+            .collect();
+        text.push_str(&format!(
+            "- **{} proposal(s) waiting** for somebody to accept or reject: {}{}. They are \
+             not in the index and `recall` cannot return them; `cyberbrain review` lists \
+             them. Tell the operator.\n",
+            waiting.len(),
+            names.join(", "),
+            if waiting.len() > names.len() {
+                ", …"
+            } else {
+                ""
+            }
+        ));
+    }
+
     let policy = ctx.app.policy();
     text.push_str(&format!(
         "- policy profile: {} (PII scan on writes: {})\n",
@@ -390,7 +415,11 @@ fn usage(text: &mut String) {
          not the file.\n\
          - `cyberbrain write --ring 2 --kind knowledge|bug|lesson|decision|reference --name <kebab-slug> \
          --body '...'` records what you learn. Ring 2 is project knowledge, ring 3 a session \
-         record. Rings 0 and 1 are the operator's: propose text, never write them.\n\
+         record. Rings 0 and 1 are the operator's: never write them directly.\n\
+         - `cyberbrain propose --ring 0 --kind decision --name <slug> --body '...'` is how you \
+         offer one instead. It goes to `proposals/`, outside the notes tree, so it is not \
+         indexed and nobody retrieves it as though it were agreed; a person other than the \
+         proposer accepts it with `cyberbrain review <name> --accept`.\n\
          - Do not edit files under the store with Edit/Write. The pre-tool-use hook refuses the \
          audit log and rings 0/1 and asks the operator about the rest, because a raw edit skips \
          the PII gate, the audit row and the reindex that `cyberbrain write` performs.\n\n",

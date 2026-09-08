@@ -40,10 +40,10 @@ use cyberbrain_index::{
 use cyberbrain_llm::{LlmClient, LlmConfig, Probe};
 use cyberbrain_policy::profile::ProfileExt;
 use cyberbrain_policy::{
-    Actor, AuditFilter, EgressEntry, EraseReason, EraseRequest, ErasureReport, ExportFormat,
-    Finding, Identifier, MemoryAuditSink, ModelCard, ModelInventory, ModelRole, OperatorChoice,
-    Policy, PolicyConfig, PolicyStatus, RetentionItem, RetentionQueue, SubjectAccessReport,
-    SubjectBlock, SubjectSource, WriteVerdict,
+    Actor, AuditAction, AuditFilter, EgressEntry, EraseReason, EraseRequest, ErasureReport,
+    ExportFormat, Finding, Identifier, MemoryAuditSink, ModelCard, ModelInventory, ModelRole,
+    OperatorChoice, Policy, PolicyConfig, PolicyStatus, RetentionItem, RetentionQueue,
+    SubjectAccessReport, SubjectBlock, SubjectSource, WriteVerdict,
 };
 use serde::Serialize;
 use serde_json::json;
@@ -233,6 +233,85 @@ pub struct WriteRequest {
     /// §8.1: refuse to overwrite a note somebody else changed in the meantime.
     pub expected_updated: Option<jiff::Timestamp>,
     pub dry_run: bool,
+}
+
+/// What `propose` did, or what it is waiting to be told.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum Proposed {
+    Written(ProposeReport),
+    /// The PII gate held it. Same shape as a held write, and answered the same way.
+    Held {
+        rendered: String,
+        name: String,
+        /// Never serialised: a finding carries the matched text.
+        #[serde(skip)]
+        findings: Vec<cyberbrain_policy::Finding>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposeReport {
+    pub name: String,
+    pub ring: Ring,
+    pub kind: String,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+    pub path: PathBuf,
+    pub proposed_by: String,
+    pub bytes: usize,
+    pub pii: PiiState,
+    pub redacted: usize,
+    /// A note of this name already exists, so accepting this would change it rather than
+    /// add one. Worth saying at propose time, not first at review time.
+    pub changes_existing: bool,
+    pub dry_run: bool,
+    pub audit_preview: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposalSummary {
+    pub name: String,
+    pub ring: Ring,
+    pub kind: String,
+    /// `None` when the audit log has no `note.proposed` row for it — a file that appeared
+    /// in `proposals/` some other way. It cannot be accepted; `review` says why.
+    pub proposed_by: Option<String>,
+    pub created: jiff::Timestamp,
+    pub changes_existing: bool,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+    pub path: PathBuf,
+}
+
+#[derive(Debug, Clone)]
+pub struct ReviewRequest {
+    pub name: String,
+    pub accept: bool,
+    /// Required when rejecting.
+    pub reason: String,
+    /// Who is deciding. Never the proposer.
+    pub by: String,
+    /// Accept even though the note changed after the proposal was made.
+    pub force: bool,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ReviewReport {
+    pub name: String,
+    pub accepted: bool,
+    pub by: String,
+    pub proposed_by: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "cyberbrain_core::path_serde::slash_opt"
+    )]
+    pub path: Option<PathBuf>,
+    pub blocks: usize,
+    pub vectors: usize,
+    pub dry_run: bool,
+    pub audit_preview: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1751,6 +1830,341 @@ impl App {
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         }))
+    }
+
+    // ----- review: propose, list, accept, reject -----------------------------------------
+    //
+    // A proposal is a note that is not a note yet. It lives in `proposals/`, outside the
+    // notes tree, and that placement is the whole safety of this: `Frontmatter` does not
+    // deny unknown fields, so a state written into a note's own header would be read and
+    // ignored by every older binary, and an unapproved ring 0 note would be injected as a
+    // live invariant. A directory an older `scan` never walks cannot be ignored.
+    //
+    // It follows that a proposal is not in the index, so `recall` and `find` cannot return
+    // one. That is the intent, not a side effect: an agent that finds an unapproved
+    // invariant treats it as one.
+
+    /// Write a note into `proposals/` for somebody else to accept.
+    ///
+    /// The PII gate runs here rather than at acceptance, so the person who wrote the text is
+    /// the one who answers for it. It runs again at acceptance over the same body, because
+    /// the profile may have changed in between.
+    pub fn propose(&self, req: WriteRequest, who: &str) -> Result<Proposed> {
+        let name = req.name.trim().to_string();
+        frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
+            path: PathBuf::from(format!("{name}.md")),
+            reason: format!("name `{name}`: {why}"),
+        })?;
+        if let Some(r) = &req.retention {
+            frontmatter::validate_retention(r).map_err(|why| Error::Frontmatter {
+                path: PathBuf::from(format!("{name}.md")),
+                reason: format!("retention `{r}`: {why}"),
+            })?;
+        }
+        if self.store.read_proposal(&name).is_ok() {
+            return Err(Error::Config(format!(
+                "a proposal named {name} is already waiting; `cyberbrain review {name} --reject` \
+                 it first, or propose under another name"
+            )));
+        }
+
+        let w = self.writers(req.dry_run);
+        let policy = w.policy.get();
+
+        // SPEC §12.4: the scan runs before any byte is written, here as anywhere.
+        let (body, pii, redacted) = match policy.check_write(&name, &req.body)? {
+            WriteVerdict::Proceed { pii, .. } => (req.body.clone(), pii, 0),
+            WriteVerdict::Held { findings } => {
+                let choice = req.choice.or(if req.force {
+                    Some(OperatorChoice::ProceedFlagged)
+                } else {
+                    None
+                });
+                match choice {
+                    None => {
+                        return Ok(Proposed::Held {
+                            rendered: cyberbrain_policy::write_gate::render_hold(
+                                &req.body, &findings,
+                            ),
+                            name,
+                            findings,
+                        });
+                    }
+                    Some(c) => {
+                        let r = policy.resolve_hold(&name, &req.body, &findings, c)?;
+                        (r.body, r.pii, r.redacted)
+                    }
+                }
+            }
+        };
+
+        let now = jiff::Timestamp::now();
+        let mut tags: Vec<String> = Vec::new();
+        for t in req.tags {
+            let t = t.trim().to_string();
+            if !t.is_empty() && !tags.contains(&t) {
+                tags.push(t);
+            }
+        }
+        let replaces = match self.store.read(&name) {
+            Ok(n) => Some(n.front.updated),
+            Err(Error::NoSuchNote(_)) => None,
+            Err(e) => return Err(e),
+        };
+        let note = Note {
+            front: Frontmatter {
+                id: NoteId::generate(),
+                name: name.clone(),
+                ring: req.ring,
+                kind: req.kind,
+                created: now,
+                updated: now,
+                tags,
+                links: link_targets(&body),
+                retention: req.retention,
+                pii,
+            },
+            body,
+            path: PathBuf::new(),
+        };
+        let bytes = frontmatter::render(&note.front, &note.body)?.len();
+
+        // The real path with the file write no-op'd, rather than a simulation beside it
+        // (SPEC §8): everything above ran, including the gate and the rendering.
+        let path = if req.dry_run {
+            self.store.proposal_path(&name)?
+        } else {
+            self.store.write_proposal(&note)?
+        };
+
+        // Who proposed it lives here and only here. The chain is hashed, which makes it a
+        // worse thing to forge than a line of YAML in a file anyone can edit — and it means
+        // no note format changed for this feature.
+        policy.audit().record(
+            &self.actor,
+            AuditAction::NoteProposed,
+            format!("note:{name}"),
+            serde_json::json!({
+                "by": who,
+                "ring": req.ring.as_u8(),
+                "kind": kind_name(req.kind),
+                "bytes": bytes,
+                "pii": pii,
+                "changes_existing": replaces.is_some(),
+                "dry_run": req.dry_run,
+            }),
+        )?;
+
+        Ok(Proposed::Written(ProposeReport {
+            name,
+            ring: note.front.ring,
+            kind: kind_name(note.front.kind),
+            path,
+            proposed_by: who.to_string(),
+            bytes,
+            pii,
+            redacted,
+            changes_existing: replaces.is_some(),
+            dry_run: req.dry_run,
+            audit_preview: w.policy.preview(),
+        }))
+    }
+
+    /// Everything waiting, oldest first, with who proposed it.
+    pub fn proposals(&self) -> Result<Vec<ProposalSummary>> {
+        let mut out = Vec::new();
+        for note in self.store.list_proposals()? {
+            let name = note.front.name.clone();
+            out.push(ProposalSummary {
+                proposed_by: self.proposer_of(&name)?,
+                changes_existing: self.store.read(&name).is_ok(),
+                name,
+                ring: note.front.ring,
+                kind: kind_name(note.front.kind),
+                created: note.front.created,
+                path: note.path,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Who the audit log says proposed this, if anyone.
+    ///
+    /// `None` means the log has no `note.proposed` row for it, which is not a missing
+    /// detail but a file that appeared in `proposals/` without going through `propose`.
+    /// The two-person rule cannot be applied to it, and `review` says so rather than
+    /// waving it through.
+    fn proposer_of(&self, name: &str) -> Result<Option<String>> {
+        let filter = AuditFilter {
+            action: Some(AuditAction::NoteProposed.as_str().to_string()),
+            subject: Some(format!("note:{name}")),
+            ..AuditFilter::default()
+        };
+        // Rows come back in sequence order, so the last one is the newest.
+        Ok(self
+            .policy
+            .audit()
+            .read(&filter)?
+            .last()
+            .and_then(|e| e.detail.get("by").and_then(|v| v.as_str()))
+            .map(str::to_string))
+    }
+
+    /// Accept or reject a proposal.
+    pub fn review(&self, req: ReviewRequest) -> Result<ReviewReport> {
+        let note = self.store.read_proposal(&req.name)?;
+        let name = note.front.name.clone();
+
+        let Some(proposer) = self.proposer_of(&name)? else {
+            return Err(Error::Config(format!(
+                "the audit log has no record of {name} being proposed, so there is nobody to \
+                 check this against. A file that appeared in proposals/ without going through \
+                 `cyberbrain propose` is not a proposal; delete it or propose it properly"
+            )));
+        };
+        // The hub's rule, in the same words, for the same reason (§14.1 of docs/HUB.md).
+        if proposer == req.by {
+            return Err(Error::PolicyRefusal {
+                profile: "review".to_string(),
+                reason: format!(
+                    "a proposal cannot be reviewed by the person who made it. {name} was \
+                     proposed by {proposer}"
+                ),
+            });
+        }
+
+        let w = self.writers(req.dry_run);
+        let policy = w.policy.get();
+
+        if !req.accept {
+            let reason = req.reason.trim();
+            if reason.is_empty() {
+                return Err(Error::Config(
+                    "rejecting needs a reason: it is the only place the proposer will look".into(),
+                ));
+            }
+            if !req.dry_run {
+                self.store.remove_proposal(&name)?;
+            }
+            policy.audit().record(
+                &self.actor,
+                AuditAction::NoteProposalRejected,
+                format!("note:{name}"),
+                serde_json::json!({
+                    "by": req.by, "proposed_by": proposer, "reason": reason,
+                    "dry_run": req.dry_run,
+                }),
+            )?;
+            return Ok(ReviewReport {
+                name,
+                accepted: false,
+                by: req.by,
+                proposed_by: proposer,
+                reason: Some(reason.to_string()),
+                path: None,
+                blocks: 0,
+                vectors: 0,
+                dry_run: req.dry_run,
+                audit_preview: w.policy.preview(),
+            });
+        }
+
+        // A proposal written against a note that has moved on since would overwrite the
+        // newer text. Same failure `expected_updated` exists to prevent, over a longer
+        // interval: the review may be days after the proposal.
+        if let Ok(existing) = self.store.read(&name)
+            && existing.front.updated > note.front.created
+            && !req.force
+        {
+            return Err(Error::Config(format!(
+                "{name} changed after this was proposed ({} against {}); accepting would \
+                 overwrite the newer text. Read both, then `--force` if the proposal is \
+                 still right",
+                existing.front.updated, note.front.created
+            )));
+        }
+
+        // Scanned again over the same body: the proposal may have sat for a week and the
+        // profile may have changed under it.
+        let pii = match policy.check_write(&name, &note.body)? {
+            WriteVerdict::Proceed { pii, .. } => pii,
+            WriteVerdict::Held { findings } => {
+                return Err(Error::PolicyRefusal {
+                    profile: "pii".to_string(),
+                    reason: format!(
+                        "{name} holds {} possible personal data item(s) and cannot be accepted \
+                         as it stands. Reject it with a reason; the proposer resolves it and \
+                         proposes again",
+                        findings.len()
+                    ),
+                });
+            }
+        };
+
+        // The id is minted here, not at propose time: a citation must point at something
+        // that exists, and until this moment nothing did.
+        let now = jiff::Timestamp::now();
+        let existing = self.store.read(&name).ok();
+        let accepted = Note {
+            front: Frontmatter {
+                id: existing
+                    .as_ref()
+                    .map(|n| n.front.id)
+                    .unwrap_or_else(NoteId::generate),
+                created: existing.as_ref().map(|n| n.front.created).unwrap_or(now),
+                updated: now,
+                pii,
+                ..note.front.clone()
+            },
+            body: note.body.clone(),
+            path: PathBuf::new(),
+        };
+        let bytes = frontmatter::render(&accepted.front, &accepted.body)?.len();
+        let ring = accepted.front.ring;
+
+        let (path, blocks, vectors) = if req.dry_run {
+            (self.store.note_path(ring, &name)?, 0, 0)
+        } else {
+            let path = w.notes.write(&accepted)?;
+            let accepted = Note {
+                path: path.clone(),
+                ..accepted
+            };
+            policy.record_write(&accepted.front, bytes)?;
+            let (blocks, _) = blocks_of(&accepted, MAX_BLOCK_TOKENS);
+            let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+            self.declare_profile(&w)?;
+            let vectors = self.embed_blocks(&texts)?;
+            let outcome = w
+                .index
+                .upsert_note(&accepted, &blocks, vectors.as_deref())?;
+            self.store.remove_proposal(&name)?;
+            (path, outcome.blocks, outcome.vectors)
+        };
+
+        policy.audit().record(
+            &self.actor,
+            AuditAction::NoteProposalAccepted,
+            format!("note:{name}"),
+            serde_json::json!({
+                "by": req.by, "proposed_by": proposer,
+                "ring": ring.as_u8(), "bytes": bytes,
+                "dry_run": req.dry_run,
+            }),
+        )?;
+
+        Ok(ReviewReport {
+            name,
+            accepted: true,
+            by: req.by,
+            proposed_by: proposer,
+            reason: None,
+            path: Some(path),
+            blocks,
+            vectors,
+            dry_run: req.dry_run,
+            audit_preview: w.policy.preview(),
+        })
     }
 
     // ----- erasure: one path -------------------------------------------------------------

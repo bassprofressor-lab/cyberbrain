@@ -144,6 +144,13 @@ Bildschirm nicht bedeuten, dass man in ein Terminal wechselt. Sie startet dassel
 das die Seite ausliefert, gegen deren Store, und gibt Ausgabe, Fehlerausgabe und
 Rückgabewert unverändert zurück.
 
+Die Ringe 0 und 1 gehören dem Betreiber, und `cyberbrain propose` ist der Weg, auf dem alle
+anderen etwas dafür anbieten: die Notiz landet in `proposals/`, außerhalb des Notizbaums,
+wird nicht indiziert und ist über `recall` nicht auffindbar — eine unfreigegebene Invariante,
+die ein Agent findet, ist eine Invariante, der niemand zugestimmt hat. Jemand anderes als der
+Vorschlagende gibt sie mit `cyberbrain review <name> --accept` frei, und das Audit-Log nennt
+beide.
+
 ## Wie es arbeitet
 
 ```mermaid

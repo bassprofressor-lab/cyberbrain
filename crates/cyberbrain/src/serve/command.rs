@@ -217,6 +217,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
         | Command::Doctor
         | Command::Status
         | Command::Export { .. }
+        // The review workflow belongs here more than anywhere: it is this store's own
+        // business, and the window is where the person reviewing already is.
+        | Command::Propose { .. }
+        | Command::Review { .. }
         | Command::Policy { .. } => None,
 
         Command::Serve { .. } => {

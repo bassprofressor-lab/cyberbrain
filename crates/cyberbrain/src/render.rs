@@ -644,6 +644,98 @@ pub fn install(r: &crate::install::Report) -> String {
     s
 }
 
+/// `propose`. Says where it went and what has to happen next, because a proposal that
+/// nobody is told to review is a file in a folder.
+pub fn proposed(r: &crate::app::ProposeReport) -> String {
+    let mut s = format!(
+        "Proposed {} for ring {} as {}\n  by: {}\n  {} bytes",
+        r.name,
+        r.ring.as_u8(),
+        Slash(&r.path),
+        r.proposed_by,
+        r.bytes
+    );
+    if r.redacted > 0 {
+        let _ = write!(s, ", {} redaction(s)", r.redacted);
+    }
+    s.push('\n');
+    if r.changes_existing {
+        let _ = writeln!(
+            s,
+            "  a note named {} already exists: accepting this changes it",
+            r.name
+        );
+    }
+    if r.dry_run {
+        s.push_str("  --dry-run: nothing was written\n");
+    }
+    s.push_str(
+        "\nIt is not in the index, so recall cannot find it. Somebody else runs \
+         `cyberbrain review` to see it.\n",
+    );
+    s
+}
+
+/// `review` with no name: what is waiting.
+pub fn proposals(list: &[crate::app::ProposalSummary]) -> String {
+    if list.is_empty() {
+        return "Nothing is waiting.\n".to_string();
+    }
+    let mut s = format!("{}\n\n", plural(list.len(), "proposal", "proposals"));
+    for p in list {
+        let _ = writeln!(s, "  {}  r{}  {}", p.name, p.ring.as_u8(), p.kind);
+        match &p.proposed_by {
+            Some(by) => {
+                let _ = writeln!(s, "      by {by}, {}", p.created);
+            }
+            // Not a missing detail: a file that arrived in proposals/ some other way.
+            None => {
+                let _ = writeln!(
+                    s,
+                    "      no `note.proposed` row in the audit log; this cannot be accepted"
+                );
+            }
+        }
+        if p.changes_existing {
+            let _ = writeln!(s, "      changes the existing note of that name");
+        }
+    }
+    s.push_str("\n`cyberbrain review <name> --accept`, or `--reject --reason \"…\"`.\n");
+    s
+}
+
+/// `review --accept` / `--reject`.
+pub fn reviewed(r: &crate::app::ReviewReport) -> String {
+    let mut s = if r.accepted {
+        format!(
+            "Accepted {} (proposed by {}, accepted by {})\n",
+            r.name, r.proposed_by, r.by
+        )
+    } else {
+        format!(
+            "Rejected {} (proposed by {}, rejected by {})\n",
+            r.name, r.proposed_by, r.by
+        )
+    };
+    if let Some(path) = &r.path {
+        let _ = writeln!(
+            s,
+            "  {} — {} block(s), {} vector(s)",
+            Slash(path),
+            r.blocks,
+            r.vectors
+        );
+    }
+    if let Some(reason) = &r.reason {
+        let _ = writeln!(s, "  reason: {reason}");
+        s.push_str("  the proposal file is gone; the reason is in the audit log\n");
+    }
+    if r.dry_run {
+        s.push_str("  --dry-run: nothing was written\n");
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     //! The one property every renderer shares: a path reaches the reader with forward

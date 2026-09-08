@@ -551,6 +551,9 @@ export type AuditActionKnown =
   | "note.write.held"
   | "note.write.resolved"
   | "note.write.discarded"
+  | "note.proposed"
+  | "note.proposal.accepted"
+  | "note.proposal.rejected"
   | "note.erase.requested"
   | "note.erase.completed"
   | "note.erase.failed"
@@ -577,6 +580,9 @@ export const AUDIT_ACTIONS: readonly AuditActionKnown[] = [
   "note.write.held",
   "note.write.resolved",
   "note.write.discarded",
+  "note.proposed",
+  "note.proposal.accepted",
+  "note.proposal.rejected",
   "note.erase.requested",
   "note.erase.completed",
   "note.erase.failed",
@@ -611,6 +617,7 @@ export type AuditActionFilter = AuditAction | "note" | "note.write" | "note.eras
 export const AUDIT_ACTION_FAMILIES: ReadonlyArray<AuditActionFilter> = [
   "note",
   "note.write",
+  "note.proposal",
   "note.erase",
   "egress",
   "policy.refusal",

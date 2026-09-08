@@ -75,6 +75,18 @@ impl Cb {
             .unwrap()
     }
 
+    /// The same run, as somebody. The review workflow turns on who is asking, so the tests
+    /// have to be able to be two people.
+    fn as_person(&self, who: &str, args: &[&str]) -> Output {
+        Self::bin()
+            .env("CYBERBRAIN_IDENTITY", who)
+            .arg("--store")
+            .arg(&self.store)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     fn json(&self, args: &[&str]) -> (Value, i32, String) {
         let mut full = vec!["--json"];
         full.extend_from_slice(args);
@@ -1313,4 +1325,218 @@ fn the_independent_python_checker_agrees() {
         "the independent checker rejected a bundle this binary wrote:\n{stdout}"
     );
     assert!(stdout.contains("chain holds over 4 row(s)"), "{stdout}");
+}
+
+// ---------------------------------------------------------------------------------------
+// propose / review: a note somebody else has to accept.
+
+fn text(out: &std::process::Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// The guarantee the whole design rests on. A proposed ring 0 note that an agent could
+/// retrieve is an invariant nobody agreed to, and the reason a proposal lives outside the
+/// notes tree rather than carrying a state in its own header.
+#[test]
+fn a_proposal_is_not_in_the_index_and_recall_cannot_return_it() {
+    let cb = Cb::new();
+    let out = cb.as_person(
+        "anna",
+        &[
+            "propose",
+            "--ring",
+            "0",
+            "--kind",
+            "decision",
+            "--name",
+            "friday-freeze",
+            "--body",
+            "Never deploy to production on a Friday, unique-marker-xyzzy.",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        cb.store.join("proposals/friday-freeze.md").is_file(),
+        "it goes outside the notes tree"
+    );
+    assert!(
+        !cb.store.join("notes/r0/friday-freeze.md").exists(),
+        "and not into it"
+    );
+
+    // A full scan is the strongest form of the question: even a rebuild from the tree does
+    // not see it, because it walks notes/.
+    cb.run(&["scan", "--full"]);
+    let hits = cb.ok(&["recall", "unique-marker-xyzzy"]);
+    assert_eq!(
+        hits["hits"].as_array().map(Vec::len),
+        Some(0),
+        "recall returned an unapproved note: {hits:#}"
+    );
+
+    // And once accepted, it is retrievable — otherwise the test above would pass on a
+    // store where recall is simply broken.
+    let out = cb.as_person("bernd", &["review", "friday-freeze", "--accept"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let hits = cb.ok(&["recall", "unique-marker-xyzzy"]);
+    assert_eq!(hits["hits"].as_array().map(Vec::len), Some(1), "{hits:#}");
+}
+
+#[test]
+fn a_proposal_cannot_be_accepted_by_the_person_who_made_it() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose", "--ring", "2", "--kind", "bug", "--name", "mine", "--body", "a thing",
+        ],
+    );
+    let out = cb.as_person("anna", &["review", "mine", "--accept"]);
+    // SPEC §8: a policy refusal is exit 3, and it is not an error in the taxonomy.
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(text(&out).contains("proposed by anna"), "{}", text(&out));
+    assert!(
+        cb.store.join("proposals/mine.md").is_file(),
+        "a refused review leaves the proposal alone"
+    );
+}
+
+#[test]
+fn accepting_moves_it_into_its_ring_and_names_both_people_in_the_log() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose", "--ring", "2", "--kind", "lesson", "--name", "handover", "--body",
+            "a lesson",
+        ],
+    );
+    let out = cb.as_person("bernd", &["review", "handover", "--accept"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cb.note_path("2", "handover").is_file());
+    assert!(
+        !cb.store.join("proposals/handover.md").exists(),
+        "the proposal is gone once it is a note"
+    );
+
+    let rows = cb.ok(&["policy", "audit", "--action", "note.proposal.accepted"]);
+    let rendered = format!("{rows:#}");
+    assert!(
+        rendered.contains("anna") && rendered.contains("bernd"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn rejecting_needs_a_reason_and_the_reason_reaches_the_log() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose", "--ring", "2", "--kind", "bug", "--name", "vague", "--body", "hmm",
+        ],
+    );
+    let out = cb.as_person("bernd", &["review", "vague", "--reject"]);
+    assert!(!out.status.success(), "a reason is not optional");
+    assert!(
+        cb.store.join("proposals/vague.md").is_file(),
+        "nothing happened"
+    );
+
+    let out = cb.as_person(
+        "bernd",
+        &[
+            "review",
+            "vague",
+            "--reject",
+            "--reason",
+            "needs an example",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!cb.store.join("proposals/vague.md").exists());
+    let rows = cb.ok(&["policy", "audit", "--action", "note.proposal.rejected"]);
+    assert!(format!("{rows:#}").contains("needs an example"), "{rows:#}");
+}
+
+/// A file dropped into `proposals/` by hand has nobody to check against, so the two-person
+/// rule cannot be applied to it. Waving it through would make the rule optional for anyone
+/// who knows where the directory is.
+#[test]
+fn a_file_that_never_went_through_propose_cannot_be_accepted() {
+    // One literal on one line on purpose: a `\`-continued string keeps the indentation of
+    // the continuation lines, and indented YAML is a parse error rather than the refusal
+    // this test is about.
+    const SMUGGLED: &str = "---\nid: 01J0000000000000000000000A\nname: smuggled\nring: 0\nkind: decision\ncreated: 2026-09-08T00:00:00Z\nupdated: 2026-09-08T00:00:00Z\n---\n\nsmuggled in\n";
+    let cb = Cb::new();
+    std::fs::create_dir_all(cb.store.join("proposals")).unwrap();
+    std::fs::write(cb.store.join("proposals/smuggled.md"), SMUGGLED).unwrap();
+    let out = cb.as_person("bernd", &["review", "smuggled", "--accept"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("no record"), "{}", text(&out));
+    assert!(!cb.note_path("0", "smuggled").exists());
+}
+
+/// The proposal may have sat for a week. Accepting it must not silently overwrite whatever
+/// the note became in the meantime.
+#[test]
+fn a_note_that_moved_on_since_the_proposal_is_not_overwritten_without_force() {
+    let cb = Cb::new();
+    cb.write("2", "moving-target", "the original");
+    cb.as_person(
+        "anna",
+        &[
+            "propose",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "moving-target",
+            "--body",
+            "anna's version",
+        ],
+    );
+    // Somebody edits the note after the proposal was made.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    cb.write("2", "moving-target", "somebody else got there first");
+
+    let out = cb.as_person("bernd", &["review", "moving-target", "--accept"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("changed after"), "{}", text(&out));
+    let on_disk = std::fs::read_to_string(cb.note_path("2", "moving-target")).unwrap();
+    assert!(
+        on_disk.contains("somebody else got there first"),
+        "{on_disk}"
+    );
+
+    let out = cb.as_person("bernd", &["review", "moving-target", "--accept", "--force"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let on_disk = std::fs::read_to_string(cb.note_path("2", "moving-target")).unwrap();
+    assert!(on_disk.contains("anna's version"), "{on_disk}");
+}
+
+#[test]
+fn proposing_without_an_identity_says_how_to_set_one() {
+    let cb = Cb::new();
+    let out = Cb::bin()
+        .env_remove("CYBERBRAIN_IDENTITY")
+        .env("HOME", cb.store.join("no-config"))
+        .env("XDG_CONFIG_HOME", cb.store.join("no-config"))
+        .arg("--store")
+        .arg(&cb.store)
+        .args([
+            "propose", "--ring", "2", "--kind", "bug", "--name", "x", "--body", "y",
+        ])
+        .output()
+        .unwrap();
+    // git may or may not be configured on the machine running this; when it is, that is a
+    // valid identity and the command is right to succeed.
+    if !out.status.success() {
+        assert!(text(&out).contains("CYBERBRAIN_IDENTITY"), "{}", text(&out));
+    }
 }
