@@ -223,6 +223,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Fixed
 
+- **A decided proposal kept vouching for its own name.** `review` asked the audit log whether
+  a `note.proposed` row existed for a name, and those rows never leave the log because the
+  chain is hashed — so a proposal that had been rejected months ago still answered. Anyone
+  could put a file of that name back into `proposals/` with any content and any ring, and
+  `--accept` would find the old row, apply the two-person rule against somebody who had
+  nothing to do with it, and write an unapproved ring 0 note whose audit trail then named
+  that person as its proposer. The state of a name is now the newest of proposed, accepted
+  and rejected, and only `proposed` is an open proposal.
+- **A typed command could write a file wherever it was pointed.** `POST /command` let
+  `policy audit --export <path>` through, and that route needs no authentication, so any
+  local process could place or destroy a file as the account running `serve` — including this
+  store's own audit log. The refusal list had considered reading and stopped there.
+- **A paste could hang the whole server.** The write half of a terminal blocked the single
+  runtime worker as soon as the program inside stopped reading its input.
 - A flake in the launcher's tests, seen roughly one run in ten and misdiagnosed once before
   it was found. The fakes those tests use are shell scripts they write and then execute, and
   on Linux a program cannot be executed while any descriptor to it is open for writing —

@@ -1473,6 +1473,47 @@ fn rejecting_needs_a_reason_and_the_reason_reaches_the_log() {
     assert!(format!("{rows:#}").contains("needs an example"), "{rows:#}");
 }
 
+/// A proposal that was already decided must not keep vouching for its own name.
+///
+/// The `note.proposed` row stays in the log forever — it has to, the chain is hashed — so
+/// asking only whether such a row exists meant a name that had once been proposed answered
+/// the question for good. Anyone could put a file of that name back into `proposals/` with
+/// any content and any ring, and `--accept` would find the old row, apply the two-person
+/// rule against somebody who had nothing to do with it, and write an unapproved ring 0 note
+/// whose audit trail then named that person as its proposer.
+///
+/// Reproduced against the defect before the fix: the smuggled ring 0 note went in and the
+/// log said Anna proposed it.
+#[test]
+fn a_decided_proposal_does_not_vouch_for_a_later_file_of_the_same_name() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose", "--ring", "2", "--kind", "bug", "--name", "recycled", "--body", "a thing",
+        ],
+    );
+    let out = cb.as_person(
+        "bernd",
+        &["review", "recycled", "--reject", "--reason", "not this"],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+
+    // Somebody puts a file of that name back by hand, aiming at ring 0.
+    std::fs::create_dir_all(cb.store.join("proposals")).unwrap();
+    std::fs::write(cb.store.join("proposals/recycled.md"), SMUGGLED_R0).unwrap();
+
+    let out = cb.as_person("bernd", &["review", "recycled", "--accept"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains("no record"), "{}", text(&out));
+    assert!(
+        !cb.note_path("0", "recycled").exists(),
+        "an unapproved ring 0 note was written"
+    );
+}
+
+const SMUGGLED_R0: &str = "---\nid: 01J0000000000000000000000C\nname: recycled\nring: 0\nkind: decision\ncreated: 2026-09-08T00:00:00Z\nupdated: 2026-09-08T00:00:00Z\n---\n\nan invariant nobody agreed to\n";
+
 /// A file dropped into `proposals/` by hand has nobody to check against, so the two-person
 /// rule cannot be applied to it. Waving it through would make the rule optional for anyone
 /// who knows where the directory is.

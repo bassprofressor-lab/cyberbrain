@@ -1988,26 +1988,47 @@ impl App {
         Ok(out)
     }
 
-    /// Who the audit log says proposed this, if anyone.
+    /// Who the audit log says proposed the proposal that is **open right now**, if any.
     ///
-    /// `None` means the log has no `note.proposed` row for it, which is not a missing
-    /// detail but a file that appeared in `proposals/` without going through `propose`.
-    /// The two-person rule cannot be applied to it, and `review` says so rather than
-    /// waving it through.
+    /// `None` means there is no open proposal of that name — either nothing was ever
+    /// proposed under it, or what was has already been accepted or rejected. Either way the
+    /// two-person rule cannot be applied, and `review` says so rather than waving it
+    /// through.
+    ///
+    /// The lifecycle is what makes this sound, and asking only whether a `note.proposed`
+    /// row exists was not enough. Those rows stay in the log forever — they have to, it is
+    /// hash-chained — so a name that was once proposed and then rejected kept answering
+    /// this question for good. Anyone could put a file of that name back into `proposals/`
+    /// by hand, with any content and any ring, and `review --accept` would find the old row,
+    /// be satisfied, compare the two-person rule against a person who had nothing to do with
+    /// it, and write an unapproved ring 0 note whose audit trail then named that person as
+    /// its proposer. So the question is not "was this ever proposed" but "is the newest
+    /// thing that happened to this name a proposal".
     fn proposer_of(&self, name: &str) -> Result<Option<String>> {
+        // Every row about this name in one read: they come back in sequence order, so the
+        // last of the three that concern a proposal is the current state. Comparing
+        // timestamps across three separate reads would be the same question asked worse —
+        // a row carries no sequence number, and two rows can share a timestamp.
         let filter = AuditFilter {
-            action: Some(AuditAction::NoteProposed.as_str().to_string()),
             subject: Some(format!("note:{name}")),
             ..AuditFilter::default()
         };
-        // Rows come back in sequence order, so the last one is the newest.
-        Ok(self
-            .policy
-            .audit()
-            .read(&filter)?
-            .last()
-            .and_then(|e| e.detail.get("by").and_then(|v| v.as_str()))
-            .map(str::to_string))
+        let rows = self.policy.audit().read(&filter)?;
+        let last = rows.iter().rev().find(|e| {
+            e.action == AuditAction::NoteProposed.as_str()
+                || e.action == AuditAction::NoteProposalAccepted.as_str()
+                || e.action == AuditAction::NoteProposalRejected.as_str()
+        });
+        Ok(match last {
+            Some(e) if e.action == AuditAction::NoteProposed.as_str() => e
+                .detail
+                .get("by")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            // Accepted, rejected, or never proposed: whatever is in `proposals/` under this
+            // name now did not get there through `propose`.
+            _ => None,
+        })
     }
 
     /// Accept or reject a proposal.

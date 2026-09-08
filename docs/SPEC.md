@@ -396,6 +396,13 @@ A file that appears in `proposals/` without such a row is listed and cannot be a
 there is nobody to check it against, and waving it through would make the rule optional for
 anyone who knows where the directory is.
 
+**The question is which row is newest, not whether one exists.** Those rows never leave the
+log — the chain is hashed — so a name that was once proposed and then decided would keep
+answering for itself forever, and a file put back under that name by hand would inherit the
+original proposer. So the state of a name is the last of `note.proposed`,
+`note.proposal.accepted` and `note.proposal.rejected` recorded against it, and only
+`note.proposed` means there is an open proposal to review.
+
 **A proposal cannot be reviewed by the person who made it**, in the same words the hub uses
 for a disclosure request and for the same reason. Identity comes from `CYBERBRAIN_IDENTITY`,
 then a line in the user's own configuration directory, then `git config user.email` — never
