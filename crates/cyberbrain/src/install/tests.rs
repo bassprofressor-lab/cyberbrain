@@ -262,7 +262,10 @@ fn both_claude_desktop_installations_get_the_entry() {
         assert_eq!(entry["args"][1], "--store");
         assert_eq!(
             Path::new(entry["args"][2].as_str().unwrap()),
-            o.store.canonicalize().unwrap(),
+            // `plain`, not the bare `canonicalize`, or this asserts the very thing the
+            // written path no longer says: on Windows the canonical form keeps the
+            // extended-length prefix and what is written has it off.
+            plain(o.store.canonicalize().unwrap()),
             "a desktop client has no working directory of ours, so the store is named"
         );
     }
