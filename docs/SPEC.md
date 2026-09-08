@@ -192,7 +192,8 @@ different models is the worst possible failure: it degrades quality without any 
 
 Default backend: **static distilled token embeddings (model2vec format), implemented
 in-tree.** No transformer inference at query time; the whole operation is a token lookup into
-an embedding matrix, mean pooling and L2 normalisation. Model artefact ~30 MB.
+an embedding matrix, mean pooling and L2 normalisation. The artefact is the model's to
+size: ~30 MB for potion-base-8M, ~500 MB for potion-multilingual-128M.
 
 Implemented in-tree rather than taken from the `model2vec-rs` crate because that crate depends
 unconditionally on `hf-hub`, which downloads models on its own. An unregistered outbound path
@@ -297,6 +298,7 @@ cyberbrain write --ring R --kind K --name N [--stdin]
 cyberbrain propose --ring R --kind K --name N        offer a note for somebody to accept (§8.0.3)
 cyberbrain review [<name> --accept|--reject --reason] what is waiting, and deciding it
 cyberbrain forget <name|id> [--dry-run]   erase note, blocks, vectors, links, and say what went
+cyberbrain manifest [--path DIR]      record the digests a model artefact is checked against
 cyberbrain doctor                     dangling links, ring cap, stale index, orphan vectors
 cyberbrain status [--json]            store health, model, backend, compliance profile
 cyberbrain export <name|id> [--format md|json]

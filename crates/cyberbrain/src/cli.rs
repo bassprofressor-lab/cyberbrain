@@ -170,6 +170,19 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Write the `manifest.json` that a model artefact needs, from the files themselves.
+    ///
+    /// Semantic search needs a model, the model needs a manifest naming the blake3 digest of
+    /// each file, and until now there was no way to produce one: the field names appeared in
+    /// no documentation and the hashing existed only inside tests. People were left to guess
+    /// a JSON shape from a deserialisation error.
+    Manifest {
+        /// The folder holding `model.safetensors` and `tokenizer.json`. Defaults to
+        /// `<store>/models/model2vec`, which is where the loader looks.
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+
     /// Report dangling links, ring-cap pressure, a stale index and orphaned vectors.
     Doctor,
 

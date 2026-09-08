@@ -221,6 +221,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   contract lives once, on the server.
 
 
+- **`cyberbrain manifest`.** Semantic search needs a model, a model needs a `manifest.json`
+  naming the blake3 digest of each of its files, and there was no way to produce one: the
+  field names appeared in no Markdown in this repository, and the hashing existed only inside
+  tests. The shape had to be guessed from a deserialisation error. It is one command now, and
+  it says what to do next — vectors are written when a note is indexed, so `scan` has to run
+  again, which was also not written down anywhere a person would look.
+
 ### Fixed
 
 - **A decided proposal kept vouching for its own name.** `review` asked the audit log whether
@@ -231,6 +238,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   nothing to do with it, and write an unapproved ring 0 note whose audit trail then named
   that person as its proposer. The state of a name is now the newest of proposed, accepted
   and rejected, and only `proposed` is an open proposal.
+- **The README described a download that does not exist.** It said nothing is fetched on your
+  behalf "unless you set `embedding.model_source` and `embedding.model_download_consent` —
+  and even then it happens once, through the one registered outbound path". There is no such
+  path in the program: `download()` has exactly one caller in the whole workspace and it is
+  that function's own unit test. `policy consent --grant` even accepts the consent and warns
+  that nothing will happen without a `model_source`, which reads as though setting one would
+  help. On a product sold on a register of what can leave your machine, a sentence describing
+  an outbound path that is not there is the worst kind of wrong sentence. The README now says
+  what is true: nothing is downloaded, ever, and here are the three steps you take yourself.
 - **A web page you had open could delete your notes.** `POST /policy/retention/apply
   ?dry_run=false` erases every note past its retention, and a self-submitting form on any
   website reached it: a form post is a "simple request", so nothing preflighted it and

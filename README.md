@@ -235,11 +235,22 @@ so the hits came back unchecked, and said so.
 
 Out of the box search is lexical, and every result says so in a caveat. Lexical means
 literal: without a model, `postgres` does not find `PostgreSQL`, and the words you search
-for are the words that have to be in the paragraph. To turn on semantic search, place a
-model2vec artefact — `model.safetensors`, `tokenizer.json` and a `manifest.json` carrying
-the blake3 digest of each — under `<store>/models/model2vec`. Nothing is downloaded on your
-behalf unless you set `embedding.model_source` and `embedding.model_download_consent` in the
-config, and even then it happens once, through the one registered outbound path.
+for are the words that have to be in the paragraph.
+
+**Nothing is downloaded on your behalf, ever, and there is no command that would.** Turning
+on semantic search is three steps and you do all three:
+
+```console
+$ # 1. put model.safetensors and tokenizer.json under <store>/models/model2vec
+$ #    a model2vec artefact, for example minishlab/potion-multilingual-128M (~500 MB) or
+$ #    the smaller potion-base-8M (~30 MB); both are MIT
+$ cyberbrain manifest   # 2. records the blake3 digest of each, so a later swap is refused
+$ cyberbrain scan       # 3. vectors are written when a note is indexed, not before
+```
+
+The digests are the point of the manifest: an artefact that does not match the one recorded
+is refused rather than loaded, because a model swapped underneath a store changes what its
+vectors mean without changing anything you can see.
 
 ## Built for the EU, switchable off
 

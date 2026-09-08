@@ -1591,3 +1591,39 @@ fn proposing_without_an_identity_says_how_to_set_one() {
         assert!(text(&out).contains("CYBERBRAIN_IDENTITY"), "{}", text(&out));
     }
 }
+
+/// The step that had no command and no documentation.
+///
+/// Semantic search needs a model, the model needs a `manifest.json` naming the blake3 digest
+/// of each file, and the field names appeared in no Markdown in this repository while the
+/// hashing lived only inside tests. The shape had to be guessed from a deserialisation
+/// error, and the last step — scanning again, because vectors are written at index time —
+/// was not mentioned where anybody would look.
+#[test]
+fn a_manifest_can_be_written_from_the_files_themselves() {
+    let cb = Cb::new();
+    let dir = cb.store.join("models/model2vec");
+
+    // Nothing there yet: say what is missing, not "invalid manifest".
+    let out = cb.run(&["manifest"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("model.safetensors"), "{}", text(&out));
+
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("model.safetensors"), b"not really a model").unwrap();
+    std::fs::write(dir.join("tokenizer.json"), b"not really a tokenizer").unwrap();
+
+    let out = cb.run(&["manifest"]);
+    assert!(out.status.success(), "{}", text(&out));
+    // The next step is in the output, because writing the file is not the last one.
+    assert!(text(&out).contains("scan"), "{}", text(&out));
+
+    let written: Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("manifest.json")).unwrap()).unwrap();
+    for field in ["weights_blake3", "tokenizer_blake3"] {
+        let digest = written[field].as_str().unwrap_or_default();
+        assert_eq!(digest.len(), 64, "{field}: {written:#}");
+        assert!(digest.chars().all(|c| c.is_ascii_hexdigit()), "{written:#}");
+    }
+    assert_ne!(written["weights_blake3"], written["tokenizer_blake3"]);
+}

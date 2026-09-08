@@ -251,6 +251,14 @@ pub enum Proposed {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ManifestReport {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+    pub path: PathBuf,
+    pub weights_blake3: String,
+    pub tokenizer_blake3: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ProposeReport {
     pub name: String,
     pub ring: Ring,
@@ -1830,6 +1838,46 @@ impl App {
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         }))
+    }
+
+    /// Write the `manifest.json` a model artefact needs, from the files themselves.
+    ///
+    /// The manifest is what makes a swapped model artefact a refusal rather than a silent
+    /// change of meaning (SPEC §6): the loader checks both digests and will not load an
+    /// artefact that does not match. Producing one was, until now, an undocumented exercise —
+    /// the field names appeared in no Markdown in the repository and the hashing existed only
+    /// inside tests, so the shape had to be guessed from a deserialisation error. This is the
+    /// same hashing, reachable.
+    ///
+    /// It does not fetch anything and does not decide whether the artefact is the right one:
+    /// it records what is in the folder, so that a later change to it is caught.
+    pub fn write_manifest(&self, dir: &Path) -> Result<ManifestReport> {
+        let paths = cyberbrain_embed::ModelPaths::in_dir(dir);
+        for (what, path) in [
+            ("model.safetensors", &paths.weights),
+            ("tokenizer.json", &paths.tokenizer),
+        ] {
+            if !path.is_file() {
+                return Err(Error::Config(format!(
+                    "no {what} in {}; put the model2vec artefact there first",
+                    Slash(dir)
+                )));
+            }
+        }
+        let manifest = cyberbrain_embed::ArtefactManifest {
+            weights_blake3: cyberbrain_embed::hash_file(&paths.weights)?,
+            tokenizer_blake3: cyberbrain_embed::hash_file(&paths.tokenizer)?,
+        };
+        let path = dir.join("manifest.json");
+        let text = serde_json::to_string_pretty(&manifest)
+            .map_err(|e| Error::Index(format!("the manifest does not serialise: {e}")))?
+            + "\n";
+        cyberbrain_core::store::write_atomic(&path, text.as_bytes())?;
+        Ok(ManifestReport {
+            path,
+            weights_blake3: manifest.weights_blake3,
+            tokenizer_blake3: manifest.tokenizer_blake3,
+        })
     }
 
     // ----- review: propose, list, accept, reject -----------------------------------------

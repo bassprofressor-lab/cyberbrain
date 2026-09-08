@@ -390,6 +390,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             // it means the importer cannot account for the corpus it just read.
             return Ok(import::exit_code(&r));
         }
+        Command::Manifest { path } => {
+            let dir = path.unwrap_or_else(|| app.config().model_dir());
+            let r = app.write_manifest(&dir)?;
+            out.emit(&r, render::manifest)?;
+        }
         Command::Doctor => {
             let r = app.doctor()?;
             out.emit(&r, render::doctor)?;

@@ -242,11 +242,22 @@ zurück, und haben das gesagt.
 
 Ohne Zutun ist die Suche lexikalisch, und jedes Ergebnis sagt das als Caveat. Lexikalisch
 heißt wörtlich: ohne Modell findet `postgres` kein `PostgreSQL`, und die Wörter, nach denen du
-suchst, müssen im Absatz stehen. Für die semantische Suche legst du ein model2vec-Artefakt
-unter `<store>/models/model2vec` ab, also `model.safetensors`, `tokenizer.json` und eine
-`manifest.json` mit der blake3-Summe beider Dateien. Heruntergeladen wird nichts für dich,
-außer du setzt `embedding.model_source` und `embedding.model_download_consent` in der Konfiguration,
-und selbst dann passiert es einmal, über den einen registrierten Weg nach draußen.
+suchst, müssen im Absatz stehen.
+
+**Heruntergeladen wird nichts für dich, nie, und es gibt auch kein Kommando dafür.** Die
+semantische Suche einzuschalten sind drei Schritte, und alle drei machst du selbst:
+
+```console
+$ # 1. model.safetensors und tokenizer.json nach <store>/models/model2vec legen
+$ #    ein model2vec-Artefakt, etwa minishlab/potion-multilingual-128M (~500 MB) oder
+$ #    das kleinere potion-base-8M (~30 MB); beide MIT
+$ cyberbrain manifest   # 2. hält die blake3-Summe beider Dateien fest
+$ cyberbrain scan       # 3. Vektoren entstehen beim Indizieren, nicht vorher
+```
+
+Die Summen sind der Sinn der `manifest.json`: ein Artefakt, das nicht zu dem festgehaltenen
+passt, wird abgewiesen statt geladen — ein unter dem Store ausgetauschtes Modell ändert
+sonst die Bedeutung seiner Vektoren, ohne dass man etwas sieht.
 
 ## Für die EU gebaut, abschaltbar
 

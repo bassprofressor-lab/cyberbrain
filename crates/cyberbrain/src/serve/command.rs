@@ -249,6 +249,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
             "`import` reads a plan and every file it names from anywhere on disk. This \
              surface has no authentication, so it is a prompt's job.",
         ),
+        Command::Manifest { .. } => Some(
+            "`manifest` writes a file into a folder you name, and this surface has no \
+             authentication. It is a one-off setup step; run it at a prompt.",
+        ),
         Command::VerifyExport { .. } => Some(
             "`verify-export` reads a file somebody handed you, from wherever you put it. \
              This surface has no authentication, so it is a prompt's job.",

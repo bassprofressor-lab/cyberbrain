@@ -256,6 +256,18 @@ pub fn written(w: &WrittenNote) -> String {
     s
 }
 
+/// `manifest`. Says what to do next, because writing the file is not the last step.
+pub fn manifest(r: &crate::app::ManifestReport) -> String {
+    format!(
+        "Wrote {}\n  model.safetensors  {}\n  tokenizer.json     {}\n\n\
+         Semantic search is on from the next `cyberbrain scan`: vectors are written when a \
+         note is indexed, so the notes already in the store have none until then.\n",
+        Slash(&r.path),
+        r.weights_blake3,
+        r.tokenizer_blake3
+    )
+}
+
 pub fn doctor(r: &DoctorReport) -> String {
     let mut s = String::new();
     if r.findings.is_empty() {
