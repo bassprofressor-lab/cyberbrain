@@ -141,6 +141,52 @@ pub fn normalise_project_dir(chosen: &Path) -> PathBuf {
     }
 }
 
+/// Where each pane goes when several projects are shown in one window.
+///
+/// A grid rather than a row: four command lines side by side on a laptop are four columns
+/// of thirty characters, which is narrower than the lines they have to show. Columns are
+/// the square root rounded up, so two projects are side by side, three are two and one, and
+/// four are a square — and the last row spreads to fill the width rather than leaving a gap
+/// where a fifth pane would have been.
+///
+/// Pure arithmetic, and here rather than in `win` so it can be checked on the machine that
+/// builds it. Integer division, with the remainder given to the earlier panes, so the panes
+/// tile the client area exactly and no seam of unpainted window is left down the middle.
+pub fn tile(count: usize, width: i32, height: i32) -> Vec<(i32, i32, i32, i32)> {
+    if count == 0 || width <= 0 || height <= 0 {
+        return Vec::new();
+    }
+    let cols = (count as f64).sqrt().ceil() as usize;
+    let rows = count.div_ceil(cols);
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let row = i / cols;
+        // The last row carries what is left, which is fewer than a full row of columns.
+        let in_row = if row + 1 == rows {
+            count - row * cols
+        } else {
+            cols
+        };
+        let col = i % cols;
+        let (x, w) = span(col, in_row, width);
+        let (y, h) = span(row, rows, height);
+        out.push((x, y, w, h));
+    }
+    out
+}
+
+/// The `i`th of `n` slices of `total`, with the remainder spread over the earlier slices so
+/// the slices add up to exactly `total`.
+fn span(i: usize, n: usize, total: i32) -> (i32, i32) {
+    let n = n.max(1) as i32;
+    let i = i as i32;
+    let base = total / n;
+    let extra = total % n;
+    let start = base * i + i.min(extra);
+    let len = base + if i < extra { 1 } else { 0 };
+    (start, len)
+}
+
 /// A short name for each open project, unique among them.
 ///
 /// The folder name is what people call a project, and it is what the menu should say. But

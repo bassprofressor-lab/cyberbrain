@@ -70,6 +70,7 @@ struct Ui {
     menu: Menu,
     per_project: Vec<ProjectIds>,
     add: MenuId,
+    panes: MenuId,
     open_window: MenuId,
     open_browser: MenuId,
     quit: MenuId,
@@ -125,6 +126,9 @@ pub fn run() {
     publish_instance(instance_path.as_deref(), &projects);
     // The session's memory of a WebView2 that would not start; see `open_page`.
     let mut browser_only = false;
+    // The side-by-side window, once somebody has asked for it. One at a time: a second
+    // would be the same panes again, and closing one of them would leave the other stale.
+    let mut panes: Option<window::ProjectWindow> = None;
     // One page, not one per project. Somebody with four projects open wants their memory,
     // not four windows every time they log in; the rest are a click away in the menu.
     if let Some(title) = titles(&projects).pop()
@@ -188,6 +192,10 @@ pub fn run() {
                 stop = true;
                 continue;
             }
+            if event.id == ui.panes {
+                show_all_command_lines(&mut panes, &projects, &mut browser_only);
+                continue;
+            }
             if event.id == ui.open_window || event.id == ui.open_browser {
                 settings.open_in = if event.id == ui.open_window {
                     // Asked for again, so try again: the runtime may have been installed
@@ -231,6 +239,12 @@ pub fn run() {
         for i in closing.into_iter().rev() {
             projects.remove(i).shut();
             changed = true;
+        }
+        // Its panes are one per project, so a project leaving makes it wrong. Closed rather
+        // than rebuilt: reopening is one click, and a window that silently loses a pane is
+        // harder to trust than one that went away when the list changed.
+        if changed && let Some(w) = panes.take() {
+            w.close();
         }
 
         for p in projects.iter_mut() {
@@ -293,6 +307,9 @@ pub fn run() {
     // One last delivery on the way out, so a day's rows do not wait for tomorrow's login.
     for p in projects.iter_mut() {
         p.delivery.final_push(&server_exe, &p.server.project_dir);
+    }
+    if let Some(w) = panes.take() {
+        w.close();
     }
     for p in projects.drain(..) {
         p.shut();
@@ -431,6 +448,9 @@ fn menu_for(dirs: &[PathBuf], open_in: OpenIn) -> Option<Ui> {
     }
 
     let add = MenuItem::new("Open another project…", true, None);
+    // The command line of every open project, tiled in one window. Disabled with nothing
+    // open, rather than absent: an entry that comes and goes is one people stop looking for.
+    let panes = MenuItem::new("All command lines side by side", !dirs.is_empty(), None);
     // Ticks rather than a single toggle: a toggle labelled "Open in a window" leaves the
     // person to work out what is happening now, and this is a setting they may only ever
     // look at once.
@@ -447,6 +467,7 @@ fn menu_for(dirs: &[PathBuf], open_in: OpenIn) -> Option<Ui> {
     }
     let sep2 = PredefinedMenuItem::separator();
     tail.push(&add);
+    tail.push(&panes);
     tail.push(&open_in_menu);
     tail.push(&sep2);
     tail.push(&quit);
@@ -456,10 +477,48 @@ fn menu_for(dirs: &[PathBuf], open_in: OpenIn) -> Option<Ui> {
         menu,
         per_project,
         add: add.id().clone(),
+        panes: panes.id().clone(),
         open_window: in_window.id().clone(),
         open_browser: in_browser.id().clone(),
         quit: quit.id().clone(),
     })
+}
+
+/// Every open project's command line, tiled in one window.
+///
+/// The panes are the projects' own pages at their own addresses, opened straight at the
+/// command line screen. Nothing reaches across them — the browser's origin rule and the
+/// page's own `connect-src 'self'` both see to that — so this is a layout and not a new
+/// way for one project to touch another.
+fn show_all_command_lines(
+    panes: &mut Option<window::ProjectWindow>,
+    projects: &[Running],
+    browser_only: &mut bool,
+) {
+    if let Some(w) = panes.as_ref()
+        && w.is_open()
+    {
+        w.focus();
+        return;
+    }
+    *panes = None;
+    if projects.is_empty() {
+        return;
+    }
+    let urls: Vec<String> = projects
+        .iter()
+        .map(|p| format!("{}#/console", p.server.url))
+        .collect();
+    match window::open_panes("Cyberbrain — command lines", &urls) {
+        Ok(w) => *panes = Some(w),
+        Err(why) => {
+            *browser_only = true;
+            sys::error_box(
+                APP,
+                &format!("{why}\n\nThe command line is also in each project's own page."),
+            );
+        }
+    }
 }
 
 /// Show a project's page where the person said it should go.

@@ -13,7 +13,7 @@ import type { CommandResult } from "@/api/types";
 import { Empty, Pill, Section } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
-import { toApiError } from "@/lib/useAsync";
+import { toApiError, useAsync } from "@/lib/useAsync";
 
 /** One line that was run, and what came back. Refusals are entries too: a refused command
  * is an answer, and hiding it would leave the transcript disagreeing with what happened. */
@@ -26,6 +26,23 @@ interface Entry {
 
 const EXAMPLES = ["status", "doctor", "find App", "scan", "policy egress"];
 
+/**
+ * The project this page belongs to, from the store path.
+ *
+ * Shown because of the side-by-side window: four command lines next to each other are four
+ * identical boxes unless each says whose it is, and a command typed into the wrong one runs
+ * against the wrong store. `store.path` ends in the store directory, and the folder holding
+ * it is what people call the project.
+ */
+function projectOf(storePath: string | undefined): string | null {
+  if (!storePath) return null;
+  const parts = storePath.split("/").filter(Boolean);
+  if (parts.length === 0) return null;
+  const last = parts[parts.length - 1];
+  if (last === ".cyberbrain" && parts.length >= 2) return parts[parts.length - 2] ?? null;
+  return last ?? null;
+}
+
 export function ConsoleScreen() {
   const t = useT();
   const [line, setLine] = useState("");
@@ -35,6 +52,8 @@ export function ConsoleScreen() {
    * recalling with the up arrow — that is usually the line you meant to fix. */
   const [history, setHistory] = useState<string[]>([]);
   const [at, setAt] = useState<number | null>(null);
+  const status = useAsync(() => api.status(), []);
+  const project = projectOf(status.data?.store.path);
   const input = useRef<HTMLInputElement>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const next = useRef(0);
@@ -106,7 +125,12 @@ export function ConsoleScreen() {
   return (
     <div className="h-full flex flex-col min-h-0">
       <Section
-        title={t.console.title}
+        title={
+          <span className="flex items-baseline gap-2">
+            {t.console.title}
+            {project ? <span className="font-mono text-xs text-fg-faint">{project}</span> : null}
+          </span>
+        }
         aside={
           entries.length > 0 ? (
             <button type="button" className="text-2xs text-fg-faint hover:text-fg" onClick={clear}>

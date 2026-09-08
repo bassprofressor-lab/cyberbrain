@@ -43,7 +43,9 @@ use windows::core::{PCWSTR, w};
 /// happen inside the window procedure, and two owners of a COM pointer whose lifetimes are
 /// a window handle and a `Vec` entry is how a `SetBounds` lands on a released interface.
 struct State {
-    controller: ICoreWebView2Controller,
+    /// One per pane. A window showing a single project has one; the side-by-side window has
+    /// one per project, and they are laid out by `launch::tile` on every resize.
+    controllers: Vec<ICoreWebView2Controller>,
 }
 
 /// A window that is showing one project. Holds the handle and nothing else.
@@ -90,6 +92,19 @@ static PROCESS_READY: AtomicBool = AtomicBool::new(false);
 /// nested loop dispatches window messages but never re-enters the launcher's own tick, so
 /// menu clicks that arrive meanwhile are simply handled on the next one.
 pub fn open(title: &str, url: &str) -> Result<ProjectWindow, String> {
+    open_panes(title, &[url.to_string()])
+}
+
+/// One window showing several pages at once, tiled.
+///
+/// Each pane is the page of one project, at that project's own loopback address. Nothing
+/// here reaches across them: no pane can talk to another's server, because the browser's
+/// own origin rule and the page's `connect-src 'self'` both say so. The window is ours, so
+/// putting several of them side by side costs a layout and no new surface at all.
+pub fn open_panes(title: &str, urls: &[String]) -> Result<ProjectWindow, String> {
+    if urls.is_empty() {
+        return Err("there is nothing to show".to_string());
+    }
     prepare_process();
     register_class()?;
 
@@ -115,7 +130,7 @@ pub fn open(title: &str, url: &str) -> Result<ProjectWindow, String> {
     }
     .map_err(|e| format!("the window could not be created: {e}"))?;
 
-    match attach(hwnd, url) {
+    match attach(hwnd, urls) {
         Ok(()) => {
             unsafe {
                 let _ = ShowWindow(hwnd, SW_SHOW);
@@ -134,36 +149,59 @@ pub fn open(title: &str, url: &str) -> Result<ProjectWindow, String> {
     }
 }
 
-/// Create the WebView2 environment and controller for `hwnd`, and navigate.
-fn attach(hwnd: HWND, url: &str) -> Result<(), String> {
+/// Create the WebView2 environment and one controller per pane, and navigate each.
+///
+/// One environment for all of them: it is the runtime and its profile, and a second would
+/// mean a second browser process tree for no gain.
+fn attach(hwnd: HWND, urls: &[String]) -> Result<(), String> {
     let environment = create_environment()?;
-    let controller = create_controller(&environment, hwnd)?;
-
-    let mut rect = RECT::default();
-    unsafe {
-        let _ = GetClientRect(hwnd, &mut rect);
-        controller
-            .SetBounds(rect)
-            .map_err(|e| format!("the page could not be placed in the window: {e}"))?;
-        controller
-            .SetIsVisible(true)
-            .map_err(|e| format!("the page could not be shown: {e}"))?;
-        let webview = controller
-            .CoreWebView2()
-            .map_err(|e| format!("the page could not be reached: {e}"))?;
-        let url_w = wide(url);
-        webview
-            .Navigate(PCWSTR(url_w.as_ptr()))
-            .map_err(|e| format!("{url} could not be opened: {e}"))?;
+    let mut controllers = Vec::with_capacity(urls.len());
+    for url in urls {
+        let controller = create_controller(&environment, hwnd)?;
+        unsafe {
+            controller
+                .SetIsVisible(true)
+                .map_err(|e| format!("the page could not be shown: {e}"))?;
+            let webview = controller
+                .CoreWebView2()
+                .map_err(|e| format!("the page could not be reached: {e}"))?;
+            let url_w = wide(url);
+            webview
+                .Navigate(PCWSTR(url_w.as_ptr()))
+                .map_err(|e| format!("{url} could not be opened: {e}"))?;
+        }
+        controllers.push(controller);
     }
 
-    // The window owns the controller from here. Stored before the first WM_SIZE can
+    // The window owns the controllers from here. Stored before the first WM_SIZE can
     // arrive, which is why the window is not shown until this has happened.
-    let state = Box::new(State { controller });
+    let state = Box::new(State { controllers });
     unsafe {
         SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
     }
+    layout(hwnd);
     Ok(())
+}
+
+/// Put every pane where `launch::tile` says, in client coordinates.
+fn layout(hwnd: HWND) {
+    with_state(hwnd, |state| {
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetClientRect(hwnd, &mut rect);
+        }
+        let panes = crate::launch::tile(state.controllers.len(), rect.right, rect.bottom);
+        for (controller, (x, y, w, h)) in state.controllers.iter().zip(panes) {
+            unsafe {
+                let _ = controller.SetBounds(RECT {
+                    left: x,
+                    top: y,
+                    right: x + w,
+                    bottom: y + h,
+                });
+            }
+        }
+    });
 }
 
 /// Chromium switches that stop the runtime talking to anything on its own.
@@ -308,13 +346,7 @@ fn register_class() -> Result<(), String> {
 extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LRESULT {
     match msg {
         WM_SIZE => {
-            with_state(hwnd, |state| {
-                let mut rect = RECT::default();
-                unsafe {
-                    let _ = GetClientRect(hwnd, &mut rect);
-                    let _ = state.controller.SetBounds(rect);
-                }
-            });
+            layout(hwnd);
             LRESULT(0)
         }
         // WM_NCDESTROY is the last message a window ever gets, so it is the one place the

@@ -125,6 +125,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   it has none because nothing it holds leaves the machine, and that sentence has to stay
   true.
 
+- **Every project's command line in one window, side by side.** One command line per window
+  meant window-hopping to fire something in one project while working in another. The tray
+  now has "All command lines side by side": one window, one pane per open project, each pane
+  that project's own page opened straight at its command line.
+
+  Nothing reaches across the panes, and nothing needed to be relaxed for this. Each pane is a
+  page at its own project's loopback address, so the browser's origin rule and the page's own
+  `connect-src 'self'` keep them apart exactly as before; `--store` is still refused on the
+  command endpoint. The window is ours, so several views in it cost a layout and no new
+  surface. The panes tile as a grid rather than a row, because four command lines side by
+  side on a laptop are four columns narrower than the lines they have to show, and the
+  arithmetic is tested against awkward window sizes so no seam of unpainted window is left
+  down the middle.
+
+  The command line screen now names its project, from the store path it already knows.
+  Four identical boxes next to each other is how somebody types into the wrong one.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.

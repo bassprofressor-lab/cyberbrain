@@ -48,6 +48,58 @@ fn a_store_is_found_from_a_subdirectory_the_way_the_cli_finds_it() {
 }
 
 #[test]
+fn one_project_fills_the_window() {
+    assert_eq!(tile(1, 1000, 800), vec![(0, 0, 1000, 800)]);
+}
+
+#[test]
+fn two_projects_are_side_by_side() {
+    assert_eq!(
+        tile(2, 1000, 800),
+        vec![(0, 0, 500, 800), (500, 0, 500, 800)]
+    );
+}
+
+/// The panes have to add up to the window. A rounding error here is a seam of unpainted
+/// window down the middle, and it only shows at sizes nobody thought to try.
+#[test]
+fn the_panes_cover_the_window_exactly_at_awkward_sizes() {
+    for count in 1..=9 {
+        for (w, h) in [(1000, 800), (1001, 799), (7, 5), (1365, 767)] {
+            let panes = tile(count, w, h);
+            assert_eq!(panes.len(), count, "{count} panes at {w}x{h}");
+            let area: i64 = panes
+                .iter()
+                .map(|(_, _, pw, ph)| *pw as i64 * *ph as i64)
+                .sum();
+            assert_eq!(
+                area,
+                w as i64 * h as i64,
+                "{count} panes at {w}x{h} do not cover it: {panes:?}"
+            );
+            for (x, y, pw, ph) in &panes {
+                assert!(*pw > 0 && *ph > 0, "empty pane in {panes:?}");
+                assert!(x + pw <= w && y + ph <= h, "pane outside in {panes:?}");
+            }
+        }
+    }
+}
+
+/// Three is two on top and one below, and that one spreads rather than leaving a gap where
+/// a fourth would have been.
+#[test]
+fn the_last_row_spreads_to_fill_the_width() {
+    let panes = tile(3, 1000, 800);
+    assert_eq!(panes[2], (0, 400, 1000, 400), "{panes:?}");
+}
+
+#[test]
+fn a_window_with_no_size_yet_gets_no_panes() {
+    assert!(tile(2, 0, 800).is_empty());
+    assert!(tile(0, 1000, 800).is_empty());
+}
+
+#[test]
 fn a_project_is_named_by_its_folder() {
     let names = labels(&[
         PathBuf::from("/home/x/orderflow"),
