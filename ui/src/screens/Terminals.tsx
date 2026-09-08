@@ -211,6 +211,16 @@ export function TerminalsScreen({ route }: Props) {
 
 function Pane({ token, command, onClose }: { token: string; command: string; onClose: () => void }) {
   const t = useT();
+  /**
+   * The dictionary, reachable from the effect without being one of its dependencies.
+   *
+   * It was a dependency for one day, for the sake of one label, and the cost was absurd:
+   * switching the language re-ran the effect, which closed the socket, which made the server
+   * kill the process. `Shift+L` in a window with an open ssh session ended that session
+   * without asking. A label is not worth a teardown.
+   */
+  const labels = useRef(t);
+  labels.current = t;
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState<"opening" | "open" | "closed">("opening");
   const [why, setWhy] = useState<string | null>(null);
@@ -253,7 +263,7 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
           if (msg.type === "error") setWhy(msg.message);
           // Not an error: a program that ran and finished. Shown so a pane that stops says
           // why rather than leaving the person to guess whether it crashed.
-          if (msg.type === "exit") term.writeln(`\r\n[${t.terminals.exited(msg.code)}]`);
+          if (msg.type === "exit") term.writeln(`\r\n[${labels.current.terminals.exited(msg.code)}]`);
         } catch {
           /* not ours; ignore rather than print protocol noise into the terminal */
         }
@@ -282,7 +292,7 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
       ws.close();
       term.dispose();
     };
-  }, [token, command, t]);
+  }, [token, command]);
 
   return (
     <div className="border rounded">

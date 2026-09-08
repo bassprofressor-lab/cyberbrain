@@ -237,6 +237,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   store's own audit log. The refusal list had considered reading and stopped there.
 - **A paste could hang the whole server.** The write half of a terminal blocked the single
   runtime worker as soon as the program inside stopped reading its input.
+- **Switching the language killed every open terminal.** The effect that owns the socket had
+  the translation dictionary in its dependency list — for the sake of one label — so changing
+  the language tore the socket down and the server killed the process behind it. One
+  keystroke and a running `ssh` session was gone, without a word.
+
+### Added
+
+- **Browser tests.** `npm run e2e` in `ui/` starts a real `cyberbrain serve --terminal` over
+  a throwaway store and drives the page with Playwright. The page has parts only a browser
+  can be wrong about — a WebSocket the content security policy has to allow, a token that
+  arrives in the URL fragment, an effect whose dependency list decides whether switching the
+  language destroys somebody's session — and every one of those has been wrong at least once.
+  None of it is visible to `tsc`.
 - A flake in the launcher's tests, seen roughly one run in ten and misdiagnosed once before
   it was found. The fakes those tests use are shell scripts they write and then execute, and
   on Linux a program cannot be executed while any descriptor to it is open for writing —

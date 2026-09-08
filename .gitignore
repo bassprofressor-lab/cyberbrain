@@ -7,3 +7,7 @@ crates/cyberbrain/ui-dist/
 eval-local/
 crates/cyberbrain/LICENSE.md
 packaging/windows/cyberbrain-setup-*.exe
+
+# Playwright leaves these behind on a failure; they are screenshots and traces, not source.
+ui/test-results/
+ui/playwright-report/
