@@ -169,6 +169,31 @@ pub enum Command {
     /// Serve the same operations over MCP on stdio.
     Mcp,
 
+    /// Put this binary into an agent's own configuration: the hooks for Claude Code, the
+    /// MCP server for a desktop client.
+    ///
+    /// Everything it writes belongs to another program, so nothing that is not ours is
+    /// touched, our entries are marked, and the previous file is kept beside the new one.
+    Install {
+        /// Which client. Repeat the flag for several; omit for every one on this machine.
+        #[arg(long, value_enum)]
+        client: Vec<InstallClient>,
+        /// The project whose `.claude/settings.json` gets the hooks. Defaults to the
+        /// working directory.
+        #[arg(long)]
+        project: Option<PathBuf>,
+        /// Name of the MCP entry. A desktop client has no project of its own, so a second
+        /// store on this machine needs a second name.
+        #[arg(long, default_value = "cyberbrain")]
+        name: String,
+        /// Take our entries out again.
+        #[arg(long)]
+        undo: bool,
+        /// Say what would change, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Compliance operations (SPEC §12).
     Policy {
         #[command(subcommand)]
@@ -250,6 +275,26 @@ pub enum HookEvent {
     PostToolUse,
     Stop,
     PreCompact,
+}
+
+/// The clients `install` knows. Not every one is written to: see `install`'s module
+/// documentation for why ChatGPT is absent and Codex is printed rather than edited.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum InstallClient {
+    ClaudeCode,
+    ClaudeDesktop,
+    Codex,
+}
+
+impl From<InstallClient> for crate::install::Client {
+    fn from(c: InstallClient) -> Self {
+        use crate::install::Client as C;
+        match c {
+            InstallClient::ClaudeCode => C::ClaudeCode,
+            InstallClient::ClaudeDesktop => C::ClaudeDesktop,
+            InstallClient::Codex => C::Codex,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

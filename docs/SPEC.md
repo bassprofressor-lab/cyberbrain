@@ -302,7 +302,10 @@ cyberbrain import --plan <file.toml> [--accept-pii]   bring an existing Markdown
 cyberbrain serve [--port 7777]        local web UI (§13)
 cyberbrain hook <event>               agent harness integration (§9)
 cyberbrain mcp                        MCP server over stdio (§9)
+cyberbrain install [--client C] [--undo]   write this binary into a client's config (§8.0.2)
 cyberbrain policy <subcommand>        compliance operations (§12)
+cyberbrain hub <subcommand>           the fleet collector, its licence and its service
+cyberbrain verify-export <file>       check an audit export, with no store and no network
 ```
 
 Exit codes: `0` success, `1` user error, `2` internal error, `3` policy refusal.
@@ -334,6 +337,39 @@ saying to skip it makes the command exit non-zero.
 
 Importing the same tree twice recognises what is already there and says so, rather than
 duplicating it.
+
+### 8.0.2 Install
+
+`install` writes the entries that switch the integrations on: the six hooks of §9.1 into a
+project's Claude Code settings, and an MCP server entry of §9.2 into a desktop client's
+configuration. It exists because every one of those integrations was reachable only by
+hand-editing another program's JSON, and a setup step that reads "open this file and add
+this object" is not a setup step.
+
+Three rules bind it, and they are the interface:
+
+1. **Nothing that is not ours is changed.** The file is parsed, our entry is replaced, and
+   everything else is written back as it was. A file that does not parse is left untouched
+   and reported — a broken settings file is somebody's work in progress, not an empty one.
+2. **Our entries are marked** with `_managedBy: "cyberbrain"` where the format has room for
+   it, and by entry name where it does not, so `--undo` removes ours and only ours.
+3. **The previous file is kept** beside the new one as `<name>.bak` whenever something is
+   written. Nothing is written when nothing changed.
+
+**Every installation present gets the entry, not the documented one.** On Windows, Claude
+Desktop from the Microsoft Store is packaged as MSIX, which virtualises `%APPDATA%`: the
+application reads its configuration from inside its package folder, while its own *Edit
+Config* button opens the unvirtualised `%APPDATA%` path that every guide names. The two are
+never synchronised and neither warns, so an entry written to the documented path alone loads
+nowhere and says it succeeded. Presence is therefore decided on the folder each installation
+creates, never on the configuration file, and every installation found is written.
+
+**What it will not do.** ChatGPT's MCP support wants an HTTPS endpoint with OAuth, which
+means a server reachable from the internet; a stdio server on the user's own machine cannot
+be registered there, and making one reachable would contradict §12.1. It is reported as
+unavailable with the reason, and no endpoint is offered. Codex CLI is configured by a TOML
+file the user writes by hand, comments and all; that file is reported and the lines to paste
+are printed, rather than reformatted by us.
 
 ### 8.1 The HTTP API
 

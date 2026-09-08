@@ -355,6 +355,33 @@ pub fn enrol(
     }
 }
 
+/// Put this project's memory into the AI clients on this machine.
+///
+/// The CLI already does it; what the launcher adds is that nobody has to find a prompt.
+/// That is not a convenience here — a person who installed Cyberbrain from a setup program
+/// has, by definition, chosen not to use the command line, and telling them to open one and
+/// then edit somebody else's JSON file is where a setup gets abandoned.
+///
+/// `Ok` carries what the CLI printed: which clients it found, which files it wrote, and the
+/// lines to paste for the one client it does not write.
+pub fn set_up_clients(server: &Path, project_dir: &Path) -> std::result::Result<String, String> {
+    let out = command(server, project_dir)
+        .arg("install")
+        .output()
+        .map_err(|e| format!("cyberbrain could not be started: {e}"))?;
+    let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
+    if out.status.success() {
+        Ok(text(&out.stdout))
+    } else {
+        let msg = text(&out.stderr);
+        Err(if msg.is_empty() {
+            format!("setting up the clients failed ({})", out.status)
+        } else {
+            msg
+        })
+    }
+}
+
 fn command(server: &Path, project_dir: &Path) -> Command {
     let mut c = Command::new(server);
     // The working directory is how the store is chosen: the CLI walks up from here, so a

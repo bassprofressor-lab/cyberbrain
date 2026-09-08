@@ -132,6 +132,13 @@ Vier Wege hinein, alle aus derselben Binärdatei:
 | `cyberbrain mcp` | Model Context Protocol über stdio, für jeden Client, der es spricht |
 | `cyberbrain serve` | Weboberfläche und HTTP-API, auf Loopback, ohne Anmeldung, weil nichts davon den Rechner verlässt |
 
+`cyberbrain install` schaltet die ersten beiden ein, ohne dass jemand fremdes JSON bearbeitet:
+es schreibt die Hooks in die Claude-Code-Einstellungen dieses Projekts und einen MCP-Eintrag in
+die Desktop-Clients, die es findet, legt die vorherige Datei daneben, und `--undo` nimmt alles
+wieder heraus. Es schreibt jede gefundene Claude-Desktop-Installation statt nur den
+dokumentierten Pfad — unter Windows sind das nicht dieselbe Datei, und die falsche scheitert
+lautlos.
+
 ## Wie es arbeitet
 
 ```mermaid

@@ -579,6 +579,71 @@ pub fn verify_export(r: &cyberbrain_policy::bundle::Report) -> String {
     s
 }
 
+/// `install`. The shape of it is one block per client, because the question a person has
+/// afterwards is "did it do the thing for Claude Desktop", not "how many files were there".
+///
+/// Every file is named in full. Two of them are the normal case on Windows, and a person
+/// who has been bitten by an entry that never loaded needs to see which one was written.
+pub fn install(r: &crate::install::Report) -> String {
+    use crate::install::Action;
+    let mut s = String::new();
+    let verb = if r.undo { "Removing" } else { "Setting up" };
+    let _ = writeln!(s, "{verb} {}", Slash(&r.binary));
+    let _ = writeln!(s, "  store: {}", Slash(&r.store));
+    if r.dry_run {
+        let _ = writeln!(s, "  --dry-run: nothing was written");
+    }
+
+    for c in &r.clients {
+        let _ = writeln!(s);
+        if !c.found {
+            let _ = writeln!(s, "{} — not found", c.client);
+            if let Some(note) = &c.note {
+                let _ = writeln!(s, "  {note}");
+            }
+            continue;
+        }
+        let _ = writeln!(s, "{}", c.client);
+        for change in &c.changes {
+            let did = match change.action {
+                Action::Added => "added",
+                Action::Updated => "updated",
+                Action::Unchanged => "already set",
+                Action::Removed => "removed",
+                Action::NothingToUndo => "nothing of ours",
+            };
+            let _ = writeln!(s, "  {did:<15} {}", Slash(&change.path));
+            let _ = writeln!(s, "  {:<15} {}", "", change.why);
+            if let Some(b) = &change.backup {
+                let _ = writeln!(s, "  {:<15} previous file kept as {}", "", Slash(b));
+            }
+        }
+        if let Some(note) = &c.note {
+            let _ = writeln!(s, "  {note}");
+        }
+        if let Some(snippet) = &c.snippet {
+            for line in snippet.lines() {
+                // A blank line stays blank: four spaces of indent on an empty line is
+                // whitespace somebody's editor will flag when they paste this.
+                if line.is_empty() {
+                    let _ = writeln!(s);
+                } else {
+                    let _ = writeln!(s, "    {line}");
+                }
+            }
+        }
+    }
+
+    if !r.undo && !r.dry_run && r.clients.iter().any(|c| c.found && !c.changes.is_empty()) {
+        let _ = writeln!(
+            s,
+            "\nRestart the client for it to read this. `cyberbrain install --undo` takes it \
+             back out."
+        );
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     //! The one property every renderer shares: a path reaches the reader with forward

@@ -13,6 +13,7 @@ mod hook;
 mod hostload;
 mod hub;
 mod import;
+mod install;
 mod mcp;
 mod render;
 mod serve;
@@ -165,6 +166,41 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             return Ok(0);
         }
 
+        // A store is needed for its path, not its contents: the entry this writes names
+        // the store so that a desktop client, which starts the process wherever it likes,
+        // talks to this project and not to whichever one it lands in.
+        Command::Install {
+            ref client,
+            ref project,
+            ref name,
+            undo,
+            dry_run,
+        } => {
+            let project = match project {
+                Some(p) => p.clone(),
+                None => std::env::current_dir().map_err(|e| Error::Io {
+                    path: ".".into(),
+                    source: e,
+                })?,
+            };
+            let store = match cli.store.as_deref() {
+                Some(_) => app::discover_store(cli.store.as_deref())?,
+                None => app::discover_store_from(Some(&project))?,
+            };
+            let opts = install::Options {
+                clients: client.iter().copied().map(Into::into).collect(),
+                project,
+                store,
+                name: name.clone(),
+                undo,
+                dry_run,
+                env: install::Env::current(),
+            };
+            let r = install::run(&opts)?;
+            out.emit(&r, render::install)?;
+            return Ok(0);
+        }
+
         // No store either: the hub keeps its own record of other machines' rows, and the
         // notes on this machine are none of its business.
         Command::Hub { ref command } => return run_hub(command, cli.store.as_deref(), out),
@@ -299,6 +335,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         | Command::Hook { .. }
         | Command::Serve { .. }
         | Command::Mcp
+        | Command::Install { .. }
         | Command::Hub { .. }
         | Command::VerifyExport { .. } => {
             unreachable!("handled before the store was opened")

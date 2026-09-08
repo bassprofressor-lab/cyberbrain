@@ -234,6 +234,40 @@ fn without_one_beside_us_the_path_is_searched() {
     }
 }
 
+/// The menu entry behind "Set up Claude on this computer…", against the real binary.
+///
+/// The point of the entry is that a person never types a command, so what is checked here
+/// is the thing they cannot: that the launcher's idea of the command matches the CLI's, and
+/// that the store it lands on is the project the tray icon has open. A stale argument here
+/// would show up on a customer's machine as a message box full of clap's help text.
+#[test]
+fn the_menu_entry_sets_up_the_project_the_launcher_has_open() {
+    let server = server_binary();
+    let tmp = tempfile::tempdir().unwrap();
+    init_store(&server, tmp.path()).expect("init a store to set up");
+
+    let said = set_up_clients(&server, tmp.path()).expect("the CLI accepted the command");
+    assert!(said.contains("claude-code"), "{said}");
+
+    let settings = tmp.path().join(".claude").join("settings.json");
+    let text = std::fs::read_to_string(&settings).expect("the hooks were written");
+    assert!(text.contains("session-start"), "{text}");
+    assert!(
+        text.contains(&server.display().to_string()),
+        "the hook has to name the binary the launcher is running, not whatever is on PATH: {text}"
+    );
+}
+
+/// A folder with no store is the one failure this can actually hit: the tray icon can be
+/// pointed anywhere. It has to come back as a message, not as a silent nothing.
+#[test]
+fn setting_up_without_a_store_says_so() {
+    let server = server_binary();
+    let tmp = tempfile::tempdir().unwrap();
+    let why = set_up_clients(&server, tmp.path()).expect_err("there is no store here");
+    assert!(why.contains("cyberbrain init"), "{why}");
+}
+
 // ---- the delivery schedule ----
 //
 // Whether an enrolled machine actually sends anything is a matter of arithmetic in a loop

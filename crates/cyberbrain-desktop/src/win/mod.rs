@@ -59,6 +59,7 @@ pub fn run() {
     let open = MenuItem::new("Open Cyberbrain", true, None);
     let folder = MenuItem::new("Open project folder", true, None);
     let choose = MenuItem::new("Choose project…", true, None);
+    let clients = MenuItem::new("Set up Claude on this computer…", true, None);
     let enrol = MenuItem::new("Connect to the company hub…", true, None);
     let quit = MenuItem::new("Quit", true, None);
     if menu
@@ -67,6 +68,7 @@ pub fn run() {
             &folder,
             &PredefinedMenuItem::separator(),
             &choose,
+            &clients,
             &enrol,
             &PredefinedMenuItem::separator(),
             &quit,
@@ -95,6 +97,7 @@ pub fn run() {
         open: open.id().clone(),
         folder: folder.id().clone(),
         choose: choose.id().clone(),
+        clients: clients.id().clone(),
         enrol: enrol.id().clone(),
         quit: quit.id().clone(),
     };
@@ -120,6 +123,8 @@ pub fn run() {
                     let _ = tray.set_tooltip(Some(tooltip(&server)));
                     sys::open_in_browser(&server.url);
                 }
+            } else if event.id == ids.clients {
+                set_up_clients(&server_exe, &server.project_dir);
             } else if event.id == ids.enrol {
                 if connect_to_hub(&server_exe, &server.project_dir) {
                     // Deliver on the next tick rather than in a quarter of an hour: the
@@ -195,6 +200,7 @@ struct Ids {
     open: MenuId,
     folder: MenuId,
     choose: MenuId,
+    clients: MenuId,
     enrol: MenuId,
     quit: MenuId,
 }
@@ -222,6 +228,21 @@ fn open_project(
         }
     }
     choose_project(server_exe, settings, settings_path, job)
+}
+
+/// Put this project's memory into the AI clients installed here, and say what happened.
+///
+/// The report is shown whole rather than boiled down to "done". Two things in it are worth
+/// a person's eyes: which file was written when Windows has two Claude Desktop
+/// installations, and the lines to paste for a client this does not write.
+fn set_up_clients(server_exe: &Path, project_dir: &Path) {
+    match launch::set_up_clients(server_exe, project_dir) {
+        Ok(said) => sys::info_box(
+            APP,
+            &format!("{said}\n\nRestart the client for it to read this."),
+        ),
+        Err(why) => sys::error_box(APP, &format!("Nothing was set up.\n\n{why}")),
+    }
 }
 
 /// Take the invitation file the company sent and enrol this store with their hub.

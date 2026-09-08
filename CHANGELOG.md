@@ -10,6 +10,47 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`cyberbrain install`.** The hooks and the MCP server have been there since the first
+  release; what had never been there was a way to switch them on. Turning them on meant
+  finding another program's configuration file, knowing where that program keeps it, and
+  adding an object to it by hand. That is not a setup step, it is the point at which a setup
+  is abandoned.
+
+  One command now does it: the six lifecycle hooks into this project's Claude Code settings,
+  and an MCP entry into each desktop client found on the machine. Nothing that is not ours is
+  changed, our entries are marked so `--undo` can take out ours and only ours, and the
+  previous file is kept beside the new one. A configuration file that does not parse is
+  reported and left exactly as it is, because a settings file with a trailing comma in it is
+  somebody's unfinished work, not an empty file to be replaced with ours.
+
+  In the Windows launcher it is a menu entry, "Set up Claude on this computer…", which is
+  where it matters: somebody who installed this from a setup program has already said they
+  would rather not open a prompt.
+
+- **Every Claude Desktop installation gets the entry, not the documented one.** The Microsoft
+  Store build is packaged as MSIX, and MSIX virtualises `%APPDATA%`: the application reads its
+  configuration inside its own package folder, while the *Edit Config* button in that same
+  application opens the unvirtualised path that every guide on the internet names. The two
+  files are never synchronised, nothing warns, and a server configured in the documented place
+  simply never loads. So presence is decided on the folder each installation creates, never on
+  the configuration file, and every installation found is written. Doing it the documented way
+  would have shipped a one-click setup whose one click does nothing.
+
+- **ChatGPT is reported as unavailable, with the reason.** Its MCP support wants an HTTPS
+  endpoint with OAuth, so a stdio server on the user's own machine cannot be registered there,
+  and making one reachable from the internet is the opposite of what this product promises.
+  Codex CLI is reported too, with the two lines to paste: its configuration is TOML somebody
+  wrote by hand, with their comments in it, and reformatting that to save a paste is a bad
+  trade.
+
+### Fixed
+
+- The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.
+
 ## [0.3.0] — 2026-09-07
 
 ### Added

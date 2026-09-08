@@ -127,6 +127,12 @@ Four ways in, all from the same binary:
 | `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
 | `cyberbrain serve` | the web page and the HTTP API, on loopback, with no authentication because it never leaves the machine |
 
+`cyberbrain install` switches the first two on without you editing anyone's JSON: it writes
+the hooks into this project's Claude Code settings and an MCP entry into the desktop clients
+it finds, keeps the previous file beside the new one, and `--undo` takes it all back out. It
+writes every Claude Desktop installation it finds rather than the documented path, because on
+Windows those are not the same file and the wrong one fails silently.
+
 ## How it works
 
 ```mermaid
