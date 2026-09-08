@@ -422,3 +422,39 @@ fn asking_for_nothing_asks_for_everything() {
     let r = run(&o).unwrap();
     assert_eq!(r.clients.len(), Client::ALL.len());
 }
+
+/// The hook command lands in `settings.json`, and on Windows `canonicalize` writes it as
+/// `\\?\D:\a\cyberbrain.exe`. That is a valid path to every Windows API and it is not what
+/// belongs in a file people read — CI found it as a launcher test that could not match the
+/// path against the binary it had started.
+///
+/// The table runs on every platform on purpose: the code is Windows-only, the mistake in it
+/// would not be.
+#[test]
+fn the_extended_length_prefix_comes_off_a_path_that_does_not_need_it() {
+    for (given, want) in [
+        (
+            r"\\?\C:\Program Files\Cyberbrain\cyberbrain.exe",
+            Some(r"C:\Program Files\Cyberbrain\cyberbrain.exe"),
+        ),
+        (
+            r"\\?\D:\a\cyberbrain\target\debug\cyberbrain.exe",
+            Some(r"D:\a\cyberbrain\target\debug\cyberbrain.exe"),
+        ),
+        // A share keeps both of its leading separators, or it names a local path instead.
+        (
+            r"\\?\UNC\server\share\cyberbrain.exe",
+            Some(r"\\server\share\cyberbrain.exe"),
+        ),
+        // Not a drive letter: the prefix is the only thing making this name a device, so it
+        // stays. Stripping it here would be the one case that changes which file is meant.
+        (r"\\?\Volume{9f3a}\cyberbrain.exe", None),
+        (r"\\?\GLOBALROOT\Device\HarddiskVolume2\x.exe", None),
+        // Ordinary paths are left exactly as they are, including a real UNC share.
+        (r"C:\Program Files\Cyberbrain\cyberbrain.exe", None),
+        (r"\\server\share\cyberbrain.exe", None),
+        ("/usr/local/bin/cyberbrain", None),
+    ] {
+        assert_eq!(without_verbatim_prefix(given).as_deref(), want, "{given}");
+    }
+}

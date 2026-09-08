@@ -354,9 +354,44 @@ fn current_binary() -> PathBuf {
     std::env::current_exe()
         .ok()
         .and_then(|p| p.canonicalize().ok().or(Some(p)))
+        .map(plain)
         .unwrap_or_else(|| PathBuf::from("cyberbrain"))
 }
 
 fn absolute(p: &Path) -> PathBuf {
-    p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
+    plain(p.canonicalize().unwrap_or_else(|_| p.to_path_buf()))
+}
+
+/// `canonicalize` on Windows hands back the extended-length form, `\\?\C:\x`. Every
+/// Windows API accepts it, so nothing was broken — but it is what landed in
+/// `settings.json`, a file a person reads and another program passes on, and a path there
+/// should look like a path. Only the two shapes that name the same file without the prefix
+/// are unwrapped; anything else keeps it, because for those the prefix is load-bearing.
+#[cfg(windows)]
+fn plain(p: PathBuf) -> PathBuf {
+    match p.to_str().and_then(without_verbatim_prefix) {
+        Some(s) => PathBuf::from(s),
+        None => p,
+    }
+}
+
+#[cfg(not(windows))]
+fn plain(p: PathBuf) -> PathBuf {
+    p
+}
+
+/// Compiled on Windows, and in every test build so the table below runs everywhere rather
+/// than only on the platform where it is hardest to notice that it stopped.
+#[cfg(any(windows, test))]
+fn without_verbatim_prefix(path: &str) -> Option<String> {
+    if let Some(rest) = path.strip_prefix(r"\\?\UNC\") {
+        return Some(format!(r"\\{rest}"));
+    }
+    let rest = path.strip_prefix(r"\\?\")?;
+    // A drive letter, a colon, and a separator: `\\?\C:\x` is `C:\x` and nothing else.
+    let b = rest.as_bytes();
+    match (b.first(), b.get(1), b.get(2)) {
+        (Some(d), Some(b':'), Some(b'\\')) if d.is_ascii_alphabetic() => Some(rest.to_string()),
+        _ => None,
+    }
 }
