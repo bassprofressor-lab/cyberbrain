@@ -1558,6 +1558,47 @@ async fn the_commands_that_do_not_belong_in_a_window_are_refused_with_a_reason()
     }
 }
 
+/// An unauthenticated write to any path on the machine, through a command that was let
+/// through because the reasoning only considered reading.
+///
+/// Reproduced before it was fixed: `{"line":"policy audit --export /tmp/x"}` answered 200
+/// and left a file there, over whatever had been there before — including, if pointed at
+/// it, this store's own hash-chained audit log.
+#[tokio::test]
+async fn a_command_may_not_write_a_file_wherever_it_is_pointed() {
+    let fx = Fx::with_cli();
+    let target = fx.store.join("..").join("written-by-a-request.json");
+    let line = format!("policy audit --export {}", target.display());
+
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": line })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{v:#}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--export"),
+        "{v:#}"
+    );
+    assert!(!target.exists(), "a refused command wrote a file anyway");
+
+    // The same command without the path is fine: reading the log is what this is for.
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "policy audit" })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{v:#}");
+    assert_eq!(v["exit_code"], 0, "{v:#}");
+}
+
 /// The one way this endpoint could reach a store the person is not looking at.
 #[tokio::test]
 async fn naming_another_store_is_refused() {

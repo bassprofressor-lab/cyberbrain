@@ -220,8 +220,11 @@ fn refuse(command: &Command) -> Option<&'static str> {
         // The review workflow belongs here more than anywhere: it is this store's own
         // business, and the window is where the person reviewing already is.
         | Command::Propose { .. }
-        | Command::Review { .. }
-        | Command::Policy { .. } => None,
+        | Command::Review { .. } => None,
+
+        // Not the whole of `policy`: one of its subcommands writes a file wherever it is
+        // pointed, and this surface has no authentication.
+        Command::Policy { command } => refuse_policy(command),
 
         Command::Serve { .. } => {
             Some("`serve` is what is answering this: the page you are reading is a running one.")
@@ -253,6 +256,36 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Hub { .. } => Some(
             "`hub` is a different surface with an authentication of its own, and this is not it.",
         ),
+    }
+}
+
+/// The `policy` subcommands, and the one that names a path.
+///
+/// The reasoning that kept `import` and `verify-export` out was right and half-sized: it
+/// said those two read files from anywhere on disk, and stopped there. `policy audit
+/// --export <path>` is the same class in the other direction, and it was the only argument
+/// of its kind among the commands that were let through — so a `POST /command` from any
+/// local process wrote a file wherever it liked, over whatever was already there, including
+/// this store's own hash-chained audit log.
+///
+/// Exhaustive on `PolicyCommand`, so a subcommand added later has to be decided here rather
+/// than inherited.
+fn refuse_policy(command: &crate::cli::PolicyCommand) -> Option<&'static str> {
+    use crate::cli::PolicyCommand as P;
+    match command {
+        P::Audit {
+            export: Some(_), ..
+        } => Some(
+            "`policy audit --export` writes a file wherever it is pointed, and this surface \
+             has no authentication. Read the log without it, or export it at a prompt.",
+        ),
+        P::Audit { .. }
+        | P::Egress
+        | P::Obligations
+        | P::Subject { .. }
+        | P::Retention { .. }
+        | P::ModelCard
+        | P::Consent { .. } => None,
     }
 }
 
