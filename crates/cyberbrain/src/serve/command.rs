@@ -291,26 +291,47 @@ fn refuse_policy(command: &crate::cli::PolicyCommand) -> Option<&'static str> {
 
 /// Split a typed line into arguments the way a person expects, and no further.
 ///
-/// Single and double quotes group, a backslash escapes the next character, and whitespace
-/// separates. Deliberately not a shell: there is no variable expansion, no glob, no `&&`,
-/// no pipe and no redirection, because none of those would be honoured downstream and a
-/// half-shell is worse than none. An unclosed quote is an error, not a guess.
+/// Single and double quotes group, and whitespace separates. Deliberately not a shell: no
+/// variable expansion, no glob, no `&&`, no pipe, no redirection, because none of those
+/// would be honoured downstream and a half-shell is worse than none. An unclosed quote is an
+/// error, not a guess.
+///
+/// **A backslash is a character, not an escape — except before a quote.** This started as
+/// "a backslash escapes whatever follows", which is the rule a Unix shell has and exactly
+/// the wrong one here. Windows is where this feature lives: the desktop launcher always
+/// starts a terminal, and the first thing anybody types into one is a path.
+/// `C:\Users\me\tool.exe` became `C:Usersmetool.exe`, and a saved connection passed its
+/// own validation and then never started. So a backslash stands for itself, and only
+/// `\"`, `\'` and `\\` mean anything — which is all that is needed to put a quote inside a
+/// quoted argument.
+///
+/// Inside single quotes nothing is special at all, which is the one thing every shell agrees
+/// on and what somebody pasting a Windows path in quotes will expect.
 pub fn tokenise(line: &str) -> Result<Option<Vec<String>>, String> {
     let mut out: Vec<String> = Vec::new();
     let mut cur = String::new();
     let mut has = false;
     let mut quote: Option<char> = None;
-    let mut chars = line.chars();
+    let mut chars = line.chars().peekable();
 
     while let Some(c) = chars.next() {
         match (quote, c) {
-            (_, '\\') => match chars.next() {
-                Some(next) => {
-                    cur.push(next);
-                    has = true;
+            // Literal everywhere inside single quotes, backslash included.
+            (Some('\''), c) if c != '\'' => {
+                cur.push(c);
+                has = true;
+            }
+            (_, '\\') => {
+                // Only a quote or another backslash is escaped. Anything else keeps the
+                // backslash, because on the platform this runs on it is a path separator.
+                match chars.peek() {
+                    Some('"') | Some('\'') | Some('\\') => {
+                        cur.push(chars.next().unwrap_or('\\'));
+                    }
+                    _ => cur.push('\\'),
                 }
-                None => return Err("the line ends in a backslash with nothing after it".into()),
-            },
+                has = true;
+            }
             (Some(q), c) if c == q => quote = None,
             (Some(_), c) => {
                 cur.push(c);

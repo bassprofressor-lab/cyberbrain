@@ -1448,12 +1448,36 @@ fn a_typed_line_is_split_the_way_somebody_would_expect() {
         t(r#"recall 'a "quoted" thing'"#),
         vec!["recall", r#"a "quoted" thing"#]
     );
-    assert_eq!(t(r"recall a\ b"), vec!["recall", "a b"]);
+    // A backslash stands for itself. This is the platform this feature lives on, and a path
+    // is the first thing anybody types: `C:\Users\me\tool.exe` used to become
+    // `C:Usersmetool.exe`, and a saved connection passed its own check and never started.
+    assert_eq!(
+        t(r"ssh -i C:\keys\id_rsa root@host"),
+        vec!["ssh", "-i", r"C:\keys\id_rsa", "root@host"]
+    );
+    assert_eq!(
+        t(r#""C:\Program Files\Git\bin\bash.exe""#),
+        vec![r"C:\Program Files\Git\bin\bash.exe"]
+    );
+    // Inside single quotes nothing is special, which is what every shell agrees on.
+    assert_eq!(t(r"'C:\tools\x'"), vec![r"C:\tools\x"]);
+    // What an escape is still for: a quote inside a quoted argument, and a literal backslash
+    // before one.
+    assert_eq!(
+        t("write --body \"say \\\"hi\\\"\""),
+        vec!["write", "--body", r#"say "hi""#]
+    );
+    assert_eq!(t(r"a\\b"), vec![r"a\b"]);
     // An empty argument is an argument: `--body ""` is a thing somebody means.
     assert_eq!(t("write --body \"\""), vec!["write", "--body", ""]);
     assert!(tokenise("   ").unwrap().is_none());
     assert!(tokenise(r#"recall "unclosed"#).is_err());
-    assert!(tokenise(r"recall a\").is_err());
+    // No longer an error, and that is the point: `C:\` is an ordinary path. Under the old
+    // rule a trailing backslash meant "escape the next character" and there was none.
+    assert_eq!(
+        tokenise(r"export C:\").unwrap().unwrap(),
+        vec!["export", r"C:\"]
+    );
 }
 
 /// Not a shell, and the point is that nothing here is honoured as one: what looks like two

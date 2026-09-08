@@ -237,6 +237,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   store's own audit log. The refusal list had considered reading and stopped there.
 - **A paste could hang the whole server.** The write half of a terminal blocked the single
   runtime worker as soon as the program inside stopped reading its input.
+- **Every Windows path typed into a terminal was broken.** The line splitter treated a
+  backslash as an escape, which is a Unix shell's rule and the wrong one here — the desktop
+  launcher always starts a terminal, so Windows is the platform this lives on, and the first
+  thing anybody types into one is a path. `C:\Users\me\tool.exe` became
+  `C:Usersmetool.exe`, and a saved connection passed its own validation and then never
+  started. A backslash stands for itself now; `\"`, `\'` and `\\` are the only escapes,
+  which is all that is needed to put a quote inside a quoted argument.
+
+  The other half of the same mistake, invisible until this one was fixed: joining argv back
+  into a Windows command line doubled every backslash, where `CommandLineToArgvW` only treats
+  them as special in a run immediately before a quote. That code moved out of the Windows-only
+  module so it is tested on every platform — the rule is string handling, the mistake was
+  string handling, and a rule that can only be checked where nobody can run the checks is a
+  rule nobody checks.
 - **Switching the language killed every open terminal.** The effect that owns the socket had
   the translation dictionary in its dependency list — for the sake of one label — so changing
   the language tore the socket down and the server killed the process behind it. One

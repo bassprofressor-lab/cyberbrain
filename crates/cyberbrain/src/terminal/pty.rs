@@ -233,7 +233,7 @@ mod windows {
                 si.lpAttributeList = list;
                 let mut pi: PROCESS_INFORMATION = std::mem::zeroed();
 
-                let mut line = command_line(&default_shell(req.command));
+                let mut line = wide(&super::command_line(&default_shell(req.command)));
                 let cwd = wide(&req.cwd.display().to_string());
                 let ok = CreateProcessW(
                     ptr::null(),
@@ -320,30 +320,63 @@ mod windows {
         use std::os::windows::ffi::OsStrExt;
         OsStr::new(s).encode_wide().chain(Some(0)).collect()
     }
-
-    /// argv joined the way `CreateProcessW` parses it back apart.
-    ///
-    /// Quoted when a piece contains a space, and inner quotes escaped, because the person
-    /// typing `ssh root@host "cd /srv && ls"` means one argument and not three.
-    fn command_line(argv: &[String]) -> Vec<u16> {
-        let mut line = String::new();
-        for (i, part) in argv.iter().enumerate() {
-            if i > 0 {
-                line.push(' ');
-            }
-            if part.contains(' ') || part.contains('"') || part.is_empty() {
-                line.push('"');
-                line.push_str(&part.replace('\\', "\\\\").replace('"', "\\\""));
-                line.push('"');
-            } else {
-                line.push_str(part);
-            }
-        }
-        wide(&line)
-    }
 }
 
 // ---------------------------------------------------------------------------------------
+
+/// argv joined the way `CreateProcessW` parses it back apart.
+///
+/// Quoted when a piece contains a space, because the person typing
+/// `ssh root@host "cd /srv && ls"` means one argument and not three.
+///
+/// The backslash rule is the fiddly half, and doubling every one of them — which is what
+/// this did first — is wrong. `CommandLineToArgvW` treats a backslash as special *only*
+/// in a run immediately before a quote: there, `2n` backslashes plus `"` open or close
+/// quoting, `2n+1` produce `n` backslashes and a literal quote, and anywhere else a
+/// backslash is itself. Doubling them all turned
+/// `C:\Program Files\Git\bin\bash.exe` into a path with doubled separators. It was
+/// invisible while `tokenise` was eating backslashes before they ever reached here.
+/// Only Windows calls this, and every platform tests it. That is the point of it being
+/// here rather than inside `mod windows`: the rule it implements is string handling, the
+/// mistake in it was string handling, and a rule that can only be checked where nobody can
+/// run the checks is a rule nobody checks.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(super) fn command_line(argv: &[String]) -> String {
+    let mut line = String::new();
+    for (i, part) in argv.iter().enumerate() {
+        if i > 0 {
+            line.push(' ');
+        }
+        if !part.is_empty() && !part.contains([' ', '\t', '"']) {
+            line.push_str(part);
+            continue;
+        }
+        line.push('"');
+        let mut backslashes = 0usize;
+        for c in part.chars() {
+            match c {
+                '\\' => {
+                    backslashes += 1;
+                }
+                '"' => {
+                    // The run before a quote is doubled, then the quote is escaped.
+                    line.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+                    backslashes = 0;
+                    line.push('"');
+                }
+                other => {
+                    line.extend(std::iter::repeat_n('\\', backslashes));
+                    backslashes = 0;
+                    line.push(other);
+                }
+            }
+        }
+        // The closing quote is a quote too: the run before it doubles.
+        line.extend(std::iter::repeat_n('\\', backslashes * 2));
+        line.push('"');
+    }
+    line
+}
 
 /// The command to run, or the platform's usual shell when none was named.
 fn default_shell(command: &[String]) -> Vec<String> {
@@ -472,6 +505,36 @@ mod tests {
             String::from_utf8_lossy(&buf)
         );
         pty.kill();
+    }
+
+    /// The rule `CommandLineToArgvW` actually applies, which is not "escape every
+    /// backslash". Checked on every platform, because the mistake is in string handling and
+    /// not in Win32 — and because it was invisible for as long as the splitter upstream was
+    /// eating backslashes before they ever arrived here.
+    #[test]
+    fn a_windows_command_line_escapes_the_way_windows_parses() {
+        let line =
+            |argv: &[&str]| command_line(&argv.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+
+        // No space: nothing to do, and above all no doubling of the separators.
+        assert_eq!(line(&[r"C:\Users\me\tool.exe"]), r"C:\Users\me\tool.exe");
+        // A space means quotes, and the backslashes inside stay as they are.
+        assert_eq!(
+            line(&[r"C:\Program Files\Git\bin\bash.exe"]),
+            r#""C:\Program Files\Git\bin\bash.exe""#
+        );
+        // A trailing backslash before the closing quote doubles, or the quote is escaped by
+        // it and the argument runs on.
+        assert_eq!(line(&[r"C:\Program Files\"]), r#""C:\Program Files\\""#);
+        // A run before a literal quote doubles, and the quote itself is escaped.
+        assert_eq!(line(&[r#"a\"b c"#]), r#""a\\\"b c""#);
+        // Several parts, joined by a single space.
+        assert_eq!(
+            line(&["ssh", "-i", r"C:\keys\id_rsa", "root@host"]),
+            r"ssh -i C:\keys\id_rsa root@host"
+        );
+        // An empty argument is an argument.
+        assert_eq!(line(&["x", ""]), r#"x """#);
     }
 
     #[test]

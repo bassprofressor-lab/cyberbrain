@@ -529,10 +529,16 @@ The token goes in a header rather than a query parameter, because a token in a r
 reaches every log that records one.
 
 The line is split by the same code that splits a line somebody types, so a saved command and
-a typed one cannot behave differently. That splitting is a contract — quotes group, a
-backslash escapes, and nothing else is a shell — and it is implemented once, on the server.
-A pipe or a semicolon is an argument; somebody who wants a shell asks for one and types it
-there.
+a typed one cannot behave differently. That splitting is a contract and it is implemented
+once, on the server: quotes group, single quotes make everything inside literal, and
+**a backslash stands for itself except before a quote** — `\"`, `\'` and `\\` are the only
+escapes there are. Nothing else is a shell; a pipe or a semicolon is an argument, and
+somebody who wants a shell asks for one and types it there.
+
+The backslash rule is that way round because of where this runs. A Unix shell's "escape
+whatever follows" is the obvious rule and the wrong one here: the desktop launcher always
+starts a terminal, so Windows is the platform this feature lives on, and the first thing
+anybody types into a terminal is a path.
 
 **The egress register (§12.1) does not cover what runs in a terminal**, and says so. A
 register claiming to enumerate every path bytes can take while `ssh` is one keystroke away
