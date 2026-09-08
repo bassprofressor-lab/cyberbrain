@@ -47,7 +47,13 @@ mod unix {
             let (master, slave) = unsafe {
                 let mut m: RawFd = -1;
                 let mut s: RawFd = -1;
-                let size = libc::winsize {
+                // `mut`, and a raw `*mut` below, because glibc declares the last two
+                // arguments `const` and Apple's libc does not. A `*mut` weakens to a
+                // `*const` at the call, so this one spelling compiles on both; the other way
+                // round it built here and failed on macOS, which is where CI found it. Raw
+                // rather than `&mut`, because from where clippy stands — glibc — a mutable
+                // reference is one the callee does not need, and that warning is an error.
+                let mut size = libc::winsize {
                     ws_row: req.rows,
                     ws_col: req.cols,
                     ws_xpixel: 0,
@@ -57,8 +63,8 @@ mod unix {
                     &mut m,
                     &mut s,
                     std::ptr::null_mut(),
-                    std::ptr::null(),
-                    &size,
+                    std::ptr::null_mut(),
+                    &raw mut size,
                 ) != 0
                 {
                     return Err(io::Error::last_os_error());
