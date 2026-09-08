@@ -222,11 +222,15 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
     );
     if terminal.is_some() {
         println!(
-            "cyberbrain serve: terminal enabled. Open this address and nothing else — the \
-             token in it is what opens a terminal, and it is new every run:\n{url}"
+            "cyberbrain serve: terminal enabled. Open this address yourself, and nothing \
+             else — the token in it is what opens a terminal, it is new every run, and it \
+             does not belong in a ticket or a log:\n{url}\n\
+             cyberbrain serve: not opening a browser for you, because the address would go \
+             into that browser's command line, where every account on this machine can read \
+             it."
         );
     }
-    if open {
+    if should_open(open, terminal.is_some()) {
         open_browser(&url);
     }
     axum::serve(
@@ -240,6 +244,20 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
     )
     .await
     .map_err(|e| Error::Config(format!("serve: {e}")))
+}
+
+/// Whether to hand the address to a browser, or leave it to the person.
+///
+/// Not when there is a terminal. Opening a browser means passing the address as an argument
+/// to `xdg-open` or `open`, and from there it becomes part of the browser's own command
+/// line — which on Linux any account on the machine can read out of `/proc`, for as long as
+/// the browser runs. The address carries the terminal token, and the token is the whole of
+/// what stands between another user of this machine and a shell as you.
+///
+/// The desktop launcher is unaffected and keeps opening things: it navigates its own window
+/// in-process and passes the address to nobody.
+fn should_open(asked: bool, terminal: bool) -> bool {
+    asked && !terminal
 }
 
 /// Hand the address to whatever the machine uses to open things.

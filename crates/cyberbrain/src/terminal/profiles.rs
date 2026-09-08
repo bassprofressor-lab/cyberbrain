@@ -107,7 +107,28 @@ pub fn save(profiles: &Profiles) -> Result<PathBuf> {
         path: path.clone(),
         source: e,
     })?;
+    restrict(&path);
     Ok(path)
+}
+
+/// Owner-only, where the platform has such a thing.
+///
+/// The route that reads this list is behind the terminal token, and the reason is written in
+/// this module: the list says which machines this person reaches and under which account.
+/// Writing it world-readable afterwards made that guard pointless — anyone with an account on
+/// the machine could read the same list off the disk. The hub tokens in the same directory
+/// have had this since they were added; this file did not, for a day.
+///
+/// Best effort, like theirs: a saved connection that is readable by others is worse than one
+/// that is not, and failing the save over a file mode would be its own problem.
+fn restrict(path: &std::path::Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 #[cfg(test)]
@@ -119,6 +140,28 @@ mod tests {
             name: name.into(),
             command: command.into(),
         }
+    }
+
+    /// The route is behind a token because the list is sensitive. The file has to agree.
+    #[cfg(unix)]
+    #[test]
+    fn the_saved_list_is_not_readable_by_other_accounts() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        // `path()` reads the environment, so point it at a directory of our own.
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", tmp.path()) };
+        unsafe { std::env::remove_var("APPDATA") };
+        let written = save(&Profiles {
+            profiles: vec![p("S2", "ssh root@example.com")],
+        })
+        .unwrap();
+        let mode = std::fs::metadata(&written).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode,
+            0o600,
+            "{} is readable by other accounts on this machine",
+            written.display()
+        );
     }
 
     #[test]

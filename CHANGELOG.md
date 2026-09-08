@@ -243,6 +243,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   is refused, and so is a `Sec-Fetch-Site` that is not `same-origin` or `none`. Neither header
   means a program on this machine, which is allowed — it can read the store off the disk
   anyway. Reads are untouched, because a cross-site read cannot see its own answer.
+- **The terminal token was readable by every account on the machine, twice over.** The
+  origin check keeps other *pages* out; the token is the only thing keeping other *accounts*
+  out, because loopback is not per-account. So anywhere the token can be read is a hole, and
+  there were two. `serve --terminal` handed the address to `xdg-open`, from where it became
+  part of the browser's own command line and `/proc` published it for as long as the browser
+  ran; it now prints the address and says why it is not opening it. And the
+  saved-connections file was written world-readable, while the hub tokens in the same
+  directory have always been owner-only — which made the token on that route pointless, since
+  the same list could be read straight off the disk.
+
+  The reasoning in the code said "no origin means a program running as *this* user". It
+  means *any* user of this machine. The decision it supported is still right; the sentence
+  was the place both holes lived, and it now says what it means.
 - **A typed command could write a file wherever it was pointed.** `POST /command` let
   `policy audit --export <path>` through, and that route needs no authentication, so any
   local process could place or destroy a file as the account running `serve` — including this

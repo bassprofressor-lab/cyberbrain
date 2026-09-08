@@ -529,8 +529,16 @@ standing, and it carries three conditions. All three, every time:
 3. **An `Origin` that is ours, or none.** A WebSocket handshake is not subject to the
    same-origin rule, so without this any page the user has open could try for a shell. A
    handshake carrying another origin is refused. One carrying none is admitted, and that is
-   deliberate: no origin means a program on this machine running as this user, which can
-   start a shell without our help and gains nothing from being refused here.
+   deliberate: it means a program rather than a page, and requiring an origin would refuse
+   every client that is not a browser.
+
+   **The origin check keeps other pages out; the token is what keeps other accounts out.**
+   Loopback is not per-account, so "no origin" means a program running as *any* user of this
+   machine, not as this one. The distinction matters because it says where the weight sits:
+   anywhere the token can be read by another account is a hole. Two were, and both are
+   closed — `serve --terminal` no longer hands the address to a browser, because that address
+   becomes the browser's command line and `/proc` publishes it, and the saved-connections file
+   is written owner-only like the hub tokens beside it.
 
 **What this does not claim.** It does not defend against the user's own account, and nothing
 could: a process running as you can already run anything you can. The line drawn is around

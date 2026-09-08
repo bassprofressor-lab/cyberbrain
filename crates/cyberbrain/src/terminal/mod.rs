@@ -17,12 +17,20 @@
 //! 3. **An `Origin` that is ours, or none at all.** A WebSocket handshake is not subject to
 //!    the same-origin rule, so any page in the user's browser could otherwise open one. A
 //!    request carrying somebody else's origin is refused. No origin at all is allowed,
-//!    because that is a program on this machine running as this user — which already has
-//!    every shell it wants and needs no help from us.
+//!    because that is a program rather than a page — and a program is what the token is for.
+//!
+//! **The token is what keeps other users out; the origin check only keeps other pages out.**
+//! Saying "no origin means a program running as *this* user" would be wrong: loopback is not
+//! per-account, so it means a program running as *any* account on this machine. Admitting it
+//! is still right — requiring an origin would refuse every client that is not a browser —
+//! but the weight then sits entirely on the token, and everywhere that token can be read is
+//! a hole. Two were: the address was handed to a browser as a command-line argument, where
+//! `/proc` makes it public to every account, and the saved-connections file was written
+//! world-readable. Both closed; the reasoning is written down here because the next such
+//! hole will be found by re-reading this paragraph.
 //!
 //! What none of this claims to stop is the user's own account. A process running as you can
-//! start a shell without asking us. The line this draws is around *other* origins and
-//! *other* users, and that is the line worth drawing.
+//! start a shell without asking us.
 
 pub mod profiles;
 pub mod pty;

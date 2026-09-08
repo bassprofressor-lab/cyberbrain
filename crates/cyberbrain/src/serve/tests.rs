@@ -1755,3 +1755,16 @@ async fn a_cross_site_read_is_not_refused() {
         .await;
     assert_eq!(code, StatusCode::OK);
 }
+
+/// A browser is opened by handing the address to another program as an argument, and that
+/// argument is readable out of `/proc` by every account on the machine for as long as the
+/// browser runs. With a terminal enabled the address carries the token, and the token is the
+/// whole of what stands between another user and a shell.
+#[test]
+fn a_terminal_address_is_never_handed_to_a_browser() {
+    use super::should_open;
+    assert!(should_open(true, false), "the ordinary case still opens");
+    assert!(!should_open(true, true), "not with a token in the address");
+    assert!(!should_open(false, false), "--no-open still means no");
+    assert!(!should_open(false, true));
+}
