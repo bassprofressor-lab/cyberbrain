@@ -145,3 +145,60 @@ async fn a_store_without_a_terminal_has_no_saved_list_either() {
         StatusCode::FORBIDDEN
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The write half must never block the runtime.
+
+/// A paste into a terminal whose program stopped reading must not hold up the caller.
+///
+/// `serve` runs on one worker. A blocking write here stops every route this server has —
+/// the page, the API, the other terminals — until the program inside decides to read again,
+/// which it may never do. So the write goes to a thread, and a caller that outruns the
+/// program loses keystrokes instead of hanging the process.
+///
+/// Written against the defect: with `write_all` called directly from the session task, the
+/// same input blocks for as long as the child sleeps.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_paste_into_a_program_that_is_not_reading_does_not_block() {
+    use super::pty::{Pty, Spawn};
+    use std::time::{Duration, Instant};
+
+    let dir = tempfile::tempdir().unwrap();
+    // Reads one line, then stops reading for good. The pty's input buffer fills, and every
+    // further write would block.
+    let mut pty = Pty::spawn(Spawn {
+        command: &[
+            "/bin/sh".into(),
+            "-c".into(),
+            "read one; exec sleep 30".into(),
+        ],
+        cwd: dir.path(),
+        cols: 80,
+        rows: 24,
+    })
+    .unwrap();
+    let tx = spawn_writer(pty.writer().unwrap());
+
+    let started = Instant::now();
+    // Well past any pty buffer, in lines, which is what fills the canonical queue.
+    // A line, because it is the newline that fills the canonical queue; the same bytes
+    // without one are discarded once the buffer is full and would not reproduce anything.
+    let mut line = vec![b'x'; 4096];
+    line.push(b'\n');
+    for _ in 0..200 {
+        let line = line.clone();
+        // Exactly what the session loop does with an incoming frame.
+        if tx.try_send(line).is_err() && tx.is_closed() {
+            break;
+        }
+    }
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "the write half blocked the caller for {elapsed:?}; on the real server that is every \
+         route hanging until the program inside reads again"
+    );
+    pty.kill();
+}

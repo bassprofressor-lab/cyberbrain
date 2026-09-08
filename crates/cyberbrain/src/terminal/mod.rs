@@ -256,33 +256,41 @@ async fn session(st: Arc<ServeState>, origin: Option<String>, mut socket: WebSoc
             return;
         }
     };
-    let (Ok(mut reader), Ok(mut writer)) = (pty.reader(), pty.writer()) else {
+    let (Ok(mut reader), Ok(writer)) = (pty.reader(), pty.writer()) else {
         let _ = say(&mut socket, "the terminal could not be read or written").await;
         pty.kill();
         return;
     };
 
-    // The pty's read is blocking and has no async form on either platform, so it lives on a
-    // thread and hands bytes over a channel. Chunks rather than lines: a terminal stream is
-    // not lines, and waiting for one would hold back a prompt that has no newline.
-    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    // Neither half of a pty has an async form on either platform, so **both** live on
+    // threads and talk to this task over channels.
+    //
+    // The write half is not symmetry for its own sake. `serve` runs on a
+    // `new_current_thread` runtime — one worker — and a write to a pty blocks as soon as the
+    // program inside stops reading its input. A person pastes a block into a terminal where
+    // something is sleeping, and every route this server has stops answering: the page, the
+    // API, the other terminals. It is one keystroke from a working product to a hung one,
+    // and the only reason the read half was already on a thread is that its blocking is
+    // obvious while the write half's is not.
+    let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                    if out_tx.blocking_send(buf[..n].to_vec()).is_err() {
                         break;
                     }
                 }
             }
         }
     });
+    let in_tx = spawn_writer(writer);
 
     loop {
         tokio::select! {
-            out = rx.recv() => match out {
+            out = out_rx.recv() => match out {
                 Some(bytes) => {
                     if socket.send(Message::Binary(bytes.into())).await.is_err() {
                         break;
@@ -293,10 +301,11 @@ async fn session(st: Arc<ServeState>, origin: Option<String>, mut socket: WebSoc
             },
             incoming = socket.recv() => match incoming {
                 Some(Ok(Message::Binary(bytes))) => {
-                    if writer.write_all(&bytes).is_err() {
+                    // Never blocks: a full channel means the program is not reading, and the
+                    // answer to that is to drop keystrokes, not to stop the server.
+                    if in_tx.try_send(bytes.to_vec()).is_err() && in_tx.is_closed() {
                         break;
                     }
-                    let _ = writer.flush();
                 }
                 Some(Ok(Message::Text(t))) => {
                     if let Ok(Control::Resize { cols, rows }) = serde_json::from_str(&t) {
@@ -324,10 +333,31 @@ async fn session(st: Arc<ServeState>, origin: Option<String>, mut socket: WebSoc
 
     // Whoever ended it, the program goes with the window. A shell left running with nothing
     // attached to it is a process nobody can see and nobody will stop.
-    pty.kill();
+    //
+    // On a thread, because this waits: `Child::wait` on Unix and `WaitForSingleObject` on
+    // Windows, and this task is the runtime's only worker.
+    tokio::task::spawn_blocking(move || pty.kill());
     // Dropping the socket closes it. `axum` has no `close()` on this type, and sending a
     // close frame by hand adds nothing the drop does not do.
     drop(socket);
+}
+
+/// A thread that writes what arrives on the channel into the terminal.
+///
+/// The channel is what makes the write non-blocking for the caller. Bounded, and
+/// deliberately not large: if the program inside is not reading, the right answer is to lose
+/// keystrokes rather than to queue megabytes of them for a program that may never want them.
+fn spawn_writer(mut writer: Box<dyn Write + Send>) -> tokio::sync::mpsc::Sender<Vec<u8>> {
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(64);
+    std::thread::spawn(move || {
+        while let Some(bytes) = rx.blocking_recv() {
+            if writer.write_all(&bytes).is_err() {
+                break;
+            }
+            let _ = writer.flush();
+        }
+    });
+    tx
 }
 
 async fn say(socket: &mut WebSocket, message: &str) -> Result<(), axum::Error> {
