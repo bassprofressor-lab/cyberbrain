@@ -700,8 +700,8 @@ export const de: Dict = {
   mode: {
     simpleName: "Einfach",
     expertName: "Vollständig",
-    toExpert: "Zur vollständigen Ansicht wechseln",
-    toSimple: "Zur einfachen Ansicht wechseln",
+    toExpert: "Vollständige Ansicht",
+    toSimple: "Einfache Ansicht",
     title: "Wie viel vom Werkzeug gezeigt wird",
   },
   ask: {

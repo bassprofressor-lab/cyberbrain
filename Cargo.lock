@@ -550,7 +550,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-code"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cyberbrain-core",
  "ignore",
@@ -596,7 +596,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "ignore",
@@ -611,7 +611,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-desktop"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "png",
  "rfd",
@@ -626,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-embed"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",
@@ -639,7 +639,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-index"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-llm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "cyberbrain-core",
  "jiff",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-policy"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",

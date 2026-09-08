@@ -126,7 +126,10 @@ export function App() {
             </button>
             {simple ? null : <Kbd keys="?" className="shrink-0" />}
           </div>
-          <button className="btn btn-sm w-full justify-center" onClick={() => setMode(simple ? "expert" : "simple")} title={t.mode.title}>
+          {/* `truncate`, because this label is translated: a longer word in some language
+              has to clip rather than run out of a 13rem sidebar, which is what the first
+              wording of it did. */}
+          <button className="btn btn-sm w-full justify-center truncate" onClick={() => setMode(simple ? "expert" : "simple")} title={t.mode.title}>
             {simple ? t.mode.toExpert : t.mode.toSimple}
           </button>
         </div>

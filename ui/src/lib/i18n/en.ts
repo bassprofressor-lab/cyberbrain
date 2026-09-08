@@ -711,8 +711,8 @@ export const en = {
   mode: {
     simpleName: "Simple",
     expertName: "Full",
-    toExpert: "Switch to the full view",
-    toSimple: "Switch to the simple view",
+    toExpert: "Full view",
+    toSimple: "Simple view",
     title: "How much of the tool to show",
   },
   ask: {
