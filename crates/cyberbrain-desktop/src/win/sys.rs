@@ -106,9 +106,11 @@ fn shell_open(target: &str) {
 /// The tray icon needs the loop to exist at all; the timer is what turns the loop into
 /// something that also notices a server that stopped without being asked.
 pub fn pump_messages(mut on_tick: impl FnMut() -> Pump) {
-    unsafe {
-        SetTimer(std::ptr::null_mut(), TICK_ID, TICK_MS, None);
-    }
+    // With no window, `SetTimer` ignores the id it is given and returns one of its own, and
+    // `KillTimer` wants that one back. Passing `TICK_ID` to both looked symmetrical and
+    // killed nothing — harmless here only because the process ends immediately afterwards,
+    // which is not a property to rely on.
+    let timer = unsafe { SetTimer(std::ptr::null_mut(), TICK_ID, TICK_MS, None) };
     let mut msg: MSG = unsafe { std::mem::zeroed() };
     loop {
         let got = unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) };
@@ -124,7 +126,7 @@ pub fn pump_messages(mut on_tick: impl FnMut() -> Pump) {
         }
     }
     unsafe {
-        KillTimer(std::ptr::null_mut(), TICK_ID);
+        KillTimer(std::ptr::null_mut(), timer);
     }
 }
 

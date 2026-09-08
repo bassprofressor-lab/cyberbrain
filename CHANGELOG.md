@@ -289,6 +289,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   arrives in the URL fragment, an effect whose dependency list decides whether switching the
   language destroys somebody's session — and every one of those has been wrong at least once.
   None of it is visible to `tsc`.
+- **Six things in the Windows-only code, all of the same family: resources with no owner.**
+  None of it can be run here, all of it was found by reading.
+  - A server that stopped on its own left its window standing — showing a dead address, with
+    the launcher no longer holding the handle, closable only by hand. The entry was removed
+    without being shut.
+  - `exited()` compared the exit code against `STILL_ACTIVE`, which is 259, so a program that
+    legitimately exits with 259 counted as running for ever and its pane just went quiet. The
+    liveness question goes to `WaitForSingleObject` now; the code is read only after it.
+  - WebView2 controllers were released and never `Close()`d, so the browser process tree
+    outlived every window — in a program that sits in the notification area for days.
+    Including the half-built case: three panes where the third fails no longer strands the
+    first two.
+  - Three ConPTY failure paths leaked two kernel handles each, and one leaked the attribute
+    list as well. A saved connection pointing at a program that is not installed is one
+    click, and people click it more than once.
+  - `ProjectWindow` decided whether its window was still there by asking `IsWindow` about a
+    raw handle. Windows reuses handles, so a stale one can start answering for somebody
+    else's window — and then Open focuses the wrong window and closing the project destroys
+    it. A window found closed is now forgotten.
+  - `SetTimer` with no window ignores the id it is given and returns its own; passing the
+    original back to `KillTimer` killed nothing. Two smaller ones with it: two Close events
+    for the same project in one tick took the same index twice, and switching Open in › The
+    web browser closed the side-by-side window, which has nothing to do with it.
 - A flake in the launcher's tests, seen roughly one run in ten and misdiagnosed once before
   it was found. The fakes those tests use are shell scripts they write and then execute, and
   on Linux a program cannot be executed while any descriptor to it is open for writing —

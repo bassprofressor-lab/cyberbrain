@@ -160,6 +160,9 @@ pub fn run() {
     // arrive as window messages first and reach us on the channel after dispatch.
     sys::pump_messages(|| {
         let mut changed = false;
+        // `changed` means "rebuild the menu", and a setting change does that too. This one
+        // means the list of projects is different, which is a smaller and more useful fact.
+        let mut list_changed = false;
         let mut stop = false;
         // Collected rather than acted on inside the loop: removing a project while walking
         // the events would renumber the ids the next event is about to be matched against.
@@ -177,6 +180,7 @@ pub fn run() {
                 let open = dirs(&projects);
                 if let Some(next) = choose_project(&server_exe, &open, &job) {
                     projects.push(next);
+                    list_changed = true;
                     // The title comes from the list it has just joined: a name that has to
                     // grow to stay unique can only be worked out once the others are known.
                     if let Some(title) = titles(&projects).pop()
@@ -236,17 +240,15 @@ pub fn run() {
             }
         }
 
+        // Sorted and deduplicated before anything is removed: two Close events for the same
+        // project in one tick would otherwise take the index twice, which closes a project
+        // nobody asked about or runs off the end of the list.
+        closing.sort_unstable();
+        closing.dedup();
         for i in closing.into_iter().rev() {
             projects.remove(i).shut();
             changed = true;
         }
-        // Its panes are one per project, so a project leaving makes it wrong. Closed rather
-        // than rebuilt: reopening is one click, and a window that silently loses a pane is
-        // harder to trust than one that went away when the list changed.
-        if changed && let Some(w) = panes.take() {
-            w.close();
-        }
-
         for p in projects.iter_mut() {
             p.delivery.tick(&server_exe, &p.server.project_dir);
         }
@@ -261,8 +263,13 @@ pub fn run() {
             }
         }
         for (i, dir, status) in died.into_iter().rev() {
-            projects.remove(i);
+            // `shut`, not `remove` alone: the window is the project's too, and dropping the
+            // entry does not close it. It used to be left standing on screen showing a dead
+            // address, with the launcher no longer holding its handle — closable only by
+            // hand.
+            projects.remove(i).shut();
             changed = true;
+            list_changed = true;
             sys::error_box(
                 APP,
                 &format!(
@@ -271,6 +278,17 @@ pub fn run() {
                     dir.display()
                 ),
             );
+        }
+
+        // Its panes are one per project, so a project leaving makes it wrong. Closed rather
+        // than rebuilt: reopening is one click, and a window that silently loses a pane is
+        // harder to trust than one that went away when the list changed.
+        //
+        // Keyed on the list, not on `changed`: switching Open in › The web browser also sets
+        // `changed`, and that has nothing to do with the panes. It used to take the window
+        // with it.
+        if list_changed && let Some(w) = panes.take() {
+            w.close();
         }
 
         if changed {
@@ -495,10 +513,10 @@ fn show_all_command_lines(
     projects: &[Running],
     browser_only: &mut bool,
 ) {
-    if let Some(w) = panes.as_ref()
-        && w.is_open()
-    {
-        w.focus();
+    if panes.as_ref().is_some_and(|w| w.is_open()) {
+        if let Some(w) = panes.as_ref() {
+            w.focus();
+        }
         return;
     }
     *panes = None;
@@ -532,9 +550,13 @@ fn open_page(p: &mut Running, title: &str, open_in: OpenIn, browser_only: &mut b
         sys::open_in_browser(&p.server.open_url);
         return;
     }
-    if let Some(w) = &p.window
-        && w.is_open()
-    {
+    // Cleared rather than left standing: Windows reuses window handles, so a stale one can
+    // start answering for a window somebody else opened — and then Open focuses the wrong
+    // window, and closing this project destroys it.
+    if p.window.as_ref().is_some_and(|w| !w.is_open()) {
+        p.window = None;
+    }
+    if let Some(w) = &p.window {
         w.focus();
         return;
     }

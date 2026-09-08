@@ -148,7 +148,9 @@ mod windows {
     use std::io::{self, Read, Write};
     use std::os::windows::io::{FromRawHandle, OwnedHandle};
     use std::ptr;
-    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Foundation::{
+        CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    };
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
     };
@@ -184,10 +186,15 @@ mod windows {
                 // closed here once it has them.
                 let (mut in_read, mut in_write) = (INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE);
                 let (mut out_read, mut out_write) = (INVALID_HANDLE_VALUE, INVALID_HANDLE_VALUE);
-                if CreatePipe(&mut in_read, &mut in_write, ptr::null(), 0) == 0
-                    || CreatePipe(&mut out_read, &mut out_write, ptr::null(), 0) == 0
-                {
+                if CreatePipe(&mut in_read, &mut in_write, ptr::null(), 0) == 0 {
                     return Err(io::Error::last_os_error());
+                }
+                if CreatePipe(&mut out_read, &mut out_write, ptr::null(), 0) == 0 {
+                    // The first pair was made and nobody owns it yet.
+                    let e = io::Error::last_os_error();
+                    CloseHandle(in_read);
+                    CloseHandle(in_write);
+                    return Err(e);
                 }
 
                 // `HPCON` is an integer handle in windows-sys, not a pointer.
@@ -212,19 +219,30 @@ mod windows {
                 InitializeProcThreadAttributeList(ptr::null_mut(), 1, 0, &mut bytes);
                 let mut attrs = vec![0u8; bytes];
                 let list = attrs.as_mut_ptr() as LPPROC_THREAD_ATTRIBUTE_LIST;
-                if InitializeProcThreadAttributeList(list, 1, 0, &mut bytes) == 0
-                    || UpdateProcThreadAttribute(
-                        list,
-                        0,
-                        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-                        pc as *const std::ffi::c_void,
-                        size_of::<HPCON>(),
-                        ptr::null_mut(),
-                        ptr::null(),
-                    ) == 0
-                {
+                if InitializeProcThreadAttributeList(list, 1, 0, &mut bytes) == 0 {
                     let e = io::Error::last_os_error();
                     ClosePseudoConsole(pc);
+                    CloseHandle(in_write);
+                    CloseHandle(out_read);
+                    return Err(e);
+                }
+                if UpdateProcThreadAttribute(
+                    list,
+                    0,
+                    PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+                    pc as *const std::ffi::c_void,
+                    size_of::<HPCON>(),
+                    ptr::null_mut(),
+                    ptr::null(),
+                ) == 0
+                {
+                    // The list was initialised, so it has allocations of its own to give
+                    // back — a failure here is not a reason to keep them.
+                    let e = io::Error::last_os_error();
+                    DeleteProcThreadAttributeList(list);
+                    ClosePseudoConsole(pc);
+                    CloseHandle(in_write);
+                    CloseHandle(out_read);
                     return Err(e);
                 }
 
@@ -249,8 +267,13 @@ mod windows {
                 );
                 DeleteProcThreadAttributeList(list);
                 if ok == 0 {
+                    // Every failed start used to cost two kernel handles, in a process that
+                    // runs for days: a profile pointing at a program that is not installed
+                    // is one click, and people click it more than once.
                     let e = io::Error::last_os_error();
                     ClosePseudoConsole(pc);
+                    CloseHandle(in_write);
+                    CloseHandle(out_read);
                     return Err(e);
                 }
 
@@ -291,13 +314,22 @@ mod windows {
             }
         }
 
+        /// Whether the program has ended, and with what.
+        ///
+        /// The liveness question goes to `WaitForSingleObject`, not to the exit code. The
+        /// obvious version compares the code against `STILL_ACTIVE`, which is 259 — and a
+        /// program that legitimately exits with 259 then counts as running for ever, so the
+        /// page never hears that it stopped and the pane simply goes quiet. The wait answers
+        /// the question that was actually asked; the code is read only once it has.
         pub fn exited(&mut self) -> Option<i32> {
-            const STILL_ACTIVE: u32 = 259;
+            if unsafe { WaitForSingleObject(handle(&self.process), 0) } != WAIT_OBJECT_0 {
+                return None;
+            }
             let mut code: u32 = 0;
             if unsafe { GetExitCodeProcess(handle(&self.process), &mut code) } == 0 {
                 return Some(-1);
             }
-            (code != STILL_ACTIVE).then_some(code as i32)
+            Some(code as i32)
         }
     }
 

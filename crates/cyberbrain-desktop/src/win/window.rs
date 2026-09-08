@@ -141,6 +141,7 @@ pub fn open_panes(title: &str, urls: &[String]) -> Result<ProjectWindow, String>
         Err(why) => {
             // A window with no page in it is worse than no window: it looks like the
             // program hung. Take it away and let the caller offer the browser.
+            //
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -155,22 +156,27 @@ pub fn open_panes(title: &str, urls: &[String]) -> Result<ProjectWindow, String>
 /// mean a second browser process tree for no gain.
 fn attach(hwnd: HWND, urls: &[String]) -> Result<(), String> {
     let environment = create_environment()?;
-    let mut controllers = Vec::with_capacity(urls.len());
-    for url in urls {
-        let controller = create_controller(&environment, hwnd)?;
-        unsafe {
-            controller
-                .SetIsVisible(true)
-                .map_err(|e| format!("the page could not be shown: {e}"))?;
-            let webview = controller
-                .CoreWebView2()
-                .map_err(|e| format!("the page could not be reached: {e}"))?;
-            let url_w = wide(url);
-            webview
-                .Navigate(PCWSTR(url_w.as_ptr()))
-                .map_err(|e| format!("{url} could not be opened: {e}"))?;
+    let mut controllers: Vec<ICoreWebView2Controller> = Vec::with_capacity(urls.len());
+    // Closed here rather than left to the window: until the last line of this function the
+    // state is not attached to the window, so `WM_NCDESTROY` would find nothing and the
+    // controllers made before a failure would outlive it. Three panes where the third fails
+    // used to strand the first two.
+    let close_all = |made: &[ICoreWebView2Controller]| {
+        for c in made {
+            unsafe {
+                let _ = c.Close();
+            }
         }
-        controllers.push(controller);
+    };
+    for url in urls {
+        let made = match one_pane(&environment, hwnd, url) {
+            Ok(c) => c,
+            Err(why) => {
+                close_all(&controllers);
+                return Err(why);
+            }
+        };
+        controllers.push(made);
     }
 
     // The window owns the controllers from here. Stored before the first WM_SIZE can
@@ -229,6 +235,28 @@ fn user_data_dir() -> Option<std::path::PathBuf> {
     let dir = base.join("cyberbrain").join("WebView2");
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
+}
+
+/// One pane: a controller of its own, shown, pointed at its address.
+fn one_pane(
+    environment: &ICoreWebView2Environment,
+    hwnd: HWND,
+    url: &str,
+) -> Result<ICoreWebView2Controller, String> {
+    let controller = create_controller(environment, hwnd)?;
+    unsafe {
+        controller
+            .SetIsVisible(true)
+            .map_err(|e| format!("the page could not be shown: {e}"))?;
+        let webview = controller
+            .CoreWebView2()
+            .map_err(|e| format!("the page could not be reached: {e}"))?;
+        let url_w = wide(url);
+        webview
+            .Navigate(PCWSTR(url_w.as_ptr()))
+            .map_err(|e| format!("{url} could not be opened: {e}"))?;
+    }
+    Ok(controller)
 }
 
 fn create_environment() -> Result<ICoreWebView2Environment, String> {
@@ -357,7 +385,16 @@ extern "system" fn window_proc(hwnd: HWND, msg: u32, w: WPARAM, l: LPARAM) -> LR
                 // Safety: the pointer came from `Box::into_raw` in `attach`, this runs
                 // once per window, and the slot is cleared above so no later message can
                 // reach it again.
-                drop(unsafe { Box::from_raw(ptr as *mut State) });
+                let state = unsafe { Box::from_raw(ptr as *mut State) };
+                // `Close` and not merely a drop. Releasing the COM reference lets go of our
+                // handle; it does not tell WebView2 to shut anything down, and the browser
+                // process tree it owns then outlives the window — in a program that sits in
+                // the notification area for days and opens a window per project.
+                for controller in &state.controllers {
+                    unsafe {
+                        let _ = controller.Close();
+                    }
+                }
             }
             unsafe { DefWindowProcW(hwnd, msg, w, l) }
         }
