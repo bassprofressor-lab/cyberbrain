@@ -463,8 +463,12 @@ fn the_menu_entry_sets_up_the_project_the_launcher_has_open() {
     let settings = tmp.path().join(".claude").join("settings.json");
     let text = std::fs::read_to_string(&settings).expect("the hooks were written");
     assert!(text.contains("session-start"), "{text}");
+    // `text` is JSON, and JSON writes every backslash twice. Comparing against the raw path
+    // means this can only ever hold where paths have no backslashes — it passed here and
+    // failed on Windows, which is the platform the whole entry exists for.
+    let named = server.display().to_string().replace('\\', "\\\\");
     assert!(
-        text.contains(&server.display().to_string()),
+        text.contains(&named),
         "the hook has to name the binary the launcher is running, not whatever is on PATH: {text}"
     );
 }
@@ -638,4 +642,21 @@ fn an_ordinary_build_is_still_opened() {
     let mut running = start_fake(&fake, tmp.path()).expect("an address, and no complaint");
     assert_eq!(running.url, "http://127.0.0.1:44444/");
     running.stop();
+}
+
+/// The rule behind the comparison above, stated where it can be seen. On Linux the paths in
+/// that file have no backslashes, so the assertion held for runs that proved nothing about
+/// the platform the menu entry is for; on Windows it could not hold at all.
+#[test]
+fn a_windows_path_is_not_in_json_unless_its_backslashes_are_doubled() {
+    let path = r"D:\a\cyberbrain\target\debug\cyberbrain.exe";
+    let json = r#"{"command": "D:\\a\\cyberbrain\\target\\debug\\cyberbrain.exe"}"#;
+    assert!(
+        !json.contains(path),
+        "a raw Windows path is not what the file holds"
+    );
+    assert!(
+        json.contains(&path.replace('\\', "\\\\")),
+        "and the doubled one is"
+    );
 }
