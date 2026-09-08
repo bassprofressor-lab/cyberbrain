@@ -199,6 +199,43 @@ fn it_starts_the_real_server_and_the_api_answers() {
     running.stop();
 }
 
+/// The launcher starts `serve --terminal`, so a project it opens has one. Which means it
+/// has to read the *second* address `serve` prints — the one carrying the token — and open
+/// that, while `url` stays the plain address that goes in the menu and the instance file.
+#[test]
+fn a_started_server_offers_a_terminal_and_the_launcher_finds_its_address() {
+    let server = server_binary();
+    let tmp = tempfile::tempdir().unwrap();
+    init_store(&server, tmp.path()).expect("init a store to serve");
+    let mut running = start(&server, tmp.path()).expect("serve reports an address");
+
+    assert!(
+        running.open_url.contains("#/?t="),
+        "the launcher has to open the address with the token in it: {}",
+        running.open_url
+    );
+    assert!(
+        !running.url.contains("t="),
+        "and the plain address must stay plain: it goes in the instance file: {}",
+        running.url
+    );
+    assert!(
+        running
+            .open_url
+            .starts_with(running.url.trim_end_matches('/'))
+    );
+    running.stop();
+}
+
+#[test]
+fn a_line_without_a_token_is_not_a_terminal_address() {
+    assert!(parse_token_url("cyberbrain serve: http://127.0.0.1:7777/").is_none());
+    assert_eq!(
+        parse_token_url("open this: http://127.0.0.1:7777/#/?t=abc123").as_deref(),
+        Some("http://127.0.0.1:7777/#/?t=abc123")
+    );
+}
+
 #[test]
 fn two_projects_can_be_open_at_once() {
     let server = server_binary();

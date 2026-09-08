@@ -277,7 +277,11 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
     }
 
     let mut child = command(server, project_dir)
-        .args(["serve", "--port", "0", "--no-open"])
+        // `--terminal` always: the launcher is the desktop application, and a desktop
+        // application that cannot open a shell is what this was asked for. A `serve` at a
+        // prompt still has none unless it asks — see the terminal module for why that
+        // default is the safe way round.
+        .args(["serve", "--port", "0", "--no-open", "--terminal"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
