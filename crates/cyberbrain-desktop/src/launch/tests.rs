@@ -47,6 +47,43 @@ fn a_store_is_found_from_a_subdirectory_the_way_the_cli_finds_it() {
     assert!(has_store(tmp.path()));
 }
 
+#[test]
+fn a_project_is_named_by_its_folder() {
+    let names = labels(&[
+        PathBuf::from("/home/x/orderflow"),
+        PathBuf::from("/home/x/my-app"),
+    ]);
+    assert_eq!(names, vec!["orderflow", "my-app"]);
+}
+
+/// Every action in this launcher is per project. Two entries reading the same thing is not
+/// a cosmetic problem: it is how somebody sets up Claude for the wrong store.
+#[test]
+fn names_that_would_collide_grow_until_they_do_not() {
+    let sep = std::path::MAIN_SEPARATOR_STR;
+    let names = labels(&[
+        PathBuf::from("/home/x/work/api"),
+        PathBuf::from("/home/x/personal/api"),
+        PathBuf::from("/home/x/site"),
+    ]);
+    assert_eq!(
+        names,
+        vec![
+            format!("work{sep}api"),
+            format!("personal{sep}api"),
+            // The one that never collided is left short.
+            "site".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn a_name_that_runs_out_of_folders_stops_rather_than_looping() {
+    // Not reachable through the folder picker, and the point is that it terminates.
+    let names = labels(&[PathBuf::from("/"), PathBuf::from("")]);
+    assert_eq!(names.len(), 2);
+}
+
 /// The binary under test, built by the same `cargo test` run that gets here.
 fn server_binary() -> PathBuf {
     // target/<profile>/deps/<test binary> -> target/<profile>/cyberbrain

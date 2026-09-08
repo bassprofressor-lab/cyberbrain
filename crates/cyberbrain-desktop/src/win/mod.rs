@@ -1,22 +1,56 @@
-//! The Windows half: a tray icon, a job object, and the two dialogs a first run needs.
+//! The Windows half: a tray icon, a job object, and the dialogs a first run needs.
 //!
-//! Structured so that the unsafe calls are four small wrappers at the bottom of the file
-//! rather than sprinkled through the logic. Everything above them is ordinary Rust, and
+//! Structured so that the unsafe calls are four small wrappers at the bottom of `sys`
+//! rather than sprinkled through the logic. Everything here is ordinary Rust, and
 //! everything worth testing lives in `launch` where a Linux machine can reach it.
+//!
+//! One launcher, several projects. The single-instance rule stays — two tray icons with no
+//! way to tell which is which was never the thing anybody wanted — and what changed is that
+//! the one icon now holds a list. Each project is a submenu carrying that project's own
+//! actions, because every action here writes to one particular store, and a menu where that
+//! is left implied is a menu that sets up the wrong project.
 
 use crate::launch::{self, Server, StartError};
 use crate::settings::{self, Settings};
 use std::path::{Path, PathBuf};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{Icon, TrayIconBuilder};
 
 mod sys;
 
 const APP: &str = "Cyberbrain";
 
+/// One open project: its server, and its own delivery timer.
+///
+/// The timer is per project because enrolment is: one store on this machine can belong to a
+/// company hub while the one beside it does not.
+struct Running {
+    server: Server,
+    delivery: launch::Delivery,
+}
+
+/// The menu ids of one project's submenu. Rebuilt with the menu, so they are held apart
+/// from [`Running`] and matched to it by position.
+#[derive(Default)]
+struct ProjectIds {
+    open: MenuId,
+    folder: MenuId,
+    clients: MenuId,
+    enrol: MenuId,
+    close: MenuId,
+}
+
+/// A built menu and the ids to recognise its items by.
+struct Ui {
+    menu: Menu,
+    per_project: Vec<ProjectIds>,
+    add: MenuId,
+    quit: MenuId,
+}
+
 pub fn run() {
     // Before anything else, and held for the whole run: two launchers would mean two tray
-    // icons, two servers and two ports, with no way to tell which icon belongs to which.
+    // icons, two sets of servers and no way to tell which icon holds which project.
     let instance_path = settings::instance_path();
     let Some(_single) = sys::SingleInstance::acquire() else {
         show_the_one_that_is_running(instance_path.as_deref());
@@ -44,44 +78,38 @@ pub fn run() {
         .unwrap_or_default();
 
     // Everything the launcher starts belongs to this job. Closing the last handle to it
-    // kills the members, which is what makes "the server dies with the tray icon" true
+    // kills the members, which is what makes "the servers die with the tray icon" true
     // even when the tray icon is killed from the task manager rather than asked to quit.
     let job = sys::JobObject::new();
 
-    let Some(mut server) = open_project(&server_exe, &mut settings, settings_path.as_deref(), &job)
-    else {
-        return; // The user cancelled the folder dialog. Nothing to run, nothing to say.
-    };
-    publish_instance(instance_path.as_deref(), &server);
-    sys::open_in_browser(&server.url);
-
-    let menu = Menu::new();
-    let open = MenuItem::new("Open Cyberbrain", true, None);
-    let folder = MenuItem::new("Open project folder", true, None);
-    let choose = MenuItem::new("Choose project…", true, None);
-    let clients = MenuItem::new("Set up Claude on this computer…", true, None);
-    let enrol = MenuItem::new("Connect to the company hub…", true, None);
-    let quit = MenuItem::new("Quit", true, None);
-    if menu
-        .append_items(&[
-            &open,
-            &folder,
-            &PredefinedMenuItem::separator(),
-            &choose,
-            &clients,
-            &enrol,
-            &PredefinedMenuItem::separator(),
-            &quit,
-        ])
-        .is_err()
-    {
-        sys::error_box(APP, "the tray menu could not be built");
-        return;
+    let mut projects = reopen(&server_exe, &settings, &job);
+    // Written before anything else can be asked, so that what the message from `reopen` says
+    // about forgetting a project is true even if the person cancels the next dialog.
+    remember(&mut settings, settings_path.as_deref(), &projects);
+    if projects.is_empty() {
+        // Either a first run or a machine where everything remembered has gone. Both end in
+        // the same question, and it is the only one worth asking on startup.
+        let Some(first) = choose_project(&server_exe, &[], &job) else {
+            return; // The user cancelled the folder dialog. Nothing to run, nothing to say.
+        };
+        projects.push(first);
+        remember(&mut settings, settings_path.as_deref(), &projects);
+    }
+    publish_instance(instance_path.as_deref(), &projects);
+    // One page, not one per project. Somebody with four projects open wants their memory,
+    // not four browser tabs every time they log in; the rest are a click away in the menu.
+    if let Some(last) = projects.last() {
+        sys::open_in_browser(&last.server.url);
     }
 
+    let Some(mut ui) = menu_for(&dirs(&projects)) else {
+        sys::error_box(APP, "the tray menu could not be built");
+        return;
+    };
+
     let tray = TrayIconBuilder::new()
-        .with_menu(Box::new(menu))
-        .with_tooltip(tooltip(&server))
+        .with_menu(Box::new(clone_menu(&ui)))
+        .with_tooltip(tooltip(&projects))
         .with_icon(tray_icon())
         .with_menu_on_left_click(true)
         .build();
@@ -93,81 +121,169 @@ pub fn run() {
         }
     };
 
-    let ids = Ids {
-        open: open.id().clone(),
-        folder: folder.id().clone(),
-        choose: choose.id().clone(),
-        clients: clients.id().clone(),
-        enrol: enrol.id().clone(),
-        quit: quit.id().clone(),
-    };
-
-    // Delivery to the company hub, if this store belongs to one. The loop already wakes
-    // once a second; this rides on that rather than bringing a thread of its own.
-    let mut delivery = launch::Delivery::default();
-
     // A message loop, because that is what a tray icon needs to exist at all. Menu clicks
     // arrive as window messages first and reach us on the channel after dispatch.
     sys::pump_messages(|| {
+        let mut changed = false;
+        let mut stop = false;
+        // Collected rather than acted on inside the loop: removing a project while walking
+        // the events would renumber the ids the next event is about to be matched against.
+        let mut closing: Vec<usize> = Vec::new();
+
         while let Ok(event) = MenuEvent::receiver().try_recv() {
-            if event.id == ids.open {
-                sys::open_in_browser(&server.url);
-            } else if event.id == ids.folder {
-                sys::open_in_explorer(&server.project_dir);
-            } else if event.id == ids.choose {
-                if let Some(next) =
-                    choose_project(&server_exe, &mut settings, settings_path.as_deref(), &job)
-                {
-                    server = next;
-                    publish_instance(instance_path.as_deref(), &server);
-                    let _ = tray.set_tooltip(Some(tooltip(&server)));
-                    sys::open_in_browser(&server.url);
+            if event.id == ui.add {
+                // Against what is running, not against what was last saved. Two of these
+                // events can arrive in one tick, and the settings are written once at the
+                // end of it — checking those would let the same store be opened twice, which
+                // is two servers writing one index.
+                let open = dirs(&projects);
+                if let Some(next) = choose_project(&server_exe, &open, &job) {
+                    sys::open_in_browser(&next.server.url);
+                    projects.push(next);
+                    changed = true;
                 }
-            } else if event.id == ids.clients {
-                set_up_clients(&server_exe, &server.project_dir);
-            } else if event.id == ids.enrol {
-                if connect_to_hub(&server_exe, &server.project_dir) {
-                    // Deliver on the next tick rather than in a quarter of an hour: the
-                    // person who just enrolled is the one who wants to see it arrive.
-                    delivery = launch::Delivery::now();
+                continue;
+            }
+            if event.id == ui.quit {
+                stop = true;
+                continue;
+            }
+            for (i, ids) in ui.per_project.iter().enumerate() {
+                let Some(p) = projects.get_mut(i) else {
+                    continue;
+                };
+                if event.id == ids.open {
+                    sys::open_in_browser(&p.server.url);
+                } else if event.id == ids.folder {
+                    sys::open_in_explorer(&p.server.project_dir);
+                } else if event.id == ids.clients {
+                    set_up_clients(&server_exe, &p.server.project_dir);
+                } else if event.id == ids.enrol {
+                    if connect_to_hub(&server_exe, &p.server.project_dir) {
+                        // Deliver on the next tick rather than in a quarter of an hour: the
+                        // person who just enrolled is the one who wants to see it arrive.
+                        p.delivery = launch::Delivery::now();
+                    }
+                } else if event.id == ids.close {
+                    closing.push(i);
                 }
-            } else if event.id == ids.quit {
-                return sys::Pump::Stop;
             }
         }
 
-        delivery.tick(&server_exe, &server.project_dir);
+        for i in closing.into_iter().rev() {
+            projects.remove(i).server.stop();
+            changed = true;
+        }
 
-        // The server going away on its own is not something to hide: without it the tray
-        // icon is a button that does nothing.
-        if let Some(status) = server.exit_status() {
+        for p in projects.iter_mut() {
+            p.delivery.tick(&server_exe, &p.server.project_dir);
+        }
+
+        // A server going away on its own is not something to hide: without it that entry in
+        // the menu is a button that does nothing. The others are unaffected, so only the one
+        // that died goes.
+        let mut died = Vec::new();
+        for (i, p) in projects.iter_mut().enumerate() {
+            if let Some(status) = p.server.exit_status() {
+                died.push((i, p.server.project_dir.clone(), status));
+            }
+        }
+        for (i, dir, status) in died.into_iter().rev() {
+            projects.remove(i);
+            changed = true;
             sys::error_box(
                 APP,
-                &format!("cyberbrain serve stopped on its own ({status}). Cyberbrain will close."),
+                &format!(
+                    "cyberbrain serve stopped on its own ({status}) for\n{}\n\nThat project \
+                     has been closed. The others are still open.",
+                    dir.display()
+                ),
             );
-            return sys::Pump::Stop;
         }
-        sys::Pump::Continue
+
+        if changed {
+            remember(&mut settings, settings_path.as_deref(), &projects);
+            publish_instance(instance_path.as_deref(), &projects);
+            match menu_for(&dirs(&projects)) {
+                Some(next) => {
+                    tray.set_menu(Some(Box::new(clone_menu(&next))));
+                    ui = next;
+                }
+                // The list changed and the menu could not be rebuilt to match. The entries
+                // on screen are now one project out of step with the list behind them, and
+                // acting on them would open, enrol or set up a store nobody pointed at. So
+                // they are disowned: the menu still draws, and nothing in it fires.
+                None => {
+                    ui.per_project.clear();
+                    sys::error_box(
+                        APP,
+                        "The tray menu could not be rebuilt, so the project entries in it \
+                         have stopped working. Quit and start Cyberbrain again.",
+                    );
+                }
+            }
+            let _ = tray.set_tooltip(Some(tooltip(&projects)));
+        }
+
+        if stop {
+            sys::Pump::Stop
+        } else {
+            sys::Pump::Continue
+        }
     });
 
     // One last delivery on the way out, so a day's rows do not wait for tomorrow's login.
-    delivery.final_push(&server_exe, &server.project_dir);
-
-    server.stop();
+    for p in projects.iter_mut() {
+        p.delivery.final_push(&server_exe, &p.server.project_dir);
+        p.server.stop();
+    }
     if let Some(path) = instance_path.as_deref() {
         settings::clear_instance(path);
     }
-    drop(job); // Belt as well as braces: the job takes anything the child left behind.
+    drop(job); // Belt as well as braces: the job takes anything the children left behind.
 }
 
-/// A second launcher's whole job: open the browser at the one that is already running.
+/// Start the projects that were open last time.
 ///
-/// It deliberately does not ask the first instance for anything: the address it left behind
-/// is enough. Liveness needs no check here — we only got this far because the mutex is held,
-/// and a launcher that died is not holding it, so its leftover file is never read.
+/// Anything that no longer starts is dropped and named in one message at the end. One
+/// dialog per broken project, before the tray icon has even appeared, is how a launcher
+/// with four projects becomes a launcher nobody opens.
+fn reopen(server_exe: &Path, settings: &Settings, job: &sys::JobObject) -> Vec<Running> {
+    let mut running = Vec::new();
+    let mut lost: Vec<String> = Vec::new();
+    for dir in &settings.projects {
+        match launch::start(server_exe, dir) {
+            Ok(server) => {
+                job.adopt(&server);
+                running.push(Running {
+                    server,
+                    delivery: launch::Delivery::default(),
+                });
+            }
+            Err(e) => lost.push(format!("{}\n    {e}", dir.display())),
+        }
+    }
+    if !lost.is_empty() {
+        sys::error_box(
+            APP,
+            &format!(
+                "These projects could not be opened and have been forgotten:\n\n{}\n\nUse \
+                 Open another project… to point at them again once they are back.",
+                lost.join("\n\n")
+            ),
+        );
+    }
+    running
+}
+
+/// A second launcher's whole job: open the browser at what is already running.
+///
+/// It deliberately does not ask the first instance for anything: the addresses it left
+/// behind are enough. Liveness needs no check here — we only got this far because the mutex
+/// is held, and a launcher that died is not holding it, so its leftover file is never read.
 fn show_the_one_that_is_running(instance_path: Option<&Path>) {
     if let Some(instance) = instance_path.and_then(settings::read_instance)
-        && let Some(url) = launch::loopback_url(&instance.url)
+        && let Some(url) = instance.latest().and_then(launch::loopback_url)
     {
         sys::open_in_browser(&url);
         return;
@@ -182,52 +298,114 @@ fn show_the_one_that_is_running(instance_path: Option<&Path>) {
     );
 }
 
-fn publish_instance(path: Option<&Path>, server: &Server) {
+fn dirs(projects: &[Running]) -> Vec<PathBuf> {
+    projects
+        .iter()
+        .map(|p| p.server.project_dir.clone())
+        .collect()
+}
+
+/// What to reopen next time. Written on every change rather than on the way out, because
+/// the way out is also the path where the machine was shut down under us.
+fn remember(settings: &mut Settings, path: Option<&Path>, projects: &[Running]) {
+    settings.projects = dirs(projects);
+    if let Some(path) = path {
+        // Not fatal: it runs, it just will not remember next time. Not worth a dialog
+        // either — the person is in the middle of opening a project, not of saving one.
+        let _ = settings::save(path, settings);
+    }
+}
+
+fn publish_instance(path: Option<&Path>, projects: &[Running]) {
     // Not worth a dialog if it fails. The cost is that a second launch says "already
-    // running" instead of opening the page, and the first one keeps working either way.
+    // running" instead of opening a page, and the first one keeps working either way.
     if let Some(path) = path {
         let _ = settings::write_instance(
             path,
-            &settings::Instance {
-                url: server.url.clone(),
-                project_dir: server.project_dir.clone(),
-            },
+            &settings::Instance::new(
+                projects
+                    .iter()
+                    .map(|p| settings::Open {
+                        url: p.server.url.clone(),
+                        project_dir: p.server.project_dir.clone(),
+                    })
+                    .collect(),
+            ),
         );
     }
 }
 
-struct Ids {
-    open: MenuId,
-    folder: MenuId,
-    choose: MenuId,
-    clients: MenuId,
-    enrol: MenuId,
-    quit: MenuId,
-}
-
-fn tooltip(server: &Server) -> String {
-    format!("Cyberbrain — {}", server.project_dir.display())
-}
-
-/// Open the remembered project, or ask for one. Returns `None` only if the user cancels.
-fn open_project(
-    server_exe: &Path,
-    settings: &mut Settings,
-    settings_path: Option<&Path>,
-    job: &sys::JobObject,
-) -> Option<Server> {
-    if let Some(dir) = settings.project_dir.clone()
-        && dir.is_dir()
-    {
-        match try_start(server_exe, &dir, job) {
-            Started::Ok(server) => return Some(server),
-            // A remembered folder that no longer works is worth one dialog, then the
-            // question everyone would ask next: which folder, then?
-            Started::Rejected => {}
-            Started::Impossible => return None,
-        }
+/// The menu, and the ids to recognise it by.
+///
+/// Rebuilt whole whenever the list of projects changes rather than patched: a submenu
+/// removed from the middle of a patched menu leaves the ids after it pointing at the wrong
+/// project, and that failure is silent and acts on somebody's store.
+fn menu_for(dirs: &[PathBuf]) -> Option<Ui> {
+    let menu = Menu::new();
+    let mut per_project = Vec::new();
+    for label in launch::labels(dirs) {
+        let open = MenuItem::new("Open", true, None);
+        let folder = MenuItem::new("Open project folder", true, None);
+        let clients = MenuItem::new("Set up Claude on this computer…", true, None);
+        let enrol = MenuItem::new("Connect to the company hub…", true, None);
+        let close = MenuItem::new("Close this project", true, None);
+        let sub = Submenu::with_items(
+            &label,
+            true,
+            &[
+                &open,
+                &folder,
+                &PredefinedMenuItem::separator(),
+                &clients,
+                &enrol,
+                &PredefinedMenuItem::separator(),
+                &close,
+            ],
+        )
+        .ok()?;
+        menu.append(&sub).ok()?;
+        per_project.push(ProjectIds {
+            open: open.id().clone(),
+            folder: folder.id().clone(),
+            clients: clients.id().clone(),
+            enrol: enrol.id().clone(),
+            close: close.id().clone(),
+        });
     }
-    choose_project(server_exe, settings, settings_path, job)
+
+    let add = MenuItem::new("Open another project…", true, None);
+    let quit = MenuItem::new("Quit", true, None);
+    let mut tail: Vec<&dyn tray_icon::menu::IsMenuItem> = Vec::new();
+    let sep = PredefinedMenuItem::separator();
+    if !dirs.is_empty() {
+        tail.push(&sep);
+    }
+    let sep2 = PredefinedMenuItem::separator();
+    tail.push(&add);
+    tail.push(&sep2);
+    tail.push(&quit);
+    menu.append_items(&tail).ok()?;
+
+    Some(Ui {
+        menu,
+        per_project,
+        add: add.id().clone(),
+        quit: quit.id().clone(),
+    })
+}
+
+/// The tray takes ownership of the menu it is given; the ids stay with us. `Menu` is a
+/// handle, so this hands over the same menu rather than a copy of it.
+fn clone_menu(ui: &Ui) -> Menu {
+    ui.menu.clone()
+}
+
+fn tooltip(projects: &[Running]) -> String {
+    match projects {
+        [] => "Cyberbrain — nothing open".to_string(),
+        [one] => format!("Cyberbrain — {}", one.server.project_dir.display()),
+        many => format!("Cyberbrain — {} projects open", many.len()),
+    }
 }
 
 /// Put this project's memory into the AI clients installed here, and say what happened.
@@ -276,20 +454,17 @@ fn connect_to_hub(server_exe: &Path, project_dir: &Path) -> bool {
 }
 
 /// Ask for a folder and start there, until it works or the user gives up.
-fn choose_project(
-    server_exe: &Path,
-    settings: &mut Settings,
-    settings_path: Option<&Path>,
-    job: &sys::JobObject,
-) -> Option<Server> {
+///
+/// A folder that is already open is not an error and not a second server: the answer to
+/// "open this one too" when it is open is to say so.
+fn choose_project(server_exe: &Path, open: &[PathBuf], job: &sys::JobObject) -> Option<Running> {
     loop {
         let chosen = rfd::FileDialog::new()
             .set_title("Choose the project whose memory to open")
             .set_directory(
-                settings
-                    .project_dir
-                    .clone()
+                open.last()
                     .filter(|d| d.is_dir())
+                    .cloned()
                     .unwrap_or_else(|| {
                         std::env::var_os("USERPROFILE")
                             .map(PathBuf::from)
@@ -299,20 +474,17 @@ fn choose_project(
             .pick_folder()?;
 
         let dir = launch::normalise_project_dir(&chosen);
+        // Two servers on one store would be two writers on one index. The menu already has
+        // this project; saying so is the whole answer.
+        if open.contains(&dir) {
+            sys::info_box(
+                APP,
+                &format!("{}\n\nis already open. It is in the menu.", dir.display()),
+            );
+            continue;
+        }
         match try_start(server_exe, &dir, job) {
-            Started::Ok(server) => {
-                settings.project_dir = Some(dir);
-                if let Some(path) = settings_path
-                    && let Err(e) = settings::save(path, settings)
-                {
-                    // Not fatal: it runs, it just will not remember next time.
-                    sys::error_box(
-                        APP,
-                        &format!("Cyberbrain is open, but the choice could not be saved: {e}"),
-                    );
-                }
-                return Some(server);
-            }
+            Started::Ok(running) => return Some(running),
             Started::Rejected => continue,
             Started::Impossible => return None,
         }
@@ -320,7 +492,7 @@ fn choose_project(
 }
 
 enum Started {
-    Ok(Server),
+    Ok(Running),
     /// It did not start and the user has been told; ask again.
     Rejected,
     /// Nothing about this installation can work, so asking for another folder would only
@@ -333,7 +505,10 @@ fn try_start(server_exe: &Path, dir: &Path, job: &sys::JobObject) -> Started {
     match launch::start(server_exe, dir) {
         Ok(server) => {
             job.adopt(&server);
-            Started::Ok(server)
+            Started::Ok(Running {
+                server,
+                delivery: launch::Delivery::default(),
+            })
         }
         Err(StartError::NoStore { dir }) => {
             let question = format!(
@@ -350,7 +525,10 @@ fn try_start(server_exe: &Path, dir: &Path, job: &sys::JobObject) -> Started {
             match launch::start(server_exe, &dir) {
                 Ok(server) => {
                     job.adopt(&server);
-                    Started::Ok(server)
+                    Started::Ok(Running {
+                        server,
+                        delivery: launch::Delivery::default(),
+                    })
                 }
                 Err(e) => {
                     sys::error_box(APP, &format!("Cyberbrain could not start:\n\n{e}"));

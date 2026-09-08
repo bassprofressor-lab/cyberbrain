@@ -47,6 +47,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   wrote by hand, with their comments in it, and reformatting that to save a paste is a bad
   trade.
 
+- **Several projects open at once, in one launcher.** A project switch used to be a
+  replacement: the running server was killed and the new one took its place, because
+  everything from the settings file to the tray menu assumed exactly one. Opening a second
+  project now adds it, and each keeps its own server on its own port.
+
+  The tray icon holds a submenu per project, carrying that project's own actions — open, its
+  folder, setting up Claude, connecting to a hub, closing it. Every one of those writes to
+  one particular store, and a menu that leaves which one implied is a menu that sets up the
+  wrong project. The names in it grow by an enclosing folder when they would collide, so
+  `work/api` and `personal/api` never both read `api`.
+
+  The single-instance rule stays. Two tray icons with no way to tell which held which
+  project was never what anybody wanted; what changed is that the one icon now holds a list.
+  A launcher started while another is running still opens the browser at what is already
+  there, now at the project opened most recently.
+
+  Everything that was open is opened again on the next start. A project that no longer
+  starts is dropped and named, all of them in one message rather than a dialog each. A
+  server that stops on its own now closes that project and leaves the others alone, where it
+  used to take the whole launcher down with it.
+
+  Anybody upgrading keeps the project they had open: the old single-project key is read
+  once, folded into the list, and never written again.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.

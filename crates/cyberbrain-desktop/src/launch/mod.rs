@@ -141,6 +141,60 @@ pub fn normalise_project_dir(chosen: &Path) -> PathBuf {
     }
 }
 
+/// A short name for each open project, unique among them.
+///
+/// The folder name is what people call a project, and it is what the menu should say. But
+/// a person with `work/api` and `personal/api` open would get two entries reading `api`,
+/// and a menu whose entries cannot be told apart is worse than a long one: every action in
+/// this launcher is per project, so picking the wrong entry sets up the wrong store.
+///
+/// So each name grows by one enclosing folder at a time, and only the ones that collide
+/// grow. Two projects that share every component are impossible — they would be the same
+/// folder — but a path that runs out of components stops rather than looping.
+pub fn labels(projects: &[PathBuf]) -> Vec<String> {
+    let parts: Vec<Vec<String>> = projects
+        .iter()
+        .map(|p| {
+            p.components()
+                .map(|c| c.as_os_str().to_string_lossy().into_owned())
+                .filter(|s| !s.is_empty() && s != "/" && s != "\\")
+                .collect()
+        })
+        .collect();
+    let mut depth = vec![1usize; projects.len()];
+    loop {
+        let names: Vec<String> = parts
+            .iter()
+            .zip(&depth)
+            .map(|(p, d)| label_at(p, *d))
+            .collect();
+        let mut grew = false;
+        for i in 0..names.len() {
+            let collides = names
+                .iter()
+                .enumerate()
+                .any(|(j, n)| j != i && *n == names[i]);
+            if collides && depth[i] < parts[i].len() {
+                depth[i] += 1;
+                grew = true;
+            }
+        }
+        if !grew {
+            return names;
+        }
+    }
+}
+
+fn label_at(parts: &[String], depth: usize) -> String {
+    if parts.is_empty() {
+        // A path with nothing in it is not a project anyone chose, but a menu entry with
+        // no text at all is a blank line people click by accident.
+        return "?".to_string();
+    }
+    let take = depth.min(parts.len());
+    parts[parts.len() - take..].join(std::path::MAIN_SEPARATOR_STR)
+}
+
 /// Whether this directory, or one above it, holds a store — the same walk the CLI does, so
 /// that a subdirectory of a project is as good an answer as its root.
 pub fn has_store(dir: &Path) -> bool {
