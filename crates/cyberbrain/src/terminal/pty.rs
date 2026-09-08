@@ -63,6 +63,12 @@ mod unix {
                 {
                     return Err(io::Error::last_os_error());
                 }
+                // Close-on-exec on the master, before anything is started through it.
+                // Without it every program in the terminal — and everything it starts, to
+                // any depth — inherits a writable handle on the terminal itself: enough to
+                // forge output the page renders as the program's, and to read input meant
+                // for something else. It also keeps the descriptor alive in every survivor.
+                libc::fcntl(m, libc::F_SETFD, libc::FD_CLOEXEC);
                 (OwnedFd::from_raw_fd(m), OwnedFd::from_raw_fd(s))
             };
 
@@ -125,7 +131,23 @@ mod unix {
             Ok(())
         }
 
+        /// End the session, not just the shell.
+        ///
+        /// `pre_exec` calls `setsid`, so the child leads its own process group and its group
+        /// id is its process id. Killing only the child left everything it had started
+        /// running — and those survivors hold the slave open, so the master never reports
+        /// end of file, so the reader thread waits for ever holding a thread and two
+        /// descriptors. One closed browser tab, one leaked thread, for the life of the
+        /// process.
+        ///
+        /// A grandchild that calls `setsid` for itself still escapes, and that is correct:
+        /// `nohup` and `tmux` exist to survive their terminal.
         pub fn kill(&mut self) {
+            // Safety: the pid is the group id because of `setsid`, and a negative pid is
+            // how `kill` addresses a group.
+            unsafe {
+                libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
+            }
             let _ = self.child.kill();
             let _ = self.child.wait();
         }
@@ -567,6 +589,91 @@ mod tests {
         );
         // An empty argument is an argument.
         assert_eq!(line(&["x", ""]), r#"x """#);
+    }
+
+    /// The master must not travel into the terminal it belongs to.
+    ///
+    /// Everything started in a terminal inherited a writable handle on that terminal:
+    /// enough to forge output the page renders as the program's own, and to read input meant
+    /// for something else. It also kept the descriptor alive in every survivor, so nothing
+    /// ever saw end of file.
+    #[cfg(unix)]
+    #[test]
+    fn a_program_in_the_terminal_does_not_inherit_the_terminal_itself() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let mut pty = Pty::spawn(Spawn {
+            command: &[
+                "/bin/sh".into(),
+                "-c".into(),
+                "ls -l /proc/self/fd; exit".into(),
+            ],
+            cwd: dir.path(),
+            cols: 80,
+            rows: 24,
+        })
+        .unwrap();
+        let mut out = Vec::new();
+        let _ = pty.reader().unwrap().read_to_end(&mut out);
+        let listing = String::from_utf8_lossy(&out);
+        assert!(
+            !listing.contains("ptmx"),
+            "the child inherited the master side of its own terminal:\n{listing}"
+        );
+        pty.kill();
+    }
+
+    /// The comment on the session loop says "the program goes with the window". That has to
+    /// be true of what the program started, not only of the program: a shell is a thing
+    /// people start other things from, and killing the shell alone leaves those running
+    /// where nobody can see or stop them.
+    ///
+    /// A grandchild that calls `setsid` for itself still escapes, and that is correct —
+    /// `nohup` and `tmux` exist to survive their terminal. This is about the ones that did
+    /// not ask to.
+    #[cfg(unix)]
+    #[test]
+    fn killing_a_session_ends_what_it_started() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let mut pty = Pty::spawn(Spawn {
+            command: &[
+                "/bin/sh".into(),
+                "-c".into(),
+                // Ignores the hangup the kernel sends when the session leader dies, so only
+                // an explicit kill of the group reaches it.
+                "trap '' HUP; sleep 60 & echo $!; wait".into(),
+            ],
+            cwd: dir.path(),
+            cols: 80,
+            rows: 24,
+        })
+        .unwrap();
+        let mut buf = [0u8; 64];
+        let n = pty.reader().unwrap().read(&mut buf).unwrap();
+        let pid: i32 = String::from_utf8_lossy(&buf[..n])
+            .trim()
+            .parse()
+            .expect("the shell printed the background pid");
+        assert!(alive(pid), "the background program should be running");
+
+        pty.kill();
+        // Signals are delivered promptly, but not instantly.
+        for _ in 0..50 {
+            if !alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // Do not leave it behind if the assertion is about to fail.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("{pid} outlived the terminal it was started in");
+    }
+
+    #[cfg(unix)]
+    fn alive(pid: i32) -> bool {
+        // Signal 0 asks without sending: it succeeds while the process exists.
+        unsafe { libc::kill(pid, 0) == 0 }
     }
 
     #[test]

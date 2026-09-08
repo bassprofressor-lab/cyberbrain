@@ -305,6 +305,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   arrives in the URL fragment, an effect whose dependency list decides whether switching the
   language destroys somebody's session — and every one of those has been wrong at least once.
   None of it is visible to `tsc`.
+- **A terminal left its children running, and a thread waiting on them for ever.** Killing a
+  session killed only the shell. Anything it had started kept running — and those survivors
+  hold the terminal open, so the reader thread behind the closed pane waited for an end of
+  file that would never come, holding a thread and two descriptors for the life of the
+  process. One closed browser tab, one leak. The whole process group goes now; a grandchild
+  that calls `setsid` for itself still escapes, which is what `nohup` and `tmux` are for.
+- **Every program in a terminal inherited the terminal itself.** The master side of the pty
+  had no close-on-exec, so a shell — and everything it started, to any depth — held a
+  writable handle on its own terminal: enough to forge output the page renders as the
+  program's, and to read input meant for something else.
 - **Six things in the Windows-only code, all of the same family: resources with no owner.**
   None of it can be run here, all of it was found by reading.
   - A server that stopped on its own left its window standing — showing a dead address, with
