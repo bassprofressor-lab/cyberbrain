@@ -4,11 +4,11 @@
  *
  *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/usage?days=30
  *   #/compliance#audit
- *   #/status
+ *   #/status   #/console
  */
 import { useEffect, useState } from "react";
 
-export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status";
+export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status" | "console";
 
 export interface Route {
   screen: Screen;
@@ -29,6 +29,9 @@ export const SCREENS: Array<{ screen: NavScreen; key: string }> = [
   { screen: "graph", key: "g" },
   { screen: "usage", key: "u" },
   { screen: "compliance", key: "c" },
+  // Last, and not because it matters least: it is the one screen that can change the store
+  // in ways the others cannot, so it is not the thing a hand lands on.
+  { screen: "console", key: "k" },
 ];
 
 export function parseRoute(hash: string): Route {
@@ -38,7 +41,7 @@ export function parseRoute(hash: string): Route {
   // Status is the landing screen: it answers "is this store healthy and what did it cost"
   // before the reader has typed anything. Search is one keystroke away (Mod+K).
   const [seg = "status", ...rest] = path.split("/");
-  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "status";
+  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "status";
   const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
   return { screen, param, query: new URLSearchParams(query), anchor };
 }

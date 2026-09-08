@@ -6,7 +6,7 @@
 //! module report says what was seen: the CSP header test without the header layer, and
 //! the dry-run isolation test with `?dry_run=true` ignored by the write route.
 
-use super::router;
+use super::{router, router_with};
 use crate::app::App;
 use axum::Router;
 use axum::body::Body;
@@ -56,11 +56,22 @@ struct Fx {
 
 impl Fx {
     fn new() -> Fx {
+        Fx::with_router(router)
+    }
+
+    /// A fixture whose `POST /command` runs the real `cyberbrain` this test run built,
+    /// rather than the test harness that `current_exe()` would name here.
+    fn with_cli() -> Fx {
+        let exe = cli_binary();
+        Fx::with_router(move |app| router_with(app, exe.clone()))
+    }
+
+    fn with_router(make: impl FnOnce(Arc<App>) -> Router) -> Fx {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("store");
         App::init(&store, &Actor::Operator).unwrap();
         let app = Arc::new(App::open(Some(&store), Actor::Operator).unwrap());
-        let router = router(app.clone());
+        let router = make(app.clone());
         Fx {
             _dir: dir,
             store,
@@ -1389,4 +1400,209 @@ async fn the_bind_is_loopback_and_the_port_is_the_only_knob() {
     );
     assert!(body.contains("\"version\""), "{body}");
     server.abort();
+}
+
+// ---------------------------------------------------------------------------------------
+// POST /command — the command line, in the window.
+
+/// The binary this test run built, found the way the desktop launcher's tests find it:
+/// `target/<profile>/deps/<test binary>` sits two levels under `target/<profile>`.
+fn cli_binary() -> PathBuf {
+    let mut dir = std::env::current_exe().expect("test binary path");
+    dir.pop();
+    if dir.ends_with("deps") {
+        dir.pop();
+    }
+    let exe = dir.join(if cfg!(windows) {
+        "cyberbrain.exe"
+    } else {
+        "cyberbrain"
+    });
+    assert!(
+        exe.is_file(),
+        "cyberbrain is not built at {}; run `cargo build -p cyberbrain` first",
+        exe.display()
+    );
+    exe
+}
+
+#[test]
+fn a_typed_line_is_split_the_way_somebody_would_expect() {
+    use super::command::tokenise;
+    let t = |s: &str| tokenise(s).unwrap().unwrap();
+    assert_eq!(t("doctor"), vec!["doctor"]);
+    assert_eq!(
+        t("  find   discover_store  "),
+        vec!["find", "discover_store"]
+    );
+    assert_eq!(
+        t(r#"write --ring 2 --name x --body "two words""#),
+        vec!["write", "--ring", "2", "--name", "x", "--body", "two words"]
+    );
+    assert_eq!(
+        t(r#"recall 'a "quoted" thing'"#),
+        vec!["recall", r#"a "quoted" thing"#]
+    );
+    assert_eq!(t(r"recall a\ b"), vec!["recall", "a b"]);
+    // An empty argument is an argument: `--body ""` is a thing somebody means.
+    assert_eq!(t("write --body \"\""), vec!["write", "--body", ""]);
+    assert!(tokenise("   ").unwrap().is_none());
+    assert!(tokenise(r#"recall "unclosed"#).is_err());
+    assert!(tokenise(r"recall a\").is_err());
+}
+
+/// Not a shell, and the point is that nothing here is honoured as one: what looks like two
+/// commands is one command with odd arguments, which clap will then reject.
+#[test]
+fn a_semicolon_is_an_argument_not_a_second_command() {
+    use super::command::tokenise;
+    assert_eq!(
+        tokenise("doctor; rm -rf /").unwrap().unwrap(),
+        vec!["doctor;", "rm", "-rf", "/"]
+    );
+    assert_eq!(
+        tokenise("doctor && status").unwrap().unwrap(),
+        vec!["doctor", "&&", "status"]
+    );
+}
+
+#[tokio::test]
+async fn a_command_runs_and_answers_the_way_a_terminal_would() {
+    let fx = Fx::with_cli();
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "doctor" })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{v:#}");
+    assert_eq!(v["exit_code"], 0, "{v:#}");
+    assert_eq!(v["argv"], json!(["doctor"]));
+    assert!(
+        v["stdout"].as_str().unwrap().contains("link"),
+        "doctor names what it checked: {v:#}"
+    );
+}
+
+/// The store is the window's. Nothing typed here reaches another one, and a command that
+/// fails is still that command's own failure rather than a different exit code of ours.
+#[tokio::test]
+async fn the_command_runs_against_this_windows_store() {
+    let fx = Fx::with_cli();
+    fx.create(2, "only-here", "a note that exists in this store alone")
+        .await;
+    let (_, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "export only-here" })),
+        )
+        .await;
+    assert_eq!(v["exit_code"], 0, "{v:#}");
+    assert!(v["stdout"].as_str().unwrap().contains("only-here"), "{v:#}");
+}
+
+#[tokio::test]
+async fn a_command_that_fails_reports_its_own_exit_code() {
+    let fx = Fx::with_cli();
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "export no-such-note" })),
+        )
+        .await;
+    // The request worked; the command did not. Those are different things and the page has
+    // to be able to tell them apart.
+    assert_eq!(code, StatusCode::OK, "{v:#}");
+    assert_eq!(v["exit_code"], 1, "{v:#}");
+    assert!(!v["stderr"].as_str().unwrap().is_empty(), "{v:#}");
+}
+
+#[tokio::test]
+async fn the_commands_that_do_not_belong_in_a_window_are_refused_with_a_reason() {
+    let fx = Fx::new();
+    for line in [
+        "serve",
+        "mcp",
+        "hook session-start",
+        "init",
+        "install",
+        "import --plan p.toml",
+        "verify-export f.json",
+        "hub fleet",
+    ] {
+        let (code, v) = fx
+            .call(
+                Method::POST,
+                "/api/v1/command",
+                Some(json!({ "line": line })),
+            )
+            .await;
+        assert_eq!(
+            code,
+            StatusCode::BAD_REQUEST,
+            "{line} was not refused: {v:#}"
+        );
+        let message = v["error"]["message"].as_str().unwrap_or_default();
+        assert!(
+            message.len() > 30,
+            "{line} was refused without saying why: {v:#}"
+        );
+    }
+}
+
+/// The one way this endpoint could reach a store the person is not looking at.
+#[tokio::test]
+async fn naming_another_store_is_refused() {
+    let fx = Fx::new();
+    for line in [
+        "status --store /tmp/elsewhere",
+        "status --store=/tmp/elsewhere",
+    ] {
+        let (code, v) = fx
+            .call(
+                Method::POST,
+                "/api/v1/command",
+                Some(json!({ "line": line })),
+            )
+            .await;
+        assert_eq!(code, StatusCode::BAD_REQUEST, "{line}: {v:#}");
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("--store"),
+            "{v:#}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_line_that_is_not_a_command_gets_clap_s_own_message() {
+    let fx = Fx::new();
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "recal something" })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
+    let message = v["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("recal"), "{v:#}");
+}
+
+#[tokio::test]
+async fn an_empty_line_is_a_bad_request_not_a_process() {
+    let fx = Fx::new();
+    let (code, _) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "   " })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST);
 }

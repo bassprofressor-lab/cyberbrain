@@ -414,6 +414,27 @@ Rules the shapes must obey:
   caveat is precisely the silent case §7 exists to prevent.
 - Scores are `RRF × ring weight`, are **not** comparable across queries, and are displayed
   relative to the top hit of the same result set.
+- **`POST /command` is the command line, and it is the CLI rather than a copy of it.** The
+  line is split here — quotes and backslash escapes, nothing else, so there is no shell for a
+  semicolon or a pipe to mean anything to — parsed with the same `clap` definition, and then
+  handed to *this same binary* as arguments with `--store` fixed to the store being served.
+  What comes back is the child's stdout, stderr and exit code, unchanged.
+
+  A subprocess and not a call into `App`, deliberately: an in-process dispatch would be a
+  second place where `write` decides what a PII hold means and a second place to forget when
+  a command grows an argument. §8 already refuses that trade for `--dry-run`. Two processes
+  over one store is the condition this store was built for — index and audit log are WAL with
+  a busy timeout, because `cyberbrain scan` at a prompt beside a running `serve` has always
+  been allowed.
+
+  The command's failure and the request's failure are different things: a command that exits
+  non-zero is `200` carrying that exit code, and only a line that is refused or does not
+  parse is `400`. **What is refused is an exhaustive match on the command enum**, so a
+  command added to the CLI does not compile until somebody decides whether it belongs in a
+  window. Refused today: `serve`, `mcp`, `hook`, `init`, `install` and `hub`, each for a
+  reason of its own, plus `import` and `verify-export` — those two read files from anywhere
+  on disk by name, and this surface has no authentication because nothing it holds leaves the
+  machine. Naming another store with `--store` is refused for the same reason.
 
 ### 8.2 Composition
 

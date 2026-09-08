@@ -9,6 +9,7 @@ import {
   type HubStatus,
   type AuditParams,
   type CitationExpansion,
+  type CommandResult,
   type CyberbrainApi,
   type DoctorReport,
   type EgressRegister,
@@ -115,4 +116,5 @@ export const httpClient: CyberbrainApi = {
 
   doctor: () => request<DoctorReport>("GET", "/doctor"),
   scan: (full) => request<ScanReport>("POST", `/scan${qs({ full })}`),
+  command: (line) => request<CommandResult>("POST", "/command", { line }),
 };

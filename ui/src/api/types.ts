@@ -1153,6 +1153,29 @@ export interface HubStatus {
   last_delivery?: string | null;
 }
 
+/**
+ * `POST /api/v1/command` request. Mirrors `serve::command::CommandRequest`.
+ *
+ * The line as typed, without the leading `cyberbrain`. The server splits it (quotes and
+ * backslash escapes, nothing else — there is no shell), checks it, and runs the same binary
+ * that is serving this page against this store.
+ */
+export interface CommandRequest {
+  line: string;
+}
+
+/** `POST /api/v1/command` response. Mirrors `serve::command::CommandResult`. */
+export interface CommandResult {
+  /** The line after splitting, so a person can see how their quotes were read. */
+  argv: string[];
+  stdout: string;
+  stderr: string;
+  /** The command's own exit code, not the request's: 0 success, 1 user error, 2 internal, 3 policy refusal. A non-zero code arrives with HTTP 200. */
+  exit_code: number;
+  /** Output was cut at 256 KB. */
+  truncated: boolean;
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
@@ -1184,4 +1207,6 @@ export interface CyberbrainApi {
 
   doctor(): Promise<DoctorReport>;
   scan(full: boolean): Promise<ScanReport>;
+  /** Run a command line against this store. A command that fails resolves; only a refused or malformed line rejects. */
+  command(line: string): Promise<CommandResult>;
 }

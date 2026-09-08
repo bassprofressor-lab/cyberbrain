@@ -100,6 +100,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   else, started with background networking, component updates, sync and SmartScreen
   reputation lookups switched off, and confined to the launcher, which is not the store.
 
+- **The command line, in the window.** The page could search, write, read the graph, run
+  doctor and scan, and answer every compliance question — but `find`, `export` and anything
+  else without a screen meant leaving for a terminal, and on the desktop that is a terminal
+  somebody chose an installer to avoid. There is now a command line beside the other screens.
+  You type the same thing you would type at a prompt, and you get back the same stdout,
+  stderr and exit code.
+
+  It is the CLI, not a copy of it. `POST /api/v1/command` splits the line — quotes and
+  backslash escapes and nothing else, so there is no shell for a semicolon or a pipe to mean
+  anything to — parses it with the same clap definition, and hands it to *this same binary*
+  as arguments with `--store` fixed to the store being served. An in-process dispatch would
+  have been a second place where `write` decides what a PII hold means and a second place to
+  forget when a command grows an argument; SPEC §8 already refuses that trade for
+  `--dry-run`. A held write comes back with exit code 3 and the operator's four choices,
+  because it is the real thing that answered.
+
+  The store is never ambiguous and cannot be argued with: a command typed in a window runs
+  against that window's store, and `--store` is refused. What else is refused is an
+  exhaustive match on the command enum, so a command added to the CLI stops the build until
+  somebody decides whether it belongs in a window. `serve`, `mcp`, `hook`, `init`, `install`
+  and `hub` are out, each for its own reason; so are `import` and `verify-export`, because
+  both read files from anywhere on disk by name and this surface has no authentication —
+  it has none because nothing it holds leaves the machine, and that sentence has to stay
+  true.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.

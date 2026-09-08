@@ -139,6 +139,11 @@ wieder heraus. Es schreibt jede gefundene Claude-Desktop-Installation statt nur 
 dokumentierten Pfad — unter Windows sind das nicht dieselbe Datei, und die falsche scheitert
 lautlos.
 
+Die Seite hat eine eigene Befehlszeile, damit `find`, `export` und alles andere ohne
+Bildschirm nicht bedeuten, dass man in ein Terminal wechselt. Sie startet dasselbe Binary,
+das die Seite ausliefert, gegen deren Store, und gibt Ausgabe, Fehlerausgabe und
+Rückgabewert unverändert zurück.
+
 ## Wie es arbeitet
 
 ```mermaid

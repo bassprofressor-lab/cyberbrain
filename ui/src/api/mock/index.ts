@@ -22,6 +22,7 @@ import {
   type AuditRow,
   type Citation,
   type CitationExpansion,
+  type CommandResult,
   type Conflict,
   type CyberbrainApi,
   type DoctorFinding,
@@ -1084,4 +1085,32 @@ export const mockClient: CyberbrainApi = {
       full ? 900 : 150,
     );
   },
+
+  /**
+   * The mock cannot run a process, so it does not pretend to. It answers the handful of
+   * lines that can be answered from data already here, and says plainly what it is for
+   * anything else — a fabricated `scan` report in a demo is exactly the kind of number
+   * somebody screenshots.
+   */
+  async command(line: string): Promise<CommandResult> {
+    const argv = line.trim().split(/\s+/).filter(Boolean);
+    const done = (stdout: string, exit_code = 0, stderr = "") =>
+      latency({ argv, stdout, stderr, exit_code, truncated: false }, 120);
+    if (argv.length === 0) throw new ApiError(400, { code: "bad-request", message: "there is no command in that line", exit_code: 1 });
+    switch (argv[0]) {
+      case "status":
+        return done(`store ${STORE_ROOT}\n${notes.length} notes\nembedding model loaded: ${PROFILE_ID} (dim 256)\n`);
+      case "doctor": {
+        const r = await this.doctor();
+        return done(r.findings.map((f) => `${f.severity}  ${f.check}  ${f.subject}: ${f.message}`).join("\n") + "\n", r.ok ? 0 : 1);
+      }
+      default:
+        return done(
+          "",
+          2,
+          `this page is showing fabricated data (transport: mock), so it has no store to run \`${argv[0]}\` against.\n`,
+        );
+    }
+  },
+
 };

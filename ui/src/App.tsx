@@ -8,6 +8,7 @@ import { useShortcuts } from "@/lib/keys";
 import { href, navigate, SCREENS, useRoute } from "@/lib/router";
 import { useTheme } from "@/lib/theme";
 import { ComplianceScreen } from "@/screens/Compliance";
+import { ConsoleScreen } from "@/screens/Console";
 import { GraphScreen } from "@/screens/Graph";
 import { NoteScreen } from "@/screens/Note";
 import { SearchScreen } from "@/screens/Search";
@@ -84,6 +85,7 @@ export function App() {
         {route.screen === "usage" ? <UsageScreen route={route} /> : null}
         {route.screen === "compliance" ? <ComplianceScreen route={route} /> : null}
         {route.screen === "status" ? <StatusScreen /> : null}
+        {route.screen === "console" ? <ConsoleScreen /> : null}
       </main>
       <ShortcutHelp />
     </div>

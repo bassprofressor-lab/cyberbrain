@@ -20,6 +20,7 @@
 //!   response — API and asset alike.
 
 mod assets;
+pub(crate) mod command;
 mod error;
 mod extract;
 mod holds;
@@ -39,6 +40,7 @@ use cyberbrain_core::{Error, Result};
 use error::{ApiError, ApiResult};
 use holds::Holds;
 use std::net::{Ipv4Addr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tower_http::set_header::SetResponseHeaderLayer;
 
@@ -54,6 +56,10 @@ pub struct ServeState {
     pub app: Arc<App>,
     pub holds: Holds,
     pub scans: Mutex<ScanTimes>,
+    /// The binary a typed command is run as. State rather than `current_exe()` at the point
+    /// of use, because in a test `current_exe()` is the test harness, and an endpoint whose
+    /// only untested path is the one that starts a process is an endpoint nobody has tried.
+    pub self_exe: PathBuf,
 }
 
 /// Run a synchronous `App` call off the async runtime's threads.
@@ -80,10 +86,18 @@ async fn no_store(
 
 /// The router, for [`serve`] and for in-process tests.
 pub fn router(app: Arc<App>) -> Router {
+    // A path that does not exist is not an error here: only `POST /command` uses it, and it
+    // reports the failure to start when asked rather than refusing to serve the page.
+    router_with(app, std::env::current_exe().unwrap_or_default())
+}
+
+/// [`router`], with the binary that a typed command re-runs handed in.
+pub fn router_with(app: Arc<App>, self_exe: PathBuf) -> Router {
     let state = Arc::new(ServeState {
         app,
         holds: Holds::new(),
         scans: Mutex::new(ScanTimes::default()),
+        self_exe,
     });
     let api = Router::new()
         .route("/status", get(ops::status))
@@ -110,6 +124,7 @@ pub fn router(app: Arc<App>) -> Router {
         .route("/usage", get(ops::usage))
         .route("/doctor", get(ops::doctor))
         .route("/scan", post(ops::scan))
+        .route("/command", post(command::run))
         .layer(axum::middleware::from_fn(no_store))
         .with_state(state);
     Router::new()

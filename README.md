@@ -133,6 +133,10 @@ it finds, keeps the previous file beside the new one, and `--undo` takes it all 
 writes every Claude Desktop installation it finds rather than the documented path, because on
 Windows those are not the same file and the wrong one fails silently.
 
+The page has a command line of its own, so `find`, `export` and everything else without a
+screen do not mean leaving for a terminal. It runs the same binary that is serving the page,
+against that page's store, and hands back the same stdout, stderr and exit code.
+
 ## How it works
 
 ```mermaid
