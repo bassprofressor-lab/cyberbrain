@@ -207,6 +207,26 @@ fn server_binary() -> PathBuf {
     exe
 }
 
+/// The tests below start the real `cyberbrain` and talk HTTP to it, which needs a binary
+/// with the page compiled in. `--no-default-features` is a supported build whose `serve`
+/// refuses to start, and it is exactly what CI's `test` job produces — so those runs
+/// reported six defects that were not there while the same tests were green on a checkout
+/// with `ui/dist` built. They stand down here and say why; the `ui` job, which builds the
+/// page first, is where they actually run.
+fn start_or_skip(server: &Path, dir: &Path, what: &str) -> Option<Server> {
+    match start(server, dir) {
+        Ok(running) => Some(running),
+        Err(StartError::NoPage) => {
+            eprintln!(
+                "skipped {what}: this cyberbrain was built without its page \
+                 (build it with --features ui to run this test)"
+            );
+            None
+        }
+        Err(e) => panic!("{what}: {e}"),
+    }
+}
+
 fn get(url: &str, path: &str) -> String {
     let hostport = url
         .trim_start_matches("http://")
@@ -229,7 +249,9 @@ fn it_starts_the_real_server_and_the_api_answers() {
     let tmp = tempfile::tempdir().unwrap();
     init_store(&server, tmp.path()).expect("init a store to serve");
 
-    let mut running = start(&server, tmp.path()).expect("serve reports an address");
+    let Some(mut running) = start_or_skip(&server, tmp.path(), "the api answers") else {
+        return;
+    };
     assert!(
         running.url.starts_with("http://127.0.0.1:"),
         "{}",
@@ -257,7 +279,9 @@ fn a_started_server_offers_a_terminal_and_the_launcher_finds_its_address() {
     let server = server_binary();
     let tmp = tempfile::tempdir().unwrap();
     init_store(&server, tmp.path()).expect("init a store to serve");
-    let mut running = start(&server, tmp.path()).expect("serve reports an address");
+    let Some(mut running) = start_or_skip(&server, tmp.path(), "the terminal address") else {
+        return;
+    };
 
     assert!(
         running.open_url.contains("#/?t="),
@@ -294,8 +318,12 @@ fn two_projects_can_be_open_at_once() {
     init_store(&server, a.path()).unwrap();
     init_store(&server, b.path()).unwrap();
 
-    let one = start(&server, a.path()).expect("first");
-    let two = start(&server, b.path()).expect("second");
+    let (Some(one), Some(two)) = (
+        start_or_skip(&server, a.path(), "two at once (first)"),
+        start_or_skip(&server, b.path(), "two at once (second)"),
+    ) else {
+        return;
+    };
     assert_ne!(one.url, two.url, "both landed on the same port");
 }
 
@@ -316,7 +344,9 @@ fn init_makes_that_same_folder_servable() {
     let tmp = tempfile::tempdir().unwrap();
     assert!(start(&server, tmp.path()).is_err());
     init_store(&server, tmp.path()).expect("init");
-    let mut running = start(&server, tmp.path()).expect("serve after init");
+    let Some(mut running) = start_or_skip(&server, tmp.path(), "serve after init") else {
+        return;
+    };
     running.stop();
 }
 
@@ -325,7 +355,9 @@ fn stopping_it_actually_stops_it() {
     let server = server_binary();
     let tmp = tempfile::tempdir().unwrap();
     init_store(&server, tmp.path()).unwrap();
-    let mut running = start(&server, tmp.path()).unwrap();
+    let Some(mut running) = start_or_skip(&server, tmp.path(), "stop() stops it") else {
+        return;
+    };
     let url = running.url.clone();
     running.stop();
     assert!(
@@ -347,7 +379,10 @@ fn the_address_a_real_server_reports_is_accepted() {
     let server = server_binary();
     let tmp = tempfile::tempdir().unwrap();
     init_store(&server, tmp.path()).unwrap();
-    let mut running = start(&server, tmp.path()).unwrap();
+    let Some(mut running) = start_or_skip(&server, tmp.path(), "its own address is accepted")
+    else {
+        return;
+    };
     assert_eq!(
         loopback_url(&running.url).as_deref(),
         Some(running.url.as_str()),

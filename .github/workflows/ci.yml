@@ -185,6 +185,11 @@ jobs:
       # The page exists now, so this is the one place the embed and its build-script
       # guard are exercised: a mock bundle here must fail the build.
       - run: cargo build --release -p cyberbrain --features ui
+      # And the one place the launcher's tests can start a real server. The `test` job
+      # builds --no-default-features, where `serve` has no page and refuses; there those
+      # six stand down and say so. Release, because that is the binary just built: they
+      # look for `cyberbrain` beside their own test binary.
+      - run: cargo test --release -p cyberbrain-desktop
 
   benchmarks:
     name: performance budgets
