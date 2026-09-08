@@ -16,6 +16,7 @@
 ; The README says how to add it by hand, which is a worse experience and a better outcome.
 ;
 ; Build:  makensis /DVERSION=0.1.0 /DSOURCE=<dir with the exes> cyberbrain.nsi
+;         add /DWEBVIEW2LOADER=<path to WebView2Loader.dll> for a GNU-toolchain build
 
 Unicode true
 !include "MUI2.nsh"
@@ -96,6 +97,13 @@ Section "Cyberbrain" SecMain
   File "${SOURCE}\cyberbrain-desktop.exe"
   File "/oname=cyberbrain.ico" "${ICON}"
   File "/oname=LICENSE.txt" "${LICENSE}"
+  ; Only a GNU-toolchain build needs this beside the launcher: under MSVC the WebView2
+  ; loader is linked in statically, under GNU it is an ordinary import and the window never
+  ; opens without the DLL. Passed only by the cross build, so the release artefact that CI
+  ; produces is unchanged by this line existing.
+!ifdef WEBVIEW2LOADER
+  File "${WEBVIEW2LOADER}"
+!endif
 
   CreateDirectory "$SMPROGRAMS\${NAME}"
   CreateShortcut "$SMPROGRAMS\${NAME}\${NAME}.lnk" "$INSTDIR\cyberbrain-desktop.exe" "" "$INSTDIR\cyberbrain.ico" 0
@@ -192,6 +200,9 @@ Section "Uninstall"
   Delete "$INSTDIR\cyberbrain-desktop.exe"
   Delete "$INSTDIR\cyberbrain.ico"
   Delete "$INSTDIR\LICENSE.txt"
+  ; Unconditional: an installation made by a GNU build is uninstalled by the uninstaller it
+  ; wrote, but leaving the name here costs nothing and a stray DLL would keep $INSTDIR alive.
+  Delete "$INSTDIR\WebView2Loader.dll"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 
