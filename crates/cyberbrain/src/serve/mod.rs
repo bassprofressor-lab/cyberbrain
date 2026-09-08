@@ -26,6 +26,7 @@ mod extract;
 mod holds;
 mod notes;
 mod ops;
+mod origin;
 mod policy;
 mod wire;
 
@@ -103,8 +104,9 @@ pub fn router_with(
         scans: Mutex::new(ScanTimes::default()),
         self_exe,
         terminal,
-        origins,
+        origins: origins.clone(),
     });
+    let ours = Arc::new(origins);
     let api = Router::new()
         .route("/status", get(ops::status))
         .route("/hub", get(ops::hub_status))
@@ -141,6 +143,14 @@ pub fn router_with(
     Router::new()
         .nest("/api/v1", api)
         .fallback(assets::fallback)
+        // Outermost, so a request that may not change this store is refused before any
+        // handler reads its body — and so the rule is one rule rather than one per route.
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let ours = ours.clone();
+                async move { origin::guard(ours, req, next).await }
+            },
+        ))
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
             assets::csp_header(),

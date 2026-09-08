@@ -47,6 +47,15 @@ const VOCAB: &[&str] = &[
     "gamma",
 ];
 
+/// What the real server computes from the address it bound. Spelled out here so the good
+/// case — our own page — is as testable as the bad one.
+fn ours() -> Vec<String> {
+    vec![
+        "http://127.0.0.1:7777".to_string(),
+        "http://localhost:7777".to_string(),
+    ]
+}
+
 struct Fx {
     _dir: tempfile::TempDir,
     store: PathBuf,
@@ -56,14 +65,14 @@ struct Fx {
 
 impl Fx {
     fn new() -> Fx {
-        Fx::with_router(|app| router_with(app, PathBuf::new(), None, Vec::new()))
+        Fx::with_router(|app| router_with(app, PathBuf::new(), None, ours()))
     }
 
     /// A fixture whose `POST /command` runs the real `cyberbrain` this test run built,
     /// rather than the test harness that `current_exe()` would name here.
     fn with_cli() -> Fx {
         let exe = cli_binary();
-        Fx::with_router(move |app| router_with(app, exe.clone(), None, Vec::new()))
+        Fx::with_router(move |app| router_with(app, exe.clone(), None, ours()))
     }
 
     fn with_router(make: impl FnOnce(Arc<App>) -> Router) -> Fx {
@@ -1675,4 +1684,74 @@ async fn an_empty_line_is_a_bad_request_not_a_process() {
         )
         .await;
     assert_eq!(code, StatusCode::BAD_REQUEST);
+}
+
+// ---------------------------------------------------------------------------------------
+// Cross-site writes.
+
+/// The failure this closes, over the real router: a self-submitting form on any website,
+/// posted to loopback. A form post is a "simple request", so no preflight stands in its way
+/// — and `retention/apply?dry_run=false` erases every note past its retention.
+///
+/// Reproduced against a running server before the fix: 200, and the notes were gone.
+#[tokio::test]
+async fn a_write_from_another_website_is_refused_over_the_real_router() {
+    let fx = Fx::new();
+    for (path, kind) in [
+        ("/api/v1/policy/retention/apply?dry_run=false", "text/plain"),
+        ("/api/v1/scan?full=true", "text/plain"),
+        ("/api/v1/command", "application/json"),
+    ] {
+        let (code, _, _) = fx
+            .raw(
+                Method::POST,
+                path,
+                None,
+                &[
+                    ("origin", "https://evil.example"),
+                    ("sec-fetch-site", "cross-site"),
+                    ("content-type", kind),
+                ],
+            )
+            .await;
+        assert_eq!(code, StatusCode::FORBIDDEN, "{path} was not refused");
+    }
+}
+
+/// And the same requests from the page this server serves still work, or the fix would be a
+/// different kind of broken.
+#[tokio::test]
+async fn the_same_write_from_our_own_page_is_allowed() {
+    let fx = Fx::new();
+    let (code, _, body) = fx
+        .raw(
+            Method::POST,
+            "/api/v1/scan?full=true",
+            None,
+            &[
+                ("origin", "http://127.0.0.1:7777"),
+                ("sec-fetch-site", "same-origin"),
+            ],
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+}
+
+/// Reads are untouched. A cross-site GET cannot see its own answer, and refusing it would
+/// break every link into the page while protecting nothing.
+#[tokio::test]
+async fn a_cross_site_read_is_not_refused() {
+    let fx = Fx::new();
+    let (code, _, _) = fx
+        .raw(
+            Method::GET,
+            "/api/v1/status",
+            None,
+            &[
+                ("origin", "https://evil.example"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK);
 }

@@ -231,6 +231,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   nothing to do with it, and write an unapproved ring 0 note whose audit trail then named
   that person as its proposer. The state of a name is now the newest of proposed, accepted
   and rejected, and only `proposed` is an open proposal.
+- **A web page you had open could delete your notes.** `POST /policy/retention/apply
+  ?dry_run=false` erases every note past its retention, and a self-submitting form on any
+  website reached it: a form post is a "simple request", so nothing preflighted it and
+  nothing checked where it came from. `POST /scan?full=true` the same. The other writing
+  routes were protected only because `axum::Json` insists on `application/json` and thereby
+  forces a preflight — an accident of an extractor, not a decision, and the accident had two
+  holes in it.
+
+  State-changing requests are now checked in one place: an `Origin` that is not this page's
+  is refused, and so is a `Sec-Fetch-Site` that is not `same-origin` or `none`. Neither header
+  means a program on this machine, which is allowed — it can read the store off the disk
+  anyway. Reads are untouched, because a cross-site read cannot see its own answer.
 - **A typed command could write a file wherever it was pointed.** `POST /command` let
   `policy audit --export <path>` through, and that route needs no authentication, so any
   local process could place or destroy a file as the account running `serve` — including this

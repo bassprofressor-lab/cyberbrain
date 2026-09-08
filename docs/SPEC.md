@@ -444,7 +444,24 @@ anything assembled purely for the screen.
 Rules the shapes must obey:
 
 - Loopback socket, same origin, JSON, no cookies. Binding anywhere but loopback is refused.
-- **No authentication, with one exception, and the exception is why this sentence changed.**
+- **A request that changes something has to come from this page or from a program.** Loopback
+  and no credentials was defended by saying there is nothing remote to authenticate. That
+  covers a program on this machine; it does not cover a **web page the user happens to have
+  open**, because a browser will send a cross-site request to `127.0.0.1` on that page's
+  say-so. Nothing is read back, but a request that only needs to arrive is enough when it
+  deletes: `POST /policy/retention/apply?dry_run=false` erases every note past its retention,
+  and a self-submitting form is a "simple request" with no preflight to stop it. So on
+  `POST`, `PUT`, `PATCH` and `DELETE`: an `Origin` that is not ours is refused, and a
+  `Sec-Fetch-Site` other than `same-origin` or `none` is refused. Neither header present is a
+  program on this machine and is allowed, the same reasoning as §8.3. Reads are untouched — a
+  cross-site read cannot see its own answer.
+
+  This is one rule in one place rather than one per route. Before it, the writing routes were
+  protected only by `axum::Json` insisting on `application/json` and thereby forcing a
+  preflight, which is an accident of an extractor rather than a decision, and the accident
+  had two holes in it.
+- **No authentication otherwise, with one exception, and the exception is why this sentence
+  changed.**
   Every route that reads or writes notes is unauthenticated, and that was defended by saying
   there is no remote access to authenticate. That defence was always about *remote*, and it
   was enough while the worst a local caller could do was write a note in a store it could
