@@ -663,9 +663,16 @@ fn choose_project(server_exe: &Path, open: &[PathBuf], job: &sys::JobObject) -> 
             .pick_folder()?;
 
         let dir = launch::normalise_project_dir(&chosen);
-        // Two servers on one store would be two writers on one index. The menu already has
-        // this project; saying so is the whole answer.
-        if open.contains(&dir) {
+        // Two servers on one store would be two writers on one index. Compared by the store
+        // each folder resolves to, not by the folder: the store is found by walking upwards,
+        // so a subdirectory of an open project is a different folder and the same store, and
+        // comparing folders let it be opened a second time.
+        let already = launch::store_of(&dir).is_some_and(|store| {
+            open.iter()
+                .filter_map(|d| launch::store_of(d))
+                .any(|other| other == store)
+        });
+        if already || open.contains(&dir) {
             sys::info_box(
                 APP,
                 &format!("{}\n\nis already open. It is in the menu.", dir.display()),

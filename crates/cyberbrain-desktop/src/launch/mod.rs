@@ -245,6 +245,22 @@ fn label_at(parts: &[String], depth: usize) -> String {
     parts[parts.len() - take..].join(std::path::MAIN_SEPARATOR_STR)
 }
 
+/// The store a directory resolves to, by the same walk the CLI does.
+///
+/// `has_store` answers whether there is one; this says *which*, and the difference matters
+/// for the "already open" check. A project is chosen by folder, but the store is found by
+/// walking upwards — so `C:\Work\api` and `C:\Work\api\src` are different folders and
+/// the same store, and comparing the folders let both be opened at once. Two servers on one
+/// store is two writers on one index, which is the thing the check exists to prevent.
+pub fn store_of(dir: &Path) -> Option<PathBuf> {
+    dir.ancestors()
+        .map(|d| d.join(STORE_DIR))
+        .find(|c| c.join("notes").is_dir())
+        // The path as the filesystem knows it: on Windows two spellings of one folder
+        // differ as strings and not as places.
+        .map(|p| p.canonicalize().unwrap_or(p))
+}
+
 /// Whether this directory, or one above it, holds a store — the same walk the CLI does, so
 /// that a subdirectory of a project is as good an answer as its root.
 pub fn has_store(dir: &Path) -> bool {

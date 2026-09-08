@@ -99,6 +99,29 @@ fn a_window_with_no_size_yet_gets_no_panes() {
     assert!(tile(0, 1000, 800).is_empty());
 }
 
+/// A project is chosen by folder and a store is found by walking upwards, so two different
+/// folders can be one store. The "already open" check compares stores for that reason: with
+/// folders, choosing a subdirectory of an open project started a second server on the same
+/// index.
+#[test]
+fn a_subdirectory_resolves_to_the_same_store_as_its_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project = tmp.path().join("api");
+    std::fs::create_dir_all(project.join(".cyberbrain/notes")).unwrap();
+    let deep = project.join("src/inner");
+    std::fs::create_dir_all(&deep).unwrap();
+
+    let a = store_of(&project).expect("the project has a store");
+    let b = store_of(&deep).expect("so does anything inside it");
+    assert_eq!(a, b, "a subdirectory has to resolve to the project's store");
+
+    // Somewhere else entirely is not the same store, or the check would refuse everything.
+    let other = tmp.path().join("site");
+    std::fs::create_dir_all(other.join(".cyberbrain/notes")).unwrap();
+    assert_ne!(store_of(&other).unwrap(), a);
+    assert!(store_of(tmp.path()).is_none(), "no store above these two");
+}
+
 #[test]
 fn a_project_is_named_by_its_folder() {
     let names = labels(&[

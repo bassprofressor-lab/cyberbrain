@@ -335,6 +335,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   had no close-on-exec, so a shell — and everything it started, to any depth — held a
   writable handle on its own terminal: enough to forge output the page renders as the
   program's, and to read input meant for something else.
+- **Choosing a subdirectory of an open project started a second server on the same store.**
+  A project is picked by folder, but a store is found by walking upwards — so `work/api` and
+  `work/api/src` are two folders and one store, and the "already open" check compared folders.
+  Two servers on one store is two writers on one index, which is exactly what that check
+  exists to prevent. It compares stores now, resolved through the filesystem so that two
+  spellings of one folder are one place.
+- **`hub service uninstall` did not wait for the service to stop**, so the delete that
+  followed usually landed while it was still stopping and left it marked for deletion until
+  the next reboot — the state the comment above that line says it is avoiding. And
+  `hub service install` treated every failure to open an existing service as "there is no
+  such service", so somebody without the rights to configure one was told the service could
+  not be registered, about a service that was there all along.
 - **Six things in the Windows-only code, all of the same family: resources with no owner.**
   None of it can be run here, all of it was found by reading.
   - A server that stopped on its own left its window standing — showing a dead address, with

@@ -273,6 +273,7 @@ mod platform {
     /// Windows codes worth naming, because each has a different fix.
     const ERROR_ACCESS_DENIED: i32 = 5;
     const ERROR_SERVICE_MARKED_FOR_DELETE: i32 = 1072;
+    const ERROR_SERVICE_DOES_NOT_EXIST: i32 = 1060;
 
     fn os_code(e: &windows_service::Error) -> Option<i32> {
         match e {
@@ -345,6 +346,22 @@ mod platform {
                     .into(),
                 ));
             }
+            // Only "there is no such service" means create one. Everything else is
+            // reported as itself: an "access denied" from `open_service` used to fall
+            // through to `create_service`, which then answered "the service already
+            // exists" — so somebody without the rights to configure an existing service
+            // was told the wrong thing about a service that was there all along.
+            Err(e) if os_code(&e) != Some(ERROR_SERVICE_DOES_NOT_EXIST) => {
+                let hint = if os_code(&e) == Some(ERROR_ACCESS_DENIED) {
+                    " This needs administrator rights."
+                } else {
+                    ""
+                };
+                return Err(Error::Config(format!(
+                    "cannot open the existing service: {}.{hint}",
+                    why(e)
+                )));
+            }
             Err(_) => m
                 .create_service(&info, ServiceAccess::CHANGE_CONFIG | ServiceAccess::START)
                 .map_err(|e| {
@@ -382,7 +399,21 @@ mod platform {
             .map_err(|e| Error::Config(format!("cannot open the service: {}", why(e))))?;
         // Stop first, ignoring "already stopped": deleting a running service leaves it
         // marked for deletion until reboot, which looks like the command did nothing.
+        //
+        // And then wait for it. `stop()` asks the service manager and returns at once, so
+        // the delete that followed almost always landed while the service was still
+        // stopping — producing exactly the marked-for-deletion state the line above says it
+        // is avoiding. Half a minute is generous for a listener that has only a socket to
+        // close; if it is still not stopped, delete anyway and let Windows say so.
         let _ = service.stop();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            match service.query_status() {
+                Ok(status) if status.current_state == ServiceState::Stopped => break,
+                Err(_) => break,
+                _ => std::thread::sleep(std::time::Duration::from_millis(200)),
+            }
+        }
         service
             .delete()
             .map_err(|e| Error::Config(format!("cannot remove the service: {}", why(e))))?;
