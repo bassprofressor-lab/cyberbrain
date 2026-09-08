@@ -43,6 +43,8 @@ export const en = {
     graph: "graph",
     usage: "usage",
     compliance: "compliance",
+    console: "command line",
+    terminals: "terminal",
   },
   common: {
     refresh: "refresh",
@@ -496,6 +498,7 @@ export const en = {
     namePrompt: "A name for this connection:",
     forget: (name: string) => `forget ${name}`,
     savedIn: (path: string) => `kept in ${path}, per user and per machine — not in the store, which travels with the repository`,
+    paneLabel: (what: string) => `terminal running ${what}`,
     exited: (code: number) => `exited with code ${code}`,
     state: { opening: "opening", open: "open", closed: "closed" },
   },

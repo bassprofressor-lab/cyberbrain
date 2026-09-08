@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { HubLine } from "@/components/HubLine";
 import { ShortcutHelp } from "@/components/ShortcutHelp";
@@ -33,6 +33,12 @@ export function App() {
   const t = useT();
   const lang = useLang();
   const current = route.screen === "note" ? "notes" : route.screen;
+  // Sticky: once the terminal screen has been opened it stays mounted, because it owns
+  // processes rather than a view. See where it is rendered.
+  const [visitedTerminals, setVisitedTerminals] = useState(false);
+  useEffect(() => {
+    if (route.screen === "terminals") setVisitedTerminals(true);
+  }, [route.screen]);
   const other = lang === "en" ? "de" : "en";
 
   useShortcuts(
@@ -109,9 +115,21 @@ export function App() {
         {route.screen === "compliance" ? <ComplianceScreen route={route} /> : null}
         {route.screen === "status" ? <StatusScreen /> : null}
         {route.screen === "console" ? <ConsoleScreen /> : null}
-        {route.screen === "terminals" ? (
+        {/*
+          Mounted once it has been visited, and kept mounted after that — `hidden` rather
+          than unmounted.
+
+          Every other screen is a view of the store and costs nothing to rebuild. This one
+          owns running processes: unmounting it closes the sockets, and the server kills what
+          was behind them. Clicking "Status" ended somebody's ssh session, with no warning
+          and nothing to say afterwards. React has no way to keep a subtree alive across a
+          route change other than not taking it down, so it is not taken down.
+        */}
+        {visitedTerminals ? (
           <Suspense fallback={<div className="p-4 text-2xs text-fg-faint">{t.common.loading}</div>}>
-            <TerminalsScreen route={route} />
+            <div hidden={route.screen !== "terminals"} className="h-full">
+              <TerminalsScreen route={route} />
+            </div>
           </Suspense>
         ) : null}
       </main>

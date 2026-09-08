@@ -292,6 +292,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   module so it is tested on every platform — the rule is string handling, the mistake was
   string handling, and a rule that can only be checked where nobody can run the checks is a
   rule nobody checks.
+- **Clicking any other screen killed every open terminal.** The panes lived in that screen's
+  own state, so leaving it unmounted them, closed the sockets and made the server kill the
+  processes behind them. Somebody's ssh session ended because they looked at Status. Every
+  other screen is a view of the store and costs nothing to rebuild; this one owns running
+  processes, so it stays mounted once it has been opened.
+- **The terminal was silent to a screen reader.** xterm builds no accessibility manager
+  unless it is asked to, so what a screen reader got was a textarea with a fixed English
+  label and nothing else: no output, no prompt, no exit. It is asked to now, and each pane
+  carries a name saying what is running in it.
+- **Neither new input showed a keyboard focus ring**, because a Tailwind `outline-none` had
+  quietly overridden the rule that draws one for everything else.
+- **The command line took the focus away while a command ran.** Disabling the focused element
+  makes the browser drop focus to the body, and keystrokes then reached the global shortcuts
+  — a typed `g t` navigated away mid-command. It is read-only while busy instead. Its output
+  is also a live region now, and its refusals are announced: with a command line the output
+  is the whole of the answer.
+- **Refusals were shown as raw JSON.** The terminal screen printed the response body into a
+  paragraph of prose; the sentence inside it is the one somebody wrote to be read.
+- The keyboard help called the two new screens `console` and `terminals` in both languages,
+  because the translation for their names was the one thing not added with them.
 - **Switching the language killed every open terminal.** The effect that owns the socket had
   the translation dictionary in its dependency list — for the sake of one label — so changing
   the language tore the socket down and the server killed the process behind it. One

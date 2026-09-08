@@ -41,6 +41,8 @@ export const de: Dict = {
     graph: "Graph",
     usage: "Nutzung",
     compliance: "Compliance",
+    console: "Befehlszeile",
+    terminals: "Terminal",
   },
   common: {
     refresh: "aktualisieren",
@@ -494,6 +496,7 @@ export const de: Dict = {
     namePrompt: "Ein Name für diese Verbindung:",
     forget: (name: string) => `${name} vergessen`,
     savedIn: (path: string) => `liegt in ${path}, je Person und je Rechner — nicht im Store, der mit dem Repo reist`,
+    paneLabel: (what: string) => `Terminal mit ${what}`,
     exited: (code: number) => `beendet, Rückgabewert ${code}`,
     state: { opening: "öffnet", open: "offen", closed: "geschlossen" },
   },

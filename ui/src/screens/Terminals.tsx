@@ -53,7 +53,19 @@ async function profiles(token: string, next?: Saved[]): Promise<{ path: string |
     credentials: "omit",
     cache: "no-store",
   });
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) {
+    // The server answers refusals in the shape every other route uses. Showing the raw body
+    // put `{"error":{"code":…}}` into a paragraph of prose; the message inside it is the
+    // sentence somebody wrote to be read.
+    const body = await res.text();
+    let message = body;
+    try {
+      message = JSON.parse(body)?.error?.message ?? body;
+    } catch {
+      /* not the usual shape; the body is all there is */
+    }
+    throw new Error(message);
+  }
   return res.json();
 }
 
@@ -135,7 +147,7 @@ export function TerminalsScreen({ route }: Props) {
             placeholder={t.terminals.placeholder}
             spellCheck={false}
             autoComplete="off"
-            className="flex-1 bg-transparent font-mono text-xs outline-none border-b py-1 placeholder:text-fg-faint"
+            className="flex-1 bg-transparent font-mono text-xs rounded-sm border-b py-1 placeholder:text-fg-faint"
           />
           <button type="submit" className="text-2xs text-fg-muted hover:text-fg">
             {t.terminals.open}
@@ -186,7 +198,11 @@ export function TerminalsScreen({ route }: Props) {
                 </span>
               ))}
             </div>
-            {savedWhy ? <p className="text-2xs text-danger mt-1">{savedWhy}</p> : null}
+            {savedWhy ? (
+              <p role="alert" className="text-2xs text-danger mt-1">
+                {savedWhy}
+              </p>
+            ) : null}
             {savedPath ? <p className="text-2xs text-fg-faint mt-1">{t.terminals.savedIn(savedPath)}</p> : null}
           </div>
         ) : null}
@@ -230,6 +246,11 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
     if (!el) return;
 
     const term = new Terminal({
+      // Without this xterm builds no accessibility manager at all, and a screen reader gets
+      // a textarea with a fixed English label and nothing else: no output, no prompt, no
+      // exit. The cost is a live region kept in step with the screen, which is the price of
+      // the terminal being usable at all by somebody who cannot see it.
+      screenReaderMode: true,
       convertEol: false,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 12,
@@ -279,6 +300,11 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
     });
 
     const resize = new ResizeObserver(() => {
+      // A hidden element has no size, and fitting to no size tells the program inside that
+      // its window is one column wide. The screen is kept mounted while the person is
+      // looking at something else — see App.tsx — so this fires with nothing to fit, and a
+      // shell that has been told the window is 1x1 draws nonsense when it comes back.
+      if (el.clientWidth === 0 || el.clientHeight === 0) return;
       fit.fit();
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: "resize", cols: term.cols, rows: term.rows }));
@@ -305,8 +331,17 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
           {t.terminals.close}
         </button>
       </div>
-      {why ? <p className="px-2 py-1 text-2xs text-danger">{why}</p> : null}
-      <div ref={host} className="h-72" />
+      {why ? (
+        <p role="alert" className="px-2 py-1 text-2xs text-danger">
+          {why}
+        </p>
+      ) : null}
+      <div
+        ref={host}
+        className="h-72"
+        role="group"
+        aria-label={t.terminals.paneLabel(command || t.terminals.shell)}
+      />
     </div>
   );
 }

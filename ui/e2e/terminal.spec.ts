@@ -61,3 +61,44 @@ test("the console runs a command against this store", async ({ page }) => {
   await page.keyboard.press("Enter");
   await expect(page.locator("pre")).toContainText("checks");
 });
+
+
+/**
+ * Written against a defect that shipped: the panes lived in the screen's own state, so
+ * clicking any other entry in the sidebar unmounted it, closed the sockets, and the server
+ * killed the processes behind them. An ssh session ended because somebody looked at Status.
+ */
+test("going to another screen and back leaves a terminal running", async ({ page }) => {
+  await page.goto(running.url);
+  await page.getByRole("link", { name: /^Terminal/ }).click();
+  await page.getByRole("button", { name: "Shell", exact: true }).click();
+  await page.keyboard.type("echo still-here\n");
+  await expect(page.locator(".xterm-rows")).toContainText("still-here");
+
+  await page.getByRole("link", { name: /^Status/ }).click();
+  await expect(page.getByRole("link", { name: /^Terminal/ })).toBeVisible();
+  await page.getByRole("link", { name: /^Terminal/ }).click();
+
+  // The same session: what it printed before is still on its screen, and it still answers.
+  await expect(page.locator(".xterm-rows")).toContainText("still-here");
+  // Click the screen, the way a person does. Focusing the helper textarea directly races the
+  // redraw that follows unhiding, and the first keystrokes land nowhere.
+  await page.locator(".xterm-screen").click();
+  await expect(page.locator(".xterm-helper-textarea")).toBeFocused();
+  await page.keyboard.type("echo and-answering\n");
+  await expect(page.locator(".xterm-rows")).toContainText("and-answering");
+});
+
+/**
+ * The output is the whole of a terminal's answer, and xterm builds no accessibility manager
+ * unless it is asked to — without it a screen reader gets a textarea and silence.
+ */
+test("the terminal is announced to a screen reader", async ({ page }) => {
+  await page.goto(running.url);
+  await page.getByRole("link", { name: /^Terminal/ }).click();
+  await page.getByRole("button", { name: "Shell", exact: true }).click();
+  await expect(page.getByRole("group", { name: /terminal running/i })).toBeVisible();
+  // xterm builds its accessibility manager only in screen-reader mode, and the manager is
+  // what creates this: the live region that a screen reader actually reads the output from.
+  await expect(page.locator(".xterm-accessibility-tree")).toHaveCount(1);
+});

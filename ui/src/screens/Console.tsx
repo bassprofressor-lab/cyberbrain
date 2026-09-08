@@ -142,7 +142,13 @@ export function ConsoleScreen() {
       >
         <p className="text-2xs text-fg-faint mb-3 max-w-prose">{t.console.lead}</p>
 
-        <div className="flex-1 min-h-0 overflow-y-auto font-mono text-xs space-y-3 pr-1">
+        <div
+          className="flex-1 min-h-0 overflow-y-auto font-mono text-xs space-y-3 pr-1"
+          // The output is the whole of the answer here. Without this a screen reader user
+          // presses Enter and is told nothing at all.
+          aria-live="polite"
+          aria-atomic="false"
+        >
           {entries.length === 0 && !busy ? (
             <Empty title={t.console.empty}>
               <div className="flex flex-wrap gap-1.5 mt-2">
@@ -159,7 +165,11 @@ export function ConsoleScreen() {
           {entries.map((e) => (
             <Transcript key={e.id} entry={e} />
           ))}
-          {busy ? <div className="text-fg-faint">{t.console.running}…</div> : null}
+          {busy ? (
+            <div role="status" className="text-fg-faint">
+              {t.console.running}…
+            </div>
+          ) : null}
           <div ref={bottom} />
         </div>
 
@@ -178,8 +188,12 @@ export function ConsoleScreen() {
             autoComplete="off"
             autoCapitalize="off"
             autoCorrect="off"
-            disabled={busy}
-            className="flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-fg-faint disabled:opacity-60"
+            // `readOnly`, not `disabled`. Disabling the focused element makes the browser
+            // take the focus away, it falls to the body, and keystrokes during a slow
+            // command then reach the global shortcuts — a typed `g t` navigates away
+            // mid-command.
+            readOnly={busy}
+            className="flex-1 bg-transparent font-mono text-xs rounded-sm placeholder:text-fg-faint"
           />
           <button
             type="button"
