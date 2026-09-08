@@ -833,6 +833,12 @@ requirements on Cyberbrain, derived from observed failures, and contain no third
 - **The shipped binary has no runtime dependencies.** No system SQLite, no OpenSSL, no model
   server, no node runtime. This is the property that matters to a user and it is verified in
   CI by running the release binary on a bare image.
+- **One exception, and it is not the binary:** the Windows launcher can draw a project's page
+  in a window of its own, and that window is WebView2, which is a runtime component of
+  Windows rather than something we ship. It is the only part of the product that needs
+  anything installed, it is optional (Open in › The web browser is the other setting), and
+  when it is missing the launcher says so and opens the browser instead. `cyberbrain` itself
+  is unaffected: it has no idea the launcher exists.
 - Build-time C is permitted but stays enumerated and justified. Current footprint: **`cc`,
   for bundled SQLite, and nothing else.** `tokenizers` declares `esaxx-rs` with
   `default-features = false`, so its `cpp` feature is off and that dependency is pure Rust;
@@ -843,6 +849,16 @@ requirements on Cyberbrain, derived from observed failures, and contain no third
 - Every dependency that performs network I/O of its own is disqualified, because it defeats
   the egress register (§12.1). `hf-hub` was removed for exactly this reason, which is why
   static embedding inference is implemented in-tree (§6) rather than taken from a crate.
+- **A browser engine is the hardest case that rule has**, and the launcher's window embeds
+  one. It is admitted under three conditions, all of them in `win/window.rs`. It is pointed
+  at the loopback address `serve` just bound and at nothing else. It is started with
+  `--disable-background-networking --disable-component-update --disable-sync
+  --no-service-autorun --disable-features=msSmartScreenProtection`, so it does not look up
+  the reputation of the address it is showing, fetch components or sync anything. And it is
+  confined to the launcher, which is not the store: no note, no citation and no audit row
+  passes through it that was not already being served over that same socket to a browser.
+  A future slice that gave the window a page of its own, rather than the one `serve`
+  answers with, would be a new decision and belongs back here first.
 - Release artefacts: one static binary per target, plus an npm wrapper package that downloads
   the matching binary, because that is how agent-harness users install things.
 - CI: build and test on Linux, Windows and macOS. The Windows job must exercise the installed

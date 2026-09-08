@@ -35,6 +35,27 @@ rfd = { version = "0.17.2", default-features = false }
 # The tray wants straight RGBA; the icon is a PNG so that one file feeds the tray, the
 # installer and the shortcut. This is the only decoder in the graph.
 png = "0.18.1"
+# The page in a window of its own. WebView2 is Microsoft's own COM API and its runtime is
+# part of Windows 10 and 11, so this is a binding, not an engine: nothing is downloaded at
+# build time either, because webview2-com-sys carries the import libraries in the crate.
+#
+# Measured before it was chosen, because it is the first dependency of this kind here. This
+# adds 13 crates to the workspace lock file, all of them Microsoft's own windows-rs family.
+# `wry`, the obvious alternative, adds 109 — an HTML and CSS parsing stack (html5ever,
+# selectors, cssparser, string_cache) and bindings for Android and iOS, all of it in the
+# lock file of a launcher that runs on Windows and nowhere else, all of it read by
+# cargo-deny. The price of the smaller graph is the window below being ours to write.
+webview2-com = "0.38.2"
+# The typed half of windows-rs, which webview2-com already speaks. `windows-sys` stays for
+# everything in `sys`: they are two views of the same API and neither is being replaced.
+windows = { version = "0.61.3", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_HiDpi",
+  "Win32_UI_WindowsAndMessaging",
+] }
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Security",

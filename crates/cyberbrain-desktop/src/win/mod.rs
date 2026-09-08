@@ -11,12 +11,15 @@
 //! is left implied is a menu that sets up the wrong project.
 
 use crate::launch::{self, Server, StartError};
-use crate::settings::{self, Settings};
+use crate::settings::{self, OpenIn, Settings};
 use std::path::{Path, PathBuf};
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
+use tray_icon::menu::{
+    CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tray_icon::{Icon, TrayIconBuilder};
 
 mod sys;
+mod window;
 
 const APP: &str = "Cyberbrain";
 
@@ -27,6 +30,28 @@ const APP: &str = "Cyberbrain";
 struct Running {
     server: Server,
     delivery: launch::Delivery,
+    /// The window showing this project, once somebody has asked for it. `None` until then,
+    /// and stale after the person closes it — closing a window closes a window, not a
+    /// project, so the next Open makes a new one.
+    window: Option<window::ProjectWindow>,
+}
+
+impl Running {
+    fn new(server: Server) -> Running {
+        Running {
+            server,
+            delivery: launch::Delivery::default(),
+            window: None,
+        }
+    }
+
+    /// Close this project for good: its window, then its server.
+    fn shut(mut self) {
+        if let Some(w) = &self.window {
+            w.close();
+        }
+        self.server.stop();
+    }
 }
 
 /// The menu ids of one project's submenu. Rebuilt with the menu, so they are held apart
@@ -45,6 +70,8 @@ struct Ui {
     menu: Menu,
     per_project: Vec<ProjectIds>,
     add: MenuId,
+    open_window: MenuId,
+    open_browser: MenuId,
     quit: MenuId,
 }
 
@@ -96,13 +123,17 @@ pub fn run() {
         remember(&mut settings, settings_path.as_deref(), &projects);
     }
     publish_instance(instance_path.as_deref(), &projects);
+    // The session's memory of a WebView2 that would not start; see `open_page`.
+    let mut browser_only = false;
     // One page, not one per project. Somebody with four projects open wants their memory,
-    // not four browser tabs every time they log in; the rest are a click away in the menu.
-    if let Some(last) = projects.last() {
-        sys::open_in_browser(&last.server.url);
+    // not four windows every time they log in; the rest are a click away in the menu.
+    if let Some(title) = titles(&projects).pop()
+        && let Some(last) = projects.last_mut()
+    {
+        open_page(last, &title, settings.open_in, &mut browser_only);
     }
 
-    let Some(mut ui) = menu_for(&dirs(&projects)) else {
+    let Some(mut ui) = menu_for(&dirs(&projects), settings.open_in) else {
         sys::error_box(APP, "the tray menu could not be built");
         return;
     };
@@ -129,6 +160,9 @@ pub fn run() {
         // Collected rather than acted on inside the loop: removing a project while walking
         // the events would renumber the ids the next event is about to be matched against.
         let mut closing: Vec<usize> = Vec::new();
+        // Worked out before the events are walked: naming a project needs the whole list,
+        // and `projects` is borrowed one entry at a time inside the loop.
+        let titles_by_index = titles(&projects);
 
         while let Ok(event) = MenuEvent::receiver().try_recv() {
             if event.id == ui.add {
@@ -138,8 +172,14 @@ pub fn run() {
                 // is two servers writing one index.
                 let open = dirs(&projects);
                 if let Some(next) = choose_project(&server_exe, &open, &job) {
-                    sys::open_in_browser(&next.server.url);
                     projects.push(next);
+                    // The title comes from the list it has just joined: a name that has to
+                    // grow to stay unique can only be worked out once the others are known.
+                    if let Some(title) = titles(&projects).pop()
+                        && let Some(last) = projects.last_mut()
+                    {
+                        open_page(last, &title, settings.open_in, &mut browser_only);
+                    }
                     changed = true;
                 }
                 continue;
@@ -148,12 +188,30 @@ pub fn run() {
                 stop = true;
                 continue;
             }
+            if event.id == ui.open_window || event.id == ui.open_browser {
+                settings.open_in = if event.id == ui.open_window {
+                    // Asked for again, so try again: the runtime may have been installed
+                    // since the failure that turned this off.
+                    browser_only = false;
+                    OpenIn::Window
+                } else {
+                    OpenIn::Browser
+                };
+                if let Some(path) = settings_path.as_deref() {
+                    let _ = settings::save(path, &settings);
+                }
+                // Rebuilt for the ticks: muda lets a checked item be clicked again, and a
+                // menu that does not show which one is on is the reason for having ticks.
+                changed = true;
+                continue;
+            }
             for (i, ids) in ui.per_project.iter().enumerate() {
                 let Some(p) = projects.get_mut(i) else {
                     continue;
                 };
                 if event.id == ids.open {
-                    sys::open_in_browser(&p.server.url);
+                    let title = titles_by_index.get(i).cloned().unwrap_or_default();
+                    open_page(p, &title, settings.open_in, &mut browser_only);
                 } else if event.id == ids.folder {
                     sys::open_in_explorer(&p.server.project_dir);
                 } else if event.id == ids.clients {
@@ -171,7 +229,7 @@ pub fn run() {
         }
 
         for i in closing.into_iter().rev() {
-            projects.remove(i).server.stop();
+            projects.remove(i).shut();
             changed = true;
         }
 
@@ -204,7 +262,7 @@ pub fn run() {
         if changed {
             remember(&mut settings, settings_path.as_deref(), &projects);
             publish_instance(instance_path.as_deref(), &projects);
-            match menu_for(&dirs(&projects)) {
+            match menu_for(&dirs(&projects), settings.open_in) {
                 Some(next) => {
                     tray.set_menu(Some(Box::new(clone_menu(&next))));
                     ui = next;
@@ -235,7 +293,9 @@ pub fn run() {
     // One last delivery on the way out, so a day's rows do not wait for tomorrow's login.
     for p in projects.iter_mut() {
         p.delivery.final_push(&server_exe, &p.server.project_dir);
-        p.server.stop();
+    }
+    for p in projects.drain(..) {
+        p.shut();
     }
     if let Some(path) = instance_path.as_deref() {
         settings::clear_instance(path);
@@ -255,10 +315,7 @@ fn reopen(server_exe: &Path, settings: &Settings, job: &sys::JobObject) -> Vec<R
         match launch::start(server_exe, dir) {
             Ok(server) => {
                 job.adopt(&server);
-                running.push(Running {
-                    server,
-                    delivery: launch::Delivery::default(),
-                });
+                running.push(Running::new(server));
             }
             Err(e) => lost.push(format!("{}\n    {e}", dir.display())),
         }
@@ -340,7 +397,7 @@ fn publish_instance(path: Option<&Path>, projects: &[Running]) {
 /// Rebuilt whole whenever the list of projects changes rather than patched: a submenu
 /// removed from the middle of a patched menu leaves the ids after it pointing at the wrong
 /// project, and that failure is silent and acts on somebody's store.
-fn menu_for(dirs: &[PathBuf]) -> Option<Ui> {
+fn menu_for(dirs: &[PathBuf], open_in: OpenIn) -> Option<Ui> {
     let menu = Menu::new();
     let mut per_project = Vec::new();
     for label in launch::labels(dirs) {
@@ -374,7 +431,15 @@ fn menu_for(dirs: &[PathBuf]) -> Option<Ui> {
     }
 
     let add = MenuItem::new("Open another project…", true, None);
+    // Ticks rather than a single toggle: a toggle labelled "Open in a window" leaves the
+    // person to work out what is happening now, and this is a setting they may only ever
+    // look at once.
+    let in_window =
+        CheckMenuItem::new("A window of its own", true, open_in == OpenIn::Window, None);
+    let in_browser = CheckMenuItem::new("The web browser", true, open_in == OpenIn::Browser, None);
+    let open_in_menu = Submenu::with_items("Open in", true, &[&in_window, &in_browser]).ok()?;
     let quit = MenuItem::new("Quit", true, None);
+
     let mut tail: Vec<&dyn tray_icon::menu::IsMenuItem> = Vec::new();
     let sep = PredefinedMenuItem::separator();
     if !dirs.is_empty() {
@@ -382,6 +447,7 @@ fn menu_for(dirs: &[PathBuf]) -> Option<Ui> {
     }
     let sep2 = PredefinedMenuItem::separator();
     tail.push(&add);
+    tail.push(&open_in_menu);
     tail.push(&sep2);
     tail.push(&quit);
     menu.append_items(&tail).ok()?;
@@ -390,8 +456,50 @@ fn menu_for(dirs: &[PathBuf]) -> Option<Ui> {
         menu,
         per_project,
         add: add.id().clone(),
+        open_window: in_window.id().clone(),
+        open_browser: in_browser.id().clone(),
         quit: quit.id().clone(),
     })
+}
+
+/// Show a project's page where the person said it should go.
+///
+/// `browser_only` is the session's memory of a WebView2 that would not start. Without it a
+/// machine with no runtime asks the same impossible thing on every click and answers with
+/// the same dialog; with it, the first failure is explained once and everything opens in
+/// the browser until the launcher is restarted.
+fn open_page(p: &mut Running, title: &str, open_in: OpenIn, browser_only: &mut bool) {
+    if open_in == OpenIn::Browser || *browser_only {
+        sys::open_in_browser(&p.server.url);
+        return;
+    }
+    if let Some(w) = &p.window
+        && w.is_open()
+    {
+        w.focus();
+        return;
+    }
+    match window::open(title, &p.server.url) {
+        Ok(w) => p.window = Some(w),
+        Err(why) => {
+            *browser_only = true;
+            sys::error_box(
+                APP,
+                &format!(
+                    "{why}\n\nThis page has been opened in the browser instead, and so will \
+                     the others until Cyberbrain is started again. Open in › The web browser \
+                     makes that the setting."
+                ),
+            );
+            sys::open_in_browser(&p.server.url);
+        }
+    }
+}
+
+/// The title of a project's window: the same short name its menu entry carries, so the
+/// taskbar button and the menu entry are recognisably the same thing.
+fn titles(projects: &[Running]) -> Vec<String> {
+    launch::labels(&dirs(projects))
 }
 
 /// The tray takes ownership of the menu it is given; the ids stay with us. `Menu` is a
@@ -505,10 +613,7 @@ fn try_start(server_exe: &Path, dir: &Path, job: &sys::JobObject) -> Started {
     match launch::start(server_exe, dir) {
         Ok(server) => {
             job.adopt(&server);
-            Started::Ok(Running {
-                server,
-                delivery: launch::Delivery::default(),
-            })
+            Started::Ok(Running::new(server))
         }
         Err(StartError::NoStore { dir }) => {
             let question = format!(
@@ -525,10 +630,7 @@ fn try_start(server_exe: &Path, dir: &Path, job: &sys::JobObject) -> Started {
             match launch::start(server_exe, &dir) {
                 Ok(server) => {
                     job.adopt(&server);
-                    Started::Ok(Running {
-                        server,
-                        delivery: launch::Delivery::default(),
-                    })
+                    Started::Ok(Running::new(server))
                 }
                 Err(e) => {
                     sys::error_box(APP, &format!("Cyberbrain could not start:\n\n{e}"));

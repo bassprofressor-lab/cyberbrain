@@ -71,9 +71,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   Anybody upgrading keeps the project they had open: the old single-project key is read
   once, folded into the list, and never written again.
 
+- **A window of its own, instead of a browser tab.** The launcher opened the system browser,
+  which made a program with a Start menu entry and a notification area icon feel like a
+  bookmark. A project's page now opens in its own window, with its own taskbar button, drawn
+  by WebView2 — a runtime component of Windows, not an engine we ship.
+
+  It is a setting, not a replacement. Open in › A window of its own, or › The web browser;
+  the browser is a real preference, with bookmarks and extensions and a window already full
+  of tabs, and it is also the way back on a machine where WebView2 is missing. That case is
+  handled rather than assumed: the launcher says what is wrong, opens the browser instead,
+  and keeps doing so until it is restarted or the setting is changed back.
+
+  Still no second frontend. The window is a frame around the page `serve` already answers
+  with, at the same loopback address the browser would have been sent to; there is no
+  navigation bar, no tab strip and no chrome of our own, because each would be an interface
+  to maintain beside the one the product has. One window per project rather than tabs, for
+  the same reason: a tab strip is something we would have to draw.
+
+  The dependency was measured before it was chosen. `webview2-com` adds 13 crates to the
+  lock file, all of them Microsoft's own windows-rs family; `wry`, the obvious alternative,
+  adds 109 — an HTML and CSS parsing stack and bindings for Android and iOS, in the lock
+  file of a launcher that runs on Windows and nowhere else, all of it read by cargo-deny.
+  The price of the smaller graph is that the window is ours to write, and it is about three
+  hundred lines.
+
+  A browser engine is the hardest case there is for the promise in SPEC §12.1, so it is
+  admitted on conditions and they are written down there: pointed at loopback and nothing
+  else, started with background networking, component updates, sync and SmartScreen
+  reputation lookups switched off, and confined to the launcher, which is not the store.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.
+- The launcher's WebView2 profile is kept in `%LOCALAPPDATA%\cyberbrain\WebView2`. The
+  default is a folder beside the executable, and after an install that executable is under
+  `Program Files`, which the user cannot write to — so every window would have failed to
+  open on exactly the machines the installer is made for, and on none where it was tried
+  from a build directory.
 
 ## [0.3.0] — 2026-09-07
 

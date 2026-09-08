@@ -15,6 +15,12 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<PathBuf>,
 
+    /// Where a project's page opens. Everyone decides this for themselves, which is why it
+    /// is a setting and not a replacement: the browser was the only way until now, and
+    /// somebody who wants their memory in the same window as their tabs is not wrong.
+    #[serde(default, skip_serializing_if = "OpenIn::is_default")]
+    pub open_in: OpenIn,
+
     /// What every version up to 0.3.0 wrote, when a launcher held one project.
     ///
     /// Read and folded into `projects` by [`load`], never written again: `skip_serializing`
@@ -23,6 +29,26 @@ pub struct Settings {
     /// betrayal for no reason.
     #[serde(default, skip_serializing)]
     project_dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OpenIn {
+    /// A window of its own, hosted by WebView2. The default: a program with a Start menu
+    /// entry and a notification area icon that answers by opening a browser tab is a
+    /// program people file under "browser tab".
+    #[default]
+    Window,
+    /// The system browser, which is what every version up to 0.3.0 did. Kept because it is
+    /// a real preference — bookmarks, extensions, a window already full of tabs — and
+    /// because it is the way back when WebView2 is missing on an older machine.
+    Browser,
+}
+
+impl OpenIn {
+    fn is_default(&self) -> bool {
+        *self == OpenIn::default()
+    }
 }
 
 /// `%APPDATA%\cyberbrain\desktop.toml` on Windows, `~/.config/cyberbrain/desktop.toml`
@@ -167,7 +193,7 @@ mod tests {
                 PathBuf::from("/home/x/proj"),
                 PathBuf::from("/home/x/other"),
             ],
-            project_dir: None,
+            ..Settings::default()
         };
         save(&file, &s).unwrap();
         assert_eq!(load(&file), s);
@@ -255,6 +281,31 @@ mod tests {
         let bad = tmp.path().join("desktop-instance.toml");
         std::fs::write(&bad, "url = ").unwrap();
         assert_eq!(read_instance(&bad), None);
+    }
+
+    /// The window is the default because the note this was built from asks for it, so the
+    /// check is that an existing file without the key gets the window rather than the old
+    /// behaviour by accident.
+    #[test]
+    fn a_settings_file_from_before_this_setting_opens_a_window() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("desktop.toml");
+        std::fs::write(&file, "projects = [\"/home/x/proj\"]\n").unwrap();
+        assert_eq!(load(&file).open_in, OpenIn::Window);
+    }
+
+    #[test]
+    fn choosing_the_browser_comes_back() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("desktop.toml");
+        let s = Settings {
+            open_in: OpenIn::Browser,
+            ..Settings::default()
+        };
+        save(&file, &s).unwrap();
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains("browser"), "{text}");
+        assert_eq!(load(&file).open_in, OpenIn::Browser);
     }
 
     #[test]
