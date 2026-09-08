@@ -453,6 +453,8 @@ fn default_shell(command: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::io::{self, Read};
 
     /// A terminal is not a pipe, and the difference is what these check: the child gets a
     /// device it believes is a terminal, and what it prints comes back with the line endings
@@ -523,22 +525,62 @@ mod tests {
         })
         .unwrap();
         let mut out = pty.reader().unwrap();
-        let mut buf = [0u8; 256];
-        let n = out.read(&mut buf).unwrap();
-        assert!(
-            String::from_utf8_lossy(&buf[..n]).contains("40 120"),
-            "{:?}",
-            String::from_utf8_lossy(&buf[..n])
-        );
+        let first = read_until(&mut out, "40 120");
+        assert!(first.contains("40 120"), "{first:?}");
 
         pty.resize(100, 30).unwrap();
-        let n = out.read(&mut buf).unwrap();
+        let second = read_until(&mut out, "30 100");
         assert!(
-            String::from_utf8_lossy(&buf[..n]).contains("30 100"),
-            "the resize did not reach the child: {:?}",
-            String::from_utf8_lossy(&buf[..n])
+            second.contains("30 100"),
+            "the resize did not reach the child: {second:?}"
         );
         pty.kill();
+    }
+
+    /// One `read` is one chunk the kernel had ready, not one line. Reading once and
+    /// asserting on it passed here for as long as the terminal has existed and came back
+    /// with `"\r\n"` on a CI machine — the tail of the previous line, arriving on its own.
+    /// So this reads until the answer is among what has arrived, or the child is gone.
+    #[cfg(unix)]
+    fn read_until(out: &mut impl Read, needle: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut seen = String::new();
+        let mut buf = [0u8; 256];
+        while std::time::Instant::now() < deadline {
+            match out.read(&mut buf) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => {
+                    seen.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    if seen.contains(needle) {
+                        break;
+                    }
+                }
+            }
+        }
+        seen
+    }
+
+    /// The reader above, against the shape that broke the test: the first chunk is a bare
+    /// line ending and the answer arrives split across the two after it.
+    #[cfg(unix)]
+    #[test]
+    fn an_answer_split_across_reads_is_still_found() {
+        struct Chunks(Vec<&'static [u8]>);
+        impl Read for Chunks {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if self.0.is_empty() {
+                    return Ok(0);
+                }
+                let c = self.0.remove(0);
+                buf[..c.len()].copy_from_slice(c);
+                Ok(c.len())
+            }
+        }
+        let mut chunks = Chunks(vec![b"\r\n", b"30 1", b"00\r\n"]);
+        assert_eq!(read_until(&mut chunks, "30 100"), "\r\n30 100\r\n");
+        // And an answer that never comes ends with the child, not with a hang.
+        let mut none = Chunks(vec![b"\r\n"]);
+        assert_eq!(read_until(&mut none, "30 100"), "\r\n");
     }
 
     #[cfg(unix)]
