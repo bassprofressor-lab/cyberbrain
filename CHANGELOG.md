@@ -14,6 +14,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Added
 
+- **A simple view, and it is what the page now opens with.** Eight sidebar entries, `g s`
+  hints beside each of them, a search box whose placeholder read "Recall… (hybrid: lexical +
+  semantic, fused, ring-weighted)", and a ranked list of hits carrying citations and scores:
+  every one of those is right for whoever runs the store, and every one of them is wrong for
+  the colleague the store is installed next to.
+
+  Simple mode has three entries. A question is answered *once*, at reading size, with its
+  sources demoted underneath — because which hit wins is the question the rings already
+  answer, and it is the wrong decision to hand to somebody who has never seen a ring. Tiers
+  are named in words ("Always applies") rather than as `r0`. No citation, score or command
+  name appears anywhere in it, and a browser test asserts that rather than trusting review.
+
+  The full view is one switch away in the sidebar and is remembered. Nothing was removed from
+  it: every other screen stays reachable by address, unchanged, so the terminal token in the
+  launcher's URL and any link to Status keep working. See SPEC §13.1.
+
+- **The empty store says it is empty.** A machine on its first day showed "no note matches",
+  which is what a filter says when it has hidden something. It now says nothing is written
+  down yet, what belongs there, and the one command that puts something there.
+
 - **`cyberbrain install`.** The hooks and the MCP server have been there since the first
   release; what had never been there was a way to switch them on. Turning them on meant
   finding another program's configuration file, knowing where that program keeps it, and

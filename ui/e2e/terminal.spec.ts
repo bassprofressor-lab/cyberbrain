@@ -8,6 +8,15 @@ test.beforeAll(async () => {
 });
 test.afterAll(() => running?.stop());
 
+/**
+ * These are tests of the full view: its sidebar, its landing screen, its terminal. The page
+ * now opens in simple mode unless told otherwise, so each of them says so before the first
+ * paint rather than clicking the switch and racing the render.
+ */
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => localStorage.setItem("cyberbrain.mode", "expert"));
+});
+
 test("the page takes the token out of the address and keeps it", async ({ page }) => {
   await page.goto(running.url);
   await expect(page).toHaveURL(/#\/status$/);

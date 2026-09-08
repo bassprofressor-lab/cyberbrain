@@ -64,3 +64,25 @@ export function RingLegend({ className = "" }: { className?: string }) {
     </div>
   );
 }
+
+/**
+ * The same tier for simple mode: the plain-language name, no `r0`, no glyph legend to learn.
+ *
+ * Hue and label still carry it together — a chip that is only coloured says nothing to a
+ * reader who cannot see the difference, which is why the name is never dropped in favour of
+ * the colour alone.
+ */
+export function RingChip({ ring, className = "" }: { ring: Ring; className?: string }) {
+  const t = useT();
+  return (
+    <span
+      // `self-start`, because every place this is used is a column flex: without it the chip
+      // stretches to the width of the card and reads as a banner.
+      className={`inline-flex self-start items-center gap-1.5 h-6 pl-2 pr-2.5 rounded-full border text-2xs font-medium whitespace-nowrap ${className}`}
+      style={{ color: `var(--ring-${ring})`, background: `var(--ring-${ring}-bg)`, borderColor: `color-mix(in oklch, var(--ring-${ring}) 45%, transparent)` }}
+    >
+      <RingGlyph ring={ring} size={8} />
+      {t.rings.plain[ring]}
+    </span>
+  );
+}

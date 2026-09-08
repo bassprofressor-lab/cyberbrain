@@ -33,6 +33,7 @@ export const en = {
     compliance: "Compliance",
     console: "Command line",
     terminals: "Terminal",
+    team: "In the team",
   },
   scopes: {
     global: "global",
@@ -45,6 +46,7 @@ export const en = {
     compliance: "compliance",
     console: "command line",
     terminals: "terminal",
+    team: "in the team",
   },
   common: {
     refresh: "refresh",
@@ -78,6 +80,11 @@ export const en = {
     day: (n: number) => `${n} day${n === 1 ? "" : "s"}`,
   },
   rings: {
+    /**
+     * The same five tiers said without the vocabulary, for simple mode. A colleague who has
+     * never read the spec cannot act on "invariant"; "always applies" is the same fact.
+     */
+    plain: ["Always applies", "How we work", "Knowledge", "From a session", "From outside"],
     label: ["Invariant", "Protocol", "Knowledge", "Session", "External"],
     help: [
       "Operator invariants. Hard rules. Override all higher rings; always injected.",
@@ -695,5 +702,55 @@ export const en = {
       deadline: "response due:",
       nothing: "Nothing found for this identifier in what was searched; read the caveats above for what a substring search cannot see.",
     },
+  },
+  /**
+   * Simple mode. The words here carry more of the design than the CSS does: this is the
+   * half of the page written for somebody who never types a command, so nothing in it names
+   * a command, a ring number or a citation.
+   */
+  mode: {
+    simpleName: "Simple",
+    expertName: "Full",
+    toExpert: "Switch to the full view",
+    toSimple: "Switch to the simple view",
+    title: "How much of the tool to show",
+  },
+  ask: {
+    navLabel: "Ask",
+    placeholder: "What are you looking for?",
+    aria: "Your question",
+    hint: "Ask in your own words. Whole sentences are fine.",
+    examples: ["Can we release on a Friday?", "Who signs off a release?", "What applies to credentials?"],
+    thinking: "looking…",
+    appliesAlways: "Applies always, no exceptions.",
+    applies: ["Applies always, no exceptions.", "This is how the work is done here.", "Written down as knowledge.", "Noted during a session.", "Came from outside and has not been checked."],
+    changed: (when: string) => `Last changed ${when}`,
+    openNote: "Open the note",
+    sources: "Where this comes from",
+    conflict: "Something written later says otherwise. The rule above is the one that counts.",
+    conflictWhy: "A rule set by the operator outranks anything noted afterwards.",
+    nothing: (q: string) => `Nothing written down about “${q}”.`,
+    nothingHint: "Try fewer words, or ask a colleague — and if the answer turns out to matter, it belongs in a note.",
+    allGood: "Everything is in order.",
+    checking: "checking…",
+    trouble: "Something needs attention.",
+    details: "Technical details",
+  },
+  simpleNotes: {
+    title: "Notes",
+    count: (n: number) => `${n} note${n === 1 ? "" : "s"}`,
+    filterAria: "Filter by title",
+    filterPlaceholder: "Filter…",
+    noMatch: "No note has that in its title.",
+    emptyTitle: "Nothing written down yet.",
+    emptyBody: "Cyberbrain keeps what gets decided while you work: a rule, a reason, something that has already gone wrong once.",
+    emptyHow: "How does something get here?",
+    emptyHowBody: "Mostly the assistant writes it while you work with it. You can also write one yourself on the command line:",
+  },
+  team: {
+    title: "In the team",
+    subtitle: "what was written down most recently",
+    empty: "Nobody has written anything down yet.",
+    by: (who: string) => `by ${who}`,
   },
 };

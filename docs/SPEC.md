@@ -949,6 +949,33 @@ Screens for v0.1:
 Dark by default, light available, honouring `prefers-color-scheme`. Keyboard-first: search
 focus, result navigation and citation copy must all work without a mouse.
 
+### 13.1 Two densities
+
+The page has two fronts, and **simple is what an unconfigured machine opens with**. The five
+screens above are the full view, written for whoever runs the store; the simple view is
+written for a colleague who will never type a command, and it is what most installs are for.
+
+Simple mode replaces three screens and hides the rest of the sidebar:
+
+- **Ask** — the same recall call, rendered as *one answer* at reading size with its sources
+  demoted under it, rather than a ranked list the reader has to adjudicate. Which hit wins is
+  the question the rings already answer, and handing that decision to a reader who has never
+  seen a ring is how the full view loses them.
+- **Notes** — cards, newest first, no ring or kind filter to choose before seeing anything.
+  The empty store says it is empty and says how that changes; "no note matches" is what a
+  filter says, and reads as one on a machine where nothing has been written yet.
+- **In the team** — `listNotes(sort: "updated")` under the name of the question people
+  actually have.
+
+Three rules hold it together. **No citation, ring number, score or command name appears in
+simple mode** — the plain-language tier name carries the same fact, and a browser test asserts
+the absence rather than trusting review. **Every other screen stays reachable by address**,
+unchanged: the launcher opens the page with a terminal token in the fragment, and a link to
+Status has to keep working. And **the choice is remembered**, so an operator flips it once.
+
+It is one product with two densities, not two products: same API calls, same tokens, same
+type scale. Anything that exists only in the simple view is a bug in the full one.
+
 The UI is a client of the same API the CLI uses. No logic lives only in the frontend.
 
 **The embedded bundle must be a real one.** `rust-embed` bakes `ui/dist` into the release

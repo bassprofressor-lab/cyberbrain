@@ -18,13 +18,29 @@ export interface Serving {
   stop: () => void;
 }
 
-export async function serve(): Promise<Serving> {
+/** A note to put in the store before the server starts. */
+export interface Seed {
+  ring: number;
+  kind: string;
+  name: string;
+  body: string;
+}
+
+/**
+ * `seed` is written with the CLI *before* `serve` starts, not after: the server indexes the
+ * store it is given at startup, and a test that wrote afterwards would be asserting on
+ * whatever the running process happened to notice.
+ */
+export async function serve(seed: Seed[] = []): Promise<Serving> {
   if (!existsSync(BIN)) {
     throw new Error(`${BIN} is not built; run \`cargo build -p cyberbrain\` first`);
   }
   const dir = mkdtempSync(join(tmpdir(), "cyberbrain-e2e-"));
   const store = join(dir, ".cyberbrain");
   await once(spawn(BIN, ["init", "--path", store]));
+  for (const n of seed) {
+    await once(spawn(BIN, ["--store", store, "write", "--ring", String(n.ring), "--kind", n.kind, "--name", n.name, "--body", n.body]));
+  }
 
   const child = spawn(BIN, ["--store", store, "serve", "--port", "0", "--no-open", "--terminal"]);
   const url = await new Promise<string>((ok, fail) => {
