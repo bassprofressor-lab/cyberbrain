@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { lazy, Suspense, useEffect } from "react";
 import { api } from "@/api/client";
 import { HubLine } from "@/components/HubLine";
 import { ShortcutHelp } from "@/components/ShortcutHelp";
@@ -6,6 +6,7 @@ import { Kbd } from "@/components/ui";
 import { LANG_NAME, setLang, useLang, useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, SCREENS, useRoute } from "@/lib/router";
+import { captureToken } from "@/lib/terminalToken";
 import { useTheme } from "@/lib/theme";
 import { ComplianceScreen } from "@/screens/Compliance";
 import { ConsoleScreen } from "@/screens/Console";
@@ -13,7 +14,18 @@ import { GraphScreen } from "@/screens/Graph";
 import { NoteScreen } from "@/screens/Note";
 import { SearchScreen } from "@/screens/Search";
 import { StatusScreen } from "@/screens/Status";
+
 import { UsageScreen } from "@/screens/Usage";
+
+/**
+ * Loaded when somebody opens it, not before.
+ *
+ * xterm.js is around 300 KB, and most sessions never open a terminal. Everything else here
+ * is in the one bundle on purpose — this is the exception, and it earns it.
+ */
+const TerminalsScreen = lazy(() =>
+  import("@/screens/Terminals").then((m) => ({ default: m.TerminalsScreen })),
+);
 
 export function App() {
   const route = useRoute();
@@ -33,6 +45,17 @@ export function App() {
     ],
     [theme.choice, lang],
   );
+
+  // Before anything renders: take the terminal token out of the address and put the address
+  // back the way it should look. Done here rather than in the terminal screen so that the
+  // launcher can open any page with it and the token survives navigating away and back.
+  useEffect(() => {
+    if (captureToken(route.query)) {
+      const rest = new URLSearchParams(route.query);
+      rest.delete("t");
+      navigate(href(route.screen, route.param, Object.fromEntries(rest)), true);
+    }
+  }, [route]);
 
   useEffect(() => {
     document.title = `${t.nav[current]}${route.param ? ` · ${route.param}` : ""} — Cyberbrain`;
@@ -86,6 +109,11 @@ export function App() {
         {route.screen === "compliance" ? <ComplianceScreen route={route} /> : null}
         {route.screen === "status" ? <StatusScreen /> : null}
         {route.screen === "console" ? <ConsoleScreen /> : null}
+        {route.screen === "terminals" ? (
+          <Suspense fallback={<div className="p-4 text-2xs text-fg-faint">{t.common.loading}</div>}>
+            <TerminalsScreen route={route} />
+          </Suspense>
+        ) : null}
       </main>
       <ShortcutHelp />
     </div>

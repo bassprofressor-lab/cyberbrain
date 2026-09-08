@@ -4,11 +4,11 @@
  *
  *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/usage?days=30
  *   #/compliance#audit
- *   #/status   #/console
+ *   #/status   #/console   #/terminals?t=<token>
  */
 import { useEffect, useState } from "react";
 
-export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status" | "console";
+export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status" | "console" | "terminals";
 
 export interface Route {
   screen: Screen;
@@ -32,6 +32,10 @@ export const SCREENS: Array<{ screen: NavScreen; key: string }> = [
   // Last, and not because it matters least: it is the one screen that can change the store
   // in ways the others cannot, so it is not the thing a hand lands on.
   { screen: "console", key: "k" },
+  // Only useful when `serve --terminal` is on and the address carries its token; the screen
+  // says so itself rather than the entry vanishing, because an entry that comes and goes is
+  // one people stop looking for.
+  { screen: "terminals", key: "e" },
 ];
 
 export function parseRoute(hash: string): Route {
@@ -41,7 +45,7 @@ export function parseRoute(hash: string): Route {
   // Status is the landing screen: it answers "is this store healthy and what did it cost"
   // before the reader has typed anything. Search is one keystroke away (Mod+K).
   const [seg = "status", ...rest] = path.split("/");
-  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "status";
+  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console", "terminals"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : "status";
   const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
   return { screen, param, query: new URLSearchParams(query), anchor };
 }

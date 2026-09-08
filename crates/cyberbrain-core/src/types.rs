@@ -224,11 +224,22 @@ pub enum EgressPurpose {
     /// Audit rows to a collecting hub, so a team can hold its own compliance evidence in
     /// one place. Rows only: the request carries what happened, never what a note said.
     AuditSync,
+    /// A program the user started in a terminal this program opened for them (SPEC §8.3).
+    ///
+    /// Listed rather than gated, and that distinction is the point. This is the one entry
+    /// the gate does not mediate: `permit` is never called for it, because what `ssh` does
+    /// is not ours to allow or refuse. It is in the register so that a reader of the
+    /// register is not misled about what can leave the machine — a register that quietly
+    /// omitted it would be false, and its whole value is that it can be believed.
+    Terminal,
 }
 
 impl EgressPurpose {
     pub fn describe(self) -> &'static str {
         match self {
+            EgressPurpose::Terminal => {
+                "whatever you run in a terminal; this program neither mediates nor records it"
+            }
             EgressPurpose::ModelDownload => {
                 "downloads a model artefact from the configured source, once, after you agree"
             }

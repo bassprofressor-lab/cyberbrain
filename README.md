@@ -143,6 +143,12 @@ cannot return it — an unapproved invariant that an agent can retrieve is an in
 agreed to. Somebody other than the proposer accepts it with `cyberbrain review <name>
 --accept`, and the audit log names both of them.
 
+`cyberbrain serve --terminal` puts a real terminal in the page — a shell, `ssh`, an agent, in
+the project's directory. It is off unless you ask for it, it needs a token the address
+carries in its fragment, and it refuses a handshake from any other origin. The egress
+register lists it as the one path this program does not mediate, because a register that
+left it out while `ssh` is one keystroke away would be false.
+
 Rings 0 and 1 are the operator's, and `cyberbrain propose` is how everyone else offers one:
 the note goes to `proposals/`, outside the notes tree, so it is not indexed and `recall`
 cannot return it — an unapproved invariant that an agent can retrieve is an invariant nobody

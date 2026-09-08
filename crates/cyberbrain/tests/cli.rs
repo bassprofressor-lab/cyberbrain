@@ -757,11 +757,21 @@ fn policy_subcommands_work_over_a_real_store() {
     ]);
     cb.write("3", "fresh-session", "gamma");
 
-    // Egress register: the three registered purposes, each enabled or disabled with a
-    // reason. An unenrolled store lists audit sync as disabled rather than hiding it.
+    // Egress register: the four registered purposes, each enabled or disabled with a
+    // reason. An unenrolled store lists audit sync as disabled rather than hiding it, and
+    // the terminal is listed as a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.len(), 4);
+    let terminal = entries
+        .iter()
+        .find(|x| x["purpose"] == "terminal")
+        .expect("the terminal is in the register");
+    assert_eq!(terminal["enabled"], false);
+    assert!(
+        terminal["state"].as_str().unwrap().contains("not mediated"),
+        "{terminal:#}"
+    );
     let sync = &entries[2];
     assert_eq!(sync["purpose"], "audit-sync");
     assert_eq!(sync["enabled"], false);

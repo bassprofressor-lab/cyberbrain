@@ -151,6 +151,13 @@ die ein Agent findet, ist eine Invariante, der niemand zugestimmt hat. Jemand an
 Vorschlagende gibt sie mit `cyberbrain review <name> --accept` frei, und das Audit-Log nennt
 beide.
 
+`cyberbrain serve --terminal` setzt ein echtes Terminal in die Seite — eine Shell, `ssh`, ein
+Agent, im Verzeichnis des Projekts. Es ist aus, solange man es nicht verlangt, es braucht
+einen Token, den die Adresse im Fragment trägt, und es weist jede Anfrage von einer anderen
+Herkunft ab. Das Ausgangsregister führt es als den einen Weg, den dieses Programm nicht
+vermittelt — ein Register, das ihn verschwiege, während `ssh` einen Tastendruck weit weg ist,
+wäre falsch.
+
 ## Wie es arbeitet
 
 ```mermaid

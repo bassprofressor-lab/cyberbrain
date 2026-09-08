@@ -64,7 +64,14 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     rolldownOptions: {
       output: {
-        manualChunks: (id: string) => (id.includes("node_modules") ? "vendor" : undefined),
+        // Everything from node_modules in one chunk, except the terminal: xterm.js is
+        // around 300 KB and most sessions never open one, so it is left to the lazy import
+        // in App.tsx to pull in when somebody actually asks for a terminal.
+        manualChunks: (id: string) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (id.includes("@xterm")) return undefined;
+          return "vendor";
+        },
       },
     },
   },

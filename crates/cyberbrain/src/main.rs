@@ -18,6 +18,7 @@ mod install;
 mod mcp;
 mod render;
 mod serve;
+mod terminal;
 mod usage;
 mod writers;
 
@@ -156,9 +157,13 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             return Ok(out.exit_code);
         }
 
-        Command::Serve { port, no_open } => {
+        Command::Serve {
+            port,
+            no_open,
+            terminal,
+        } => {
             let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Operator)?);
-            runtime()?.block_on(serve::serve(app, port, !no_open))?;
+            runtime()?.block_on(serve::serve(app, port, !no_open, terminal))?;
             return Ok(0);
         }
         Command::Mcp => {

@@ -207,6 +207,15 @@ pub enum Command {
         /// Do not open a browser.
         #[arg(long)]
         no_open: bool,
+        /// Offer a terminal in the page: a real shell, `ssh`, whatever you would run at a
+        /// prompt, in the project's directory.
+        ///
+        /// Off by default, and that is a decision rather than caution. Every other route
+        /// this serves reads or writes notes; this one starts a process, so a store served
+        /// for reading cannot be talked into starting one. With it on, the address printed
+        /// at startup carries a token in its fragment — open that address and no other.
+        #[arg(long)]
+        terminal: bool,
     },
 
     /// Agent harness integration. Reads the payload on stdin, answers on stdout.

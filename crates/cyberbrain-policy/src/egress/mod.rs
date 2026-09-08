@@ -43,10 +43,11 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 3] = [
+pub const PURPOSES: [EgressPurpose; 4] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
+    EgressPurpose::Terminal,
 ];
 
 /// One line of `cyberbrain policy egress`. Plain data so the CLI and the UI print the same
@@ -72,6 +73,7 @@ pub struct EgressEntry {
 
 pub fn purpose_name(p: EgressPurpose) -> &'static str {
     match p {
+        EgressPurpose::Terminal => "terminal",
         EgressPurpose::ModelDownload => "model-download",
         EgressPurpose::LocalInference => "local-inference",
         EgressPurpose::AuditSync => "audit-sync",
@@ -98,6 +100,26 @@ pub fn register(cfg: &PolicyConfig) -> Vec<EgressEntry> {
 
 fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
     match purpose {
+        // The one entry the gate does not mediate. It is here so the register is true, not
+        // so it can be enforced: `permit` is never called for a terminal, because what a
+        // program somebody started does is not ours to allow or refuse. Saying that plainly
+        // is worth more than a register that is complete only because it left this out.
+        EgressPurpose::Terminal => EgressEntry {
+            purpose,
+            destination: "anywhere the program you started connects to".to_string(),
+            data: "whatever you type and whatever that program sends; it can read this store, because you can",
+            carries_note_content: true,
+            requires: "`cyberbrain serve --terminal`, and the token from the address it prints",
+            permitted_by: [Profile::Off, Profile::Eu, Profile::Ch],
+            enabled: false,
+            state: concat!(
+                "not mediated by this gate. A terminal exists only while `serve --terminal` ",
+                "is running; what runs in one is yours, in your name, and neither permitted ",
+                "nor recorded here. Listed so this register is not read as a complete list ",
+                "of what can leave the machine while a shell is one keystroke away."
+            )
+            .to_string(),
+        },
         EgressPurpose::ModelDownload => {
             let (enabled, state) = match (&cfg.model_source, cfg.model_download_consent) {
                 (None, _) => (false, "disabled: no model_source configured".to_string()),
@@ -649,6 +671,13 @@ impl Egress {
             ));
         }
         match purpose {
+            // The gate is never asked about a terminal; if it ever is, that is a mistake in
+            // the caller and not a decision to make quietly.
+            EgressPurpose::Terminal => {
+                return Err(
+                    "the terminal is not a gated path: nothing may take a ticket for it".into(),
+                );
+            }
             EgressPurpose::ModelDownload => {
                 if !self.cfg.model_download_consent {
                     return Err(
@@ -1007,7 +1036,12 @@ mod tests {
         let names: Vec<&str> = reg.iter().map(|e| purpose_name(e.purpose)).collect();
         assert_eq!(
             names,
-            ["model-download", "local-inference", "audit-sync"],
+            [
+                "model-download",
+                "local-inference",
+                "audit-sync",
+                "terminal"
+            ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
         );
         for e in &reg {
@@ -1015,7 +1049,8 @@ mod tests {
             match e.purpose {
                 EgressPurpose::ModelDownload
                 | EgressPurpose::LocalInference
-                | EgressPurpose::AuditSync => {}
+                | EgressPurpose::AuditSync
+                | EgressPurpose::Terminal => {}
             }
         }
         // Audit sync is off until a store is enrolled — a path that exists is not a path
@@ -1027,6 +1062,26 @@ mod tests {
             .expect("audit sync is in the register");
         assert!(!sync.enabled, "not enrolled means nothing is sent");
         assert!(!sync.carries_note_content, "rows only, never note text");
+
+        // The terminal is in the register precisely because it is not gated. Both halves
+        // matter: it must be listed, and it must not read as something this program permits.
+        let term = reg
+            .iter()
+            .find(|e| e.purpose == EgressPurpose::Terminal)
+            .expect("the terminal is in the register");
+        assert!(
+            !term.enabled,
+            "a path this gate does not mediate is not `enabled`"
+        );
+        assert!(
+            term.state.contains("not mediated"),
+            "the state has to say so in words, not leave it to be inferred: {}",
+            term.state
+        );
+        assert!(
+            term.carries_note_content,
+            "somebody in a shell can read this store, and the register must not suggest otherwise"
+        );
     }
 
     #[test]

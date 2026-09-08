@@ -529,7 +529,7 @@ fn show_all_command_lines(
 /// the browser until the launcher is restarted.
 fn open_page(p: &mut Running, title: &str, open_in: OpenIn, browser_only: &mut bool) {
     if open_in == OpenIn::Browser || *browser_only {
-        sys::open_in_browser(&p.server.url);
+        sys::open_in_browser(&p.server.open_url);
         return;
     }
     if let Some(w) = &p.window
@@ -538,7 +538,7 @@ fn open_page(p: &mut Running, title: &str, open_in: OpenIn, browser_only: &mut b
         w.focus();
         return;
     }
-    match window::open(title, &p.server.url) {
+    match window::open(title, &p.server.open_url) {
         Ok(w) => p.window = Some(w),
         Err(why) => {
             *browser_only = true;
@@ -550,7 +550,7 @@ fn open_page(p: &mut Running, title: &str, open_in: OpenIn, browser_only: &mut b
                      makes that the setting."
                 ),
             );
-            sys::open_in_browser(&p.server.url);
+            sys::open_in_browser(&p.server.open_url);
         }
     }
 }

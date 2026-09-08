@@ -23,7 +23,7 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.104"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 # The hub's own record and its device tokens. SQLite is already in the tree through
 # cyberbrain-index, and blake3 through the audit chain; neither is new C or a new licence.
 blake3 = "1.8.7"
@@ -60,6 +60,20 @@ argon2 = "0.6.0"
 # windows-sys ^0.61 is the version the workspace already pulls, so this adds no second copy.
 [target.'cfg(windows)'.dependencies]
 windows-service = "0.8.1"
+# The pseudo-console behind the terminal. No new crate in the graph: windows-sys is already
+# here through the workspace, and these are feature flags on it.
+windows-sys = { version = "0.61.2", features = [
+  "Win32_Foundation",
+  "Win32_Security",
+  "Win32_System_Console",
+  "Win32_System_Pipes",
+  "Win32_System_Threading",
+] }
+
+[target.'cfg(unix)'.dependencies]
+# The same thing on the machine this is built and tested on. A terminal that only exists on
+# the platform nobody here can run is a terminal nobody here can test.
+libc = "0.2.189"
 
 [features]
 # The web UI is compiled into the binary from the built page: `ui/dist` in a checkout,

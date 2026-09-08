@@ -6,7 +6,7 @@
 //! module report says what was seen: the CSP header test without the header layer, and
 //! the dry-run isolation test with `?dry_run=true` ignored by the write route.
 
-use super::{router, router_with};
+use super::router_with;
 use crate::app::App;
 use axum::Router;
 use axum::body::Body;
@@ -56,14 +56,14 @@ struct Fx {
 
 impl Fx {
     fn new() -> Fx {
-        Fx::with_router(router)
+        Fx::with_router(|app| router_with(app, PathBuf::new(), None, Vec::new()))
     }
 
     /// A fixture whose `POST /command` runs the real `cyberbrain` this test run built,
     /// rather than the test harness that `current_exe()` would name here.
     fn with_cli() -> Fx {
         let exe = cli_binary();
-        Fx::with_router(move |app| router_with(app, exe.clone()))
+        Fx::with_router(move |app| router_with(app, exe.clone(), None, Vec::new()))
     }
 
     fn with_router(make: impl FnOnce(Arc<App>) -> Router) -> Fx {
@@ -1135,8 +1135,8 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     let paths = e["paths"].as_array().unwrap();
     assert_eq!(
         paths.len(),
-        3,
-        "model download, local inference, audit sync"
+        4,
+        "model download, local inference, audit sync, terminal"
     );
     assert_eq!(paths[0]["purpose"], "model-download");
     // Audit sync is in the register whether or not the store is enrolled, and says which
@@ -1377,7 +1377,12 @@ async fn the_bind_is_loopback_and_the_port_is_the_only_knob() {
     assert!(addr.ip().is_loopback());
     let app = fx.app.clone();
     let server = tokio::spawn(async move {
-        axum::serve(listener, super::router(app)).await.unwrap();
+        axum::serve(
+            listener,
+            super::router_with(app, PathBuf::new(), None, Vec::new()),
+        )
+        .await
+        .unwrap();
     });
     let body = tokio::task::spawn_blocking(move || {
         use std::io::{Read, Write};

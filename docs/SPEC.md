@@ -301,7 +301,7 @@ cyberbrain doctor                     dangling links, ring cap, stale index, orp
 cyberbrain status [--json]            store health, model, backend, compliance profile
 cyberbrain export <name|id> [--format md|json]
 cyberbrain import --plan <file.toml> [--accept-pii]   bring an existing Markdown tree in
-cyberbrain serve [--port 7777]        local web UI (§13)
+cyberbrain serve [--port 7777] [--terminal]   local web UI (§13), and a terminal (§8.3)
 cyberbrain hook <event>               agent harness integration (§9)
 cyberbrain mcp                        MCP server over stdio (§9)
 cyberbrain install [--client C] [--undo]   write this binary into a client's config (§8.0.2)
@@ -436,8 +436,15 @@ anything assembled purely for the screen.
 
 Rules the shapes must obey:
 
-- Loopback socket, same origin, JSON, no cookies, no auth. Binding anywhere but loopback is
-  refused; there is no authentication because there is no remote access to authenticate.
+- Loopback socket, same origin, JSON, no cookies. Binding anywhere but loopback is refused.
+- **No authentication, with one exception, and the exception is why this sentence changed.**
+  Every route that reads or writes notes is unauthenticated, and that was defended by saying
+  there is no remote access to authenticate. That defence was always about *remote*, and it
+  was enough while the worst a local caller could do was write a note in a store it could
+  already read off the disk. The terminal starts a process, which is a different thing, so it
+  does not inherit the exemption; §8.3 states what guards it instead. Any route added later
+  that runs code, reads a path outside the store, or reaches the network has to say the same,
+  here, before it ships.
 - Errors carry `{ error: { code, message, exit_code } }` where `exit_code` is the same value
   §8 gives the CLI. One failure taxonomy, two front ends.
 - Every mutating route accepts `?dry_run=true`, and per §8 it runs the real path with a no-op
@@ -478,6 +485,39 @@ Rules the shapes must obey:
   reason of its own, plus `import` and `verify-export` — those two read files from anywhere
   on disk by name, and this surface has no authentication because nothing it holds leaves the
   machine. Naming another store with `--store` is refused for the same reason.
+
+### 8.3 The terminal
+
+`serve --terminal` offers `GET /api/v1/terminal`, a WebSocket carrying bytes to and from a
+pseudo-console with a program of the caller's choosing inside it. A shell, `ssh`, an agent —
+whatever the person would run at a prompt, in the project's directory.
+
+This is the surface that made §8.1's sentence about authentication too broad to leave
+standing, and it carries three conditions. All three, every time:
+
+1. **Off unless asked for.** Plain `cyberbrain serve` has no terminal at all and answers
+   `404` with the reason. A store served for reading cannot be talked into starting a
+   process.
+2. **A token the caller cannot fetch.** Minted per run and handed to the page in the URL
+   *fragment* — which a browser keeps to itself and never puts in a request. It is in no
+   request line, so it reaches no log, and a caller that can only speak HTTP to this port
+   cannot read it. It arrives in the socket's first frame and is compared in constant time.
+3. **An `Origin` that is ours, or none.** A WebSocket handshake is not subject to the
+   same-origin rule, so without this any page the user has open could try for a shell. A
+   handshake carrying another origin is refused. One carrying none is admitted, and that is
+   deliberate: no origin means a program on this machine running as this user, which can
+   start a shell without our help and gains nothing from being refused here.
+
+**What this does not claim.** It does not defend against the user's own account, and nothing
+could: a process running as you can already run anything you can. The line drawn is around
+other origins and other users, which is the line worth drawing.
+
+**The egress register (§12.1) does not cover what runs in a terminal**, and says so. A
+register claiming to enumerate every path bytes can take while `ssh` is one keystroke away
+would be false, and a false register is worse than an honest gap. What the register still
+covers is what *Cyberbrain* does: a note never leaves this machine by any path this program
+takes, and that is unchanged. A terminal is the user's own doing, in their own name, and it
+is registered as exactly that.
 
 ### 8.2 Composition
 
@@ -700,6 +740,19 @@ what the configuration string claimed.
 a refusal in the log rather than as a silent unaudited request.
 
 CI whitelists HTTP-client construction only at call sites that take an `EgressGate`.
+
+**What the register covers, said exactly.** It covers every path *this program* can send
+bytes on. It does not, and cannot, cover what the person running it does in a terminal this
+program opened for them (§8.3): `ssh` is one keystroke away there, and a register claiming
+otherwise would be false. A false register is worse than an honest gap, because the whole
+value of this one is that a reader can believe it.
+
+The promise that survives, and the one the product is sold on, is narrower and still worth
+having: **a note never leaves this machine by any path Cyberbrain takes.** The store, the
+index, the audit log and the resident rings are read and written locally; the two registered
+paths are the inference endpoint and the model download, both off by default, both named,
+both audited. A terminal moves no note. It is the user's own doing, under their own name,
+and `policy egress` says so rather than pretending not to know it exists.
 
 ### 12.1.1 What the transport itself may do behind your back
 

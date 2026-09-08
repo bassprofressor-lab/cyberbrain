@@ -178,6 +178,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   Session-start says how many are waiting, since a proposal nobody is told about is a file in
   a folder.
 
+- **A terminal in the window.** `serve --terminal`, and in the desktop launcher always: a
+  real pseudo-console with a program of your choosing in it, in the project's directory. A
+  shell, `ssh -o ServerAliveInterval=60 root@…`, an agent — whatever you would run at a
+  prompt. xterm.js draws it, a WebSocket carries the bytes, and ConPTY on Windows or a pty on
+  Unix runs it. Both platforms, because a terminal whose only implementation runs where
+  nobody here can try it is a terminal nobody has tried.
+
+  **This is the change that made Cyberbrain a workbench and not only a memory, and two
+  promises had to be rewritten to stay true.**
+
+  SPEC §8.1 said there was no authentication because there was no remote access to
+  authenticate. That was about *remote*, and it held while the worst a local caller could do
+  was write a note. A shell is a different thing, so the terminal does not inherit the
+  exemption: it is off unless asked for, it needs a token minted per run and handed to the
+  page in the URL fragment (which a browser never puts in a request, so it reaches no log),
+  and it refuses a handshake carrying an origin that is not ours — a WebSocket handshake is
+  not subject to the same-origin rule, so without that check any page you had open could try
+  for a shell. A handshake with no origin is admitted, deliberately: that is a program on
+  this machine running as you, which can start a shell without our help.
+
+  SPEC §12.1's egress register can no longer claim to enumerate every path bytes may take,
+  and pretending otherwise while `ssh` is one keystroke away would make it false — a false
+  register is worse than an honest gap. So the terminal is *in* the register, as the one
+  entry the gate does not mediate, saying so in words. The promise that survives is narrower
+  and is the one the product is sold on: **a note never leaves this machine by any path
+  Cyberbrain takes.** What you do in a terminal is yours, in your name.
+
+  Measured before it was chosen: ConPTY costs no new crate at all (feature flags on
+  `windows-sys`, already here), the WebSocket costs five, and xterm.js is loaded only when
+  somebody opens a terminal — the main bundle is the size it was.
+
 ### Fixed
 
 - The command surface in SPEC §8 had not listed `hub` or `verify-export` since they shipped.

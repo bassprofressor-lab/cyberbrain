@@ -57,6 +57,10 @@ impl std::fmt::Display for StartError {
 pub struct Server {
     child: Child,
     pub url: String,
+    /// The address that carries the terminal token, when this server was started with one.
+    /// Held apart from `url` because `url` is what goes in the instance file and into the
+    /// menu, and a token has no business in either.
+    pub open_url: String,
     pub project_dir: PathBuf,
 }
 
@@ -301,6 +305,10 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
                     said = true;
                     let _ = tx.send(Signal::Url(url));
                 }
+            } else if let Some(url) = parse_token_url(&line) {
+                // The second address, printed after the first: same server, with the
+                // terminal token in its fragment.
+                let _ = tx.send(Signal::TokenUrl(url));
             }
             append(&d, &line);
         }
@@ -315,11 +323,34 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
     });
 
     match rx.recv_timeout(START_TIMEOUT) {
-        Ok(Signal::Url(url)) => Ok(Server {
-            child,
-            url,
-            project_dir: project_dir.to_path_buf(),
-        }),
+        Ok(Signal::Url(url)) => {
+            // The token line follows the address line, so a short wait here costs nothing
+            // on a server that prints one and a moment on one that does not. Its absence is
+            // not an error: `serve` may be a build or a version without a terminal, and a
+            // launcher that refused to open a project over that would be worse than one
+            // that opens it without a terminal.
+            let open_url = match rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(Signal::TokenUrl(u)) => u,
+                _ => url.clone(),
+            };
+            Ok(Server {
+                child,
+                url,
+                open_url,
+                project_dir: project_dir.to_path_buf(),
+            })
+        }
+        // Cannot happen: the reader only sends this after an address, and the address is
+        // what this match is waiting for. Named rather than left to a wildcard, so that a
+        // change to the reader has to come back here.
+        Ok(Signal::TokenUrl(_)) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(StartError::Failed {
+                message: "cyberbrain serve printed a terminal address before its own".into(),
+                output: String::new(),
+            })
+        }
         // The marker comes before the address, so this is decided before a browser is
         // opened rather than after somebody has read a JSON error.
         Ok(Signal::NoPage) => {
@@ -352,7 +383,17 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
 /// What the reader thread found on `serve`'s stdout, whichever came first.
 enum Signal {
     Url(String),
+    TokenUrl(String),
     NoPage,
+}
+
+/// The address carrying a terminal token, if this line is one.
+///
+/// Matched on the fragment rather than on the surrounding words, so a change to the
+/// sentence around it does not quietly stop the launcher opening a terminal.
+pub fn parse_token_url(line: &str) -> Option<String> {
+    let url = parse_serve_url(line)?;
+    url.contains("#/?t=").then_some(url)
 }
 
 /// The line `cyberbrain serve` prints when its build has no page.
