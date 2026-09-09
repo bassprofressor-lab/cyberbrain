@@ -22,6 +22,7 @@ Unicode true
 !include "MUI2.nsh"
 !include "x64.nsh"
 !include "FileFunc.nsh"
+!include "Sections.nsh"
 
 !ifndef VERSION
   !define VERSION "0.0.0"
@@ -83,12 +84,6 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}"
 
 !insertmacro MUI_LANGUAGE "English"
 
-Function .onInit
-  ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "Cyberbrain needs 64-bit Windows."
-    Abort
-  ${EndIf}
-FunctionEnd
 
 Section "Cyberbrain" SecMain
   SectionIn RO
@@ -194,6 +189,30 @@ SectionEnd
 LangString DESC_SecMain ${LANG_ENGLISH} "The command-line tool and the launcher that opens it without a terminal."
 LangString DESC_SecDesktop ${LANG_ENGLISH} "An icon on the desktop as well as in the Start menu."
 LangString DESC_SecHub ${LANG_ENGLISH} "Only for the one machine that collects the audit trail of the others. Registers a Windows service on port 7788, opens that port in the firewall, and creates a folder to put the licence in. Not needed on a normal workstation."
+
+; After the sections on purpose: NSIS gives a section its number where the section stands,
+; so `${SecHub}` above the definition is not an error but a warning, and the flag would have
+; been accepted and quietly done nothing.
+Function .onInit
+  ${IfNot} ${RunningX64}
+    MessageBox MB_ICONSTOP "Cyberbrain needs 64-bit Windows."
+    Abort
+  ${EndIf}
+
+  ; A silent install picks its components from the command line. Without this, `/S` can only
+  ; ever install the default set — which leaves out the hub, and an unattended rollout that
+  ; cannot install the one machine that collects is not an unattended rollout. It is also
+  ; what lets CI install this the way a customer would and then check what happened.
+  ;
+  ;   cyberbrain-setup.exe /S           workstation
+  ;   cyberbrain-setup.exe /S /HUB      workstation and the collector service
+  ${GetParameters} $R0
+  ${GetOptions} $R0 "/HUB" $R1
+  ${IfNot} ${Errors}
+    !insertmacro SelectSection ${SecHub}
+  ${EndIf}
+  ClearErrors
+FunctionEnd
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_SecMain)

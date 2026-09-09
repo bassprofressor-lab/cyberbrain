@@ -43,6 +43,11 @@ jobs:
   desktop-installer:
     name: desktop launcher and installer
     runs-on: windows-latest
+    # On the job rather than on the step that uses it: a step's own `env:` is not visible to
+    # that step's `if`, so the condition would have read empty and the check would have
+    # skipped itself for ever, quietly.
+    env:
+      HUB_TEST_LICENCE: ${{ secrets.HUB_TEST_LICENCE }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -80,6 +85,148 @@ jobs:
         with:
           name: windows-installer
           path: packaging/windows/cyberbrain-setup-0.0.0-ci.exe
+
+      # Everything below is here because building an installer proves nothing about
+      # installing one. Two faults reached a person's machine on 2026-09-09 that this would
+      # have caught before it left: the hub treated its own certificate as somebody else's
+      # because the service is registered with paths rather than with --tls-generate, and
+      # the private key was readable by every account on the machine through an inherited
+      # ACL. Neither is visible from Linux, and neither needs a human to see it.
+      - name: install it the way a customer would
+        shell: pwsh
+        run: |
+          $setup = "packaging/windows/cyberbrain-setup-0.0.0-ci.exe"
+          # /S is silent, /HUB selects the collector service — the same two switches an
+          # unattended rollout uses.
+          $p = Start-Process -FilePath $setup -ArgumentList '/S','/HUB' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installer exited $($p.ExitCode)" }
+          $dir = "$env:ProgramFiles\Cyberbrain"
+          foreach ($f in 'cyberbrain.exe','cyberbrain-desktop.exe','uninstall.exe') {
+            if (-not (Test-Path "$dir\$f")) { throw "$f was not installed" }
+          }
+
+      - name: the hub made itself a certificate and knows it is its own
+        shell: pwsh
+        run: |
+          $data = "$env:ProgramData\Cyberbrain"
+          foreach ($f in 'hub-cert.pem','hub-key.pem') {
+            if (-not (Test-Path "$data\$f")) { throw "$f is missing: the installer did not make one" }
+          }
+
+          # The registration has to carry the certificate, or an upgrade drops back to
+          # plain text without anybody noticing.
+          $config = (sc.exe qc CyberbrainHub) -join "`n"
+          foreach ($flag in '--tls-cert','--tls-key') {
+            if ($config -notmatch [regex]::Escape($flag)) { throw "the service is registered without $flag :`n$config" }
+          }
+
+          # The service writes its first lines on start. It is registered as auto-start and
+          # started by the installer, so this is a wait for a file, not for a person.
+          $log = "$data\hub-service.log"
+          $deadline = (Get-Date).AddSeconds(60)
+          do {
+            Start-Sleep -Seconds 2
+            $text = if (Test-Path $log) { Get-Content $log -Raw } else { '' }
+          } while ($text -notmatch 'cyberbrain hub: ' -and (Get-Date) -lt $deadline)
+          Write-Host $text
+          if ($text -notmatch 'cyberbrain hub: https://') { throw "the hub is not serving https" }
+          # The half that went missing in the field: without it the pin never reaches an
+          # invitation and every client refuses the certificate.
+          if ($text -notmatch '\(invitations pin this\)') {
+            throw "the hub does not recognise its own certificate as its own"
+          }
+
+          # And the number the program reports is the number in its log.
+          $shown = & "$env:ProgramFiles\Cyberbrain\cyberbrain.exe" hub cert show --data "$data\hub.db"
+          Write-Host ($shown -join "`n")
+          $fromLog = [regex]::Match($text, 'certificate SHA-256: ([0-9A-F:]+)').Groups[1].Value
+          if (-not ($shown -join ' ').Contains($fromLog)) { throw "cert show and the log disagree about the fingerprint" }
+
+      - name: nobody but an administrator can read the key
+        shell: pwsh
+        run: |
+          $acl = (icacls "$env:ProgramData\Cyberbrain\hub-key.pem") -join "`n"
+          Write-Host $acl
+          # Measured on a real machine before this check existed: the key inherited
+          # C:\ProgramData's ACL, which grants BUILTIN\Users read.
+          if ($acl -match 'BUILTIN\\Users') { throw "the private key is readable by every account on the machine:`n$acl" }
+          foreach ($who in 'NT AUTHORITY\\SYSTEM','BUILTIN\\Administrators') {
+            if ($acl -notmatch $who) { throw "$who cannot reach the key:`n$acl" }
+          }
+
+      - name: the program is on the PATH, and a note can be delivered to the hub
+        shell: pwsh
+        run: |
+          $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+          if ($machine -notmatch [regex]::Escape("$env:ProgramFiles\Cyberbrain")) {
+            throw "the install directory is not on the machine PATH"
+          }
+          # A process started now inherits this job's environment, not the new one, so the
+          # PATH is refreshed here rather than trusting the variable that was read at start.
+          $env:PATH = $machine + ';' + [Environment]::GetEnvironmentVariable('Path','User')
+          cyberbrain --version
+          if ($LASTEXITCODE -ne 0) { throw "cyberbrain is not resolvable by name" }
+
+      # The rest of the chain — an invitation carrying the fingerprint, a client that pins
+      # it, a delivery, and the refusal when the pin is wrong — needs a licence, and only
+      # the issuer can sign one. It runs when the repository has HUB_TEST_LICENCE set and is
+      # skipped without a word otherwise, because a check that quietly passes when it did
+      # not run is worse than no check.
+      - name: a pinned client delivers, and a wrong pin does not
+        if: ${{ env.HUB_TEST_LICENCE != '' }}
+        shell: pwsh
+        run: |
+          $data = "$env:ProgramData\Cyberbrain"
+          $exe = "$env:ProgramFiles\Cyberbrain\cyberbrain.exe"
+          Set-Content -Path "$data\licence.txt" -Value $env:HUB_TEST_LICENCE
+          Restart-Service CyberbrainHub
+          Start-Sleep -Seconds 5
+
+          & $exe hub add ci-client --data "$data\hub.db" --invite "$env:RUNNER_TEMP\invite.json" --hub-url "https://$env:COMPUTERNAME:7788"
+          $invite = Get-Content "$env:RUNNER_TEMP\invite.json" -Raw | ConvertFrom-Json
+          if (-not $invite.hub_cert_sha256) { throw "the invitation carries no certificate to pin" }
+          if ($invite.version -ne 2) { throw "the invitation is version $($invite.version)" }
+
+          $store = "$env:RUNNER_TEMP\ci-store"
+          New-Item -ItemType Directory -Path $store | Out-Null
+          Push-Location $store
+          & $exe init
+          & $exe hub enrol "$env:RUNNER_TEMP\invite.json"
+          & $exe write --ring 2 --kind knowledge --name ci-note --body 'A row to deliver.'
+          & $exe hub push
+          if ($LASTEXITCODE -ne 0) { throw "a pinned delivery failed" }
+
+          # And the other direction, which is the whole point of a pin: a hub presenting
+          # something else is not this hub.
+          $pin = Get-ChildItem "$env:APPDATA\cyberbrain\hub-tokens\*.pin" | Select-Object -First 1
+          $good = Get-Content $pin -Raw
+          Set-Content -Path $pin -Value ($good -replace '^..', 'FF')
+          $out = (& $exe hub push 2>&1) -join ' '
+          if ($LASTEXITCODE -eq 0) { throw "a delivery went through with the wrong certificate pinned" }
+          if ($out -notmatch 'different certificate') { throw "the refusal does not say what was wrong: $out" }
+          Set-Content -Path $pin -Value $good
+          Pop-Location
+          # The failure above was the point of the step, and a pwsh step ends with
+          # `exit $LASTEXITCODE`: left alone, passing this check would fail the job.
+          $global:LASTEXITCODE = 0
+
+      - name: uninstalling takes the service and the PATH entry with it
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "$env:ProgramFiles\Cyberbrain\uninstall.exe" -ArgumentList '/S' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "uninstaller exited $($p.ExitCode)" }
+          Start-Sleep -Seconds 5
+          sc.exe query CyberbrainHub 2>&1 | Out-Null
+          if ($LASTEXITCODE -eq 0) { throw "the service is still registered" }
+          $machine = [Environment]::GetEnvironmentVariable('Path','Machine')
+          if ($machine -match [regex]::Escape("$env:ProgramFiles\Cyberbrain")) {
+            throw "the PATH still points at a directory that is gone"
+          }
+          # The record is deliberately left behind: it is the evidence, and removing the
+          # software must not remove it.
+          if (-not (Test-Path "$env:ProgramData\Cyberbrain\hub.db")) { throw "uninstalling deleted the record" }
+          # `sc query` was meant to fail; see above.
+          $global:LASTEXITCODE = 0
 
   # SPEC §9.1: the Windows hook has to survive cmd.exe. A job that only compiles proves
   # nothing about quoting, spaces in paths, or the absence of a POSIX shell — the failures
