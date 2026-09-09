@@ -626,14 +626,23 @@ fn run_hub_cert(command: &cli::CertCommand, out: Out) -> Result<i32> {
                 .as_str()
                 .or_else(|| v["certificate"].as_str())
                 .unwrap_or_default();
-            s.push_str(&format!(
+            s.push_str(
                 "\nThis is what invitations pin, and enrolled machines need nothing else. A \
                  browser is the exception: it has never heard of this certificate and warns \
-                 until the machine itself trusts it.\n\n\
-                 Windows, in an elevated prompt:\n  certutil -addstore -f Root {here}\n\
-                 Linux:\n  cp {here} /usr/local/share/ca-certificates/cyberbrain-hub.crt && \
-                 update-ca-certificates\n\
-                 (the .crt ending is not decoration there; the file is ignored without it)\n"
+                 until the machine itself trusts it.\n\n",
+            );
+            // The platform this is running on, and only that one. Printing both put a
+            // Windows path into a `cp` line on Windows, which is not an instruction, and an
+            // instruction that cannot be right is a reason to distrust the ones that are.
+            #[cfg(windows)]
+            s.push_str(&format!(
+                "In an elevated prompt:\n  certutil -addstore -f Root {here}\n"
+            ));
+            #[cfg(not(windows))]
+            s.push_str(&format!(
+                "As root:\n  cp {here} /usr/local/share/ca-certificates/cyberbrain-hub.crt \
+                 && update-ca-certificates\n\
+                 (the .crt ending is not decoration; the file is ignored without it)\n"
             ));
             s
         },
