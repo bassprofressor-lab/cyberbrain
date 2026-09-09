@@ -149,7 +149,45 @@ A licence dropped at `/var/lib/cyberbrain/licence.txt` is picked up on start her
 
 ## Encrypting it
 
-Give it a certificate and a key, in PEM, and it serves https itself:
+### If you have no certificate
+
+Most companies of this size have no certificate authority of their own, so the hub makes its
+own certificate:
+
+```console
+$ cyberbrain hub serve --addr 0.0.0.0:7788 --data /var/lib/cyberbrain/hub.db --tls-generate
+cyberbrain hub: https://0.0.0.0:7788/  (record: …)
+certificate SHA-256: 6C:D4:7B:43:…  (invitations pin this)
+```
+
+On Windows there is nothing to type: `hub service install` does it for you unless you gave it
+a certificate or said `--insecure-http`. The pair lands beside the record as `hub-cert.pem`
+and `hub-key.pem`, the key owner-only, and it is **made once and then left alone** — every
+invitation ever issued names that certificate, so quietly replacing it would stop every
+enrolled machine at once. Replacing it deliberately is deleting both files and reissuing the
+invitations.
+
+**Every invitation issued afterwards carries its fingerprint, and clients pin it.** A pinned
+client accepts that certificate and nothing else — not a company CA, not a public one — and it
+refuses to deliver over plain http, where no certificate is presented at all. Nothing has to be
+installed on the machines: the invitation they were enrolled with is what tells them what to
+expect.
+
+```console
+$ cyberbrain hub enrol ws-021.json
+enrolled with https://hub.example.internal:7788 as dev_01M1Y9…
+token stored at ~/.config/cyberbrain/hub-tokens/4a920a2c….token
+this hub is pinned to the certificate 6C:D4:7B:43:…
+deliveries go nowhere else, whatever certificate is presented
+```
+
+A browser is a different matter: it has never heard of this certificate and will warn. The
+fingerprint printed at every start is what you compare the warning against, and the way to stop
+being asked is to put `hub-cert.pem` into the machine's trust store, by group policy or by hand.
+
+### If you have one
+
+Give it a certificate and a key, in PEM, and it serves https with them:
 
 ```console
 $ cyberbrain hub serve --addr 0.0.0.0:7788 --data /var/lib/cyberbrain/hub.db \
@@ -161,10 +199,13 @@ certificate SHA-256: 63:4E:3F:E0:…
 On Windows the same two flags go on `hub service install`, where they become part of the
 registration — so an upgrade cannot quietly put the hub back into plain text.
 
-The fingerprint is printed at every start because it is what somebody compares against what
-their browser shows. Clients need nothing: a delivery verifies against the machine's own
-trust store, so a certificate from your CA or a public one is trusted the moment that
-machine trusts it, by the same rules as everything else on it.
+**A certificate you supplied is never pinned**, and clients need nothing: a delivery verifies
+against the machine's own trust store, so a certificate from your CA or a public one is trusted
+the moment that machine trusts it, by the same rules as everything else on it. Pinning it would
+turn its next renewal into every client on the network stopping at once.
+
+What falls between the two is a self-signed certificate made by hand: nobody trusts it and
+nothing pins it, so clients will refuse it. Let the hub make its own instead.
 
 **Without a certificate the hub still collects, and says so.** On a network address it logs a
 warning at every start and the page carries a banner, because on that hub every device token
@@ -174,9 +215,10 @@ The refusal is deliberately narrow — deliveries are unaffected, and a hub that
 collecting until somebody produced a certificate would be a worse trade than the one it is
 trying to prevent.
 
-Registering a *new* service on a network address without a certificate is refused, because
-that is the one moment a person is standing there to decide. `--insecure-http` says you meant
-it. A hub that is already running is never stopped over this.
+Registering a *new* service on a network address is where this is decided, because it is the
+one moment a person is standing there: with no flags it makes a certificate and uses it.
+`--insecure-http` is how you ask for plain text instead. A hub that is already running is never
+stopped over this.
 
 ## The hub's own page
 
@@ -455,7 +497,11 @@ week" is a finding, and its absence would read as an oversight.
 
 ## What is not in this slice
 
-- **No certificate of its own.** The hub serves the certificate you give it (see
-  *Encrypting it*) and it does not make one. In a network with no certificate authority of
-  its own that leaves a self-signed certificate and a browser warning, or plain text. The
-  slice that generates one and pins it at enrolment is the next one.
+- **No renewal, and no rotation.** The certificate the hub makes itself outlives all of us,
+  deliberately: an expiry would stop a hub years from now for a reason nobody is looking for.
+  Replacing it means deleting the pair and reissuing every invitation, and nothing here
+  automates that. A certificate you supplied renews on your own schedule and the hub does not
+  care, which is why that one is never pinned.
+- **The browser is still on its own.** A pin is something a client can be told at enrolment; a
+  browser cannot be, so a certificate the hub made itself still produces a warning until
+  somebody puts it in the machine's trust store.

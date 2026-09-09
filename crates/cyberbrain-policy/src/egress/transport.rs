@@ -19,6 +19,15 @@
 //!
 //! Bodies are read fully into memory. The largest thing that goes through here is a ~30 MB
 //! model artefact.
+//!
+//! # Pinned destinations
+//!
+//! One caller, audit delivery, may name a certificate instead of trusting the platform: a
+//! hub in a company with no certificate authority serves one it made itself, and the
+//! invitation that enrolled this machine carried its fingerprint. A pinned request trusts
+//! **that certificate and nothing else** — not the platform store, not a company CA — and it
+//! refuses to be made over plain http, because a pin on an unencrypted connection is a
+//! promise about a certificate that is not being used.
 
 use super::{Egress, EgressTicket, Outcome};
 use crate::audit::Actor;
@@ -80,8 +89,106 @@ fn check(ticket: &EgressTicket, url: &str) -> Result<Url> {
     Ok(u)
 }
 
+/// A certificate a caller insists on, as SHA-256 over its DER.
+///
+/// Parsed from what an invitation carried, which is what a browser and `openssl x509
+/// -fingerprint -sha256` show: uppercase pairs separated by colons. Bare hex is taken too,
+/// because that is what somebody who copied it out of a script will have.
+#[derive(Debug, Clone, Copy)]
+pub struct CertificatePin([u8; 32]);
+
+impl CertificatePin {
+    pub fn parse(s: &str) -> Result<Self> {
+        let hex: String = s
+            .chars()
+            .filter(|c| !matches!(c, ':' | ' ' | '-'))
+            .collect();
+        if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            return Err(Error::Config(format!(
+                "{s:?} is not a SHA-256 fingerprint: 64 hex digits, optionally in pairs \
+                 separated by colons"
+            )));
+        }
+        let mut out = [0u8; 32];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16)
+                .map_err(|e| Error::Config(format!("{s:?}: {e}")))?;
+        }
+        Ok(Self(out))
+    }
+}
+
+/// Accepts exactly one certificate and nothing else.
+///
+/// The name is not checked, and that is the point rather than an omission: in a network with
+/// no certificate authority, a name is a claim anybody can make and this fingerprint is the
+/// identity. Signature checking is still the provider's, because a pin says which key may
+/// sign, not that signatures stop mattering.
+#[derive(Debug)]
+struct PinnedCertificate {
+    want: CertificatePin,
+    provider: std::sync::Arc<rustls::crypto::CryptoProvider>,
+}
+
+impl rustls::client::danger::ServerCertVerifier for PinnedCertificate {
+    fn verify_server_cert(
+        &self,
+        end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> std::result::Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        use sha2::Digest;
+        let got = sha2::Sha256::digest(end_entity.as_ref());
+        if got.as_slice() == self.want.0 {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        } else {
+            Err(rustls::Error::General(
+                "the hub presented a different certificate from the one this machine \
+                 was invited with"
+                    .into(),
+            ))
+        }
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls::pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> std::result::Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.provider.signature_verification_algorithms,
+        )
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.provider
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
 /// The only HTTP client construction in this crate. Takes the ticket, which took the gate.
-fn client(ticket: &EgressTicket) -> Result<reqwest::Client> {
+fn client(ticket: &EgressTicket, pin: Option<CertificatePin>) -> Result<reqwest::Client> {
     install_tls_provider();
     let dest = ticket.destination();
     let pinned: Vec<SocketAddr> = dest
@@ -89,15 +196,28 @@ fn client(ticket: &EgressTicket) -> Result<reqwest::Client> {
         .iter()
         .map(|ip| SocketAddr::new(*ip, dest.port))
         .collect();
-    reqwest::Client::builder()
+    let mut b = reqwest::Client::builder()
         .user_agent(USER_AGENT)
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
-        .https_only(ticket.purpose() == EgressPurpose::ModelDownload)
-        .resolve_to_addrs(&dest.host, &pinned)
-        .build()
+        .https_only(ticket.purpose() == EgressPurpose::ModelDownload || pin.is_some())
+        .resolve_to_addrs(&dest.host, &pinned);
+    if let Some(want) = pin {
+        let provider = std::sync::Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider.clone())
+            .with_safe_default_protocol_versions()
+            .map_err(|e| err_for(ticket.purpose(), format!("TLS versions: {e}")))?
+            .dangerous()
+            .with_custom_certificate_verifier(std::sync::Arc::new(PinnedCertificate {
+                want,
+                provider,
+            }))
+            .with_no_client_auth();
+        b = b.use_preconfigured_tls(config);
+    }
+    b.build()
         .map_err(|e| err_for(ticket.purpose(), format!("building HTTP client: {e}")))
 }
 
@@ -145,7 +265,7 @@ async fn finish(ticket: &EgressTicket, resp: reqwest::Response) -> Result<Respon
 /// HTTP GET. The URL must be covered by the ticket.
 pub async fn get(ticket: &EgressTicket, url: &str) -> Result<Response> {
     let u = check(ticket, url)?;
-    let c = client(ticket)?;
+    let c = client(ticket, None)?;
     let resp = c
         .get(u)
         .send()
@@ -165,9 +285,22 @@ pub async fn post_bearer(
     token: &str,
     headers: &[(&str, &str)],
     body: String,
+    pin: Option<CertificatePin>,
 ) -> Result<Response> {
     let u = check(ticket, url)?;
-    let c = client(ticket)?;
+    if pin.is_some() && u.scheme() != "https" {
+        return Err(err_for(
+            ticket.purpose(),
+            format!(
+                "{} is pinned to a certificate but the address is {}, where no \
+                 certificate is presented. Enrol again with an invitation carrying the \
+                 address the hub actually serves.",
+                redact(url),
+                u.scheme()
+            ),
+        ));
+    }
+    let c = client(ticket, pin)?;
     let mut req = c
         .post(u)
         .bearer_auth(token)
@@ -175,11 +308,12 @@ pub async fn post_bearer(
     for (k, v) in headers {
         req = req.header(*k, *v);
     }
-    let resp = req
-        .body(body)
-        .send()
-        .await
-        .map_err(|e| err_for(ticket.purpose(), format!("POST {}: {e}", redact(url))))?;
+    let resp = req.body(body).send().await.map_err(|e| {
+        err_for(
+            ticket.purpose(),
+            format!("POST {}: {}", redact(url), with_cause(&e)),
+        )
+    })?;
     finish(ticket, resp).await
 }
 
@@ -253,6 +387,28 @@ pub async fn download(
 }
 
 /// URL without query or fragment, for error messages and audit rows.
+/// A request failure with the reason underneath it.
+///
+/// `reqwest::Error` prints "error sending request for url (…)" and keeps what actually went
+/// wrong in its source chain, which nothing shows by default. For a pinned delivery that is
+/// the difference between "the network is broken" and "this hub is presenting a certificate
+/// nobody here was invited with" — two problems with different people fixing them.
+fn with_cause(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut source = e.source();
+    while let Some(next) = source {
+        let text = next.to_string();
+        // Chains repeat themselves; saying the same thing three times reads like three
+        // problems.
+        if !out.contains(&text) {
+            out.push_str(": ");
+            out.push_str(&text);
+        }
+        source = next.source();
+    }
+    out
+}
+
 fn redact(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => {

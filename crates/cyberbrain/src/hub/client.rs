@@ -32,6 +32,11 @@ pub struct Invitation {
     pub token: String,
     pub hub_url: Option<String>,
     pub inference_url: Option<String>,
+    /// The hub's certificate, SHA-256, when it serves with one of its own making. Absent for
+    /// a hub behind a certificate the machine's own trust store already knows, which is the
+    /// ordinary case in a company that has a certificate authority.
+    #[serde(default)]
+    pub hub_cert_sha256: Option<String>,
 }
 
 pub fn parse_invitation(text: &str) -> Result<Invitation> {
@@ -43,9 +48,12 @@ pub fn parse_invitation(text: &str) -> Result<Invitation> {
             inv.kind
         )));
     }
-    if inv.version != 1 {
+    // Version 2 added the pin, and a version 1 file is still a valid invitation: it simply
+    // has no pin in it. Refusing what we can read would mean upgrading every hub and every
+    // machine on the same afternoon.
+    if inv.version == 0 || inv.version > 2 {
         return Err(Error::Config(format!(
-            "invitation version {} is not 1",
+            "invitation version {} is newer than this program understands; upgrade it",
             inv.version
         )));
     }
@@ -98,6 +106,58 @@ pub fn token_for(hub_url: &str) -> Result<String> {
     Ok(text.trim().to_string())
 }
 
+/// Where the pin for a hub is kept: beside its token, one file per hub, same naming.
+pub fn pin_path(hub_url: &str) -> Option<PathBuf> {
+    token_path(hub_url).map(|p| p.with_extension("pin"))
+}
+
+/// The certificate this machine was invited to expect from a hub, if it was invited with one.
+///
+/// No environment override, unlike the token. A token is a credential a service account may
+/// legitimately be handed without touching disk; a pin decides whether a certificate is
+/// believed, and reading that from the environment would be a way to talk a client into
+/// trusting something else by setting a variable.
+pub fn pin_for(hub_url: &str) -> Option<String> {
+    pin_at(&pin_path(hub_url)?)
+}
+
+/// The pin in a file, if there is one worth having. An empty file is not a pin: it would
+/// otherwise parse as one and fail every delivery with a fingerprint error.
+pub fn pin_at(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let text = text.trim().to_string();
+    (!text.is_empty()).then_some(text)
+}
+
+pub fn save_pin(hub_url: &str, pin: &str) -> Result<PathBuf> {
+    let path = pin_path(hub_url)
+        .ok_or_else(|| Error::Config("no configuration directory to write a pin to".into()))?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+    std::fs::write(&path, format!("{pin}\n")).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
+    Ok(path)
+}
+
+/// Forget a pin, for a hub that has moved behind an ordinary certificate.
+///
+/// Enrolling again is the moment this is decided, and leaving an old pin in place would mean
+/// a machine that keeps expecting a certificate nobody serves any more.
+pub fn forget_pin(hub_url: &str) -> Result<()> {
+    if let Some(path) = pin_path(hub_url)
+        && path.exists()
+    {
+        std::fs::remove_file(&path).map_err(|e| Error::Io { path, source: e })?;
+    }
+    Ok(())
+}
+
 pub fn save_token(hub_url: &str, token: &str) -> Result<PathBuf> {
     let path = token_path(hub_url)
         .ok_or_else(|| Error::Config("no configuration directory to write a token to".into()))?;
@@ -138,6 +198,7 @@ pub struct Delivered {
 
 /// Read the hub's reply. Written to be explicit about the three answers that are not
 /// failures of ours: nothing new, not collecting, and a gap we can close by sending more.
+#[derive(Debug)]
 pub enum Reply {
     Ok(Delivered),
     /// The hub is not collecting (licence). Not an error on this side: keep the rows.
@@ -163,10 +224,17 @@ pub async fn deliver(
     actor: &cyberbrain_policy::Actor,
     hub_url: &str,
     token: &str,
+    // What this machine was invited to expect, from `pin_for`. Passed in rather than read
+    // here, for the same reason the token is: this function does what it is given, and the
+    // caller is the one place that decides what this machine's credentials are.
+    pin: Option<&str>,
     version: &str,
     bundle: String,
 ) -> Result<Reply> {
     let url = format!("{}/api/v1/ingest", hub_url.trim_end_matches('/'));
+    let pin = pin
+        .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
+        .transpose()?;
     let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::AuditSync, &url)?;
     let resp = cyberbrain_policy::egress::transport::post_bearer(
         &ticket,
@@ -176,6 +244,7 @@ pub async fn deliver(
         // is fixed, while this is what lets the fleet view show an out-of-date client.
         &[("x-cyberbrain-version", version)],
         bundle,
+        pin,
     )
     .await?;
 

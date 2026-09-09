@@ -377,6 +377,13 @@ impl HubStore {
         .map(|_| ())
     }
 
+    pub fn clear_setting(&self, key: &str) -> Result<()> {
+        ix(self
+            .conn
+            .execute("DELETE FROM settings WHERE key = ?", params![key]))
+        .map(|_| ())
+    }
+
     /// The installed licence text, if there is one.
     pub fn licence_text(&self) -> Result<Option<String>> {
         ix(self

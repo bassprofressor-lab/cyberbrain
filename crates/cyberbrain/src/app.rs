@@ -2724,7 +2724,19 @@ impl App {
 
         let egress = self.policy.egress();
         let actor = cyberbrain_policy::Actor::Operator;
-        let reply = client::deliver(egress, &actor, &hub_url, &token, version, bundle).await?;
+        // The pin, like the token, is what this machine was enrolled with: both are read
+        // here, and the delivery itself decides nothing about who it trusts.
+        let pin = client::pin_for(&hub_url);
+        let reply = client::deliver(
+            egress,
+            &actor,
+            &hub_url,
+            &token,
+            pin.as_deref(),
+            version,
+            bundle,
+        )
+        .await?;
 
         Ok(match reply {
             Reply::Ok(d) => (

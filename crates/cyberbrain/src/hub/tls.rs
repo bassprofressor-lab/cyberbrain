@@ -9,17 +9,25 @@
 //! to open a prompt. A collector that is only encrypted when somebody else did the work is a
 //! collector that mostly is not.
 //!
-//! # What this slice does and does not do
+//! # One fingerprint, and what may be pinned
 //!
-//! It terminates TLS with a certificate the operator supplies, and it prints the
-//! certificate's fingerprint so it can be compared with what a browser shows. It does **not**
-//! generate a certificate and it does **not** pin one at enrolment — that is the next slice,
-//! and until it lands a hub in a network with no certificate authority of its own still has
-//! the choice between a browser warning and plain text.
+//! The fingerprint is SHA-256 over the certificate: the number a browser shows, the number
+//! `openssl x509 -fingerprint -sha256` prints, the number in an invitation. There was a
+//! version of this that pinned the public key instead, so that renewing a certificate for the
+//! same key would leave every enrolled machine working. Pinning the key means a client has to
+//! read the public key out of the certificate it was shown, which means an X.509 parser in
+//! `cyberbrain-policy` — the one crate whose job is to have less in it, not more. The cost of
+//! the simpler choice is bounded because of what may be pinned:
 //!
-//! The client side needs nothing: `cyberbrain-policy`'s transport verifies against the
-//! platform trust store, so a certificate from a company CA or a public one is trusted the
-//! day it is installed, by the same rules as everything else on that machine.
+//! - **A certificate the hub made itself** is pinned. It is made once and never replaced
+//!   (see [`ensure_self_signed`]), so there is no renewal to break. Replacing it is deleting
+//!   two files, which nobody does by accident, and the invitations then have to be reissued.
+//! - **A certificate the operator supplied** is never pinned. It comes from a certificate
+//!   authority, the machine's own trust store already knows it, and it may be renewed as
+//!   often as its issuer likes without anything here caring.
+//!
+//! What falls between is a self-signed certificate the operator made by hand: trusted by
+//! nobody and pinned by nobody, so clients will refuse it. Let the hub make its own.
 //!
 //! # Why the accept loop is written out by hand
 //!
@@ -58,9 +66,15 @@ pub struct Certificate {
     config: Arc<ServerConfig>,
     /// SHA-256 over the leaf certificate, in the grouping browsers show it in.
     pub fingerprint: String,
+    /// Whether this is the hub's own certificate, and may therefore be pinned in invitations.
+    /// A certificate that came from the operator is not: it has an issuer, and issuers renew.
+    pub pinnable: bool,
 }
 
-/// Read a PEM certificate chain and its key.
+/// Read the certificate the operator supplied.
+///
+/// Not pinnable: it belongs to a certificate authority that will renew it, and a pin would
+/// turn that renewal into every client on the network stopping at once.
 ///
 /// Errors name the file and what was wrong with it. This runs at startup, under a service
 /// control manager, where the alternative to a sentence somebody can act on is a service
@@ -107,7 +121,107 @@ pub fn load(cert: &Path, key: &Path) -> Result<Certificate> {
     Ok(Certificate {
         config: Arc::new(config),
         fingerprint: fingerprint(&leaf),
+        pinnable: false,
     })
+}
+
+/// The hub's own certificate: made if it is not there, then loaded like any other.
+pub fn own(dir: &Path, names: &[String]) -> Result<Certificate> {
+    let (cert, key) = ensure_self_signed(dir, names)?;
+    Ok(Certificate {
+        pinnable: true,
+        ..load(&cert, &key)?
+    })
+}
+
+/// The hub's own certificate, made once and kept beside the record.
+///
+/// # Why the hub makes one at all
+///
+/// The customer this is for has no certificate authority, and telling them to obtain a
+/// certificate is telling them to stay in plain text. A certificate nobody trusts still
+/// encrypts the wire, and the pin in the invitation is what turns "nobody trusts it" into
+/// "the machines that were invited trust exactly this one".
+///
+/// # Why it is not regenerated
+///
+/// The pin in every invitation ever issued is the public key in this file. Making a new one
+/// because a hostname changed would silently stop every enrolled machine from delivering, so
+/// an existing pair is used as it is; replacing it is deleting the two files, which is a
+/// thing somebody does on purpose.
+pub fn ensure_self_signed(
+    dir: &Path,
+    names: &[String],
+) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let cert_path = dir.join("hub-cert.pem");
+    let key_path = dir.join("hub-key.pem");
+    if cert_path.exists() && key_path.exists() {
+        return Ok((cert_path, key_path));
+    }
+    if cert_path.exists() != key_path.exists() {
+        return Err(Error::Config(format!(
+            "one half of the hub's certificate is missing: {} and {} come as a pair. \
+             Delete the one that is left to have a new pair made, or put the other one back.",
+            cert_path.display(),
+            key_path.display()
+        )));
+    }
+    // rcgen's own validity is 1975 to 4096 and it is left alone. A certificate that expires
+    // would stop a hub years later for a reason nobody is looking for, and the thing that
+    // says which hub this is here is the pin, not a date somebody has to renew.
+    let mut params = rcgen::CertificateParams::new(names.to_vec())
+        .map_err(|e| Error::Config(format!("cannot build a certificate for {names:?}: {e}")))?;
+    params.distinguished_name = rcgen::DistinguishedName::new();
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "Cyberbrain Hub");
+    let key = rcgen::KeyPair::generate()
+        .map_err(|e| Error::Config(format!("cannot generate a key: {e}")))?;
+    let cert = params
+        .self_signed(&key)
+        .map_err(|e| Error::Config(format!("cannot sign the certificate: {e}")))?;
+    std::fs::write(&cert_path, cert.pem()).map_err(|e| Error::Io {
+        path: cert_path.clone(),
+        source: e,
+    })?;
+    std::fs::write(&key_path, key.serialize_pem()).map_err(|e| Error::Io {
+        path: key_path.clone(),
+        source: e,
+    })?;
+    restrict(&key_path);
+    Ok((cert_path, key_path))
+}
+
+/// The names a hub's own certificate should carry.
+///
+/// Its own name first, because that is what the page suggests for invitations and what a
+/// browser will be pointed at. `localhost` and the loopback address are there for the
+/// administrator sitting at the machine, and the bound address when it is a real one — a
+/// wildcard bind is not a name and would only produce a certificate for `0.0.0.0`.
+pub fn names_for(addr: &std::net::SocketAddr) -> Vec<String> {
+    let mut names = vec![
+        super::page::hostname(),
+        "localhost".to_string(),
+        "127.0.0.1".to_string(),
+    ];
+    if !addr.ip().is_unspecified() && !addr.ip().is_loopback() {
+        names.push(addr.ip().to_string());
+    }
+    names.dedup();
+    names
+}
+
+/// Owner-only where the platform has such a thing, best effort. A key readable by everybody
+/// on the machine is worse than one that is not; failing the start over a file mode would be
+/// its own problem, and the hub runs as LocalSystem on the platform this matters least on.
+fn restrict(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 /// `AB:CD:…`, uppercase and in pairs, because that is how a browser shows it and the whole

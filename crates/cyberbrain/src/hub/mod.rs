@@ -274,6 +274,29 @@ pub fn ingest(
     })
 }
 
+/// Where the hub keeps the fingerprint of the key it is currently serving with.
+const PIN_SETTING: &str = "tls_cert_sha256";
+
+/// Remember what an invitation should pin, or forget it.
+///
+/// The hub serves and `hub add` issues invitations, and those are two processes that never
+/// meet: the only thing they share is this record. Written on every start rather than once,
+/// so it describes the hub that is running now and not the one that ran in March.
+pub fn remember_pin(hub: &HubStore, pin: Option<&str>) -> Result<()> {
+    match pin {
+        Some(p) => hub.set_setting(PIN_SETTING, p),
+        None => hub.clear_setting(PIN_SETTING),
+    }
+}
+
+/// What an invitation should pin, if this hub serves with a key it knows the fingerprint of.
+pub fn pin_to_offer(hub: &HubStore) -> Option<String> {
+    hub.setting(PIN_SETTING)
+        .ok()
+        .flatten()
+        .filter(|p| !p.is_empty())
+}
+
 /// Path of the hub's record, from the flag or the default.
 pub fn data_path(explicit: Option<PathBuf>) -> PathBuf {
     explicit.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA))

@@ -590,30 +590,6 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
             // of a typo in an address is diagnosed from services.msc, which is a bad place
             // to find out.
             let parsed = hub::parse_addr(addr)?;
-            let tls = match (tls_cert, tls_key) {
-                (Some(c), Some(k)) => {
-                    // Loaded here as well as at startup, because "the service was registered"
-                    // and "the service will start" have to be the same sentence. The cost is
-                    // reading two files twice.
-                    hub::tls::load(c, k)?;
-                    Some((c.as_path(), k.as_path()))
-                }
-                _ => None,
-            };
-            // The one moment a person is standing there: registering a collector that will
-            // take device tokens off the network in the clear should be a decision made now,
-            // not a discovery made later. A running hub is never stopped over this — an
-            // upgrade that refused to start would take the collection down with it — so the
-            // refusal lives here and nowhere else.
-            if tls.is_none() && !parsed.ip().is_loopback() && !insecure_http {
-                return Err(Error::Config(format!(
-                    "{parsed} is a network address and no certificate was given, so every \
-                     device token would cross the network in the clear. Register it with \
-                     --tls-cert and --tls-key, or with --addr 127.0.0.1:7788 for a hub that \
-                     only this machine talks to. If plain text really is what you want here, \
-                     say --insecure-http."
-                )));
-            }
             let path = data
                 .clone()
                 .unwrap_or_else(|| service::default_data_dir().join("hub.db"));
@@ -623,6 +599,27 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
                     source: e,
                 })?;
             }
+            // Generated where nothing was given, because this is the one moment a person is
+            // standing there and because the customer this is for has no certificate to give.
+            // A hub that listens to the network in the clear is now something somebody asked
+            // for in writing, not what happens when they answer no questions.
+            let own;
+            let tls = match (tls_cert, tls_key) {
+                (Some(c), Some(k)) => {
+                    // Loaded here as well as at startup, because "the service was registered"
+                    // and "the service will start" have to be the same sentence. The cost is
+                    // reading two files twice.
+                    hub::tls::load(c, k)?;
+                    Some((c.as_path(), k.as_path()))
+                }
+                _ if *insecure_http || parsed.ip().is_loopback() => None,
+                _ => {
+                    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+                    own = hub::tls::ensure_self_signed(dir, &hub::tls::names_for(&parsed))?;
+                    hub::tls::load(&own.0, &own.1)?;
+                    Some((own.0.as_path(), own.1.as_path()))
+                }
+            };
             let exe = std::env::current_exe()
                 .map_err(|e| Error::Config(format!("cannot find this program on disk: {e}")))?;
             service::install(&exe, &path, addr, tls)?;
@@ -634,6 +631,7 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
                     "data": path,
                     "addr": parsed.to_string(),
                     "encrypted": tls.is_some(),
+                    "certificate": tls.map(|(c, _)| c.display().to_string()),
                     "licence_drop": drop,
                     "state": "running",
                 }),
@@ -723,6 +721,15 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
 
             let app = App::open(store, Actor::Operator)?;
             let token_at = hub::client::save_token(&hub_url, &inv.token)?;
+            // Taken from the invitation and written down, or taken away again: enrolling
+            // afresh with a hub that has since moved behind an ordinary certificate must not
+            // leave this machine expecting the old key for ever.
+            match &inv.hub_cert_sha256 {
+                Some(pin) => {
+                    hub::client::save_pin(&hub_url, pin)?;
+                }
+                None => hub::client::forget_pin(&hub_url)?,
+            }
             let inference =
                 app.enrol_with_hub(&hub_url, &inv.device, inv.inference_url.as_deref())?;
 
@@ -731,6 +738,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     "hub": hub_url,
                     "device": inv.device,
                     "token_stored_at": token_at,
+                    "pinned_certificate": inv.hub_cert_sha256,
                     "inference_endpoint": inference,
                 }),
                 |v| {
@@ -740,6 +748,12 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         v["device"].as_str().unwrap_or_default(),
                         v["token_stored_at"].as_str().unwrap_or_default()
                     );
+                    if let Some(p) = v["pinned_certificate"].as_str() {
+                        s.push_str(&format!(
+                            "this hub is pinned to the certificate {p}\n\
+                             deliveries go nowhere else, whatever certificate is presented\n"
+                        ));
+                    }
                     if let Some(e) = v["inference_endpoint"].as_str() {
                         s.push_str(&format!("inference endpoint set to {e}\n"));
                     }
@@ -775,6 +789,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             data,
             tls_cert,
             tls_key,
+            tls_generate,
         } => {
             let path = hub::data_path(data.clone());
             let addr = hub::parse_addr(addr)?;
@@ -783,6 +798,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             // because the file it was told to use had the wrong permissions.
             let tls = match (tls_cert, tls_key) {
                 (Some(c), Some(k)) => Some(hub::tls::load(c, k)?),
+                _ if *tls_generate => {
+                    let dir = path.parent().unwrap_or(std::path::Path::new("."));
+                    Some(hub::tls::own(dir, &hub::tls::names_for(&addr))?)
+                }
                 // clap's `requires` makes one-without-the-other unreachable from the command
                 // line; the match still has to say what it means.
                 _ => None,
@@ -796,6 +815,16 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 let path = path.clone();
                 Box::new(move |stop| {
                     let store = hub::HubStore::open(&path)?;
+                    // Written on every start and cleared when there is no pin, because an
+                    // invitation is issued by a second process reading this record: a stale
+                    // fingerprint here would send a machine off to expect a certificate this
+                    // hub no longer serves.
+                    hub::remember_pin(
+                        &store,
+                        tls.as_ref()
+                            .filter(|c| c.pinnable)
+                            .map(|c| c.fingerprint.as_str()),
+                    )?;
                     // A licence dropped next to the record is taken on start, so licensing a
                     // hub is copying a file rather than typing a command with a path in it.
                     let dir = path.parent().unwrap_or(std::path::Path::new("."));
@@ -849,8 +878,18 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             // Printed every start, because the fingerprint is what somebody
                             // compares against the browser warning, and the moment they need
                             // it is the moment the hub was restarted onto a new certificate.
+                            // Both are labelled with what they are for: they look alike and
+                            // they are not interchangeable.
                             Some(cert) => {
-                                let line = format!("certificate SHA-256: {}", cert.fingerprint);
+                                let line = format!(
+                                    "certificate SHA-256: {}{}",
+                                    cert.fingerprint,
+                                    if cert.pinnable {
+                                        "  (invitations pin this)"
+                                    } else {
+                                        ""
+                                    }
+                                );
                                 println!("{line}");
                                 hub::service::log(&line);
                             }
@@ -954,14 +993,23 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             let (device, token) = store.add_device(name, &now())?;
 
             if let Some(path) = invite {
+                // Taken from the record, which the running hub wrote when it started. A pin
+                // is only issued when there is a hub currently serving with a key it could
+                // name — an invitation that promises a certificate nobody serves is worse
+                // than one that promises none.
+                let pin = hub::pin_to_offer(&store);
                 let invitation = serde_json::json!({
                     "kind": "cyberbrain.hub.invitation",
-                    "version": 1,
+                    // 2 adds the pin. A client of either version reads either file: the
+                    // field is absent on hubs that have no certificate of their own, and a
+                    // missing pin means "verify the ordinary way", not "verify nothing".
+                    "version": 2,
                     "device": device.id,
                     "name": device.name,
                     "token": token,
                     "hub_url": hub_url,
                     "inference_url": inference_url,
+                    "hub_cert_sha256": pin,
                 });
                 let text = serde_json::to_string_pretty(&invitation)
                     .map_err(|e| Error::Config(format!("invitation does not serialise: {e}")))?;

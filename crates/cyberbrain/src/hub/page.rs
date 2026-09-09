@@ -89,11 +89,13 @@ impl View {
     }
 }
 
-/// The machine's own name, for the address clients should deliver to.
+/// The machine's own name, for the address clients should deliver to — and for the names in
+/// the hub's own certificate, which have to be the ones this page suggests or the browser
+/// warns about a name mismatch on top of everything else.
 ///
 /// Its name rather than an IP: a hub that moves to another address keeps its name, and the
 /// person filling this in can correct it in the field anyway.
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     #[cfg(windows)]
     let var = "COMPUTERNAME";
     #[cfg(not(windows))]

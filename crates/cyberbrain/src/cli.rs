@@ -537,6 +537,11 @@ pub enum HubCommand {
         /// The private key for --tls-cert, PEM.
         #[arg(long, value_name = "PATH", requires = "tls_cert")]
         tls_key: Option<PathBuf>,
+        /// Make a certificate of its own beside the record if there is not one yet, and
+        /// serve with it. For a network with no certificate authority: invitations issued
+        /// afterwards carry its fingerprint, and the machines that get one trust it.
+        #[arg(long, conflicts_with = "tls_cert")]
+        tls_generate: bool,
     },
     /// Register a machine and print its token. The token is shown once and stored only as a
     /// hash, so a copy of the record is not a set of working credentials.

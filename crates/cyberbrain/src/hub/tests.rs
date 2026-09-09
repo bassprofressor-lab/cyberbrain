@@ -1754,3 +1754,226 @@ async fn a_hub_with_a_certificate_answers_over_tls_and_stops_when_told() {
         .unwrap()
         .unwrap();
 }
+
+// ---- the hub's own certificate, and the pin that goes with it ----
+
+#[test]
+fn a_hub_makes_one_certificate_and_keeps_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let first = super::tls::own(dir.path(), &["hub.example.internal".into()]).unwrap();
+    assert!(first.pinnable, "its own certificate is the pinnable one");
+    assert!(dir.path().join("hub-cert.pem").exists());
+    assert!(dir.path().join("hub-key.pem").exists());
+
+    // The pin in every invitation ever issued is this certificate. A second start must not
+    // quietly mint a new one, or every enrolled machine stops delivering at once.
+    let second = super::tls::own(dir.path(), &["hub.example.internal".into()]).unwrap();
+    assert_eq!(first.fingerprint, second.fingerprint);
+
+    // And a certificate that came from the operator is never pinned: it has an issuer, and
+    // issuers renew.
+    let supplied = super::tls::load(
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .unwrap();
+    assert!(!supplied.pinnable);
+}
+
+#[test]
+fn half_a_certificate_is_refused_rather_than_replaced() {
+    let dir = tempfile::tempdir().unwrap();
+    super::tls::own(dir.path(), &["hub".into()]).unwrap();
+    std::fs::remove_file(dir.path().join("hub-cert.pem")).unwrap();
+    // Making a fresh pair here would look like a repair and would silently invalidate every
+    // pin. The key that is still lying there is the evidence that this was a hub.
+    let e = super::tls::own(dir.path(), &["hub".into()])
+        .err()
+        .expect("a missing half is not something to paper over")
+        .to_string();
+    assert!(e.contains("come as a pair"), "{e}");
+}
+
+#[test]
+fn the_names_in_the_certificate_follow_the_address() {
+    let wildcard: std::net::SocketAddr = "0.0.0.0:7788".parse().unwrap();
+    let names = super::tls::names_for(&wildcard);
+    assert!(names.contains(&"localhost".to_string()));
+    assert!(names.contains(&"127.0.0.1".to_string()));
+    // A wildcard bind is not a name. A certificate for "0.0.0.0" would be a mismatch on
+    // every address the hub is actually reached at.
+    assert!(!names.contains(&"0.0.0.0".to_string()), "{names:?}");
+
+    let concrete: std::net::SocketAddr = "192.168.1.20:7788".parse().unwrap();
+    assert!(super::tls::names_for(&concrete).contains(&"192.168.1.20".to_string()));
+}
+
+#[test]
+fn the_pin_offered_to_invitations_is_what_the_running_hub_serves() {
+    let hub = HubStore::in_memory().unwrap();
+    assert_eq!(super::pin_to_offer(&hub), None);
+    super::remember_pin(&hub, Some("AB:CD")).unwrap();
+    assert_eq!(super::pin_to_offer(&hub).as_deref(), Some("AB:CD"));
+    // Restarted without a certificate: an invitation issued now must not promise one. A
+    // stale fingerprint sends a machine off to expect something nobody serves.
+    super::remember_pin(&hub, None).unwrap();
+    assert_eq!(super::pin_to_offer(&hub), None);
+}
+
+#[test]
+fn an_invitation_without_a_pin_is_still_an_invitation() {
+    // Version 1 files exist in the field: hubs issued them before there was a pin, and a
+    // client that refused them would mean upgrading every hub and every machine on the same
+    // afternoon.
+    let v1 = r#"{"kind":"cyberbrain.hub.invitation","version":1,"device":"dev_1",
+        "name":"ws","token":"t","hub_url":"https://hub.internal:7788"}"#;
+    let inv = super::client::parse_invitation(v1).unwrap();
+    assert_eq!(inv.hub_cert_sha256, None);
+
+    let v2 = r#"{"kind":"cyberbrain.hub.invitation","version":2,"device":"dev_1",
+        "name":"ws","token":"t","hub_url":"https://hub.internal:7788",
+        "hub_cert_sha256":"63:4E:3F"}"#;
+    assert_eq!(
+        super::client::parse_invitation(v2).unwrap().hub_cert_sha256,
+        Some("63:4E:3F".to_string())
+    );
+
+    // Something newer than this program: say so rather than guess at it.
+    let v3 = r#"{"kind":"cyberbrain.hub.invitation","version":3,"device":"d","name":"w",
+        "token":"t","hub_url":"https://hub.internal:7788"}"#;
+    let e = super::client::parse_invitation(v3).unwrap_err().to_string();
+    assert!(e.contains("newer than this program"), "{e}");
+}
+
+#[test]
+fn a_fingerprint_is_read_the_way_it_is_written_down() {
+    use cyberbrain_policy::egress::transport::CertificatePin;
+    let colons = "63:4E:3F:E0:BE:0A:13:3F:D4:CB:2B:AA:19:2F:C4:FD:52:C6:0F:00:5C:13:BF:41:03:89:34:03:CD:5B:65:9F";
+    assert!(CertificatePin::parse(colons).is_ok());
+    // The same thing pasted out of a script, and in the case a terminal gave it.
+    assert!(CertificatePin::parse(&colons.replace(':', "")).is_ok());
+    assert!(CertificatePin::parse(&colons.to_lowercase()).is_ok());
+    // And the shapes that are not a fingerprint at all. Half of one is the dangerous case:
+    // a truncated paste must not become a pin that matches nothing and is never checked.
+    for bad in ["", "63:4E:3F", "not a fingerprint", &colons[..40]] {
+        assert!(CertificatePin::parse(bad).is_err(), "{bad:?}");
+    }
+}
+
+/// The real delivery path, against a hub that is really serving TLS.
+///
+/// Through `client::deliver` rather than the transport underneath it, so that what is tested
+/// is what `hub push` does — including whether the pin it was given ever reaches the wire.
+async fn deliver_to_pinned_hub(hub_url: &str, pin: Option<&str>) -> Result<super::client::Reply> {
+    use cyberbrain_policy::{Actor, AuditLog, Egress, PolicyConfig};
+    let cfg = PolicyConfig {
+        hub_endpoint: Some(hub_url.to_string()),
+        ..Default::default()
+    };
+    let (log, _sink) = AuditLog::in_memory();
+    let egress = Egress::new(cfg, log, Actor::Cli);
+    super::client::deliver(
+        &egress,
+        &Actor::Cli,
+        hub_url,
+        "a-token",
+        pin,
+        "0.0.0-test",
+        String::new(),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_pinned_client_talks_to_that_hub_and_to_no_other() {
+    let dir = tempfile::tempdir().unwrap();
+    let cert = super::tls::own(dir.path(), &["localhost".into(), "127.0.0.1".into()]).unwrap();
+    let ours = cert.fingerprint.clone();
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let make = super::api::router(state_for(HubStore::in_memory().unwrap(), true))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(async move {
+        super::tls::serve(listener, make, cert, async {
+            let _ = stopped.await;
+        })
+        .await
+    });
+    let url = format!("https://127.0.0.1:{port}");
+
+    // Pinned to what this hub actually serves: the delivery goes through. The hub has no
+    // licence, so its answer is "not collecting" — an answer, and therefore proof that TLS
+    // and the delivery both worked. The pin's job is to get us to a refusal we can read.
+    let ok = deliver_to_pinned_hub(&url, Some(&ours)).await.unwrap();
+    assert!(
+        matches!(ok, super::client::Reply::NotCollecting(_)),
+        "reached the hub and got its own answer, not a transport error: {ok:?}"
+    );
+
+    // Pinned to a different, perfectly valid certificate: refused. This is the whole point.
+    // It is the certificate of the test CA's leaf, so the failure cannot be blamed on the
+    // fingerprint being malformed.
+    let other = super::tls::load(
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .unwrap()
+    .fingerprint;
+    assert_ne!(other, ours);
+    let wrong = deliver_to_pinned_hub(&url, Some(&other))
+        .await
+        .expect_err("a hub presenting another certificate is not this hub")
+        .to_string();
+    // And it says so. reqwest prints "error sending request" and keeps the reason in a
+    // source chain nothing shows by default; an operator whose hub was reinstalled would
+    // otherwise be told only that something went wrong with the network.
+    assert!(
+        wrong.contains("different certificate"),
+        "the error should say what was wrong: {wrong}"
+    );
+
+    // And with no pin at all: also refused, because a certificate the hub made itself is in
+    // nobody's trust store. Without this case the first one would only prove that the
+    // connection works, not that the pin is what made it work.
+    let unpinned = deliver_to_pinned_hub(&url, None)
+        .await
+        .expect_err("a self-signed certificate is not trusted by the platform");
+    assert!(unpinned.to_string().contains("POST"), "{unpinned}");
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), served)
+        .await
+        .expect("the server should stop")
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_pin_refuses_to_be_used_over_plain_http() {
+    // A pin on an unencrypted connection is a promise about a certificate that is not being
+    // presented. Refused before anything is sent, rather than delivering in the clear while
+    // the operator believes the hub is pinned.
+    let e = deliver_to_pinned_hub("http://127.0.0.1:7788", Some("AB"))
+        .await
+        .err();
+    // The malformed pin is caught first; use a real one to reach the scheme check.
+    let real = "63:4E:3F:E0:BE:0A:13:3F:D4:CB:2B:AA:19:2F:C4:FD:52:C6:0F:00:5C:13:BF:41:03:89:34:03:CD:5B:65:9F";
+    assert!(e.is_some());
+    let e = deliver_to_pinned_hub("http://127.0.0.1:7788", Some(real))
+        .await
+        .expect_err("pinned and unencrypted is a contradiction")
+        .to_string();
+    assert!(e.contains("pinned to a certificate"), "{e}");
+    assert!(e.contains("no certificate is presented"), "{e}");
+}
