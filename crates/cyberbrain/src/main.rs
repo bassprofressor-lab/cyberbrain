@@ -865,12 +865,16 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             // Read before the listener is opened. A certificate that cannot be loaded is the
             // operator's mistake to see at once, not a hub that comes up in plain text
             // because the file it was told to use had the wrong permissions.
+            let dir = path
+                .parent()
+                .unwrap_or(std::path::Path::new("."))
+                .to_path_buf();
             let tls = match (tls_cert, tls_key) {
-                (Some(c), Some(k)) => Some(hub::tls::load(c, k)?),
-                _ if *tls_generate => {
-                    let dir = path.parent().unwrap_or(std::path::Path::new("."));
-                    Some(hub::tls::own(dir, &hub::tls::names_for(&addr))?)
-                }
+                // Named paths, which is how the Windows service is registered even when the
+                // installer made the pair itself — so the question of whose certificate this
+                // is gets asked here rather than assumed from how it arrived.
+                (Some(c), Some(k)) => Some(hub::tls::named(&dir, c, k)?),
+                _ if *tls_generate => Some(hub::tls::own(&dir, &hub::tls::names_for(&addr))?),
                 // clap's `requires` makes one-without-the-other unreachable from the command
                 // line; the match still has to say what it means.
                 _ => None,

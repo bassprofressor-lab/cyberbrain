@@ -2001,3 +2001,61 @@ fn the_fingerprint_can_be_read_without_the_key() {
         .to_string();
     assert!(e.contains(super::tls::OWN_KEY), "{e}");
 }
+
+#[test]
+fn the_pair_beside_the_record_stays_ours_when_it_arrives_as_two_paths() {
+    // The Windows installer makes the certificate and then registers the service with
+    // --tls-cert and --tls-key pointing at it. On the first build that reached a Windows
+    // machine the hub therefore treated its own certificate as somebody else's, issued
+    // invitations with no pin, and every client would have refused a certificate it was
+    // never told to expect. The log line said so — the "(invitations pin this)" was missing
+    // — and nothing here noticed, because on this machine the flag was never used.
+    let dir = tempfile::tempdir().unwrap();
+    let made = super::tls::own(dir.path(), &["hub".into()]).unwrap();
+    assert!(made.pinnable);
+
+    let as_registered = super::tls::named(
+        dir.path(),
+        &dir.path().join(super::tls::OWN_CERT),
+        &dir.path().join(super::tls::OWN_KEY),
+    )
+    .unwrap();
+    assert!(
+        as_registered.pinnable,
+        "the same two files, named on a command line, are still the hub's own"
+    );
+    assert_eq!(as_registered.fingerprint, made.fingerprint);
+
+    // And a certificate that really did come from somewhere else stays unpinnable, whatever
+    // directory it is asked about.
+    let elsewhere = super::tls::named(
+        dir.path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .unwrap();
+    assert!(!elsewhere.pinnable);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_generated_key_is_not_readable_by_everybody() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    super::tls::own(dir.path(), &["hub".into()]).unwrap();
+    let mode = std::fs::metadata(dir.path().join(super::tls::OWN_KEY))
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(
+        mode, 0o600,
+        "the key is the one file that must not be shared"
+    );
+    // The certificate is the opposite: it is handed out on purpose.
+    assert!(std::fs::read_to_string(dir.path().join(super::tls::OWN_CERT)).is_ok());
+}

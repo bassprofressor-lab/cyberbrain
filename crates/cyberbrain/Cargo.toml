@@ -87,6 +87,11 @@ windows-service = "0.8.1"
 windows-sys = { version = "0.61.2", features = [
   "Win32_Foundation",
   "Win32_Security",
+  # The hub's own key is created with a DACL that inherits nothing. Without this the file
+  # inherits the read that C:\ProgramData grants BUILTIN\Users, which was measured on a
+  # real install and is not what a private key is for.
+  "Win32_Security_Authorization",
+  "Win32_Storage_FileSystem",
   "Win32_System_Console",
   "Win32_System_Pipes",
   "Win32_System_Threading",

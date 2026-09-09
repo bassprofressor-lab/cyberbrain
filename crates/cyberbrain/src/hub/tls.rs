@@ -134,6 +134,37 @@ pub fn own(dir: &Path, names: &[String]) -> Result<Certificate> {
     })
 }
 
+/// A certificate named by two paths, which is how a service registration carries one.
+///
+/// The paths are the only thing there is to go on, so this is where the question of whose
+/// certificate it is gets asked: the same call answers it for a company CA's certificate and
+/// for the pair the installer made two minutes ago.
+pub fn named(dir: &Path, cert: &Path, key: &Path) -> Result<Certificate> {
+    Ok(Certificate {
+        pinnable: is_own_pair(dir, cert, key),
+        ..load(cert, key)?
+    })
+}
+
+/// Whether these two files are the pair this hub made for itself.
+///
+/// It has to be asked, because a certificate arrives as two paths and nothing else. The
+/// Windows installer makes the pair and then registers the service with `--tls-cert` and
+/// `--tls-key` pointing at it, so the hub that starts sees exactly what it would see for a
+/// certificate from a company CA. Without this it treats its own certificate as somebody
+/// else's, issues invitations with no pin, and every client then refuses a certificate
+/// nobody told them to expect. The answer is the convention: this pair, these names, beside
+/// the record.
+pub fn is_own_pair(dir: &Path, cert: &Path, key: &Path) -> bool {
+    let same = |a: &Path, b: &Path| match (a.canonicalize(), b.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        // On a path that cannot be resolved, compare what we were given. Being wrong here
+        // means no pin, which is the safe direction to be wrong in.
+        _ => a == b,
+    };
+    same(cert, &dir.join(OWN_CERT)) && same(key, &dir.join(OWN_KEY))
+}
+
 /// The hub's own certificate, made once and kept beside the record.
 ///
 /// # Why the hub makes one at all
@@ -184,11 +215,10 @@ pub fn ensure_self_signed(
         path: cert_path.clone(),
         source: e,
     })?;
-    std::fs::write(&key_path, key.serialize_pem()).map_err(|e| Error::Io {
+    write_private(&key_path, &key.serialize_pem()).map_err(|e| Error::Io {
         path: key_path.clone(),
         source: e,
     })?;
-    restrict(&key_path);
     Ok((cert_path, key_path))
 }
 
@@ -211,17 +241,93 @@ pub fn names_for(addr: &std::net::SocketAddr) -> Vec<String> {
     names
 }
 
-/// Owner-only where the platform has such a thing, best effort. A key readable by everybody
-/// on the machine is worse than one that is not; failing the start over a file mode would be
-/// its own problem, and the hub runs as LocalSystem on the platform this matters least on.
-fn restrict(path: &Path) {
+/// Write a private key so that only this machine's administrators can read it.
+///
+/// The permissions are part of creating the file, not something done to it afterwards:
+/// between a create and a chmod the key is readable by everybody, and that window is on the
+/// one file that must never be.
+///
+/// Measured rather than assumed. On Windows the hub's key inherited the ACL of
+/// `C:\ProgramData`, which grants `BUILTIN\Users` read; `icacls` on a real install said
+/// `(I)(RX)`. Anybody who can log in to the hub could read its key and then be the hub, to
+/// every machine that was invited to expect exactly that certificate.
+fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    // `create_new` rather than `create`: this is only ever called for a key that does not
+    // exist yet, and it closes the race with anything that put a file there first.
+    opts.write(true).create_new(true);
+
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-    #[cfg(not(unix))]
-    let _ = path;
+
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+
+        // `D:P` is a DACL that inherits nothing, which is the whole point: what it would
+        // inherit is the read for Users. Then full access for the local system account and
+        // the administrators group, by SID and not by name — the names are localised and
+        // this has to work on a German Windows.
+        let sddl: Vec<u16> = "D:P(A;;FA;;;SY)(A;;FA;;;BA)\0".encode_utf16().collect();
+        let mut descriptor = std::ptr::null_mut();
+        let built = unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                sddl.as_ptr(),
+                1, // SDDL_REVISION_1
+                &mut descriptor,
+                std::ptr::null_mut(),
+            )
+        };
+        // The descriptor is never freed: windows-sys 0.61 no longer binds LocalFree, and
+        // this is a few hundred bytes once, in a process that generates one key and then
+        // runs for months. Said out loud rather than left to be discovered.
+        if built != 0 {
+            use std::os::windows::ffi::OsStrExt;
+            use std::os::windows::io::FromRawHandle;
+            use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+            use windows_sys::Win32::Storage::FileSystem::{
+                CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
+            };
+
+            // `std`'s own OpenOptions has no way to pass security attributes — the extension
+            // trait offers flags and access modes and nothing for a descriptor — so the file
+            // is created through the API that takes one. This is the only reason the write
+            // is not four lines.
+            let attributes = SECURITY_ATTRIBUTES {
+                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+                lpSecurityDescriptor: descriptor,
+                bInheritHandle: 0,
+            };
+            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+            let handle = unsafe {
+                CreateFileW(
+                    wide.as_ptr(),
+                    FILE_GENERIC_WRITE,
+                    0, // shared with nobody while it is being written
+                    &attributes,
+                    CREATE_NEW,
+                    FILE_ATTRIBUTE_NORMAL,
+                    std::ptr::null_mut(),
+                )
+            };
+            if handle == INVALID_HANDLE_VALUE {
+                return Err(std::io::Error::last_os_error());
+            }
+            let mut f = unsafe { std::fs::File::from_raw_handle(handle as _) };
+            return f.write_all(contents.as_bytes());
+        }
+        // If the descriptor could not be built the file is still written below, with the
+        // inherited ACL. A hub that refuses to start over a file mode helps nobody, and
+        // `hub cert show` is where that gap belongs.
+    }
+
+    let mut f = opts.open(path)?;
+    f.write_all(contents.as_bytes())
 }
 
 /// The name the hub's own certificate is kept under, beside the record.
