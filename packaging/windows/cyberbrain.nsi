@@ -125,6 +125,23 @@ Section "Cyberbrain" SecMain
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKLM "${REGKEY}" "EstimatedSize" "$0"
 
+  ; On the PATH, because the workstation half of this is a command-line program and
+  ; "cyberbrain hub push" on a timer should not have to name a directory with a space in it.
+  ; Through a script rather than from here: NSIS truncates strings at a fixed length and a
+  ; machine PATH is regularly longer, so reading it here and writing it back would quietly
+  ; cut it off. See path.ps1.
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\path.ps1" "path.ps1"
+  DetailPrint "Putting $INSTDIR on the PATH..."
+  nsExec::ExecToStack 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" -Action add -Directory "$INSTDIR"'
+  Pop $0
+  Pop $1
+  ${If} $0 != 0
+    ; Not a failure of the installation: everything works from the full path, and an
+    ; installer that stops here over a convenience would be worse than the inconvenience.
+    DetailPrint "Could not change the PATH ($0). Use the full path, or add $INSTDIR by hand."
+  ${EndIf}
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -188,6 +205,14 @@ Section "Uninstall"
   ; The service first, while the program that can remove it is still on disk. It is quiet
   ; about not finding one: most installations never had it.
   nsExec::ExecToStack '"$INSTDIR\cyberbrain.exe" hub service uninstall'
+  Pop $0
+  Pop $1
+
+  ; Out of the PATH again. A directory that no longer exists, left in the PATH of every
+  ; process on the machine, is litter that outlives the program by years.
+  InitPluginsDir
+  File "/oname=$PLUGINSDIR\path.ps1" "path.ps1"
+  nsExec::ExecToStack 'powershell -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\path.ps1" -Action remove -Directory "$INSTDIR"'
   Pop $0
   Pop $1
   nsExec::ExecToStack 'netsh advfirewall firewall delete rule name="${NAME} Hub"'

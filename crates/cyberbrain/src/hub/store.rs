@@ -50,7 +50,43 @@ pub struct HubStore {
 }
 
 fn ix<T>(r: rusqlite::Result<T>) -> Result<T> {
-    r.map_err(|e| Error::Index(format!("hub store: {e}")))
+    r.map_err(|e| Error::Index(format!("hub store: {}", explain(e))))
+}
+
+/// SQLite's own words, plus what to do about them where we know.
+///
+/// "attempt to write a readonly database" is the message a person gets for running `hub add`
+/// in an ordinary prompt: the record belongs to the service account, everybody else may read
+/// it, and SQLite therefore opened it read-only. The sentence is accurate and tells the
+/// reader nothing they can act on, which for a command they typed on purpose is the same as
+/// telling them nothing.
+pub(super) fn explain(e: rusqlite::Error) -> String {
+    let text = e.to_string();
+    let readonly = matches!(
+        e,
+        rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error {
+                code: rusqlite::ErrorCode::ReadOnly,
+                ..
+            },
+            _
+        )
+    );
+    if !readonly {
+        return text;
+    }
+    let hint = if cfg!(windows) {
+        concat!(
+            "the record belongs to the account the hub service runs as, and this prompt is ",
+            "not elevated. Open one with Run as administrator and try again."
+        )
+    } else {
+        concat!(
+            "the record belongs to the account the hub runs as. Try again as that user, or ",
+            "with sudo."
+        )
+    };
+    format!("{text} — {hint}")
 }
 
 impl HubStore {

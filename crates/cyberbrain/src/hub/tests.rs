@@ -2059,3 +2059,36 @@ fn a_generated_key_is_not_readable_by_everybody() {
     // The certificate is the opposite: it is handed out on purpose.
     assert!(std::fs::read_to_string(dir.path().join(super::tls::OWN_CERT)).is_ok());
 }
+
+#[test]
+fn a_record_that_cannot_be_written_says_what_to_do_about_it() {
+    // What an operator gets for running `hub add` in an ordinary prompt: the record belongs
+    // to the service account, so SQLite opened it read-only. "attempt to write a readonly
+    // database" is true and useless — it is not a sentence somebody can act on.
+    //
+    // The mapping is tested rather than the situation. These tests run as root, and root
+    // ignores a read-only file: the first version of this test set the file read-only,
+    // wrote to it anyway, and would have passed for a reason that had nothing to do with
+    // the code.
+    let readonly = rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(8), // SQLITE_READONLY
+        Some("attempt to write a readonly database".into()),
+    );
+    let e = super::store::explain(readonly);
+    assert!(e.contains("readonly database"), "{e}");
+    assert!(
+        e.contains("elevated") || e.contains("sudo"),
+        "the message has to name the way out: {e}"
+    );
+
+    // Everything else is passed on as SQLite said it, with no guess bolted on: a wrong
+    // suggestion under a real error sends the reader away from it.
+    let other = rusqlite::Error::SqliteFailure(
+        rusqlite::ffi::Error::new(11), // SQLITE_CORRUPT
+        Some("database disk image is malformed".into()),
+    );
+    assert_eq!(
+        super::store::explain(other),
+        "database disk image is malformed"
+    );
+}
