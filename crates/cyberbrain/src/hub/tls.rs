@@ -153,8 +153,8 @@ pub fn ensure_self_signed(
     dir: &Path,
     names: &[String],
 ) -> Result<(std::path::PathBuf, std::path::PathBuf)> {
-    let cert_path = dir.join("hub-cert.pem");
-    let key_path = dir.join("hub-key.pem");
+    let cert_path = dir.join(OWN_CERT);
+    let key_path = dir.join(OWN_KEY);
     if cert_path.exists() && key_path.exists() {
         return Ok((cert_path, key_path));
     }
@@ -222,6 +222,25 @@ fn restrict(path: &Path) {
     }
     #[cfg(not(unix))]
     let _ = path;
+}
+
+/// The name the hub's own certificate is kept under, beside the record.
+pub const OWN_CERT: &str = "hub-cert.pem";
+/// And its key. Named here so that nothing else spells either of them out.
+pub const OWN_KEY: &str = "hub-key.pem";
+
+/// The fingerprint of a certificate file, without needing its key.
+///
+/// `hub cert show` runs while the hub is running, as a second process that has no business
+/// reading the key — and on a hub started by the service control manager, may not be able to.
+pub fn fingerprint_of(path: &Path) -> Result<String> {
+    let leaf = CertificateDer::pem_file_iter(path)
+        .map_err(|e| Error::Config(format!("cannot read {}: {e}", path.display())))?
+        .next()
+        .transpose()
+        .map_err(|e| Error::Config(format!("cannot read {}: {e}", path.display())))?
+        .ok_or_else(|| Error::Config(format!("{} holds no certificate", path.display())))?;
+    Ok(fingerprint(&leaf))
 }
 
 /// `AB:CD:…`, uppercase and in pairs, because that is how a browser shows it and the whole

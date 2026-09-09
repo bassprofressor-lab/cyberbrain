@@ -572,6 +572,75 @@ fn run_licence(command: &cli::LicenceCommand, out: Out) -> Result<i32> {
 /// here rather than being reached for globally.
 /// Register the hub as a Windows service, or control the one that is registered.
 ///
+/// The certificate a hub serves with, for the two questions that come up about it: which one
+/// is this, and how do I stop the browser complaining.
+///
+/// Only ever the hub's own, the pair beside the record. A certificate the operator supplied
+/// is a file they already have, in a place they chose, and copying it around from here would
+/// be this program being helpful about something it does not own.
+fn run_hub_cert(command: &cli::CertCommand, out: Out) -> Result<i32> {
+    use cli::CertCommand;
+    let (data, to) = match command {
+        CertCommand::Show { data } => (data, None),
+        CertCommand::Export { to, data } => (data, Some(to)),
+    };
+    let record = hub::data_path(data.clone());
+    let dir = record.parent().unwrap_or(std::path::Path::new("."));
+    let cert = dir.join(hub::tls::OWN_CERT);
+    if !cert.exists() {
+        return Err(Error::Config(format!(
+            "this hub has no certificate of its own: {} is not there. Either it serves one \
+             you supplied, in which case that file is where you put it, or it is not \
+             encrypted at all — start it with --tls-generate.",
+            cert.display()
+        )));
+    }
+    let fingerprint = hub::tls::fingerprint_of(&cert)?;
+    if let Some(to) = to {
+        // Copied rather than moved or linked: the hub goes on serving the original, and what
+        // is handed out is a certificate, which is public by construction — it is what the
+        // hub shows every machine that connects to it.
+        std::fs::copy(&cert, to).map_err(|e| Error::Io {
+            path: to.clone(),
+            source: e,
+        })?;
+    }
+    out.emit(
+        &serde_json::json!({
+            "certificate": cert,
+            "sha256": fingerprint,
+            "exported_to": to,
+        }),
+        |v| {
+            let mut s = format!(
+                "certificate: {}\nSHA-256:     {}\n",
+                v["certificate"].as_str().unwrap_or_default(),
+                v["sha256"].as_str().unwrap_or_default()
+            );
+            if let Some(to) = v["exported_to"].as_str() {
+                s.push_str(&format!("copied to:   {to}\n"));
+            }
+            // The path, not the file name: the two lines below are meant to be copied, and
+            // a hub's certificate is never in the directory somebody is standing in.
+            let here = v["exported_to"]
+                .as_str()
+                .or_else(|| v["certificate"].as_str())
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "\nThis is what invitations pin, and enrolled machines need nothing else. A \
+                 browser is the exception: it has never heard of this certificate and warns \
+                 until the machine itself trusts it.\n\n\
+                 Windows, in an elevated prompt:\n  certutil -addstore -f Root {here}\n\
+                 Linux:\n  cp {here} /usr/local/share/ca-certificates/cyberbrain-hub.crt && \
+                 update-ca-certificates\n\
+                 (the .crt ending is not decoration there; the file is ignored without it)\n"
+            ));
+            s
+        },
+    )?;
+    Ok(0)
+}
+
 /// The installer calls `install` with the same defaults, so a customer who ticks the box and
 /// an administrator who types the command end up with exactly the same registration.
 fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
@@ -1052,6 +1121,8 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         }
 
         HubCommand::Licence { command } => run_licence(command, out),
+
+        HubCommand::Cert { command } => run_hub_cert(command, out),
 
         HubCommand::Fleet { data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;

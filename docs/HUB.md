@@ -183,7 +183,29 @@ deliveries go nowhere else, whatever certificate is presented
 
 A browser is a different matter: it has never heard of this certificate and will warn. The
 fingerprint printed at every start is what you compare the warning against, and the way to stop
-being asked is to put `hub-cert.pem` into the machine's trust store, by group policy or by hand.
+being asked is to put the certificate into the machine's trust store. `hub cert` is the command
+for both halves of that:
+
+```console
+$ cyberbrain hub cert show --data /var/lib/cyberbrain/hub.db
+certificate: /var/lib/cyberbrain/hub-cert.pem
+SHA-256:     6C:D4:7B:43:…
+
+This is what invitations pin, and enrolled machines need nothing else. A browser is the
+exception: it has never heard of this certificate and warns until the machine itself trusts it.
+
+Windows, in an elevated prompt:
+  certutil -addstore -f Root /var/lib/cyberbrain/hub-cert.pem
+Linux:
+  cp /var/lib/cyberbrain/hub-cert.pem /usr/local/share/ca-certificates/cyberbrain-hub.crt && update-ca-certificates
+  (the .crt ending is not decoration there; the file is ignored without it)
+
+$ cyberbrain hub cert export \\fileserver\deploy\cyberbrain-hub.pem
+```
+
+`export` copies the certificate and nothing else — the key stays where it is. Handing the
+certificate around is safe by construction: it is what the hub shows every machine that
+connects to it.
 
 ### If you have one
 
@@ -502,6 +524,7 @@ week" is a finding, and its absence would read as an oversight.
   Replacing it means deleting the pair and reissuing every invitation, and nothing here
   automates that. A certificate you supplied renews on your own schedule and the hub does not
   care, which is why that one is never pinned.
-- **The browser is still on its own.** A pin is something a client can be told at enrolment; a
-  browser cannot be, so a certificate the hub made itself still produces a warning until
-  somebody puts it in the machine's trust store.
+- **Nothing puts the certificate into a trust store for you.** `hub cert show` prints the two
+  commands that do it, for the two platforms, and `hub cert export` gets the file to where a
+  group policy can pick it up — but running them is the administrator's, because writing to a
+  machine's root store is not something a collector should do quietly on its way past.

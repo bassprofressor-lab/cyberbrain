@@ -1977,3 +1977,27 @@ async fn a_pin_refuses_to_be_used_over_plain_http() {
     assert!(e.contains("pinned to a certificate"), "{e}");
     assert!(e.contains("no certificate is presented"), "{e}");
 }
+
+#[test]
+fn the_fingerprint_can_be_read_without_the_key() {
+    // `hub cert show` runs beside a hub that is already running, as a second process with no
+    // business reading the key — and under a service account, possibly no way to.
+    let dir = tempfile::tempdir().unwrap();
+    let made = super::tls::own(dir.path(), &["hub".into()]).unwrap();
+    let read = super::tls::fingerprint_of(&dir.path().join(super::tls::OWN_CERT)).unwrap();
+    assert_eq!(read, made.fingerprint);
+
+    // And it is the same number for a certificate that came from somewhere else, so the two
+    // ways of asking cannot drift apart.
+    let supplied = std::path::Path::new(TESTDATA).join("hub-test-leaf.pem");
+    assert_eq!(
+        super::tls::fingerprint_of(&supplied).unwrap(),
+        "63:4E:3F:E0:BE:0A:13:3F:D4:CB:2B:AA:19:2F:C4:FD:52:C6:0F:00:5C:13:BF:41:03:89:34:03:CD:5B:65:9F"
+    );
+
+    // A key is not a certificate, and the message has to say which file was wrong.
+    let e = super::tls::fingerprint_of(&dir.path().join(super::tls::OWN_KEY))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains(super::tls::OWN_KEY), "{e}");
+}

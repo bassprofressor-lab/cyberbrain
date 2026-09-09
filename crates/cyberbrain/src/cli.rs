@@ -593,6 +593,11 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: LicenceCommand,
     },
+    /// The certificate this hub serves with: what it is, and how to make a browser accept it.
+    Cert {
+        #[command(subcommand)]
+        command: CertCommand,
+    },
     /// Devices, when they were last heard from, and what is wrong with any of them.
     Fleet {
         #[arg(long, value_name = "PATH")]
@@ -676,6 +681,24 @@ pub enum HubCommand {
     /// Stop a device from sending. Its rows stay: revoking is not a deletion.
     Revoke {
         id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CertCommand {
+    /// Where the certificate is, what its fingerprint is, and what to do with it.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Write a copy somewhere it can be handed out: a share, a group policy, an email.
+    /// Only the certificate; the key stays where it is.
+    Export {
+        /// Where to write it. The file is a public thing — it is what the hub shows every
+        /// machine that connects to it.
+        to: PathBuf,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
