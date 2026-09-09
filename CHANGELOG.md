@@ -12,6 +12,74 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-09-09
+
+### Added
+
+- **The hub encrypts itself.** It used to bind `0.0.0.0:7788` and serve plain HTTP: every
+  device token and the administrator password went over the wire as text, and the answer in
+  the documentation was to put a reverse proxy in front — which, for a Windows service on a
+  machine in a company of eleven people, is a second piece of software nobody installs.
+
+  `hub serve --tls-cert --tls-key` now serves https itself, and on Windows the same two flags
+  become part of the service registration, so an upgrade cannot quietly drop back to plain
+  text. Nothing new entered the dependency graph for it.
+
+- **It makes its own certificate**, because the customer this is for has no certificate
+  authority and telling them to obtain one is telling them to stay in plain text.
+  `hub serve --tls-generate`, and the Windows installer does it for you unless you supplied a
+  certificate or asked for `--insecure-http`. The pair lives beside the record, the key
+  readable only by the machine's administrators.
+
+- **An invitation says which certificate to expect.** Every invitation issued while such a
+  hub is running carries its fingerprint, and a client enrolled with one accepts that
+  certificate and nothing else — not the platform trust store, not a company CA — and refuses
+  to deliver over plain http, where no certificate is presented at all. Nothing has to be
+  installed on the client machines: the invitation they were already handed is the channel.
+
+  Only a certificate the hub made itself is pinned. One you supplied has an issuer, and
+  issuers renew; pinning it would turn the next renewal into every client stopping at once.
+
+- **`hub cert show` and `hub cert export`**, because a browser is the one client that cannot
+  be told anything at enrolment. `show` prints where the certificate is, its fingerprint, and
+  the command that makes the machine trust it — for the platform it is running on, and only
+  that one.
+
+- **`/HUB` for a silent install.** `/S` could only ever install the default set, which
+  deliberately excludes the collector, so an unattended rollout could not produce a hub.
+
+- **The install directory goes on the machine PATH**, and comes off again on uninstall.
+
+### Changed
+
+- **Without a certificate the hub still collects**, and says so: it warns at every start on a
+  network address and the page carries a banner. One thing is refused outright — the
+  administrator password may then only be typed at the machine the hub runs on, checked
+  before the password is looked at rather than after. Deliveries are unaffected, because a
+  hub that stopped collecting until somebody produced a certificate would be the worse trade.
+
+- **Registering the service on a network address** now makes a certificate rather than asking
+  nothing and listening in the clear. `--insecure-http` is how you ask for plain text.
+
+- **`attempt to write a readonly database`** — what `hub add` says in an ordinary prompt,
+  because the record belongs to the service account — now names the way out.
+
+### Security
+
+- **A hub's private key was readable by every account on the machine.** It inherited the ACL
+  of `C:\ProgramData`, which grants `BUILTIN\Users` read; anybody who could log in could read
+  the key and then be the hub to every machine that had pinned it. The key is now created
+  with a DACL that inherits nothing and grants only SYSTEM and the local administrators —
+  created that way rather than tightened afterwards, since between a create and a chmod the
+  file is readable by everybody. Found by an operator with `icacls` on a real install.
+
+### Fixed
+
+- **A hub did not recognise its own certificate** when the service was registered with paths
+  to it, which is exactly what the installer does. It therefore issued invitations with no
+  pin, and clients would have refused the certificate nobody told them to expect. Found on
+  the first Windows machine this reached, in a log line that stopped one clause short.
+
 ## [0.3.1] — 2026-09-08
 
 ### Added

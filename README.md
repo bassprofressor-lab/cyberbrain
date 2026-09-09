@@ -283,16 +283,19 @@ behaviour.
 
 ## Status
 
-**v0.3.1, and young.** 664 tests, 6 browser tests, seven crates on crates.io plus the Windows launcher,
+**v0.4.0, and young.** 685 tests, 6 browser tests, seven crates on crates.io plus the Windows launcher,
 clippy and rustfmt clean. Binaries for Linux and Windows on the release page, and an
 installer beside them. It has been run against one operator's real corpus — 1,086 notes
 across five projects — and not much else. Expect rough edges, report them.
 
-The Windows side is the newest part and the least worn in: CI builds the launcher, the hub
-service and the installer, packages them and runs the store through the binary it ships, but
-none of it had been installed on anyone's desktop or registered on anyone's server when 0.3.0
-went out. The service code cannot be exercised anywhere but Windows, so it is compiled and
-reviewed rather than run. If it misbehaves on yours, that is worth an issue.
+The Windows side is the newest part and the least worn in. It is no longer only compiled and
+reviewed: CI installs the installer the way a customer would, silently, and then checks what
+installing it did — that the hub made itself a certificate and recognises it as its own, that
+the private key is unreadable by ordinary accounts, that the service registration carries the
+certificate, and that uninstalling takes the service and the PATH entry away again and leaves
+the record alone. That job exists because two faults reached an operator's desktop that no
+amount of compiling would have shown. It has been installed and run on exactly one desktop
+and one server. If it misbehaves on yours, that is worth an issue.
 
 Cyberbrain is an original work. It shares no source code with any other memory tool; §0 of
 [`docs/SPEC.md`](docs/SPEC.md) records the boundary it was built under, and the commit
