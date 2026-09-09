@@ -16,13 +16,14 @@
 //! is one function that returns a string, it works with the page source visible, and it
 //! cannot fail to load.
 //!
-//! # Why it is loopback only
+//! # Who may look at it
 //!
 //! It shows who is on the network and it can install a licence, and the hub deliberately
-//! binds an address the whole network can reach. Rather than invent a sign-in for this
-//! slice, the rule is that you have to be at the machine. That is a rule with an obvious
-//! shape, it cannot be misconfigured, and a networked view — with the admin role that
-//! already exists behind it — can come later without taking anything back.
+//! binds an address the whole network can reach. Setting the first password is still only
+//! possible at the machine; after that the page is reachable from a desk, and on a hub that
+//! is not encrypted signing in is again only possible at the machine, because the password
+//! would otherwise cross the network in the clear. The page says so where it applies, rather
+//! than leaving the operator to work out why sign-in works in one place and not another.
 
 use super::report::{self, FleetRow};
 use super::store::HubStore;
@@ -43,6 +44,9 @@ pub struct View {
     pub suggested_url: String,
     /// What just happened, if the page was reached by installing something.
     pub flash: Option<Result<String, String>>,
+    /// Whether the surface this was served over is encrypted. Shown, because the operator
+    /// looking at the fleet is the one person who can do something about it.
+    pub encrypted: bool,
 }
 
 impl View {
@@ -50,6 +54,7 @@ impl View {
         hub: &HubStore,
         record: &std::path::Path,
         port: u16,
+        encrypted: bool,
         now: jiff::Timestamp,
         flash: Option<Result<String, String>>,
     ) -> Self {
@@ -71,8 +76,15 @@ impl View {
             licence,
             seats,
             found_file,
-            suggested_url: format!("http://{}:{port}", hostname()),
+            // The scheme this hub is actually being served over. An invitation that says
+            // http to a hub that only answers https sends a client at a door that is shut.
+            suggested_url: format!(
+                "{}://{}:{port}",
+                if encrypted { "https" } else { "http" },
+                hostname()
+            ),
             flash,
+            encrypted,
         }
     }
 }
@@ -174,6 +186,17 @@ pub fn render(v: &View) -> String {
             Err(t) => ("bad", t),
         };
         h.push_str(&format!("<p class=\"flash {kind}\">{}</p>", esc(text)));
+    }
+
+    // Above the fleet, not below it: on an unencrypted hub every token in that table was
+    // handed over in the clear, so it is the first thing about them that is true.
+    if !v.encrypted {
+        h.push_str(
+            "<p class=\"flash bad\">This hub is not encrypted. Device tokens and anything \
+             typed here cross the network in the clear, and signing in works only at this \
+             machine. Start it with <code>--tls-cert</code> and <code>--tls-key</code> to \
+             change that.</p>",
+        );
     }
 
     h.push_str(&licence_card(v));

@@ -55,6 +55,23 @@ tracing-subscriber = "0.3.23"
 ulid = { version = "3.0.0", features = ["serde"] }
 argon2 = "0.6.0"
 
+# The hub terminates its own TLS. Not one of these is new in the graph: reqwest in
+# cyberbrain-policy already brings rustls, tokio-rustls, hyper and hyper-util, and sha2 comes
+# with the signature crates. What is new is that this binary now names them, because it
+# serves with them rather than only calling out through them. A reverse proxy would have been
+# less code here and a second service to install on every customer's machine, which is the
+# kind of trade that looks cheap in a repository and expensive in the field.
+# Server side only, and provably: no `client` feature, no default features. hyper itself is
+# not named here because nothing in this crate names it — the connection builder comes from
+# hyper-util and takes the ALPN result from rustls, so both protocols are served without this
+# binary ever holding a hyper type of its own.
+hyper-util = { version = "0.1.20", default-features = false, features = ["server", "server-auto", "http1", "http2", "tokio", "service"] }
+rustls = { version = "0.23.43", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+# PEM reading lives in pki-types now, so there is no rustls-pemfile here on purpose.
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
+sha2 = "0.11.0"
+tokio-rustls = { version = "0.26.5", default-features = false, features = ["ring", "tls12"] }
+
 # The hub runs as a Windows service, and a service is the only way it can be up before
 # anybody logs in — which is what makes silence from a client a usable signal.
 # windows-sys ^0.61 is the version the workspace already pulls, so this adds no second copy.

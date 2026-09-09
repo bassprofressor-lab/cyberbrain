@@ -221,7 +221,12 @@ pub fn describe_os_error(io: &std::io::Error) -> String {
 mod platform {
     use super::*;
 
-    pub fn install(_exe: &Path, _data: &Path, _addr: &str) -> Result<()> {
+    pub fn install(
+        _exe: &Path,
+        _data: &Path,
+        _addr: &str,
+        _tls: Option<(&Path, &Path)>,
+    ) -> Result<()> {
         Err(unsupported())
     }
     pub fn uninstall() -> Result<()> {
@@ -296,8 +301,26 @@ mod platform {
         })
     }
 
-    pub fn install(exe: &Path, data: &Path, addr: &str) -> Result<()> {
+    pub fn install(exe: &Path, data: &Path, addr: &str, tls: Option<(&Path, &Path)>) -> Result<()> {
         let m = manager(ServiceManagerAccess::CREATE_SERVICE | ServiceManagerAccess::CONNECT)?;
+        // Part of the registration rather than something the service works out at startup:
+        // the certificate is the difference between a hub in the clear and one that is not,
+        // and a difference that important belongs in the command line somebody can read in
+        // services.msc, next to the record and the address.
+        let mut launch_arguments = vec![
+            OsString::from("hub"),
+            OsString::from("serve"),
+            OsString::from("--data"),
+            OsString::from(data),
+            OsString::from("--addr"),
+            OsString::from(addr),
+        ];
+        if let Some((cert, key)) = tls {
+            launch_arguments.push(OsString::from("--tls-cert"));
+            launch_arguments.push(OsString::from(cert));
+            launch_arguments.push(OsString::from("--tls-key"));
+            launch_arguments.push(OsString::from(key));
+        }
         let info = ServiceInfo {
             name: OsString::from(SERVICE_NAME),
             display_name: OsString::from(DISPLAY_NAME),
@@ -307,14 +330,7 @@ mod platform {
             start_type: ServiceStartType::AutoStart,
             error_control: ServiceErrorControl::Normal,
             executable_path: exe.to_path_buf(),
-            launch_arguments: vec![
-                OsString::from("hub"),
-                OsString::from("serve"),
-                OsString::from("--data"),
-                OsString::from(data),
-                OsString::from("--addr"),
-                OsString::from(addr),
-            ],
+            launch_arguments,
             dependencies: vec![],
             account_name: None, // LocalSystem
             account_password: None,

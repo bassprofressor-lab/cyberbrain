@@ -147,6 +147,37 @@ WantedBy=multi-user.target
 
 A licence dropped at `/var/lib/cyberbrain/licence.txt` is picked up on start here too.
 
+## Encrypting it
+
+Give it a certificate and a key, in PEM, and it serves https itself:
+
+```console
+$ cyberbrain hub serve --addr 0.0.0.0:7788 --data /var/lib/cyberbrain/hub.db \
+    --tls-cert /etc/cyberbrain/hub.pem --tls-key /etc/cyberbrain/hub.key
+cyberbrain hub: https://0.0.0.0:7788/  (record: …)
+certificate SHA-256: 63:4E:3F:E0:…
+```
+
+On Windows the same two flags go on `hub service install`, where they become part of the
+registration — so an upgrade cannot quietly put the hub back into plain text.
+
+The fingerprint is printed at every start because it is what somebody compares against what
+their browser shows. Clients need nothing: a delivery verifies against the machine's own
+trust store, so a certificate from your CA or a public one is trusted the moment that
+machine trusts it, by the same rules as everything else on it.
+
+**Without a certificate the hub still collects, and says so.** On a network address it logs a
+warning at every start and the page carries a banner, because on that hub every device token
+crosses the network in the clear. One thing is refused outright: **the administrator password
+can then only be typed at the machine the hub runs on.** Signing in from a desk needs https.
+The refusal is deliberately narrow — deliveries are unaffected, and a hub that stopped
+collecting until somebody produced a certificate would be a worse trade than the one it is
+trying to prevent.
+
+Registering a *new* service on a network address without a certificate is refused, because
+that is the one moment a person is standing there to decide. `--insecure-http` says you meant
+it. A hub that is already running is never stopped over this.
+
 ## The hub's own page
 
 `http://localhost:7788/` on the machine the hub runs on. It answers the three questions
@@ -168,9 +199,10 @@ sentence people read after the change was needed.
 
 Instead the first visit **from the machine the hub runs on** asks you to set one. That is
 safe without a password in front of it: whoever is at that console could read the record with
-any SQLite tool. After that the page is reachable from any desk on the network, and
-`/api/v1/fleet` with it. Until it is set, the hub still collects — evidence must not wait for
-an administrator.
+any SQLite tool. After that the page is reachable from any desk on the network — **provided
+the hub is encrypted**, because otherwise the password would cross that network in the clear;
+on a hub without a certificate, signing in stays at the machine (see *Encrypting it*). Until
+a password is set, the hub still collects — evidence must not wait for an administrator.
 
 Forgotten it, or the person who set it has left:
 
@@ -423,6 +455,7 @@ week" is a finding, and its absence would read as an oversight.
 
 ## What is not in this slice
 
-- **No TLS of its own.** Put it behind a reverse proxy inside your network, or wait for the
-  slice that gives the hub a certificate and pins it at enrolment. Do not expose it to the
-  internet as it stands.
+- **No certificate of its own.** The hub serves the certificate you give it (see
+  *Encrypting it*) and it does not make one. In a network with no certificate authority of
+  its own that leaves a self-signed certificate and a browser warning, or plain text. The
+  slice that generates one and pins it at enrolment is the next one.

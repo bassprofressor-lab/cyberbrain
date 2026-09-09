@@ -1250,6 +1250,9 @@ fn view_of(
         hub,
         std::path::Path::new(record),
         7788,
+        // The hub these tests describe is a properly set up one; the unencrypted case has
+        // its own test below, because what it shows is different on purpose.
+        true,
         NOW.parse().unwrap(),
         flash,
     )
@@ -1301,7 +1304,8 @@ fn a_collecting_hub_shows_the_seats() {
         seats: Some((2, 5)),
         fleet: Vec::new(),
         found_file: None,
-        suggested_url: "http://hub:7788".into(),
+        suggested_url: "https://hub:7788".into(),
+        encrypted: true,
         flash: None,
     };
     let html = page::render(&v);
@@ -1331,7 +1335,8 @@ fn a_licence_about_to_run_out_says_it_on_the_page() {
         seats: Some((5, 5)),
         fleet: Vec::new(),
         found_file: None,
-        suggested_url: "http://hub:7788".into(),
+        suggested_url: "https://hub:7788".into(),
+        encrypted: true,
         flash: None,
     };
     let html = page::render(&v);
@@ -1365,12 +1370,12 @@ fn a_licence_file_that_is_already_installed_is_not_offered_again() {
     let record = dir.path().join("hub.db");
 
     // Before: there is something to click.
-    let before = View::gather(&hub, &record, 7788, NOW.parse().unwrap(), None);
+    let before = View::gather(&hub, &record, 7788, true, NOW.parse().unwrap(), None);
     assert!(before.found_file.is_some());
 
     // After: the file is still lying there, as files do, and the button is gone.
     hub.set_licence(text).unwrap();
-    let after = View::gather(&hub, &record, 7788, NOW.parse().unwrap(), None);
+    let after = View::gather(&hub, &record, 7788, true, NOW.parse().unwrap(), None);
     assert_eq!(after.found_file, None);
 }
 
@@ -1498,4 +1503,254 @@ fn our_cookie_is_found_among_other_peoples() {
     assert_eq!(admin::cookie_from(None), None);
     // Not a prefix match: a cookie called cyberbrain_hub_something is not ours.
     assert_eq!(admin::cookie_from(Some("cyberbrain_hub_x=abc")), None);
+}
+
+// ---- TLS, and who may type a password into a hub without it ----
+//
+// The guardrail and the encryption are one subject: what the certificate buys is that the
+// password may be typed from a desk at all. Both halves are tested here, and both were
+// written against a hub that did neither.
+
+use axum::body::Body;
+use axum::extract::connect_info::ConnectInfo;
+use axum::http::{Request, StatusCode};
+use rustls_pki_types::pem::PemObject;
+use tower::ServiceExt;
+
+const TESTDATA: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hub/testdata");
+
+fn hub_with_password(password: &str) -> HubStore {
+    let hub = HubStore::in_memory().unwrap();
+    admin::set_password(&hub, password).unwrap();
+    hub
+}
+
+fn state_for(hub: HubStore, encrypted: bool) -> Arc<super::api::HubState> {
+    Arc::new(super::api::HubState {
+        hub: std::sync::Mutex::new(hub),
+        record: std::path::PathBuf::from("hub.db"),
+        port: 7788,
+        sessions: Default::default(),
+        flash: std::sync::Mutex::new(None),
+        encrypted,
+    })
+}
+
+/// A sign-in attempt from `from`, the way the router will see it.
+async fn sign_in_from(
+    state: Arc<super::api::HubState>,
+    from: &str,
+    password: &str,
+) -> axum::response::Response {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/login")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Body::from(format!("password={password}")))
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(from.parse::<std::net::SocketAddr>().unwrap()));
+    super::api::router(state).oneshot(req).await.unwrap()
+}
+
+fn cookie_of(r: &axum::response::Response) -> String {
+    r.headers()
+        .get(axum::http::header::SET_COOKIE)
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn a_password_is_not_taken_over_the_network_in_the_clear() {
+    let state = state_for(hub_with_password("correct horse battery"), false);
+    let r = sign_in_from(state, "192.168.1.20:51000", "correct horse battery").await;
+    // Refused, not "wrong password": the hub knows perfectly well it is right, and saying
+    // so would be a sentence that teaches the administrator to keep trying.
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(cookie_of(&r).is_empty(), "no session may come of this");
+    let body = axum::body::to_bytes(r.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&body);
+    assert!(body.contains("not encrypted"), "{body}");
+    // Both ways out, because the person reading it may only be able to take one of them.
+    assert!(body.contains("machine the hub runs on"), "{body}");
+    assert!(body.contains("--tls-cert"), "{body}");
+}
+
+#[tokio::test]
+async fn at_the_machine_a_password_still_works_without_a_certificate() {
+    // The hub in the cupboard has to stay administrable, or the guardrail above is a way of
+    // locking an operator out of their own collector.
+    let state = state_for(hub_with_password("correct horse battery"), false);
+    let r = sign_in_from(state, "127.0.0.1:51000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let cookie = cookie_of(&r);
+    assert!(cookie.contains("cyberbrain_hub="), "{cookie}");
+    // No `Secure` here: over http a browser would drop it, and the sign-in would appear to
+    // succeed and then not have happened.
+    assert!(!cookie.contains("Secure"), "{cookie}");
+}
+
+#[tokio::test]
+async fn with_a_certificate_a_password_may_come_from_a_desk() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state, "192.168.1.20:51000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(cookie_of(&r).contains("Secure"), "{}", cookie_of(&r));
+}
+
+#[tokio::test]
+async fn a_wrong_password_from_a_desk_is_still_wrong() {
+    // The guardrail must not become an accidental way in: an encrypted hub checks the
+    // password like any other.
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state, "192.168.1.20:51000", "hunter2").await;
+    assert_eq!(r.status(), StatusCode::OK); // the sign-in page again
+    assert!(cookie_of(&r).is_empty());
+}
+
+#[test]
+fn the_page_says_when_the_hub_is_not_encrypted() {
+    let hub = HubStore::in_memory().unwrap();
+    let v = View::gather(
+        &hub,
+        std::path::Path::new("hub.db"),
+        7788,
+        false,
+        NOW.parse().unwrap(),
+        None,
+    );
+    // The address it suggests for invitations follows the hub it is actually being served
+    // over, or the first thing an operator does with this page is send clients to a door
+    // that is shut.
+    assert!(
+        v.suggested_url.starts_with("http://"),
+        "{}",
+        v.suggested_url
+    );
+    let html = page::render(&v);
+    assert!(html.contains("not encrypted"), "{html}");
+
+    let encrypted = View::gather(
+        &hub,
+        std::path::Path::new("hub.db"),
+        7788,
+        true,
+        NOW.parse().unwrap(),
+        None,
+    );
+    assert!(encrypted.suggested_url.starts_with("https://"));
+    assert!(!page::render(&encrypted).contains("not encrypted"));
+}
+
+#[test]
+fn the_fingerprint_is_the_one_a_browser_shows() {
+    let cert = super::tls::load(
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .unwrap();
+    // The value openssl prints for the same file. Written out rather than computed here:
+    // a fingerprint checked against our own hashing would agree with itself even if it
+    // hashed the wrong bytes.
+    assert_eq!(
+        cert.fingerprint,
+        "63:4E:3F:E0:BE:0A:13:3F:D4:CB:2B:AA:19:2F:C4:FD:52:C6:0F:00:5C:13:BF:41:03:89:34:03:CD:5B:65:9F"
+    );
+}
+
+#[test]
+fn a_certificate_and_a_key_that_are_not_a_pair_are_refused_by_name() {
+    // The CA's certificate with the leaf's key: both files are real, and neither is the
+    // other's half. The message has to name the files, because at this point the operator
+    // is looking at four paths and one of them is wrong.
+    let e = super::tls::load(
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-ca.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .err()
+    .expect("a certificate and a key that are not a pair cannot be served with")
+    .to_string();
+    assert!(e.contains("do not go together"), "{e}");
+    assert!(e.contains("hub-test-ca.pem"), "{e}");
+}
+
+#[tokio::test]
+async fn a_hub_with_a_certificate_answers_over_tls_and_stops_when_told() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let cert = super::tls::load(
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf.pem")
+            .as_path(),
+        std::path::Path::new(TESTDATA)
+            .join("hub-test-leaf-key.pem")
+            .as_path(),
+    )
+    .unwrap();
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let make = super::api::router(state_for(HubStore::in_memory().unwrap(), true))
+        .into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let (stop, stopped) = tokio::sync::oneshot::channel::<()>();
+    let served = tokio::spawn(async move {
+        super::tls::serve(listener, make, cert, async {
+            let _ = stopped.await;
+        })
+        .await
+    });
+
+    // A client that trusts the test CA and nothing else. Trusting everything would make
+    // this a test that the socket works, not that the hub presents a certificate for it.
+    let mut roots = rustls::RootCertStore::empty();
+    for c in rustls_pki_types::CertificateDer::pem_file_iter(
+        std::path::Path::new(TESTDATA).join("hub-test-ca.pem"),
+    )
+    .unwrap()
+    {
+        roots.add(c.unwrap()).unwrap();
+    }
+    let mut config = rustls::ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let connector = tokio_rustls::TlsConnector::from(Arc::new(config));
+    let tcp = tokio::net::TcpStream::connect(addr).await.unwrap();
+    // Bounded, because the interesting failure is a hub that answers in plain text: the
+    // handshake then waits for a server hello that is never coming, and an unbounded wait
+    // turns a failing test into a build that hangs until somebody kills it.
+    let mut tls = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        connector.connect("localhost".try_into().unwrap(), tcp),
+    )
+    .await
+    .expect("the hub should answer the handshake rather than leave it open")
+    .expect("the hub should present a certificate the test CA signed");
+    tls.write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = String::new();
+    tls.read_to_string(&mut answer).await.unwrap();
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    assert!(answer.contains("\"role\":\"hub\""), "{answer}");
+
+    // And it comes back when asked to stop, rather than being left for the test harness to
+    // kill: a hub that cannot be stopped cannot be upgraded either.
+    stop.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), served)
+        .await
+        .expect("the server should return when it is told to stop")
+        .unwrap()
+        .unwrap();
 }

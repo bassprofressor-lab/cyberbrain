@@ -131,12 +131,22 @@ impl Sessions {
 /// there is no script on the page.
 pub const COOKIE: &str = "cyberbrain_hub";
 
-pub fn set_cookie(token: &str) -> String {
-    format!("{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict")
+/// `Secure` only where it is true. Marking a cookie `Secure` on a hub served over plain text
+/// would protect nothing — there is no encrypted version of that hub to fall back to — and
+/// browsers disagree about whether they will store such a cookie over `http://localhost`,
+/// which is exactly where the administrator of an unencrypted hub has to sign in.
+pub fn set_cookie(token: &str, encrypted: bool) -> String {
+    format!(
+        "{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict{}",
+        if encrypted { "; Secure" } else { "" }
+    )
 }
 
-pub fn clear_cookie() -> String {
-    format!("{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+pub fn clear_cookie(encrypted: bool) -> String {
+    format!(
+        "{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0{}",
+        if encrypted { "; Secure" } else { "" }
+    )
 }
 
 /// Pull our cookie out of a Cookie header, ignoring whatever else is in it.

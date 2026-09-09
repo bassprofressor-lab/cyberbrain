@@ -579,11 +579,41 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
     use hub::service;
 
     match command {
-        ServiceCommand::Install { data, addr } => {
+        ServiceCommand::Install {
+            data,
+            addr,
+            tls_cert,
+            tls_key,
+            insecure_http,
+        } => {
             // Checked before anything is registered: a service that will not start because
             // of a typo in an address is diagnosed from services.msc, which is a bad place
             // to find out.
             let parsed = hub::parse_addr(addr)?;
+            let tls = match (tls_cert, tls_key) {
+                (Some(c), Some(k)) => {
+                    // Loaded here as well as at startup, because "the service was registered"
+                    // and "the service will start" have to be the same sentence. The cost is
+                    // reading two files twice.
+                    hub::tls::load(c, k)?;
+                    Some((c.as_path(), k.as_path()))
+                }
+                _ => None,
+            };
+            // The one moment a person is standing there: registering a collector that will
+            // take device tokens off the network in the clear should be a decision made now,
+            // not a discovery made later. A running hub is never stopped over this — an
+            // upgrade that refused to start would take the collection down with it — so the
+            // refusal lives here and nowhere else.
+            if tls.is_none() && !parsed.ip().is_loopback() && !insecure_http {
+                return Err(Error::Config(format!(
+                    "{parsed} is a network address and no certificate was given, so every \
+                     device token would cross the network in the clear. Register it with \
+                     --tls-cert and --tls-key, or with --addr 127.0.0.1:7788 for a hub that \
+                     only this machine talks to. If plain text really is what you want here, \
+                     say --insecure-http."
+                )));
+            }
             let path = data
                 .clone()
                 .unwrap_or_else(|| service::default_data_dir().join("hub.db"));
@@ -595,7 +625,7 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
             }
             let exe = std::env::current_exe()
                 .map_err(|e| Error::Config(format!("cannot find this program on disk: {e}")))?;
-            service::install(&exe, &path, addr)?;
+            service::install(&exe, &path, addr, tls)?;
             let drop =
                 service::licence_drop_path(path.parent().unwrap_or(std::path::Path::new(".")));
             out.emit(
@@ -603,17 +633,23 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
                     "service": service::SERVICE_NAME,
                     "data": path,
                     "addr": parsed.to_string(),
+                    "encrypted": tls.is_some(),
                     "licence_drop": drop,
                     "state": "running",
                 }),
                 |v| {
                     format!(
-                        "{} registered and started.\nrecord:  {}\nlistens: {}\n\nPut a \
+                        "{} registered and started.\nrecord:  {}\nlistens: {} ({})\n\nPut a \
                          licence file at {} and restart the service; without one nothing is \
                          collected.\n",
                         service::DISPLAY_NAME,
                         v["data"].as_str().unwrap_or_default(),
                         v["addr"].as_str().unwrap_or_default(),
+                        if v["encrypted"].as_bool().unwrap_or_default() {
+                            "https"
+                        } else {
+                            "plain text"
+                        },
                         v["licence_drop"].as_str().unwrap_or_default(),
                     )
                 },
@@ -734,9 +770,23 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(code)
         }
 
-        HubCommand::Serve { addr, data } => {
+        HubCommand::Serve {
+            addr,
+            data,
+            tls_cert,
+            tls_key,
+        } => {
             let path = hub::data_path(data.clone());
             let addr = hub::parse_addr(addr)?;
+            // Read before the listener is opened. A certificate that cannot be loaded is the
+            // operator's mistake to see at once, not a hub that comes up in plain text
+            // because the file it was told to use had the wrong permissions.
+            let tls = match (tls_cert, tls_key) {
+                (Some(c), Some(k)) => Some(hub::tls::load(c, k)?),
+                // clap's `requires` makes one-without-the-other unreachable from the command
+                // line; the match still has to say what it means.
+                _ => None,
+            };
             // Set before anything can go wrong: started by the service control manager there
             // is no console, so a message that only reaches stdout reaches nobody — including
             // the one saying why the thing will not start.
@@ -766,6 +816,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         Dropped::None | Dropped::Unchanged => {}
                     }
                     let path = path.clone();
+                    let tls = tls.clone();
                     runtime()?.block_on(async move {
                         let listener = tokio::net::TcpListener::bind(addr)
                             .await
@@ -782,9 +833,11 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             port: bound.port(),
                             sessions: Default::default(),
                             flash: std::sync::Mutex::new(None),
+                            encrypted: tls.is_some(),
                         });
+                        let scheme = if tls.is_some() { "https" } else { "http" };
                         let hello = format!(
-                            "cyberbrain hub: http://{bound}/  (record: {}; devices \
+                            "cyberbrain hub: {scheme}://{bound}/  (record: {}; devices \
                              authenticate with a bearer token)",
                             path.display()
                         );
@@ -792,21 +845,47 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         println!("{licence_line}");
                         hub::service::log(&hello);
                         hub::service::log(&licence_line);
-                        // With connect info, because the page and the fleet view are shown
-                        // only to the machine the hub runs on.
-                        axum::serve(
-                            listener,
-                            hub::api::router(state)
-                                .into_make_service_with_connect_info::<std::net::SocketAddr>(),
-                        )
+                        match &tls {
+                            // Printed every start, because the fingerprint is what somebody
+                            // compares against the browser warning, and the moment they need
+                            // it is the moment the hub was restarted onto a new certificate.
+                            Some(cert) => {
+                                let line = format!("certificate SHA-256: {}", cert.fingerprint);
+                                println!("{line}");
+                                hub::service::log(&line);
+                            }
+                            // Not a warning on loopback: that hub is talking to itself.
+                            None if !bound.ip().is_loopback() => {
+                                let line = format!(
+                                    "warning: {bound} is a network address and this hub is \
+                                     not encrypted. Device tokens cross the network in the \
+                                     clear and the password can only be typed at this \
+                                     machine. Start it with --tls-cert and --tls-key."
+                                );
+                                eprintln!("{line}");
+                                hub::service::log(&line);
+                            }
+                            None => {}
+                        }
+                        // With connect info, because who may set or type a password is
+                        // decided by where the request came from.
+                        let make = hub::api::router(state)
+                            .into_make_service_with_connect_info::<std::net::SocketAddr>();
                         // The stop signal arrives on a plain channel from the service
                         // control handler, which is not async and must answer at once.
-                        .with_graceful_shutdown(async move {
+                        let stopped = async move {
                             let _ = tokio::task::spawn_blocking(move || stop.recv()).await;
-                            hub::service::log("stop requested; closing the listener");
-                        })
-                        .await
-                        .map_err(|e| Error::Config(format!("hub: {e}")))
+                        };
+                        match tls {
+                            Some(cert) => hub::tls::serve(listener, make, cert, stopped).await,
+                            None => axum::serve(listener, make)
+                                .with_graceful_shutdown(async move {
+                                    stopped.await;
+                                    hub::service::log("stop requested; closing the listener");
+                                })
+                                .await
+                                .map_err(|e| Error::Config(format!("hub: {e}"))),
+                        }
                     })
                 })
             };

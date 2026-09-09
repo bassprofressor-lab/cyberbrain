@@ -14,6 +14,20 @@
 //! HTTP client or a self-fetching dependency: a dependency that is present will eventually
 //! be used. Inbound listeners (`TcpListener`, axum's `serve`) are allowed; the web UI binds
 //! loopback.
+//!
+//! # The one exception, and why it is about capability rather than about a name
+//!
+//! `hyper` and `hyper-util` are both halves in one crate each: the client and the server.
+//! The hub terminates its own TLS and therefore drives connections itself, which needs the
+//! server half — and forbidding the name would have meant either giving up on encrypting
+//! the hub or asking every customer to install a reverse proxy, which is how a rule stops
+//! protecting anything and starts being worked around.
+//!
+//! So the rule reads the declaration instead: `default-features = false` and no feature
+//! whose name contains `client`. That is checkable, it is what the compiler acts on, and a
+//! crate declared this way has no client to reach for. The source-level check above is
+//! unchanged and still catches `hyper::Client`, `hyper_util::client` and
+//! `TcpStream::connect` wherever no gate is held.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,6 +73,33 @@ const NETWORK_CRATES: &[&str] = &[
 
 /// Crates allowed to depend on an HTTP client at all.
 const CRATES_WITH_CLIENTS: &[&str] = &["cyberbrain-policy", "cyberbrain-llm"];
+
+/// Crates that carry a client and a server, and may be declared for the server half alone.
+const SPLIT_CRATES: &[&str] = &["hyper", "hyper-util"];
+
+/// Whether a dependency line takes only the server half: defaults off, and no feature that
+/// names the client. Written against the line as cargo reads it, so there is no second
+/// opinion about what was enabled.
+fn server_half_only(line: &str) -> bool {
+    let Some((_, rest)) = line.split_once('{') else {
+        // A bare `hyper = "1"` takes whatever the defaults are, which is not a decision
+        // anybody made here.
+        return false;
+    };
+    let compact = rest.replace(' ', "");
+    if !compact.contains("default-features=false") {
+        return false;
+    }
+    // Split on the whole `features=[`, not on the word: `default-features` ends in the same
+    // eight letters, and matching those alone read the tail of *that* key as the feature
+    // list. A declaration with no list at all then looked like a list with no client in it,
+    // which is the one answer this function must never give.
+    let Some(list) = compact.split("features=[").nth(1) else {
+        return false;
+    };
+    let list = list.split(']').next().unwrap_or("");
+    !list.is_empty() && !list.contains("client")
+}
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -234,6 +275,9 @@ fn network_dependencies_are_declared_only_by_policy_and_llm() {
                 .next()
                 .unwrap_or("")
                 .trim_matches('"');
+            if SPLIT_CRATES.contains(&key) && server_half_only(t) {
+                continue;
+            }
             if NETWORK_CRATES.contains(&key) {
                 offences.push(format!(
                     "{}:{}: {t}",
@@ -249,4 +293,29 @@ fn network_dependencies_are_declared_only_by_policy_and_llm() {
          client or a self-fetching crate. Remove:\n  {}",
         offences.join("\n  ")
     );
+}
+
+#[test]
+fn the_server_half_exception_does_not_let_a_client_through() {
+    // The predicate is the whole exception, so it is tested against the shapes it has to
+    // refuse rather than only the one it has to allow.
+    assert!(server_half_only(
+        "hyper-util = { version = \"0.1.20\", default-features = false, features = [\"server\", \"tokio\"] }"
+    ));
+    // Defaults left on: nobody decided what came with them.
+    assert!(!server_half_only(
+        "hyper-util = { version = \"0.1.20\", features = [\"server\"] }"
+    ));
+    // The client half, asked for by name.
+    assert!(!server_half_only(
+        "hyper-util = { version = \"0.1.20\", default-features = false, features = [\"client\", \"server\"] }"
+    ));
+    assert!(!server_half_only(
+        "hyper-util = { version = \"0.1.20\", default-features = false, features = [\"client-legacy\"] }"
+    ));
+    // No features at all is not a server-only declaration either.
+    assert!(!server_half_only(
+        "hyper-util = { version = \"0.1.20\", default-features = false }"
+    ));
+    assert!(!server_half_only("hyper-util = \"0.1.20\""));
 }

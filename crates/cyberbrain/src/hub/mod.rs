@@ -33,6 +33,7 @@ pub mod page;
 pub mod report;
 pub mod service;
 pub mod store;
+pub mod tls;
 
 #[cfg(test)]
 mod tests;

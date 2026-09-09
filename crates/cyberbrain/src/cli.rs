@@ -497,6 +497,17 @@ pub enum ServiceCommand {
         /// can talk to collects nothing.
         #[arg(long, default_value = "0.0.0.0:7788")]
         addr: String,
+        /// PEM certificate chain the service serves with. Kept in the registration, so an
+        /// upgrade does not quietly drop back to plain text.
+        #[arg(long, value_name = "PATH", requires = "tls_key")]
+        tls_cert: Option<PathBuf>,
+        /// The private key for --tls-cert, PEM.
+        #[arg(long, value_name = "PATH", requires = "tls_cert")]
+        tls_key: Option<PathBuf>,
+        /// Register it anyway with no certificate, listening to the network in the clear.
+        /// Deliberately ugly to type: it is a decision, not a default.
+        #[arg(long)]
+        insecure_http: bool,
     },
     /// Stop the service and remove the registration. The record is left alone.
     Uninstall,
@@ -518,6 +529,14 @@ pub enum HubCommand {
         /// Where the record lives.
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
+        /// PEM certificate chain to serve with. Given together with --tls-key, the hub
+        /// speaks https and a password may be typed into it from a desk rather than only
+        /// at the machine.
+        #[arg(long, value_name = "PATH", requires = "tls_key")]
+        tls_cert: Option<PathBuf>,
+        /// The private key for --tls-cert, PEM.
+        #[arg(long, value_name = "PATH", requires = "tls_cert")]
+        tls_key: Option<PathBuf>,
     },
     /// Register a machine and print its token. The token is shown once and stored only as a
     /// hash, so a copy of the record is not a set of working credentials.

@@ -21,6 +21,10 @@ pub struct HubState {
     pub port: u16,
     /// Where the record lives, so the page can say so and find a licence beside it.
     pub record: std::path::PathBuf,
+    /// Whether this surface is encrypted. Not cosmetic: it decides whether a password may
+    /// be typed into it from anywhere but the machine itself, and whether the session
+    /// cookie is marked `Secure`.
+    pub encrypted: bool,
     /// The last thing the page did, shown once on the next render.
     pub flash: Mutex<Option<Result<String, String>>>,
 }
@@ -52,6 +56,24 @@ pub(crate) fn at_the_machine(who: &std::net::SocketAddr) -> bool {
 
 const ELSEWHERE: &str = "This hub has not been set up yet. Open it on the machine it runs \
      on to set the administrator password. Devices deliver to /api/v1/ingest as usual.";
+
+/// Why a password was refused on an unencrypted hub, and what to do instead.
+///
+/// It names both ways out, because the operator who reads this may not be the one who can
+/// take the second: signing in at the machine works today, a certificate is a change to how
+/// the hub is started.
+const PLAINTEXT: &str = "This hub is not encrypted, so a password typed here would travel \
+     across the network in the clear. Sign in on the machine the hub runs on, or start it \
+     with --tls-cert and --tls-key and come back over https (docs/HUB.md). Devices go on \
+     delivering to /api/v1/ingest either way.";
+
+/// Whether a password may be typed into this hub from where this request came from.
+///
+/// Encrypted: from anywhere, which is the entire reason the page has a password. Not
+/// encrypted: only from the machine itself, where nothing goes over a wire at all.
+fn password_may_travel(state: &HubState, from: &std::net::SocketAddr) -> bool {
+    state.encrypted || at_the_machine(from)
+}
 
 /// What a caller is allowed to see.
 enum Who {
@@ -131,6 +153,7 @@ async fn page(
         &hub,
         &state.record,
         state.port,
+        state.encrypted,
         jiff::Timestamp::now(),
         flash,
     );
@@ -173,7 +196,10 @@ async fn claim(
             // Straight in, rather than showing the sign-in form to somebody who has just
             // proved who they are twice.
             (
-                [(header::SET_COOKIE, super::admin::set_cookie(&token))],
+                [(
+                    header::SET_COOKIE,
+                    super::admin::set_cookie(&token, state.encrypted),
+                )],
                 Redirect::to("/"),
             )
                 .into_response()
@@ -187,7 +213,16 @@ pub struct LoginForm {
     password: String,
 }
 
-async fn login(State(state): State<Arc<HubState>>, Form(form): Form<LoginForm>) -> Response {
+async fn login(
+    State(state): State<Arc<HubState>>,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<LoginForm>,
+) -> Response {
+    // Before the password is looked at, not after: a hub that checks first and refuses
+    // afterwards has already been told the password by the time it objects.
+    if !password_may_travel(&state, &from) {
+        return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
+    }
     let ok = match state.hub.lock() {
         Ok(hub) => super::admin::verify(&hub, &form.password),
         Err(_) => false,
@@ -198,7 +233,10 @@ async fn login(State(state): State<Arc<HubState>>, Form(form): Form<LoginForm>) 
     }
     let token = state.sessions.open(jiff::Timestamp::now());
     (
-        [(header::SET_COOKIE, super::admin::set_cookie(&token))],
+        [(
+            header::SET_COOKIE,
+            super::admin::set_cookie(&token, state.encrypted),
+        )],
         Redirect::to("/"),
     )
         .into_response()
@@ -211,7 +249,10 @@ async fn logout(State(state): State<Arc<HubState>>, headers: HeaderMap) -> Respo
         state.sessions.close(&t);
     }
     (
-        [(header::SET_COOKIE, super::admin::clear_cookie())],
+        [(
+            header::SET_COOKIE,
+            super::admin::clear_cookie(state.encrypted),
+        )],
         Redirect::to("/"),
     )
         .into_response()
@@ -232,6 +273,12 @@ async fn change_password(
 ) -> Response {
     if !matches!(who(&state, &headers, &from), Who::Admin) {
         return html(super::page::login_page(None));
+    }
+    // The form carries the current password and the new one, so the same rule applies here
+    // as at sign-in. Reachable only with a session, which over plain text can only have been
+    // opened at the machine — belt and braces, and it costs one comparison.
+    if !password_may_travel(&state, &from) {
+        return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
     let outcome = {
         let hub = match state.hub.lock() {
