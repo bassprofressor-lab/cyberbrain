@@ -426,3 +426,60 @@ footer{color:var(--dim);font-size:.85rem;margin-top:1.4rem}
 .sub a{color:var(--dim);margin-left:.5rem}
 </style>
 <main>"#;
+
+/// The page an editor sees: the conflicts in their bereiche and nothing else.
+///
+/// Two versions side by side and two buttons. The decision is which text stands, so the
+/// page shows the texts and not their metadata — an editor who has to reason about
+/// timestamps to answer "which of these is right" has been handed the wrong question.
+pub fn conflicts_page(
+    name: &str,
+    conflicts: &[(super::store::NoteConflict, String)],
+) -> String {
+    let mut body = String::new();
+    if conflicts.is_empty() {
+        body.push_str(
+            "<section class=card><h2>Nothing to decide</h2>\
+             <p>No note in your bereiche was changed in two places at once.</p></section>",
+        );
+    }
+    for (c, held_text) in conflicts {
+        body.push_str(&format!(
+            "<section class=card>\
+               <h2>{name_}</h2>\
+               <p class=muted>in {bereich} · two machines changed this without seeing each \
+                  other. Nothing was overwritten.</p>\
+               <div class=side-by-side>\
+                 <div><h3>What stands now</h3><p class=muted>{held_from}, {held_when}</p>\
+                   <pre>{held_body}</pre>\
+                   <form method=post action=\"/conflicts/{id}\">\
+                     <input type=hidden name=take value=held>\
+                     <button type=submit>Keep this one</button></form></div>\
+                 <div><h3>What was offered</h3><p class=muted>{off_from}, {off_when}</p>\
+                   <pre>{off_body}</pre>\
+                   <form method=post action=\"/conflicts/{id}\">\
+                     <input type=hidden name=take value=offered>\
+                     <button type=submit>Use this one instead</button></form></div>\
+               </div>\
+             </section>",
+            name_ = esc(&c.name),
+            bereich = esc(&c.bereich),
+            id = esc(&c.id),
+            held_from = esc(&c.held_from_device),
+            held_when = esc(&c.held_updated),
+            held_body = esc(held_text),
+            off_from = esc(&c.offered_from_device),
+            off_when = esc(&c.offered_updated),
+            off_body = esc(&c.offered_body),
+        ));
+    }
+    let mut h = String::from(HEAD);
+    h.push_str(&format!(
+        "<header><h1>Conflicts</h1></header>\
+         <p class=note>Signed in as {}. You see the bereiche you are responsible for.\
+         <form method=post action=\"/logout\" style=\"display:inline\">\
+         <button type=submit>Sign out</button></form></p>{body}</main>",
+        esc(name)
+    ));
+    h
+}

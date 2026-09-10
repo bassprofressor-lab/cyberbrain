@@ -846,6 +846,16 @@ pub enum GrantCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum PrincipalCommand {
+    /// Put a person in charge of a bereich. Only an `editor` has these: seeing note text is
+    /// not part of running the machine, so an administrator gets none.
+    Assign {
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        bereich: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// Register a person and print their credential once.
     Add {
         name: String,

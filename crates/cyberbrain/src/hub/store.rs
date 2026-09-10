@@ -314,6 +314,16 @@ impl HubStore {
                  resolved_at         TEXT,
                  resolution          TEXT
              );
+             -- Which bereiche a person is responsible for. Only `editor` principals have
+             -- these: an admin has none and gets none, because seeing note text is not part
+             -- of running the machine.
+             CREATE TABLE IF NOT EXISTS principal_bereiche (
+                 principal  TEXT NOT NULL REFERENCES principals(id),
+                 bereich    TEXT NOT NULL,
+                 added_at   TEXT NOT NULL,
+                 PRIMARY KEY (principal, bereich)
+             );
+
              CREATE INDEX IF NOT EXISTS note_conflicts_open
                  ON note_conflicts(bereich, name) WHERE resolved_at IS NULL;
 
@@ -1063,6 +1073,70 @@ impl HubStore {
             }
         }
         Ok(out)
+    }
+
+    /// Put a person in charge of a bereich. Only meaningful for an `editor`; the caller
+    /// checks the role, this writes.
+    pub fn assign_bereich(&self, principal: &str, bereich: &str, now: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "INSERT INTO principal_bereiche (principal, bereich, added_at) VALUES (?, ?, ?)
+             ON CONFLICT(principal, bereich) DO NOTHING",
+            params![principal, bereich, now],
+        ))?;
+        Ok(())
+    }
+
+    /// The bereiche a person is responsible for.
+    pub fn bereiche_of(&self, principal: &str) -> Result<Vec<String>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT bereich FROM principal_bereiche WHERE principal = ? ORDER BY bereich",
+        ))?;
+        let rows = ix(stmt.query_map(params![principal], |r| r.get::<_, String>(0)))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Open conflicts this person may see: the ones in their bereiche, and no others.
+    /// Filtering here rather than at the page means a mistake in a template cannot widen it.
+    ///
+    /// The held text is fetched alongside. A conflict row holds only the version that was
+    /// turned away; showing that on its own asks somebody to choose between a text and a
+    /// blank, which is not a choice.
+    pub fn conflicts_for_principal(&self, principal: &str) -> Result<Vec<(NoteConflict, String)>> {
+        let mut out = Vec::new();
+        for b in self.bereiche_of(principal)? {
+            for c in self.open_conflicts(&b)? {
+                let held: Option<String> = ix(self
+                    .conn
+                    .query_row(
+                        "SELECT body FROM synced_notes WHERE bereich = ? AND name = ?",
+                        params![c.bereich, c.name],
+                        |r| r.get(0),
+                    )
+                    .optional())?;
+                let held = held.unwrap_or_else(|| {
+                    "(the held version is no longer here — it was erased or replaced)".into()
+                });
+                out.push((c, held));
+            }
+        }
+        Ok(out)
+    }
+
+    /// One conflict, but only if this person is responsible for its bereich.
+    pub fn conflict_for_principal(
+        &self,
+        principal: &str,
+        id: &str,
+    ) -> Result<Option<NoteConflict>> {
+        Ok(self
+            .conflicts_for_principal(principal)?
+            .into_iter()
+            .map(|(c, _)| c)
+            .find(|c| c.id == id))
     }
 
     /// Conflicts nobody has decided yet. Open ones only: a resolved conflict is history and

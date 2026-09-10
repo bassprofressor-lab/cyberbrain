@@ -1488,6 +1488,47 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         HubCommand::Principal { command } => {
             use cli::PrincipalCommand;
             match command {
+                PrincipalCommand::Assign {
+                    principal,
+                    bereich,
+                    data,
+                } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    cyberbrain_core::frontmatter::validate_bereich(bereich)
+                        .map_err(|r| Error::Config(format!("bereich `{bereich}`: {r}")))?;
+                    let who = store.principals()?.into_iter().find(|p| &p.id == principal);
+                    match who {
+                        None => return Err(Error::Config(format!("no principal {principal}"))),
+                        Some(p) if p.role != hub::access::Role::Editor => {
+                            return Err(Error::Config(format!(
+                                "{} is {}, not an editor. Only an editor is given bereiche, \
+                                 because reading note text is not part of the other roles.",
+                                p.name,
+                                p.role.as_str()
+                            )));
+                        }
+                        Some(_) => {}
+                    }
+                    let stamp = now();
+                    store.assign_bereich(principal, bereich, &stamp)?;
+                    let _ = store.record(
+                        "cli",
+                        "principal.assigned",
+                        serde_json::json!({ "principal": principal, "bereich": bereich }),
+                        &stamp,
+                    );
+                    out.emit(
+                        &serde_json::json!({ "principal": principal, "bereich": bereich }),
+                        |v| {
+                            format!(
+                                "{} now sees conflicts in {}\n",
+                                v["principal"].as_str().unwrap_or_default(),
+                                v["bereich"].as_str().unwrap_or_default()
+                            )
+                        },
+                    )?;
+                    Ok(0)
+                }
                 PrincipalCommand::Add { name, role, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let role = hub::access::Role::parse(role)?;

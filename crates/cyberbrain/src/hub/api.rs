@@ -50,6 +50,8 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/api/v1/notes", post(post_notes))
         .route("/api/v1/erase", post(post_erase))
         .route("/api/v1/fetch", post(post_fetch))
+        .route("/conflicts", get(get_conflicts))
+        .route("/conflicts/{id}", post(post_conflict))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -233,15 +235,34 @@ async fn login(
     if !password_may_travel(&state, &from) {
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
-    let ok = match state.hub.lock() {
-        Ok(hub) => super::admin::verify(&hub, &form.password),
-        Err(_) => false,
+    // Two kinds of caller arrive at the same box: the administrator with the hub password,
+    // and a person with the credential `hub principal add` printed for them. Tried in that
+    // order, and the refusal is the same sentence either way — saying which one nearly
+    // worked would tell an unknown caller what kind of secret they are holding.
+    let who = match state.hub.lock() {
+        Ok(hub) => {
+            if super::admin::verify(&hub, &form.password) {
+                Some(super::admin::Who::Admin)
+            } else {
+                match hub.principal_by_token(&form.password) {
+                    Ok(Some(p)) if p.is_active() => Some(super::admin::Who::Principal {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                        role: p.role,
+                    }),
+                    _ => None,
+                }
+            }
+        }
+        Err(_) => None,
     };
-    if !ok {
+    let Some(who) = who else {
         stumble().await;
-        return html(super::page::login_page(Some("That is not the password.")));
-    }
-    let token = state.sessions.open(jiff::Timestamp::now());
+        return html(super::page::login_page(Some(
+            "That is not the password or a credential this hub knows.",
+        )));
+    };
+    let token = state.sessions.open_as(jiff::Timestamp::now(), who);
     (
         [(
             header::SET_COOKIE,
@@ -496,6 +517,84 @@ fn client_version(headers: &HeaderMap) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+/// Only an editor sees this page, and only their own bereiche. Both halves of that are
+/// checked here rather than in the template: a page that decides its own audience is one
+/// mistake away from showing everything.
+fn editor_of(state: &HubState, headers: &HeaderMap) -> Option<(String, String)> {
+    // `admin::Who` and the `Who` in this module are different questions: this one is about
+    // the page a visitor gets, that one about whose session it is.
+    let token =
+        super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))?;
+    match state.sessions.who(&token, jiff::Timestamp::now())? {
+        super::admin::Who::Principal { id, name, role }
+            if role == super::access::Role::Editor =>
+        {
+            Some((id, name))
+        }
+        _ => None,
+    }
+}
+
+async fn get_conflicts(State(state): State<Arc<HubState>>, headers: HeaderMap) -> Response {
+    let Some((id, name)) = editor_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    let Ok(hub) = state.hub.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+    };
+    match hub.conflicts_for_principal(&id) {
+        Ok(list) => Html(super::page::conflicts_page(&name, &list)).into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("cannot read conflicts: {e}"),
+        )
+            .into_response(),
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct TakeForm {
+    take: String,
+}
+
+async fn post_conflict(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    axum::extract::Path(cid): axum::extract::Path<String>,
+    Form(form): Form<TakeForm>,
+) -> Response {
+    let Some((pid, pname)) = editor_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    let now = jiff::Timestamp::now().to_string();
+    let Ok(hub) = state.hub.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+    };
+    // Checked against this person's bereiche, not against the id alone. Otherwise a
+    // guessed id would settle a conflict in a department somebody has nothing to do with.
+    match hub.conflict_for_principal(&pid, &cid) {
+        Ok(Some(_)) => {}
+        _ => return Redirect::to("/conflicts").into_response(),
+    }
+    let take_offered = form.take == "offered";
+    if hub
+        .resolve_conflict(&cid, take_offered, &now)
+        .unwrap_or(false)
+    {
+        let _ = hub.record(
+            &pid,
+            "conflict.resolved",
+            json!({
+                "id": cid,
+                "by": pname,
+                "took": if take_offered { "offered" } else { "held" },
+            }),
+            &now,
+        );
+    }
+    Redirect::to("/conflicts").into_response()
 }
 
 /// Hand a device the notes it may read. A GET, because it changes nothing here: the hub

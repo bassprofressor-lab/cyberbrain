@@ -42,12 +42,21 @@ pub enum Role {
     Auditor,
     /// Approves requests; may read every request and every disclosure.
     Countersigner,
+    /// Works in a department: sees and settles note conflicts in the bereiche this person
+    /// was assigned, and nothing else.
+    ///
+    /// A fourth role rather than a wider `admin`, because a conflict is two note texts and
+    /// `admin` is "state only" on purpose — the property that makes this hub something a
+    /// works council can accept. Deciding which version of a rule stands is a job for
+    /// somebody who knows the work, not for whoever runs the machine.
+    Editor,
 }
 
 impl Role {
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "admin" => Ok(Role::Admin),
+            "editor" => Ok(Role::Editor),
             "auditor" => Ok(Role::Auditor),
             "countersigner" => Ok(Role::Countersigner),
             other => Err(Error::Config(format!(
@@ -61,6 +70,7 @@ impl Role {
             Role::Admin => "admin",
             Role::Auditor => "auditor",
             Role::Countersigner => "countersigner",
+            Role::Editor => "editor",
         }
     }
 }

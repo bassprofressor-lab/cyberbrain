@@ -84,21 +84,56 @@ pub fn verify(hub: &HubStore, password: &str) -> bool {
 ///
 /// Deliberate: a hub restarts when it is upgraded or the machine reboots, both moments when
 /// asking again costs one login and removes every stale cookie in the building.
+/// Who a session belongs to. The administrator runs the machine; a principal works in a
+/// department. They see different pages on purpose, and the session is where that is
+/// decided rather than in a template.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Who {
+    Admin,
+    /// A principal id, with the role it held when the session opened.
+    Principal {
+        id: String,
+        name: String,
+        role: super::access::Role,
+    },
+}
+
 #[derive(Default)]
 pub struct Sessions {
-    open: Mutex<HashMap<String, jiff::Timestamp>>,
+    open: Mutex<HashMap<String, (jiff::Timestamp, Who)>>,
 }
 
 impl Sessions {
     pub fn open(&self, now: jiff::Timestamp) -> String {
+        self.open_as(now, Who::Admin)
+    }
+
+    pub fn open_as(&self, now: jiff::Timestamp, who: Who) -> String {
         let mut bytes = [0u8; 32];
         getrandom::fill(&mut bytes).expect("the operating system has randomness");
         let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
         if let Ok(mut open) = self.open.lock() {
-            open.retain(|_, until| *until > now);
-            open.insert(token.clone(), now + jiff::Span::new().hours(SESSION_HOURS));
+            open.retain(|_, (until, _)| *until > now);
+            open.insert(
+                token.clone(),
+                (now + jiff::Span::new().hours(SESSION_HOURS), who),
+            );
         }
         token
+    }
+
+    /// Who this cookie belongs to, if it is still good. Same expiry handling as `holds`.
+    pub fn who(&self, token: &str, now: jiff::Timestamp) -> Option<Who> {
+        let mut open = self.open.lock().ok()?;
+        let (until, who) = open.get(token)?.clone();
+        if until <= now {
+            return None;
+        }
+        open.insert(
+            token.to_string(),
+            (now + jiff::Span::new().hours(SESSION_HOURS), who.clone()),
+        );
+        Some(who)
     }
 
     /// Is this cookie still good — and if so, push its expiry out again.
@@ -106,11 +141,11 @@ impl Sessions {
         let Ok(mut open) = self.open.lock() else {
             return false;
         };
-        match open.get(token) {
-            Some(until) if *until > now => {
+        match open.get(token).cloned() {
+            Some((until, who)) if until > now => {
                 open.insert(
                     token.to_string(),
-                    now + jiff::Span::new().hours(SESSION_HOURS),
+                    (now + jiff::Span::new().hours(SESSION_HOURS), who),
                 );
                 true
             }
