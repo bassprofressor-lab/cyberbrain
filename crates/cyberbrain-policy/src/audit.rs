@@ -319,6 +319,28 @@ impl AuditSink for MemoryAuditSink {
 /// Hash of "nothing before this row".
 pub const GENESIS: &str = "genesis";
 
+/// How many times a row is rebuilt against a moved chain head before giving up.
+///
+/// Eight, because that is roughly the number of writers this tool has running at once on a
+/// busy machine — a hook, an MCP server, a terminal or two — and every retry after the
+/// first has one fewer competitor. Bounded rather than endless: if it still cannot get in
+/// after eight, something other than ordinary contention is going on, and looping forever
+/// would hide it.
+const CHAIN_TRIES: u32 = 8;
+
+/// A short, growing, slightly uneven pause between attempts.
+///
+/// Growing so that a burst spreads out instead of colliding again, and uneven because
+/// writers that arrived together would otherwise wake together and race in lockstep. The
+/// jitter comes from the clock rather than a random number generator: this crate has no
+/// business pulling in one for a sleep, and the low bits of a nanosecond reading are as
+/// uncorrelated between processes as anything a seed would give us.
+fn back_off(attempt: u32) {
+    let jitter = (jiff::Timestamp::now().as_nanosecond() % 2_000).unsigned_abs() as u64;
+    let micros = u64::from(attempt) * 2_000 + jitter;
+    std::thread::sleep(std::time::Duration::from_micros(micros));
+}
+
 /// The writer. Cheap to clone (it is an `Arc` around the sink); hand clones to the egress
 /// gate, the write gate and the retention path.
 #[derive(Clone)]
@@ -363,7 +385,7 @@ impl AuditLog {
         subject: impl Into<String>,
         detail: Value,
     ) -> Result<AuditEvent> {
-        let mut detail = match detail {
+        let detail = match detail {
             Value::Object(m) => Value::Object(m),
             Value::Null => json!({}),
             other => json!({ "value": other }),
@@ -371,37 +393,62 @@ impl AuditLog {
         let _guard = self.write_lock.lock().map_err(|_| {
             Error::Index("audit write lock poisoned; refusing to append (fail closed)".into())
         })?;
-        let prev = self
-            .sink
-            .last()?
-            .and_then(|e| e.chain_hash().map(str::to_owned))
-            .unwrap_or_else(|| GENESIS.to_string());
-        // Truncated to milliseconds, which is the precision an audit store can hold.
-        // Keeping more here gives one event two timestamps: the one a caller is handed
-        // back and the coarser one that was written. A `since` filter built from the
-        // returned value would then skip the very row it came from, and a reader would
-        // conclude the log had a gap where it has none.
-        let now = jiff::Timestamp::now()
-            .round(jiff::Unit::Millisecond)
-            .unwrap_or_else(|_| jiff::Timestamp::now());
-        let at = now.to_string();
-        let mut event = AuditEvent {
-            ts: now,
-            actor: actor.to_string(),
-            action: action.to_string(),
-            subject: subject.into(),
-            detail: detail.clone(),
-        };
-        let hash = event.compute_hash(&prev, &at);
-        if let Value::Object(m) = &mut detail {
-            m.insert(
-                "_chain".into(),
-                json!({ "prev": prev, "hash": hash, "at": at }),
-            );
+        let subject = subject.into();
+        // Reading the chain head and appending against it are two steps, and the lock above
+        // only holds the second process in *this* one. Another process — a hook, an MCP
+        // server, a second terminal — can append in between, and the sink then refuses this
+        // row because its `prev` no longer names the head. That refusal is correct and it is
+        // also transient: read the head again, hash against it, offer the row again.
+        //
+        // It has to be retried here rather than left to the caller, because by the time a
+        // caller sees the error it has usually already done the thing it was recording. A
+        // note on disk that the chain does not mention is the one state this log exists to
+        // rule out, and it was reachable with two terminals and one unlucky moment.
+        let mut last_seq = 0;
+        for attempt in 1..=CHAIN_TRIES {
+            let prev = self
+                .sink
+                .last()?
+                .and_then(|e| e.chain_hash().map(str::to_owned))
+                .unwrap_or_else(|| GENESIS.to_string());
+            // Truncated to milliseconds, which is the precision an audit store can hold.
+            // Keeping more here gives one event two timestamps: the one a caller is handed
+            // back and the coarser one that was written. A `since` filter built from the
+            // returned value would then skip the very row it came from, and a reader would
+            // conclude the log had a gap where it has none.
+            let now = jiff::Timestamp::now()
+                .round(jiff::Unit::Millisecond)
+                .unwrap_or_else(|_| jiff::Timestamp::now());
+            let at = now.to_string();
+            let mut event = AuditEvent {
+                ts: now,
+                actor: actor.to_string(),
+                action: action.to_string(),
+                subject: subject.clone(),
+                detail: detail.clone(),
+            };
+            let hash = event.compute_hash(&prev, &at);
+            let mut chained = detail.clone();
+            if let Value::Object(m) = &mut chained {
+                m.insert(
+                    "_chain".into(),
+                    json!({ "prev": prev, "hash": hash, "at": at }),
+                );
+            }
+            event.detail = chained;
+            match self.sink.append(&event) {
+                Ok(()) => return Ok(event),
+                Err(Error::AuditContended { seq, .. }) => {
+                    last_seq = seq;
+                    back_off(attempt);
+                }
+                Err(e) => return Err(e),
+            }
         }
-        event.detail = detail;
-        self.sink.append(&event)?;
-        Ok(event)
+        Err(Error::AuditContended {
+            seq: last_seq,
+            tries: CHAIN_TRIES,
+        })
     }
 
     /// SPEC §11: model, endpoint and token counts of every inference call. Counts the
@@ -840,8 +887,95 @@ pub fn render(rows: &[AuditEvent], format: ExportFormat) -> String {
     }
 }
 
+/// A sink that loses the race a fixed number of times and then lets the row through.
+///
+/// It is the other process, made deterministic: the same refusal the real sink raises when
+/// the chain head moved between the read and the insert.
+#[cfg(test)]
+struct ContendingSink {
+    refuse: std::sync::Mutex<u32>,
+    inner: MemoryAuditSink,
+    attempts: std::sync::atomic::AtomicU32,
+}
+
+#[cfg(test)]
+impl ContendingSink {
+    fn new(refuse: u32) -> Self {
+        Self {
+            refuse: std::sync::Mutex::new(refuse),
+            inner: MemoryAuditSink::new(),
+            attempts: std::sync::atomic::AtomicU32::new(0),
+        }
+    }
+}
+
+#[cfg(test)]
+impl AuditSink for ContendingSink {
+    fn append(&self, event: &AuditEvent) -> Result<()> {
+        self.attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut left = self.refuse.lock().unwrap();
+        if *left > 0 {
+            *left -= 1;
+            return Err(Error::AuditContended { seq: 41, tries: 1 });
+        }
+        self.inner.append(event)
+    }
+
+    fn last(&self) -> Result<Option<AuditEvent>> {
+        self.inner.last()
+    }
+
+    fn read(&self, filter: &AuditFilter) -> Result<Vec<AuditEvent>> {
+        self.inner.read(filter)
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// A row that loses the race is rebuilt against the head that is actually there.
+    ///
+    /// Calibrated against the state before the retry existed: with `record_raw` returning
+    /// on the first refusal, this asserts `is_ok()` on an `Err` and fails on the line below.
+    #[test]
+    fn a_row_that_loses_the_race_is_offered_again() {
+        let sink = Arc::new(ContendingSink::new(3));
+        let log = AuditLog::new(sink.clone());
+        let e = log.record_raw("t", "note.write", "n", json!({"a": 1}));
+        assert!(
+            e.is_ok(),
+            "three lost races is not a reason to give up: {e:?}"
+        );
+        assert_eq!(
+            sink.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            4,
+            "three refusals and the one that got in"
+        );
+        // And the row that got in is chained to the head, not to what the first attempt saw.
+        let stored = sink.last().unwrap().expect("a row");
+        assert_eq!(stored.chain_prev(), Some(GENESIS));
+        assert_eq!(verify_chain(&[stored]).unwrap(), 1);
+    }
+
+    /// Bounded, and it says so rather than looping.
+    #[test]
+    fn a_row_that_never_gets_in_says_which_row_won() {
+        let sink = Arc::new(ContendingSink::new(u32::MAX));
+        let log = AuditLog::new(sink.clone());
+        match log.record_raw("t", "note.write", "n", json!({})) {
+            Err(Error::AuditContended { seq, tries }) => {
+                assert_eq!(seq, 41);
+                assert_eq!(tries, CHAIN_TRIES);
+            }
+            other => panic!("expected a contention error, got {other:?}"),
+        }
+        assert_eq!(
+            sink.attempts.load(std::sync::atomic::Ordering::SeqCst),
+            CHAIN_TRIES,
+            "it must stop, and it must have tried"
+        );
+    }
     use super::*;
 
     // ---- the export bundle (SPEC §12.6) ----

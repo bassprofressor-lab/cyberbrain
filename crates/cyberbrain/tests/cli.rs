@@ -1634,3 +1634,174 @@ fn a_manifest_can_be_written_from_the_files_themselves() {
     }
     assert_ne!(written["weights_blake3"], written["tokenizer_blake3"]);
 }
+
+/// Several writers at once, and afterwards every note on disk is a note the chain mentions.
+///
+/// This is the shape the tool actually runs in: a hook, an MCP server and a terminal write
+/// to one store, and they are separate processes, so the in-process lock in `AuditLog` does
+/// not serialise them. The loser of a race used to get `nothing was written` *after* its
+/// file was already on disk — eight parallel writes left eight notes and one audit row, and
+/// `doctor` reported six notes not indexed.
+///
+/// Shown against the defect first (SPEC §14.2): with the retry in `record_raw` removed,
+/// this fails on the count below with 8 files against 2 rows.
+#[test]
+fn writers_that_arrive_together_leave_no_note_the_chain_does_not_mention() {
+    let cb = Cb::new();
+    const N: usize = 8;
+
+    let kids: Vec<_> = (0..N)
+        .map(|i| {
+            Cb::bin()
+                .arg("--store")
+                .arg(&cb.store)
+                .args([
+                    "write",
+                    "--ring",
+                    "2",
+                    "--kind",
+                    "knowledge",
+                    "--name",
+                    &format!("gleichzeitig-{i}"),
+                    "--body",
+                    "*Für: zwei schreiben zugleich*",
+                ])
+                .spawn()
+                .unwrap()
+        })
+        .collect();
+    let codes: Vec<i32> = kids
+        .into_iter()
+        .map(|k| k.wait_with_output().unwrap().status.code().unwrap_or(-1))
+        .collect();
+
+    // Name and id, because the audit row names the note by id and the person by name; a
+    // test that compared only one of them would be comparing the wrong two sets.
+    let on_disk: Vec<(String, String)> = (0..N)
+        .map(|i| format!("gleichzeitig-{i}"))
+        .filter(|n| cb.note_path("2", n).exists())
+        .map(|n| {
+            let text = std::fs::read_to_string(cb.note_path("2", &n)).unwrap();
+            let id = text
+                .lines()
+                .find_map(|l| l.strip_prefix("id: "))
+                .unwrap_or_else(|| panic!("{n} has no id in its frontmatter"))
+                .trim()
+                .to_string();
+            (n, id)
+        })
+        .collect();
+    let recorded: Vec<String> = cb
+        .audit_rows()
+        .iter()
+        .filter(|r| r["action"] == "note.write")
+        .filter_map(|r| r["subject"].as_str().map(str::to_string))
+        .collect();
+
+    // Not "all eight succeeded" — that would be a promise about contention this code does
+    // not make. The promise is that the two sets agree: what is on disk is what the chain
+    // says is on disk, whichever way the races went.
+    for (name, id) in &on_disk {
+        assert!(
+            recorded.contains(&format!("note:{id}")),
+            "{name} ({id}) is on disk and not in the audit chain.\n  exit codes: {codes:?}\n  \
+             on disk: {on_disk:?}\n  recorded: {recorded:?}"
+        );
+    }
+    assert_eq!(
+        on_disk.len(),
+        N,
+        "with the retry in place every writer should get in: {codes:?}"
+    );
+
+    // And the chain itself still verifies — a retry that appended a row against a stale
+    // head would pass the count above and break here.
+    let v = cb.ok(&["policy", "audit", "--verify"]);
+    let verified = v["verified"]["Ok"].as_i64().unwrap_or_else(|| {
+        panic!("the chain did not verify: {}", v["verified"]);
+    });
+    assert_eq!(
+        verified,
+        v["rows"].as_i64().unwrap(),
+        "every row has to be part of the chain, not just most of them: {v}"
+    );
+
+    // Nothing left for `scan` to find: the index was written in the same request as the
+    // note, which is what stopped happening when the audit row failed.
+    let d = cb.ok(&["doctor", "--json"]);
+    let text = serde_json::to_string(&d).unwrap();
+    assert!(!text.contains("not indexed"), "{text}");
+}
+
+/// A write whose audit row cannot be appended leaves the notes tree as it found it.
+///
+/// The retry above handles contention, which is what happens in practice. This is the other
+/// half: when the row cannot be written at all, the file must not stand as a note the chain
+/// has never heard of. A trigger on the `audit` table is the stand-in for "the row cannot be
+/// written" — it fails the insert the same way a full disk or a corrupt index would, at the
+/// same point.
+///
+/// Shown against the defect first (SPEC §14.2): with the rollback in `App::write` removed,
+/// the new note is left on disk and the edit has overwritten the old body, while both
+/// commands report failure.
+#[test]
+fn a_write_that_cannot_be_recorded_leaves_no_trace_on_disk() {
+    let cb = Cb::new();
+    cb.write("2", "vorher", "*Für: der alte stand*\n\nDer alte Text.");
+
+    // `audit.db`, not `cyberbrain.db`: the record lives in its own file because it is not
+    // a cache and must not be thrown away with one.
+    let audit = rusqlite::Connection::open(cb.store.join("audit.db")).unwrap();
+    audit
+        .execute_batch(
+            "CREATE TRIGGER audit_is_full BEFORE INSERT ON audit
+             BEGIN SELECT RAISE(ABORT, 'the audit table cannot be written'); END;",
+        )
+        .unwrap();
+
+    // A new note: nothing may be left behind.
+    let out = cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "nachher",
+        "--body",
+        "*Für: darf es nicht geben*",
+    ]);
+    assert!(!out.status.success(), "the write has to fail");
+    assert!(
+        !cb.note_path("2", "nachher").exists(),
+        "a note whose write could not be recorded was left on disk"
+    );
+
+    // An edit: the previous text has to survive, not the half-applied one.
+    let out = cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "vorher",
+        "--body",
+        "*Für: der neue stand*\n\nDer neue Text.",
+    ]);
+    assert!(!out.status.success(), "the edit has to fail");
+    let text = std::fs::read_to_string(cb.note_path("2", "vorher")).unwrap();
+    assert!(
+        text.contains("Der alte Text."),
+        "the edit was rolled back to the wrong thing:\n{text}"
+    );
+    assert!(!text.contains("Der neue Text."), "{text}");
+
+    // With the trigger gone the store is ordinary again — the rollback left nothing that
+    // needs repairing by hand.
+    audit.execute_batch("DROP TRIGGER audit_is_full").unwrap();
+    let d = cb.ok(&["doctor", "--json"]);
+    let text = serde_json::to_string(&d).unwrap();
+    assert!(!text.contains("file is gone"), "{text}");
+    assert!(!text.contains("not indexed"), "{text}");
+}

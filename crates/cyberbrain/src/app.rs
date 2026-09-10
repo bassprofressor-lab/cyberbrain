@@ -1734,6 +1734,28 @@ impl App {
 
     // ----- write -------------------------------------------------------------------------
 
+    /// Put the notes tree back after an audit row that could not be written.
+    ///
+    /// Removed if the note is new, rewritten from the copy read at the start if it is an
+    /// edit. Failures here are printed rather than returned: the caller is already on its
+    /// way out with the reason it got here, and replacing that reason with "and the
+    /// rollback failed too" would lose the one the operator needs. Staying silent is the
+    /// one thing it must not do — then a file really is left behind with nothing saying so.
+    fn undo_note_write(w: &Writers<'_>, note: &Note, existing: Option<&Note>, why: &Error) {
+        let name = &note.front.name;
+        let put_back = match existing {
+            Some(prev) => w.notes.write(prev).map(|_| ()),
+            None => w.notes.remove(&note.path).map(|_| ()),
+        };
+        if let Err(e) = put_back {
+            eprintln!(
+                "cyberbrain: {name} could not be recorded ({why}) and the file could not be \
+                 put back either ({e}). The note on disk is not in the audit chain; remove \
+                 or rewrite it by hand, then run `cyberbrain scan`."
+            );
+        }
+    }
+
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
         let name = req.name.trim().to_string();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
@@ -1826,7 +1848,15 @@ impl App {
         let bytes = frontmatter::render(&note.front, &note.body)?.len();
         let path = w.notes.write(&note)?;
         let note = Note { path, ..note };
-        policy.record_write(&note.front, bytes)?;
+        // The file is on disk and the row is not, and that is the wrong order to be
+        // interrupted in: a note the chain does not mention is the one state the chain
+        // exists to rule out. `record_write` already retries a moved chain head eight
+        // times, so arriving here means something worse than contention — and then the
+        // file goes back to what it was, rather than standing as an unrecorded note.
+        if let Err(e) = policy.record_write(&note.front, bytes) {
+            Self::undo_note_write(&w, &note, existing.as_ref(), &e);
+            return Err(e);
+        }
 
         // A write reindexes the note in the same request (§8.1).
         let (blocks, _) = blocks_of(&note, MAX_BLOCK_TOKENS);

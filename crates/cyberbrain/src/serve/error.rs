@@ -98,6 +98,7 @@ pub fn variant_name(e: &Error) -> &'static str {
         Error::RingCapExceeded { .. } => "ring-cap-exceeded",
         Error::StoreIntegrity(_) => "store-integrity",
         Error::Index(_) => "index",
+        Error::AuditContended { .. } => "audit-contended",
         Error::Embed(_) => "embed",
         Error::EmbeddingProfileMismatch { .. } => "embedding-profile-mismatch",
         Error::Llm(_) => "llm",
@@ -117,6 +118,11 @@ impl From<Error> for ApiError {
             Error::EmbeddingProfileMismatch { .. } => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "profile-mismatch")
             }
+            // 503 and not 500: the store is fine, this request lost a race for the end of
+            // the audit chain after the retries were spent. A caller that reads "service
+            // unavailable" tries again, which is the right thing to do here and the wrong
+            // thing to do with a 500.
+            Error::AuditContended { .. } => (StatusCode::SERVICE_UNAVAILABLE, "audit-contended"),
             _ if exit_code == 1 => (StatusCode::BAD_REQUEST, "bad-request"),
             _ => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         };

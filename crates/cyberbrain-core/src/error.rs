@@ -44,6 +44,20 @@ pub enum Error {
     #[error("index: {0}")]
     Index(String),
 
+    /// Another process appended to the audit chain between this row reading the chain head
+    /// and writing itself against it. Transient by nature, and not a broken chain: the row
+    /// simply lost the race, and the fix is to read the head again and hash against it.
+    ///
+    /// Its own variant rather than an `Index` with a recognisable message, because
+    /// `AuditLog::record_raw` retries on exactly this and on nothing else. Matching that on
+    /// the text of an error message is how a reworded sentence silently turns a retry into
+    /// a failure.
+    #[error(
+        "audit: another writer reached row {seq} first, {tries} times running; nothing was \
+         written. Nothing is broken — run the operation again."
+    )]
+    AuditContended { seq: i64, tries: u32 },
+
     #[error("embedding: {0}")]
     Embed(String),
 
@@ -88,6 +102,7 @@ impl Error {
             Error::RingCapExceeded { .. } => "ring-cap-exceeded",
             Error::StoreIntegrity(_) => "store-integrity",
             Error::Index(_) => "index",
+            Error::AuditContended { .. } => "audit-contended",
             Error::Embed(_) => "embed",
             Error::EmbeddingProfileMismatch { .. } => "embedding-profile-mismatch",
             Error::Llm(_) => "llm",

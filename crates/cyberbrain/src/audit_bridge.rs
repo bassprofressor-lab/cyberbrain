@@ -129,11 +129,12 @@ impl AuditSink for StoreAuditSink {
                     .and_then(stored_chain_hash)
                     .unwrap_or_else(|| GENESIS.to_string());
                 if *expected != actual {
-                    return Err(Error::Index(format!(
-                        "audit: another writer appended row {} while this row was being \
-                         chained; nothing was written, retry the operation",
-                        last.map(|l| l.seq).unwrap_or(0)
-                    )));
+                    // Typed, because the caller retries on this and only this. The row is
+                    // rebuilt against the head that is actually there and offered again.
+                    return Err(Error::AuditContended {
+                        seq: last.map(|l| l.seq).unwrap_or(0),
+                        tries: 1,
+                    });
                 }
             }
             Ok(row)
