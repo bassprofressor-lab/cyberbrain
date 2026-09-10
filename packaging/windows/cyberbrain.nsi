@@ -10,10 +10,11 @@
 ; the licence into. A customer who has to open a command prompt to finish an installation is
 ; a customer who stops.
 ;
-; Deliberately NOT done here: putting the install directory on the PATH. NSIS truncates
-; strings at 1024 characters in its default build, and a system PATH is often longer than
-; that, so the "helpful" version of this feature silently eats the end of someone's PATH.
-; The README says how to add it by hand, which is a worse experience and a better outcome.
+; The install directory goes on the machine PATH, but not from here: NSIS truncates strings
+; at 1024 characters in its default build, and a system PATH is regularly longer, so reading
+; it here and writing it back would silently eat the end of somebody's PATH. path.ps1 does
+; it instead, and this comment used to say the feature did not exist at all — which it did,
+; forty lines further down.
 ;
 ; Build:  makensis /DVERSION=0.1.0 /DSOURCE=<dir with the exes> cyberbrain.nsi
 ;         add /DWEBVIEW2LOADER=<path to WebView2Loader.dll> for a GNU-toolchain build

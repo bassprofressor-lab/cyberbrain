@@ -77,6 +77,7 @@ updated: 2026-09-05T09:12:03Z
 tags: [postgres, deployment]
 links: [docker-bind-mount-inode-drift]   # derived from [[...]], written back on scan
 retention: P2Y           # ISO-8601 duration, optional; absent means indefinite
+bereich: disposition     # department, team or domain; optional, absent means private
 pii: none | reviewed | flagged
 ---
 
@@ -117,6 +118,28 @@ collision is caught loudly as a uniqueness violation at index time rather than p
 wrong data, but two extra characters are a cheap way to avoid a baffling scan failure.
 
 ---
+
+### 3.4 `bereich`, and what it decides
+
+A note may name the department, team or domain it belongs to. The field is optional, and its
+absence is the safe default: a note without a `bereich` is never offered to anyone.
+
+It does two things and deliberately not a third.
+
+1. **It filters recall.** `--bereich x` narrows a search to that department. It never ranks:
+   a hit is not better for being in your department, it is either in scope or it is not.
+2. **It is the unit of sharing.** Notes travel between machines by bereich and never
+   individually, so that what may be shared is decided once, in words, rather than per note
+   in a hurry. Under Art. 5(1)(b) GDPR a department boundary is a purpose limitation, which
+   is why a grant carries a written reason and why the reason is not optional.
+3. **It is not a permission on this machine.** Every note in the store is readable by
+   whoever can read the store. `bereich` says where a note may *go*, not who may see it
+   here, and a design that let it look like access control would be a lie a filesystem can
+   disprove.
+
+Rings 0 and 1 are outside all of this: they belong to the operator of each host, they carry
+no bereich, and no grant can make them travel. See `docs/HUB.md` for the sharing rule in
+full — the grant, its direction, and the countersignature it takes to have any effect.
 
 ## 4. Storage layout
 

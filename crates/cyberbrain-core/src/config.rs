@@ -311,6 +311,13 @@ timeout_ms = 30000
 # this is the wait a person notices. Over budget, the hits come back with a caveat saying
 # the check did not run. 0 waits as long as timeout_ms.
 contradiction_budget_ms = 3000
+# cgroup v2 directory of the process serving base_url, when it runs on this machine and you
+# want the load page to attribute its CPU and memory exactly rather than machine-wide. The
+# page asks for this by name, and until now the only place the name appeared was a doc
+# comment in the source. Configured and not detected on purpose: the automatic route runs
+# through a container runtime's proxy process, and an attribution that is wrong but looks
+# exact is worse than none.
+# load_cgroup = "/sys/fs/cgroup/system.slice/docker-<id>.scope"
 
 [hub]
 # Set by `cyberbrain hub enrol <invitation>`. Without a url this store sends nothing, and

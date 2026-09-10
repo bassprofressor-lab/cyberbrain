@@ -12,6 +12,83 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **Notes can travel between machines, through the hub.** Until now the hub took audit rows
+  and nothing else. A store that switches on `allow_note_sync` can share the notes that
+  carry a `bereich` — a department, team or domain — with the devices that have been granted
+  that bereich. Rings 0 and 1 never travel, whatever is granted, and that is checked on the
+  way out, on the way in, and by a constraint in the hub's own database.
+
+- **A bereich grant takes two people.** One person writes it and a second countersigns it
+  with `cyberbrain hub grant approve <id> --as <credential>`; until then it is written down
+  and moves nothing. Whoever runs the hub registers the devices and can read a device token
+  out of the invitation file, so a single-signature grant would have meant that the operator
+  could point any department at a machine of their own — and "admin sees state, not content"
+  would have been a house rule rather than a property of the machine. **Upgrading a hub makes
+  its existing grants inactive**, because treating what is already there as signed would
+  carry that hole over the upgrade. Each refusal names the one command that revives one.
+
+- **A fourth role, `editor`.** Two machines that changed the same note without seeing each
+  other produce a conflict, and deciding which version stands means reading both texts. That
+  is a job for somebody who knows the work, not for whoever runs the machine — so `admin`
+  still sees no note text, and an editor sees conflicts only in the bereiche they were
+  assigned.
+
+- **`bereich` on a note**, set with `--bereich`, in the frontmatter, in the web UI, over MCP
+  and over the API. It filters recall and never ranks it.
+
+- **Age is a tie-break in recall.** Between two hits a ring apart, the ring still decides;
+  between two hits of the same ring, the fresher one comes first. Deliberately smaller than
+  the closest gap between two ring weights, so it can never reorder across rings.
+
+### Fixed
+
+- **A note could exist that the audit chain did not mention.** Two writers arriving at once
+  — a hook, an MCP server and a terminal are three processes, not three threads — raced for
+  the end of the chain, and the loser was told "nothing was written" after its file was
+  already on disk. Eight parallel writes left eight notes and one row. The chain append now
+  rebuilds the row against the head that is actually there and offers it again, and if it
+  still cannot get in, the note file goes back to what it was.
+
+- **Any signed-in principal counted as the hub administrator.** The hub has one login box
+  and two kinds of caller behind it; the question asked of the cookie was only "is this
+  session live". An editor could hand themselves a grant to any bereich on the hub. The role
+  decides now.
+
+- **`cyberbrain hub conflicts` printed every department's note text** to whoever could open
+  the file, while the web page checked the role and the bereich for the same rows. It takes
+  an editor's credential now.
+
+- **`cyberbrain hub report` wrote out every device's activity rows** with no credential and
+  no record, one subcommand away from the disclosure route that needs an auditor to ask and
+  somebody else to approve. It writes the summary only; the rows are `hub disclose`.
+
+- **Devices arrived and left without a word in the hub's log**, although granting a role had
+  been an entry all along.
+
+- **A pulled note lost its identity.** It arrived with a new id (so a citation written on the
+  sending machine resolved nowhere), `created` of now (so a retention clock restarted), no
+  tags, no retention at all, and `updated` of now — which made the next real change from the
+  other machine look older than a note this machine had never touched.
+
+- **An ordinary edit dropped a note's retention period.** `retention` could not tell "not
+  mentioned" from "remove it", so fixing a typo silently removed an agreed deletion date.
+
+- **Erasing a shared note said nothing about the hub's copy** except at the command line.
+
+- **Quitting the Windows launcher left `cyberbrain.exe` running**, which blocked the next
+  installation. The launcher now holds every process it starts in its job object, answers
+  `cyberbrain-desktop.exe --quit`, and the installer asks it to close before replacing
+  anything.
+
+### Changed
+
+- **`docs/HUB.md` and both READMEs said that what a note says never leaves the machine that
+  holds it.** That was true when it was written and stopped being true with note sync. It is
+  the product's strongest promise, so it is worth saying plainly that it was carrying a claim
+  the code no longer supported.
+
 ## [0.4.0] — 2026-09-09
 
 ### Added

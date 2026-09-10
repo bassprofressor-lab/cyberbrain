@@ -7,11 +7,21 @@
 //! It can also read, write, delete and apply retention. Opening its bind would hand all of
 //! that to anyone on the network.
 //!
-//! So the hub is a second surface with its own, much smaller job. It cannot read a note, it
-//! has no notes: it takes audit rows, checks that they continue where the sender left off,
-//! and keeps them. Everything a client sends is evidence about actions, never content —
-//! `subject` arrives as it was written, and what a note *said* never leaves the machine that
-//! holds it.
+//! So the hub is a second surface with its own, much smaller job: it takes audit rows,
+//! checks that they continue where the sender left off, and keeps them. It cannot read,
+//! write, delete or apply retention on anybody's store.
+//!
+//! It does hold note text, in one narrow case and never by default. A store that switches on
+//! `allow_note_sync` can share the notes carrying a `bereich`, in rings 2 to 4, with the
+//! devices that have a countersigned grant for that bereich — see `sync_access` for the rule
+//! and `docs/HUB.md` for what it means to somebody who has to explain it. Everything else a
+//! client sends is evidence about actions and not content: `subject` arrives as it was
+//! written, and a row says that a note was written, never what it said.
+//!
+//! The distinction is not a comment. `EgressPurpose::AuditSync` and `EgressPurpose::NoteSync`
+//! are separate entries in the register, the second carries `carries_note_content: true`, and
+//! `cyberbrain policy egress` prints both — so the difference is something an operator reads
+//! off their own machine rather than something they take on trust from this paragraph.
 //!
 //! # What the anchor does here
 //!

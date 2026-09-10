@@ -72,8 +72,11 @@ Starting it again while it is running does not give you a second icon: the secon
 opens your browser at the one already serving, and exits.
 
 It is not signed, so SmartScreen will warn on first run: More info, then Run anyway. The
-installer deliberately does not touch your `PATH`; if you want `cyberbrain` on the command
-line as well, add `C:\Program Files\Cyberbrain` yourself, or `cargo install cyberbrain`.
+installer puts `C:\Program Files\Cyberbrain` on the machine `PATH`, so `cyberbrain` works
+in a fresh terminal as well as from the Start menu. It does that through a small PowerShell
+script rather than from NSIS itself: NSIS truncates strings at a fixed length and a machine
+PATH is regularly longer, so reading it in the installer and writing it back would quietly
+cut off the end of somebody's PATH.
 
 The same installer can set up **the hub** — the one machine in a team that collects the
 others' audit trail. Tick *Hub service (collector)*: it registers a Windows service, opens
@@ -81,9 +84,16 @@ the port, and makes a folder to drop the licence file into. Nothing else, and no
 prompt. On the client machines, *Connect to the company hub…* in the tray menu takes the
 invitation file they were sent. The hub itself has a page at `http://localhost:7788/`: licence, seats, and
 which machines are reporting. The first visit from the hub's own machine sets the
-administrator password — there is no default one — and after that it opens from any desk. What a note
-**says** never leaves the machine that holds it, on either side.
-[`docs/HUB.md`](docs/HUB.md) has the whole picture.
+administrator password — there is no default one — and after that it opens from any desk,
+over HTTPS.
+
+By default the hub takes audit rows and nothing else: a row says that a note was written,
+never what it said. A team that wants the same handover note on four desks can switch note
+sharing on, and then the hub does hold the text of the notes that carry a `bereich` — never
+rings 0 and 1, only for devices with a grant for that bereich, and only once a second person
+has countersigned that grant, so that whoever runs the hub cannot point a department at a
+machine of their own. `cyberbrain policy egress` prints which of those paths are on, on your
+machine, without asking anybody. [`docs/HUB.md`](docs/HUB.md) has the whole picture.
 
 <details>
 <summary>Without the web page, or from a checkout</summary>
@@ -136,12 +146,6 @@ Windows those are not the same file and the wrong one fails silently.
 The page has a command line of its own, so `find`, `export` and everything else without a
 screen do not mean leaving for a terminal. It runs the same binary that is serving the page,
 against that page's store, and hands back the same stdout, stderr and exit code.
-
-Rings 0 and 1 are the operator's, and `cyberbrain propose` is how everyone else offers one:
-the note goes to `proposals/`, outside the notes tree, so it is not indexed and `recall`
-cannot return it — an unapproved invariant that an agent can retrieve is an invariant nobody
-agreed to. Somebody other than the proposer accepts it with `cyberbrain review <name>
---accept`, and the audit log names both of them.
 
 `cyberbrain serve --terminal` puts a real terminal in the page — a shell, `ssh`, an agent, in
 the project's directory. It is off unless you ask for it, it needs a token the address
@@ -283,7 +287,7 @@ behaviour.
 
 ## Status
 
-**v0.4.0, and young.** 685 tests, 6 browser tests, seven crates on crates.io plus the Windows launcher,
+**v0.4.0, and young.** 732 tests, 6 browser tests, seven crates on crates.io plus the Windows launcher,
 clippy and rustfmt clean. Binaries for Linux and Windows on the release page, and an
 installer beside them. It has been run against one operator's real corpus — 1,086 notes
 across five projects — and not much else. Expect rough edges, report them.

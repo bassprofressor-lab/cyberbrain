@@ -8,7 +8,9 @@ It is a second surface, not `serve` with the address opened up. `serve` binds lo
 has no authentication, and SPEC §8.2 ties those together deliberately: there is nothing to
 authenticate because there is no remote access. It can also read, write, delete and apply
 retention — opening its bind would hand that to everyone on the network. The hub
-authenticates, and the only thing it can do is take rows.
+authenticates, and what it can do is a short list: take audit rows, and — where a store has
+switched it on and two people have agreed to a bereich — hold and hand back the notes of that
+bereich. It cannot read, write, delete or apply retention on anybody's store.
 
 ## The licence
 
@@ -382,9 +384,75 @@ different from one that has stopped saying anything.
 
 ## What the hub knows, and what it does not
 
-It holds the same rows the client's own audit log holds: timestamp, actor, action, subject,
-and the detail as written. **It has no notes**, no index and no search — what a note *said*
-never leaves the machine that holds it.
+Two kinds of thing, and they are kept apart on purpose.
+
+**Audit rows, always.** The same rows the client's own audit log holds: timestamp, actor,
+action, subject, and the detail as written. No index, no search, no note bodies among them —
+a row says that a note was written, not what it said.
+
+**Note text, only where somebody put it there.** A store can also share notes through the
+hub, and then the hub does hold the text of those notes. That is off until it is switched on
+(`allow_note_sync`, off by default), it never covers rings 0 and 1, it only covers notes
+carrying a `bereich`, and each bereich has to be granted to each device and countersigned by
+a second person before anything moves. The section below says exactly what that means.
+
+Both halves are in the egress register, and the register is the thing to read rather than
+this paragraph: `cyberbrain policy egress` names every way bytes leave a machine, whether
+each one carries note content, and whether it is on.
+
+## Sharing notes between machines
+
+An audit trail answers *who did what*. A department that wants the same handover note on
+four desks needs something else, and this is it.
+
+**What travels.** A note travels only if all of these hold. Any one of them missing and it
+stays where it is, with a refusal that names the missing one.
+
+| | |
+|---|---|
+| `allow_note_sync = true` in the store's `cyberbrain.toml` | Off by default. A store that never turns it on shares audit rows and nothing else. |
+| The note carries a `bereich` | The department, team or domain it belongs to. No bereich, no sharing — the default is private. |
+| Ring 2, 3 or 4 | Rings 0 and 1 never leave the machine, and no grant can permit them. Checked on the way out, on the way in, and by a database constraint. |
+| A grant for that device and bereich, in the right direction | `send`, `receive` or `both`. Receiving admits foreign content and sending discloses your own; they are separate rights because they are separate risks. |
+| Somebody other than the grant's author has countersigned it | See below. |
+
+```console
+$ cyberbrain hub grant add --device dev_01J… --bereich disposition \
+      --direction both --reason "Schichtübergabe innerhalb der Abteilung"
+grant bg_01J… written: device dev_01J… may both bereich disposition
+  reason: Schichtübergabe innerhalb der Abteilung
+
+It does nothing yet. A bereich takes two people, so somebody holding a countersigner
+credential has to run:
+  cyberbrain hub grant approve bg_01J… --as <credential>
+```
+
+**Why two people.** Whoever runs the hub registers the devices and can read a device token
+out of the invitation file it writes. If that same person could also point a bereich at a
+device, then "admin sees state, not content" would be a house rule rather than a property of
+the machine: register a device, grant it `receive` on any department, fetch. So a grant is
+written by one person and takes effect when another signs it, and the signature is a row in
+the hub's log with both names in it. A grant nobody has signed is visible on the hub's page,
+marked as waiting, and moves nothing.
+
+**What the hub then holds.** For each shared note: its name, bereich, ring, kind, its
+frontmatter as the sender rendered it, and its body. Two machines that changed the same note
+without seeing each other produce a conflict, and a conflict row holds the text that was
+turned away as well — the same data under a different column name, which is why erasure
+clears both.
+
+**Who may read it.** Not the operator. The pages that show note text are the conflict pages,
+and they are for the `editor` role and only for the bereiche that editor was assigned.
+`cyberbrain hub conflicts` needs the same credential and answers the same way.
+
+**Erasure.** `cyberbrain hub erase <name> --bereich <b>` removes the hub's copy, the text
+held in any conflict row for it, and leaves a tombstone so that machines which already
+pulled it learn it went rather than merely stopping to see it. It is deliberately not behind
+`allow_note_sync`: a setting must not be able to stand between somebody and Art. 17.
+
+**What `forget` does not do.** Erasing a note locally does not reach the hub. `cyberbrain
+forget` says so when the note had a bereich and the store is enrolled, and names the command
+above. Making a local command delete across the network is a different decision.
 
 `cyberbrain hub fleet` shows devices, not activity — and shows the ones with something wrong
 first, because a list that reads the same whether or not there is a problem gets skimmed:
@@ -420,11 +488,14 @@ unnoticed.
 |---|---|---|
 | **admin** | devices, gaps, versions, seats, licence | activity rows |
 | **auditor** | activity — only inside an approved window | anything without a countersignature |
-| **countersigner** | every request, with its reason; the whole access log | rows, unless also an auditor |
+| **countersigner** | every request, with its reason; the whole access log; bereich grants waiting to be signed | rows, unless also an auditor |
+| **editor** | note conflicts in the bereiche they were assigned, both texts | anything outside those bereiche; activity of any kind |
 
 ```console
 $ cyberbrain hub principal add "M. Kraus" --role auditor
 $ cyberbrain hub principal add "Works council" --role countersigner
+$ cyberbrain hub principal add "R. Berger" --role editor
+$ cyberbrain hub principal assign R. Berger --bereich disposition
 ```
 
 Credentials are shown once and stored as a hash, like device tokens. Granting a role is

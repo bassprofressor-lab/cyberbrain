@@ -74,9 +74,11 @@ Ein zweiter Start, während er schon läuft, bringt kein zweites Symbol: der zwe
 öffnet den Browser auf dem bereits laufenden und beendet sich.
 
 Signiert ist die Datei nicht, SmartScreen warnt deshalb beim ersten Start: Weitere
-Informationen, dann Trotzdem ausführen. Den `PATH` fasst das Installationsprogramm bewusst
-nicht an; wer `cyberbrain` auch auf der Kommandozeile will, trägt
-`C:\Program Files\Cyberbrain` selbst ein oder nimmt `cargo install cyberbrain`.
+Informationen, dann Trotzdem ausführen. `C:\Program Files\Cyberbrain` trägt das Installationsprogramm in
+den `PATH` der Maschine ein, damit `cyberbrain` auch in einem frischen Fenster läuft. Das
+macht ein kleines PowerShell-Skript und nicht NSIS selbst: NSIS kürzt Zeichenketten ab einer
+festen Länge, und ein Maschinen-PATH ist regelmäßig länger — im Installer gelesen und
+zurückgeschrieben wäre am Ende still etwas abgeschnitten.
 
 Dasselbe Installationsprogramm richtet auf Wunsch auch **die Zentraleinheit** ein — den einen
 Rechner, der die Nachweise der übrigen einsammelt. Häkchen bei *Hub service (collector)*: es
@@ -86,9 +88,17 @@ Lizenzdatei kommt. Mehr nicht, und keine Kommandozeile. Auf den Arbeitsplätzen 
 haben. Die Zentraleinheit selbst hat eine Seite unter `http://localhost:7788/`: Lizenz, Plätze, und
 welche Maschinen melden. Der erste Aufruf auf ihrem eigenen Rechner setzt das
 Verwalterkennwort — ein Standardkennwort gibt es nicht — danach geht sie von jedem
-Schreibtisch aus auf. Was eine
-Notiz **sagt**, verlässt auf keiner der beiden Seiten den Rechner, auf dem sie liegt. Das
-ganze Bild steht in [`docs/HUB.md`](docs/HUB.md).
+Schreibtisch aus auf, über HTTPS.
+
+Von Haus aus nimmt die Zentraleinheit Nachweiszeilen und sonst nichts: eine Zeile sagt, dass
+eine Notiz geschrieben wurde, nie was darin stand. Wer dieselbe Übergabenotiz auf vier
+Schreibtischen haben will, kann das Teilen einschalten — dann hält die Zentraleinheit auch
+den Text der Notizen, die einen `bereich` tragen. Nie die Ringe 0 und 1, nur für Geräte mit
+einer Freigabe für diesen Bereich, und erst wenn eine zweite Person diese Freigabe
+gegengezeichnet hat, damit wer die Zentraleinheit betreibt nicht eine Abteilung auf einen
+eigenen Rechner leiten kann. Was davon auf Ihrem Rechner an ist, sagt Ihnen `cyberbrain
+policy egress`, ohne jemanden fragen zu müssen. Das ganze Bild steht in
+[`docs/HUB.md`](docs/HUB.md).
 
 <details>
 <summary>Ohne Weboberfläche, oder aus einem Checkout</summary>
@@ -291,18 +301,22 @@ kein Verhalten.
 
 ## Stand
 
-**v0.3.1, und jung.** 664 Tests, 6 Browsertests, sieben Pakete auf crates.io und dazu der Windows-Starter,
-clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux und Windows und ein
-Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines einzigen
-Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist zu
-rechnen, melde sie.
+**v0.4.0, und jung.** 732 Tests, 6 Browsertests, sieben Pakete auf crates.io und dazu der
+Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux und
+Windows und ein Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines
+einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist
+zu rechnen, melde sie.
 
-Die Windows-Seite ist der jüngste und am wenigsten eingelaufene Teil: die CI baut Starter,
-Hub-Dienst und Installationsprogramm, packt sie und lässt einen Store durch die Binärdatei
-laufen, die dabei ausgeliefert wird — installiert hatte das zum Erscheinen von 0.3.0 aber
-noch niemand, und eingetragen als Dienst auch nicht. Der Dienstcode lässt sich nirgendwo
-außer unter Windows ausführen; er ist übersetzt und gelesen, nicht gelaufen. Wenn er sich auf
-deinem Rechner danebenbenimmt, ist das einen Fehlerbericht wert.
+Die Windows-Seite ist der jüngste und am wenigsten eingelaufene Teil. Sie ist nicht mehr nur
+übersetzt und gelesen: die CI installiert das Installationsprogramm so, wie eine Kundin es
+täte, still, und prüft danach nach, was dabei herauskam — dass die Zentraleinheit sich ein
+eigenes Zertifikat ausgestellt hat und es als ihr eigenes wiedererkennt, dass der private
+Schlüssel für gewöhnliche Konten nicht lesbar ist, dass die Diensteintragung das Zertifikat
+mitführt, und dass eine Deinstallation Dienst und PATH-Eintrag wieder mitnimmt und den
+Nachweisbestand liegen lässt. Diese Prüfung gibt es, weil zwei Fehler auf einem Schreibtisch
+ankamen, die kein Übersetzen gezeigt hätte. Installiert und gelaufen ist das auf genau einem
+Arbeitsplatz und einem Server. Wenn es sich auf deinem danebenbenimmt, ist das einen
+Fehlerbericht wert.
 
 Cyberbrain ist ein eigenständiges Werk. Es teilt keinen Quelltext mit irgendeinem anderen
 Gedächtnis-Werkzeug; §0 von [`docs/SPEC.md`](docs/SPEC.md) hält die Grenze fest, unter der es
