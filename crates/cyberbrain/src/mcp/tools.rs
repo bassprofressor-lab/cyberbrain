@@ -164,6 +164,7 @@ pub fn catalogue() -> Vec<Tool> {
                     "name": schema_prop("write", "name", json!({ "type": "string" })),
                     "body": schema_prop("write", "body", json!({ "type": "string" })),
                     "tags": schema_prop("write", "tags", json!({ "type": "array", "items": { "type": "string" } })),
+                    "bereich": schema_prop("write", "bereich", json!({ "type": "string" })),
                     "retention": schema_prop("write", "retention", json!({ "type": "string" })),
                     "force": schema_prop("write", "force", json!({ "type": "boolean" })),
                     "dry_run": schema_prop("write", "dry_run", json!({ "type": "boolean" })),
@@ -412,12 +413,13 @@ pub async fn call(app: &App, name: &str, raw_args: &Value) -> Result<Value, RpcE
 }
 
 async fn recall(app: &App, raw: &Value) -> Result<Value, RpcError> {
-    let a = Args::new("recall", raw, &["query", "n", "ring"])?;
+    let a = Args::new("recall", raw, &["query", "n", "ring", "bereich"])?;
     let query = a.string_required("query")?;
     let req = RecallRequest {
         n: a.uint("n", 1)?
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
         ring: a.ring("ring")?,
+        bereich: a.string("bereich")?,
     };
     Ok(match app.recall(&query, &req).await {
         // Caveats travel twice on purpose: verbatim in `structuredContent.caveats`, and as
@@ -473,6 +475,7 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
             "name",
             "body",
             "tags",
+            "bereich",
             "retention",
             "force",
             "dry_run",
@@ -518,6 +521,7 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         name: a.string_required("name")?,
         body: a.string_required("body")?,
         tags: a.string_list("tags")?.unwrap_or_default(),
+        bereich: a.string("bereich")?,
         retention: a.string("retention")?,
         force: a.boolean("force")?.unwrap_or(false),
         choice,

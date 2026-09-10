@@ -53,6 +53,7 @@ impl Fixture {
                 name: name.into(),
                 body: body.into(),
                 tags: vec![],
+                bereich: None,
                 retention: None,
                 force: true,
                 choice: None,

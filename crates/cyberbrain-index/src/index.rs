@@ -443,13 +443,14 @@ impl Index {
             .map_err(|e| Error::Index(format!("tags: {e}")))?;
         tx.execute(
             "INSERT INTO notes (id, name, ring, kind, path, created, updated, mtime_ns, size,
-                                hash, tags, retention, pii)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                                hash, tags, bereich, retention, pii)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, ring = excluded.ring, kind = excluded.kind,
                 path = excluded.path, created = excluded.created, updated = excluded.updated,
                 mtime_ns = excluded.mtime_ns, size = excluded.size, hash = excluded.hash,
-                tags = excluded.tags, retention = excluded.retention, pii = excluded.pii",
+                tags = excluded.tags, bereich = excluded.bereich,
+                retention = excluded.retention, pii = excluded.pii",
             params![
                 id_s,
                 note.front.name,
@@ -462,6 +463,7 @@ impl Index {
                 stamp.map(|s| s.size as i64),
                 content_hash(note),
                 tags,
+                note.front.bereich,
                 note.front.retention,
                 enum_str(&note.front.pii)?,
             ],
@@ -677,7 +679,7 @@ impl Index {
     // ----- reads ------------------------------------------------------------------------
 
     const NOTE_COLUMNS: &'static str = "n.id, n.name, n.ring, n.kind, n.path, n.created, n.updated, n.mtime_ns, n.size, \
-         n.hash, n.tags, n.retention, n.pii, \
+         n.hash, n.tags, n.bereich, n.retention, n.pii, \
          (SELECT count(*) FROM blocks b WHERE b.note_id = n.id), \
          (SELECT count(*) FROM vectors v JOIN blocks b ON b.citation = v.citation WHERE b.note_id = n.id), \
          (SELECT json_group_array(to_name) FROM (SELECT to_name FROM links l WHERE l.from_note = n.id ORDER BY pos))";
@@ -703,10 +705,11 @@ impl Index {
                     r.get::<_, String>(9)?,
                     r.get::<_, String>(10)?,
                     r.get::<_, Option<String>>(11)?,
-                    r.get::<_, String>(12)?,
-                    r.get::<_, i64>(13)?,
+                    r.get::<_, Option<String>>(12)?,
+                    r.get::<_, String>(13)?,
                     r.get::<_, i64>(14)?,
-                    r.get::<_, String>(15)?,
+                    r.get::<_, i64>(15)?,
+                    r.get::<_, String>(16)?,
                 ))
             })
             .ix()?;
@@ -724,6 +727,7 @@ impl Index {
                 size,
                 hash,
                 tags,
+                bereich,
                 retention,
                 pii,
                 block_count,
@@ -746,6 +750,7 @@ impl Index {
                         .map_err(|e| Error::Index(format!("stored tags of note {id}: {e}")))?,
                     links: serde_json::from_str(&links)
                         .map_err(|e| Error::Index(format!("stored links of note {id}: {e}")))?,
+                    bereich,
                     retention,
                     pii: enum_parse::<PiiState>("pii", &pii)?,
                 },

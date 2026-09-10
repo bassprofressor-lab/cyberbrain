@@ -56,7 +56,11 @@ pub async fn recall(
     }
     let ring = p.ring.map(Ring::try_from).transpose()?;
     let started = Instant::now();
-    let req = RecallRequest { n: p.n, ring };
+    let req = RecallRequest {
+        n: p.n,
+        ring,
+        bereich: None,
+    };
     let result = st.app.recall(&q, &req).await?;
     let retrieval = &st.app.config().retrieval;
     let n = p.n.unwrap_or(retrieval.n);

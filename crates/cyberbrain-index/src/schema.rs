@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -108,6 +108,12 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO blocks_fts (rowid, text, name, citation, ring)
         SELECT b.id, b.text, CASE WHEN b.idx = 0 THEN n.name END, b.citation, n.ring
         FROM blocks b JOIN notes n ON n.id = b.note_id;
+    "#,
+    // v3: `bereich` — which part of the organisation a note belongs to. Nullable, because
+    // every note written before this migration has none and a single-project store needs none.
+    r#"
+    ALTER TABLE notes ADD COLUMN bereich TEXT;
+    CREATE INDEX notes_bereich ON notes(bereich) WHERE bereich IS NOT NULL;
     "#,
 ];
 

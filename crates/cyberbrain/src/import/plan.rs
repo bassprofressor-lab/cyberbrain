@@ -104,6 +104,10 @@ pub struct Group {
     pub existing: Existing,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Department, team or domain applied to every note of the group. A tree of folders
+    /// maps onto an organisation this way: one group per folder, one bereich each.
+    #[serde(default)]
+    pub bereich: Option<String>,
     /// ISO-8601 duration applied to every note of the group.
     #[serde(default)]
     pub retention: Option<String>,

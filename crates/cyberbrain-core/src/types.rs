@@ -158,6 +158,11 @@ pub struct Frontmatter {
     /// Derived from `[[...]]` in the body and written back by `scan`. Never hand-maintained.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<String>,
+    /// Which part of the organisation this note belongs to: a department, a team, a
+    /// domain. Optional, because a single-project store does not need one and every
+    /// existing note predates the field. Filters recall; never changes ranking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bereich: Option<String>,
     /// ISO-8601 duration. Absent means keep indefinitely (SPEC §12.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention: Option<String>,

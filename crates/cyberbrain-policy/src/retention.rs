@@ -254,6 +254,7 @@ mod tests {
             updated: ts("2026-09-01T00:00:00Z"),
             tags: vec![],
             links: vec![],
+            bereich: None,
             retention: retention.map(str::to_owned),
             pii: PiiState::None,
         }

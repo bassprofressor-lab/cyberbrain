@@ -520,6 +520,7 @@ fn run_write(
                         updated: w.updated,
                         tags: req.tags.clone(),
                         links: link_targets(&body),
+                        bereich: req.bereich.clone(),
                         retention: req.retention.clone(),
                         pii: w.pii,
                     },
@@ -605,6 +606,9 @@ pub async fn put_note(
             name: cur.name.clone(),
             body: parsed.body,
             tags: parsed.front.tags.unwrap_or_else(|| cur.tags.clone()),
+            // The API has no bereich field yet; app.write() keeps the note's own, so an
+            // edit through the UI cannot silently drop it.
+            bereich: None,
             retention: match parsed.front.retention {
                 Some(r) => r,
                 None => cur.retention.clone(),
@@ -662,6 +666,7 @@ pub async fn post_note(
             name,
             body: parsed.body,
             tags: parsed.front.tags.unwrap_or_default(),
+            bereich: None,
             retention: parsed.front.retention.flatten(),
             force: false,
             choice: None,

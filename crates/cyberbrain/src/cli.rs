@@ -66,6 +66,9 @@ pub enum Command {
         /// Restrict to exactly this ring.
         #[arg(long, value_parser = clap::value_parser!(u8).range(0..=4))]
         ring: Option<u8>,
+        /// Restrict to notes of this department, team or domain.
+        #[arg(long)]
+        bereich: Option<String>,
     },
 
     /// Exact line ranges for a symbol, so the agent reads a slice and not a file.
@@ -99,6 +102,10 @@ pub enum Command {
         /// A tag. Repeat the flag for several.
         #[arg(long)]
         tags: Vec<String>,
+        /// Which department, team or domain this note belongs to. Filters recall; never
+        /// changes ranking. Absent is fine and stays the default.
+        #[arg(long)]
+        bereich: Option<String>,
         /// ISO-8601 duration, e.g. P2Y. Absent means keep indefinitely.
         #[arg(long)]
         retention: Option<String>,
@@ -128,6 +135,9 @@ pub enum Command {
         body: Option<String>,
         #[arg(long)]
         tags: Vec<String>,
+        /// Which department, team or domain this note belongs to.
+        #[arg(long)]
+        bereich: Option<String>,
         #[arg(long)]
         retention: Option<String>,
         /// Propose despite PII findings, recording them as flagged.

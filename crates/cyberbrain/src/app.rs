@@ -216,6 +216,8 @@ pub struct Expanded {
 pub struct RecallRequest {
     pub n: Option<usize>,
     pub ring: Option<Ring>,
+    /// Restrict to notes of this department, team or domain.
+    pub bereich: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,6 +227,8 @@ pub struct WriteRequest {
     pub name: String,
     pub body: String,
     pub tags: Vec<String>,
+    /// Which department, team or domain the note belongs to. Filters recall, never ranks.
+    pub bereich: Option<String>,
     pub retention: Option<String>,
     /// Write despite findings, stamping `flagged`. The CLI's `--force`.
     pub force: bool,
@@ -1324,6 +1328,7 @@ impl App {
             k_lex: r.k_lex,
             k_sem: r.k_sem,
             ring: req.ring,
+            bereich: req.bereich.clone(),
             min_cosine: 0.0,
         };
         let embedder_state = self.embedder();
@@ -1801,6 +1806,12 @@ impl App {
             updated: now,
             tags,
             links: link_targets(&body),
+            // A request that names no bereich keeps the one the note already had: an update
+            // that omits a field must not silently drop it.
+            bereich: req
+                .bereich
+                .clone()
+                .or_else(|| existing.as_ref().and_then(|n| n.front.bereich.clone())),
             retention: req.retention,
             pii,
         };
@@ -1969,6 +1980,7 @@ impl App {
                 updated: now,
                 tags,
                 links: link_targets(&body),
+                bereich: req.bereich,
                 retention: req.retention,
                 pii,
             },

@@ -659,6 +659,7 @@ mod tests {
                 updated: ts(),
                 tags: vec![],
                 links: vec![],
+                bereich: None,
                 retention: None,
                 pii: PiiState::None,
             },

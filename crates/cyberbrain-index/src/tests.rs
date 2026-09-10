@@ -86,6 +86,7 @@ fn note(name: &str, ring: Ring, body: &str, links: &[&str]) -> Note {
             updated: ts,
             tags: vec!["t".into()],
             links: links.iter().map(|s| s.to_string()).collect(),
+            bereich: None,
             retention: None,
             pii: PiiState::None,
         },
@@ -333,10 +334,16 @@ fn ring_weight_orders_equal_matches() {
         Ring::Knowledge.weight(),
         Ring::External.weight(),
     ];
+    // Since 2026-09-10 the score also carries a recency weight. It is derived here from the
+    // same function the ranker uses, never a literal, for the same reason as the ring weights
+    // above. The fixture stamps every note with the same `updated`, so this factor is equal
+    // across the three and cannot be what orders them.
+    let ts: jiff::Timestamp = "2026-09-05T09:12:03Z".parse().unwrap();
+    let recency = crate::recall::recency_weight(ts, jiff::Timestamp::now());
     for (h, w) in r.hits.iter().zip(weights) {
-        let expect = w * rrf(rank(&h.note_name), rank(&h.note_name));
+        let expect = w * recency * rrf(rank(&h.note_name), rank(&h.note_name));
         assert!(
-            (h.score - expect).abs() < 1e-6,
+            (h.score - expect).abs() < 1e-5,
             "{}: {} vs {expect}",
             h.note_name,
             h.score
@@ -1420,4 +1427,119 @@ fn audit_survives_cache_deletion() {
     let reopened = AuditStore::open(&record).unwrap();
     assert_eq!(reopened.read(&AuditFilter::default()).unwrap(), before);
     assert_eq!(reopened.count().unwrap(), 2);
+}
+
+// ---------------------------------------------------------------------------------------
+// bereich and recency, added 2026-09-10.
+// ---------------------------------------------------------------------------------------
+
+/// The reason `RECENCY_AMPLITUDE` is as small as it is. Age decides between two notes of the
+/// same ring; it must never lift a note over one from a more trusted ring, however stale the
+/// trusted one is. Checked against the closest pair of ring weights, which is the only place
+/// this can break.
+#[test]
+fn recency_never_beats_a_ring() {
+    use crate::recall::{RECENCY_AMPLITUDE, recency_weight};
+    let now: jiff::Timestamp = "2026-09-10T12:00:00Z".parse().unwrap();
+    // Freshest possible against the most stale possible.
+    let freshest = recency_weight(now, now);
+    let ancient: jiff::Timestamp = "2000-01-01T00:00:00Z".parse().unwrap();
+    let stalest = recency_weight(ancient, now);
+    assert!(freshest <= 1.0 + RECENCY_AMPLITUDE + f32::EPSILON);
+    assert!(stalest >= 1.0 - RECENCY_AMPLITUDE - f32::EPSILON);
+
+    // The closest two ring weights. A stale note of the better ring must still win.
+    let (better, worse) = (Ring::Invariant.weight(), Ring::Protocol.weight());
+    assert!(
+        better * stalest > worse * freshest,
+        "a fresh ring-1 note ({}) outranked a stale ring-0 note ({}): amplitude is too large",
+        worse * freshest,
+        better * stalest
+    );
+    // And the same for every other adjacent pair.
+    for (b, w) in [
+        (Ring::Protocol, Ring::Knowledge),
+        (Ring::Knowledge, Ring::Session),
+        (Ring::Session, Ring::External),
+    ] {
+        assert!(
+            b.weight() * stalest > w.weight() * freshest,
+            "{b:?} vs {w:?}: recency crossed a ring boundary"
+        );
+    }
+}
+
+/// A note updated today outranks an otherwise identical one from months ago. This is the
+/// tie-break the amplitude exists for.
+#[test]
+fn fresher_of_two_equals_wins() {
+    use crate::recall::recency_weight;
+    let now: jiff::Timestamp = "2026-09-10T12:00:00Z".parse().unwrap();
+    let today = recency_weight(now, now);
+    let ninety_days: jiff::Timestamp = "2026-06-12T12:00:00Z".parse().unwrap();
+    let older = recency_weight(ninety_days, now);
+    assert!(today > older, "today {today} was not above 90 days old {older}");
+    // One half-life should give up half the amplitude, within float noise.
+    let expected = 1.0 - 0.015 + 2.0 * 0.015 * 0.5;
+    assert!((older - expected).abs() < 1e-4, "{older} vs {expected}");
+}
+
+/// A timestamp in the future must not buy an unbounded bonus.
+#[test]
+fn a_future_stamp_is_capped_at_current() {
+    use crate::recall::{RECENCY_AMPLITUDE, recency_weight};
+    let now: jiff::Timestamp = "2026-09-10T12:00:00Z".parse().unwrap();
+    let year_ahead: jiff::Timestamp = "2027-09-10T12:00:00Z".parse().unwrap();
+    let w = recency_weight(year_ahead, now);
+    assert!((w - (1.0 + RECENCY_AMPLITUDE)).abs() < 1e-6, "{w}");
+}
+
+/// `bereich` admits and excludes; a bereich nobody carries says so rather than returning
+/// everything, which is the failure mode of a filter that silently does nothing.
+#[test]
+fn bereich_filters_and_says_when_it_matches_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ix = Index::open(&dir.path().join("i.db")).unwrap();
+    let mut a = note("disposition-regel", Ring::Knowledge, "Ladung und Tour", &[]);
+    a.front.bereich = Some("disposition".into());
+    let mut b = note("buchhaltung-regel", Ring::Knowledge, "Ladung und Konto", &[]);
+    b.front.bereich = Some("buchhaltung".into());
+    for n in [&a, &b] {
+        ix.upsert_note(n, &blocks_of(n), None).unwrap();
+    }
+
+    let all = ix
+        .recall("Ladung", None, &RecallOptions::default())
+        .unwrap();
+    assert_eq!(all.hits.len(), 2, "unfiltered should see both");
+
+    let only = ix
+        .recall(
+            "Ladung",
+            None,
+            &RecallOptions {
+                bereich: Some("disposition".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(only.hits.len(), 1);
+    assert_eq!(only.hits[0].note_name, "disposition-regel");
+
+    let none = ix
+        .recall(
+            "Ladung",
+            None,
+            &RecallOptions {
+                bereich: Some("vertrieb".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(none.hits.is_empty());
+    assert!(
+        none.caveats.iter().any(|c| c.contains("vertrieb")),
+        "an empty bereich must be named in the caveats, got {:?}",
+        none.caveats
+    );
 }

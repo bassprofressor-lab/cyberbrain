@@ -18,7 +18,7 @@ use std::path::Path;
 const FENCE: &str = "---";
 
 /// Keys the head may contain. Anything else is a typo or a field from another tool.
-const KNOWN_KEYS: [&str; 10] = [
+const KNOWN_KEYS: [&str; 11] = [
     "id",
     "name",
     "ring",
@@ -27,6 +27,7 @@ const KNOWN_KEYS: [&str; 10] = [
     "updated",
     "tags",
     "links",
+    "bereich",
     "retention",
     "pii",
 ];
@@ -92,6 +93,9 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
         .map_err(|e| fail(e.to_string()))?;
 
     validate_name(&front.name).map_err(|r| fail(format!("name `{}`: {r}", front.name)))?;
+    if let Some(b) = &front.bereich {
+        validate_bereich(b).map_err(|r| fail(format!("bereich `{b}`: {r}")))?;
+    }
     if let Some(r) = &front.retention {
         validate_retention(r).map_err(|why| fail(format!("retention `{r}`: {why}")))?;
     }
@@ -130,6 +134,28 @@ pub fn render(front: &Frontmatter, body: &str) -> Result<String> {
 /// A name is a kebab-case slug: ASCII lowercase letters and digits, single hyphens
 /// between them, 1..=120 characters. It becomes `<name>.md` inside a ring directory, so
 /// the rule also rules out every path-traversal shape (`..`, `/`, `\`, drive letters).
+/// A `bereich` names a department, team or domain. It is typed in filters and on the command
+/// line, so it may not carry whitespace or path separators; beyond that it stays free, because
+/// an organisation's own labels ("30-Assets", "Disposition") are not ours to reshape.
+pub fn validate_bereich(bereich: &str) -> std::result::Result<(), &'static str> {
+    if bereich.is_empty() {
+        return Err("must not be empty");
+    }
+    if bereich.chars().count() > 64 {
+        return Err("must be at most 64 characters");
+    }
+    if bereich.chars().any(|c| c.is_whitespace()) {
+        return Err("must not contain whitespace");
+    }
+    if bereich.contains('/') || bereich.contains('\\') {
+        return Err("must not contain a path separator");
+    }
+    if bereich.chars().any(|c| c.is_control()) {
+        return Err("must not contain control characters");
+    }
+    Ok(())
+}
+
 pub fn validate_name(name: &str) -> std::result::Result<(), &'static str> {
     if name.is_empty() {
         return Err("must not be empty");
@@ -244,6 +270,7 @@ fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(
         "kind" => as_::<NoteKind>(value),
         "created" | "updated" => as_::<jiff::Timestamp>(value),
         "tags" | "links" => as_::<Vec<String>>(value),
+        "bereich" => as_::<Option<String>>(value),
         "retention" => as_::<Option<String>>(value),
         "pii" => as_::<PiiState>(value),
         _ => Ok(()),

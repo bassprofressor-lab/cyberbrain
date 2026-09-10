@@ -737,6 +737,7 @@ fn stdout_carries_protocol_only_over_real_pipes() {
                 name: "pipe-note".into(),
                 body: "Postgres 18 moved pgdata.".into(),
                 tags: vec![],
+                bereich: None,
                 retention: None,
                 force: false,
                 choice: None,

@@ -143,6 +143,7 @@ impl VectorCache {
         query: &[f32],
         k: usize,
         ring: Option<Ring>,
+        allowed: Option<&std::collections::HashSet<String>>,
         min_cosine: f32,
     ) -> Vec<(f32, usize)> {
         if k == 0 || self.len() == 0 || query.len() != self.dim {
@@ -152,6 +153,13 @@ impl VectorCache {
         for (i, row) in self.data.chunks_exact(self.dim).enumerate() {
             if let Some(r) = ring
                 && self.rings[i] != r
+            {
+                continue;
+            }
+            // `allowed` is the bereich filter, resolved to citations by the caller so this
+            // loop stays a plain membership test.
+            if let Some(a) = allowed
+                && !a.contains(&self.citations[i])
             {
                 continue;
             }

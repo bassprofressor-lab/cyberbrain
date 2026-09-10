@@ -249,6 +249,7 @@ mod tests {
             updated: jiff::Timestamp::now(),
             tags: vec![],
             links: vec![],
+            bereich: None,
             retention: None,
             pii: PiiState::Unscanned,
         };

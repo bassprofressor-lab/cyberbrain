@@ -233,7 +233,13 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let r = app.scan(ScanOptions { full, dry_run })?;
             out.emit(&r, render::scan)?;
         }
-        Command::Recall { query, id, n, ring } => {
+        Command::Recall {
+            query,
+            id,
+            n,
+            ring,
+            bereich,
+        } => {
             if let Some(id) = id {
                 let r = app.recall_id(&id)?;
                 out.emit(&r, render::expanded)?;
@@ -242,7 +248,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     Error::Config("recall needs a query, or --id <citation>".into())
                 })?;
                 let ring = ring.map(Ring::try_from).transpose()?;
-                let req = RecallRequest { n: Some(n), ring };
+                let req = RecallRequest {
+                    n: Some(n),
+                    ring,
+                    bereich,
+                };
                 let r = runtime()?.block_on(app.recall(&query, &req))?;
                 out.emit(&r, render::recall)?;
             }
@@ -257,6 +267,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             name,
             body,
             tags,
+            bereich,
             retention,
             force,
             dry_run,
@@ -271,6 +282,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 name,
                 body,
                 tags,
+                bereich,
                 retention,
                 force,
                 choice: None,
@@ -304,6 +316,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             name,
             body,
             tags,
+            bereich,
             retention,
             force,
             dry_run,
@@ -319,6 +332,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 name,
                 body,
                 tags,
+                bereich,
                 retention,
                 force,
                 choice: None,
