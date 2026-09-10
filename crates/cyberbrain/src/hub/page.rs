@@ -517,10 +517,7 @@ footer{color:var(--dim);font-size:.85rem;margin-top:1.4rem}
 /// Two versions side by side and two buttons. The decision is which text stands, so the
 /// page shows the texts and not their metadata — an editor who has to reason about
 /// timestamps to answer "which of these is right" has been handed the wrong question.
-pub fn conflicts_page(
-    name: &str,
-    conflicts: &[(super::store::NoteConflict, String)],
-) -> String {
+pub fn conflicts_page(name: &str, conflicts: &[(super::store::NoteConflict, String)]) -> String {
     let mut body = String::new();
     if conflicts.is_empty() {
         body.push_str(

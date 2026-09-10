@@ -1478,7 +1478,10 @@ fn fresher_of_two_equals_wins() {
     let today = recency_weight(now, now);
     let ninety_days: jiff::Timestamp = "2026-06-12T12:00:00Z".parse().unwrap();
     let older = recency_weight(ninety_days, now);
-    assert!(today > older, "today {today} was not above 90 days old {older}");
+    assert!(
+        today > older,
+        "today {today} was not above 90 days old {older}"
+    );
     // One half-life should give up half the amplitude, within float noise.
     let expected = 1.0 - 0.015 + 2.0 * 0.015 * 0.5;
     assert!((older - expected).abs() < 1e-4, "{older} vs {expected}");
@@ -1502,7 +1505,12 @@ fn bereich_filters_and_says_when_it_matches_nothing() {
     let mut ix = Index::open(&dir.path().join("i.db")).unwrap();
     let mut a = note("disposition-regel", Ring::Knowledge, "Ladung und Tour", &[]);
     a.front.bereich = Some("disposition".into());
-    let mut b = note("buchhaltung-regel", Ring::Knowledge, "Ladung und Konto", &[]);
+    let mut b = note(
+        "buchhaltung-regel",
+        Ring::Knowledge,
+        "Ladung und Konto",
+        &[],
+    );
     b.front.bereich = Some("buchhaltung".into());
     for n in [&a, &b] {
         ix.upsert_note(n, &blocks_of(n), None).unwrap();

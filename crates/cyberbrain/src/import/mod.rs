@@ -13,10 +13,10 @@
 //! found, what became a note, and every item that did not, by name and with a reason.
 
 pub mod plan;
-pub mod suggest;
 pub mod report;
 mod slug;
 mod split;
+pub mod suggest;
 mod walk;
 
 #[cfg(test)]

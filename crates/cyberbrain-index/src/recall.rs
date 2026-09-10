@@ -107,7 +107,9 @@ impl Index {
                     set.insert(r.ix()?);
                 }
                 if set.is_empty() {
-                    caveats.push(format!("no note carries bereich {b:?}; no hits are possible"));
+                    caveats.push(format!(
+                        "no note carries bereich {b:?}; no hits are possible"
+                    ));
                 }
                 Some(set)
             }

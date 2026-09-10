@@ -2897,9 +2897,12 @@ impl App {
         name: &str,
     ) -> Result<(serde_json::Value, i32)> {
         use crate::hub::client::{self, Reply};
-        let hub_url = self.config.hub.url.clone().ok_or_else(|| {
-            Error::Config("this store is not enrolled with a hub".into())
-        })?;
+        let hub_url = self
+            .config
+            .hub
+            .url
+            .clone()
+            .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
         let token = client::token_for(&hub_url)?;
         let pin = client::pin_for(&hub_url);
         let reply = client::erase_at_hub(
@@ -3001,7 +3004,9 @@ impl App {
                 "{} note(s) would be offered to {}. {} carry no bereich and {} are ring 0 or 1, \
                  which never leave this machine.",
                 v["offered"],
-                hub_url.as_deref().unwrap_or("a hub, once this store is enrolled with one"),
+                hub_url
+                    .as_deref()
+                    .unwrap_or("a hub, once this store is enrolled with one"),
                 skipped_no_bereich,
                 skipped_resident
             ));
@@ -3042,10 +3047,7 @@ impl App {
                 let mut known = client::read_known(&hub_url);
                 for n in &offered {
                     let name = n["name"].as_str().unwrap_or_default();
-                    let conflicted = d
-                        .conflicts
-                        .iter()
-                        .any(|c| c["name"].as_str() == Some(name));
+                    let conflicted = d.conflicts.iter().any(|c| c["name"].as_str() == Some(name));
                     if !conflicted && let Some(u) = n["updated"].as_str() {
                         known.insert(name.to_string(), u.to_string());
                     }

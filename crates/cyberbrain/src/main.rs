@@ -1298,8 +1298,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         }
         HubCommand::Erase { name, bereich } => {
             let app = App::open(store, Actor::Operator)?;
-            let (report, code) =
-                runtime()?.block_on(app.erase_at_hub(bereich, name))?;
+            let (report, code) = runtime()?.block_on(app.erase_at_hub(bereich, name))?;
             out.emit(&report, |v| {
                 format!("{}\n", v["message"].as_str().unwrap_or_default())
             })?;

@@ -256,10 +256,7 @@ pub fn read_known(hub_url: &str) -> std::collections::BTreeMap<String, String> {
         .unwrap_or_default()
 }
 
-pub fn write_known(
-    hub_url: &str,
-    map: &std::collections::BTreeMap<String, String>,
-) -> Result<()> {
+pub fn write_known(hub_url: &str, map: &std::collections::BTreeMap<String, String>) -> Result<()> {
     let Some(p) = known_path(hub_url) else {
         return Ok(());
     };
@@ -287,10 +284,9 @@ pub async fn fetch_from_hub(
     // direction that carries it, whichever way it flows.
     let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::NoteSync, &url)?;
     let payload = serde_json::json!({ "since": since }).to_string();
-    let resp = cyberbrain_policy::egress::transport::post_bearer(
-        &ticket, &url, token, &[], payload, pin,
-    )
-    .await?;
+    let resp =
+        cyberbrain_policy::egress::transport::post_bearer(&ticket, &url, token, &[], payload, pin)
+            .await?;
     let body = String::from_utf8_lossy(&resp.body).to_string();
     if resp.status != 200 {
         return Err(Error::Config(format!(
@@ -321,10 +317,9 @@ pub async fn erase_at_hub(
         .transpose()?;
     let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::NoteErasure, &url)?;
     let payload = serde_json::json!({ "bereich": bereich, "name": name }).to_string();
-    let resp = cyberbrain_policy::egress::transport::post_bearer(
-        &ticket, &url, token, &[], payload, pin,
-    )
-    .await?;
+    let resp =
+        cyberbrain_policy::egress::transport::post_bearer(&ticket, &url, token, &[], payload, pin)
+            .await?;
     let body = String::from_utf8_lossy(&resp.body).to_string();
     let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
     let message = json
@@ -392,7 +387,10 @@ pub async fn deliver_notes(
                 .unwrap_or_default() as usize,
             // `stored` is how many were newer than what the hub held; the rest passed the
             // rules and changed nothing. Reported as rows so one number means one thing.
-            total_rows: json.get("stored").and_then(|v| v.as_i64()).unwrap_or_default(),
+            total_rows: json
+                .get("stored")
+                .and_then(|v| v.as_i64())
+                .unwrap_or_default(),
             hub: hub_url.to_string(),
             conflicts: json
                 .get("conflicts")

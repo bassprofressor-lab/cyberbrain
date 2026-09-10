@@ -51,10 +51,23 @@ fn kind_for(name: &str) -> NoteKind {
     // "vorfall" alone missed every folder anybody would actually create.
     if has(&["regel", "rule", "policy", "richtlinie", "vorgabe"]) {
         NoteKind::Decision
-    } else if has(&["anleitung", "howto", "how-to", "guide", "handbuch", "manual"]) {
+    } else if has(&[
+        "anleitung",
+        "howto",
+        "how-to",
+        "guide",
+        "handbuch",
+        "manual",
+    ]) {
         NoteKind::Reference
     } else if has(&[
-        "vorfall", "vorfäll", "vorfael", "incident", "stoerung", "störung", "postmortem",
+        "vorfall",
+        "vorfäll",
+        "vorfael",
+        "incident",
+        "stoerung",
+        "störung",
+        "postmortem",
         "panne",
     ]) {
         NoteKind::Bug
@@ -78,8 +91,20 @@ fn bereich_for(name: &str) -> Option<String> {
         return None;
     }
     let generic = [
-        "docs", "doc", "notes", "notizen", "wiki", "dokumente", "documents", "allgemein",
-        "misc", "sonstiges", "temp", "tmp", "archiv", "archive",
+        "docs",
+        "doc",
+        "notes",
+        "notizen",
+        "wiki",
+        "dokumente",
+        "documents",
+        "allgemein",
+        "misc",
+        "sonstiges",
+        "temp",
+        "tmp",
+        "archiv",
+        "archive",
     ];
     if generic.contains(&n.to_lowercase().as_str()) {
         return None;
@@ -219,7 +244,11 @@ pub fn to_plan(s: &Survey) -> String {
     }
 
     for g in &s.groups {
-        let label = if g.dir.is_empty() { "top-level" } else { &g.dir };
+        let label = if g.dir.is_empty() {
+            "top-level"
+        } else {
+            &g.dir
+        };
         let paths = if g.dir.is_empty() {
             "\"*.md\", \"*.markdown\"".to_string()
         } else {
@@ -288,7 +317,10 @@ pub fn summary(s: &Survey) -> String {
             .iter()
             .map(|(ext, n)| format!("{n}× .{ext}"))
             .collect();
-        t.push_str(&format!("Not Markdown and left alone: {}.\n", parts.join(", ")));
+        t.push_str(&format!(
+            "Not Markdown and left alone: {}.\n",
+            parts.join(", ")
+        ));
     }
     t.push_str(&format!(
         "{with_bereich} group(s) got a suggested bereich from the folder name; the rest stay \
@@ -352,7 +384,10 @@ mod tests {
             total_files: 3,
         };
         let plan = to_plan(&s);
-        assert!(!plan.contains(r#"paths = ["**/*"]"#), "catch-all skip is back");
+        assert!(
+            !plan.contains(r#"paths = ["**/*"]"#),
+            "catch-all skip is back"
+        );
         assert!(plan.contains(r#""**/*.pdf""#));
     }
 

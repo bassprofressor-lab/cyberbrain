@@ -301,129 +301,129 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 state,
             }
         }
-            EgressPurpose::NoteErasure => {
-                // Only enrolment, on purpose. This is the one hub path that stays open when
-                // sharing is switched off: a setting that can leave data somewhere it may no
-                // longer be would break Art. 17 by configuration.
-                let (enabled, state) = match &cfg.hub_endpoint {
-                    None => (
-                        false,
-                        "disabled: this store is not enrolled with a hub".to_string(),
-                    ),
-                    Some(url) => match Destination::parse(url) {
-                        Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
-                        Ok(d) => match d.literal_locality() {
-                            Some(Locality::Public) if !cfg.allow_public_hub => (
-                                false,
-                                format!(
-                                    "disabled: {} is a public address and allow_public_hub is false",
-                                    d.host
-                                ),
+        EgressPurpose::NoteErasure => {
+            // Only enrolment, on purpose. This is the one hub path that stays open when
+            // sharing is switched off: a setting that can leave data somewhere it may no
+            // longer be would break Art. 17 by configuration.
+            let (enabled, state) = match &cfg.hub_endpoint {
+                None => (
+                    false,
+                    "disabled: this store is not enrolled with a hub".to_string(),
+                ),
+                Some(url) => match Destination::parse(url) {
+                    Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
+                    Ok(d) => match d.literal_locality() {
+                        Some(Locality::Public) if !cfg.allow_public_hub => (
+                            false,
+                            format!(
+                                "disabled: {} is a public address and allow_public_hub is false",
+                                d.host
                             ),
-                            Some(Locality::NotUnicast) => (
-                                false,
-                                format!("disabled: {} is not a unicast address", d.host),
-                            ),
-                            _ => (true, format!("enabled: erasures reach {url}")),
-                        },
-                    },
-                };
-                EgressEntry {
-                    purpose,
-                    destination: format!(
-                        "the hub this store was enrolled with ({})",
-                        cfg.hub_endpoint.as_deref().unwrap_or("none configured")
-                    ),
-                    data: concat!(
-                        "HTTP POST of a bereich and a note name, so the hub can remove its ",
-                        "copy. The note itself is not in the request"
-                    ),
-                    carries_note_content: false,
-                    requires: concat!(
-                        "the store was enrolled with a hub. Deliberately not gated on ",
-                        "allow_note_sync: withdrawing what was shared must not depend on ",
-                        "sharing still being on"
-                    ),
-                    permitted_by: ALL_PROFILES,
-                    enabled,
-                    state,
-                }
-            }
-            EgressPurpose::NoteSync => {
-                // Stricter than AuditSync by one condition, and that condition is the point:
-                // being enrolled with a hub is a decision about evidence, sharing notes is a
-                // decision about content. An upgrade must not turn the first into the second.
-                let (enabled, state) = match (&cfg.hub_endpoint, cfg.allow_note_sync) {
-                    (None, _) => (
-                        false,
-                        "disabled: this store is not enrolled with a hub".to_string(),
-                    ),
-                    (Some(_), false) => (
-                        false,
-                        "disabled: allow_note_sync is false; enrolment alone does not share notes"
-                            .to_string(),
-                    ),
-                    (Some(url), true) => match Destination::parse(url) {
-                        Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
-                        Ok(d) => match d.literal_locality() {
-                            Some(Locality::Public) if !cfg.allow_public_hub => (
-                                false,
-                                format!(
-                                    "disabled: {} is a public address and allow_public_hub is false",
-                                    d.host
-                                ),
-                            ),
-                            Some(Locality::Public) => (
-                                true,
-                                format!(
-                                    concat!(
-                                        "enabled WITH allow_public_hub: {} is public; ",
-                                        "note content leaves this network"
-                                    ),
-                                    url
-                                ),
-                            ),
-                            Some(Locality::Overlay) if !cfg.allow_overlay_network => (
-                                false,
-                                format!(
-                                    concat!(
-                                        "disabled: {} is in 100.64.0.0/10 and ",
-                                        "allow_overlay_network is false"
-                                    ),
-                                    d.host
-                                ),
-                            ),
-                            Some(Locality::NotUnicast) => (
-                                false,
-                                format!("disabled: {} is not a unicast address", d.host),
-                            ),
-                            _ => (true, format!("enabled: delivering notes to {url}")),
-                        },
-                    },
-                };
-                EgressEntry {
-                    purpose,
-                    destination: format!(
-                        concat!(
-                            "the hub this store was enrolled with ({}); DNS lookup of its ",
-                            "hostname via the OS resolver if it is not an IP literal"
                         ),
-                        cfg.hub_endpoint.as_deref().unwrap_or("none configured")
-                    ),
-                    data: concat!(
-                        "HTTP POST of whole notes: frontmatter and body, for the bereiche this ",
-                        "device was granted. Never rings 0 or 1, never a note without a bereich"
-                    ),
-                    carries_note_content: true,
-                    requires: concat!(
-                        "the store was enrolled with a hub AND allow_note_sync is set; the hub ",
-                        "is loopback or private-range unless allow_public_hub is set"
-                    ),
-                    permitted_by: ALL_PROFILES,
-                    enabled,
-                    state,
-                }
+                        Some(Locality::NotUnicast) => (
+                            false,
+                            format!("disabled: {} is not a unicast address", d.host),
+                        ),
+                        _ => (true, format!("enabled: erasures reach {url}")),
+                    },
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: format!(
+                    "the hub this store was enrolled with ({})",
+                    cfg.hub_endpoint.as_deref().unwrap_or("none configured")
+                ),
+                data: concat!(
+                    "HTTP POST of a bereich and a note name, so the hub can remove its ",
+                    "copy. The note itself is not in the request"
+                ),
+                carries_note_content: false,
+                requires: concat!(
+                    "the store was enrolled with a hub. Deliberately not gated on ",
+                    "allow_note_sync: withdrawing what was shared must not depend on ",
+                    "sharing still being on"
+                ),
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
             }
+        }
+        EgressPurpose::NoteSync => {
+            // Stricter than AuditSync by one condition, and that condition is the point:
+            // being enrolled with a hub is a decision about evidence, sharing notes is a
+            // decision about content. An upgrade must not turn the first into the second.
+            let (enabled, state) = match (&cfg.hub_endpoint, cfg.allow_note_sync) {
+                (None, _) => (
+                    false,
+                    "disabled: this store is not enrolled with a hub".to_string(),
+                ),
+                (Some(_), false) => (
+                    false,
+                    "disabled: allow_note_sync is false; enrolment alone does not share notes"
+                        .to_string(),
+                ),
+                (Some(url), true) => match Destination::parse(url) {
+                    Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
+                    Ok(d) => match d.literal_locality() {
+                        Some(Locality::Public) if !cfg.allow_public_hub => (
+                            false,
+                            format!(
+                                "disabled: {} is a public address and allow_public_hub is false",
+                                d.host
+                            ),
+                        ),
+                        Some(Locality::Public) => (
+                            true,
+                            format!(
+                                concat!(
+                                    "enabled WITH allow_public_hub: {} is public; ",
+                                    "note content leaves this network"
+                                ),
+                                url
+                            ),
+                        ),
+                        Some(Locality::Overlay) if !cfg.allow_overlay_network => (
+                            false,
+                            format!(
+                                concat!(
+                                    "disabled: {} is in 100.64.0.0/10 and ",
+                                    "allow_overlay_network is false"
+                                ),
+                                d.host
+                            ),
+                        ),
+                        Some(Locality::NotUnicast) => (
+                            false,
+                            format!("disabled: {} is not a unicast address", d.host),
+                        ),
+                        _ => (true, format!("enabled: delivering notes to {url}")),
+                    },
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: format!(
+                    concat!(
+                        "the hub this store was enrolled with ({}); DNS lookup of its ",
+                        "hostname via the OS resolver if it is not an IP literal"
+                    ),
+                    cfg.hub_endpoint.as_deref().unwrap_or("none configured")
+                ),
+                data: concat!(
+                    "HTTP POST of whole notes: frontmatter and body, for the bereiche this ",
+                    "device was granted. Never rings 0 or 1, never a note without a bereich"
+                ),
+                carries_note_content: true,
+                requires: concat!(
+                    "the store was enrolled with a hub AND allow_note_sync is set; the hub ",
+                    "is loopback or private-range unless allow_public_hub is set"
+                ),
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
+            }
+        }
     }
 }
 
