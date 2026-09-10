@@ -749,9 +749,14 @@ export const en = {
     emptyHowBody: "Mostly the assistant writes it while you work with it. You can also write one yourself on the command line:",
   },
   team: {
-    title: "In the team",
-    subtitle: "what was written down most recently",
+    title: "Team",
+    subtitle: "what is shared and what stays here",
     empty: "Nobody has written anything down yet.",
     by: (who: string) => `by ${who}`,
+    enrolled: (hub: string) => `This machine is enrolled with ${hub}. Notes carrying a bereich can be shared there.`,
+    notEnrolled: "This machine is not enrolled with a hub. Nothing leaves it.",
+    count: (n: number) => (n === 1 ? "1 note" : `${n} notes`),
+    privateHeading: "No bereich",
+    privateNote: "Without a bereich a note is never shared, even when this machine is enrolled with a hub.",
   },
 };

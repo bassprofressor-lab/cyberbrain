@@ -739,8 +739,13 @@ export const de: Dict = {
   },
   team: {
     title: "Im Team",
-    subtitle: "was zuletzt aufgeschrieben wurde",
+    subtitle: "was geteilt wird und was hierbleibt",
     empty: "Es hat noch niemand etwas aufgeschrieben.",
     by: (who: string) => `von ${who}`,
+    enrolled: (hub: string) => `Dieser Rechner ist bei ${hub} angemeldet. Notizen mit Bereich können dorthin geteilt werden.`,
+    notEnrolled: "Dieser Rechner ist bei keinem Hub angemeldet. Nichts verlässt ihn.",
+    count: (n: number) => (n === 1 ? "1 Notiz" : `${n} Notizen`),
+    privateHeading: "Ohne Bereich",
+    privateNote: "Ohne Bereich wird eine Notiz nie geteilt — auch dann nicht, wenn dieser Rechner bei einem Hub angemeldet ist.",
   },
 };

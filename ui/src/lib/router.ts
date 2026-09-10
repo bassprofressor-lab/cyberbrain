@@ -24,13 +24,18 @@ export interface Route {
 export type NavScreen = Exclude<Screen, "note">;
 
 /**
- * The sidebar in expert mode. Unchanged: `team` is not here, because everything it shows is
- * the notes list sorted by date, which this mode already has a screen for.
+ * The sidebar in expert mode.
+ *
+ * `team` was left out until 2026-09-10 for a reason that has since expired: back then it was
+ * the notes list sorted by date, which this mode already has a screen for. Since a note can
+ * carry a `bereich` it answers something no other screen does — what of this store's work
+ * can leave the machine, and what stays — so it belongs in both views.
  */
 export const SCREENS: Array<{ screen: NavScreen; key: string }> = [
   { screen: "status", key: "t" },
   { screen: "search", key: "s" },
   { screen: "notes", key: "n" },
+  { screen: "team", key: "m" },
   { screen: "graph", key: "g" },
   { screen: "usage", key: "u" },
   { screen: "compliance", key: "c" },
