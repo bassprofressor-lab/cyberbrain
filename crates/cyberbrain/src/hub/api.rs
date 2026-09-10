@@ -48,6 +48,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/health", get(health))
         .route("/api/v1/ingest", post(post_ingest))
         .route("/api/v1/notes", post(post_notes))
+        .route("/api/v1/erase", post(post_erase))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -494,6 +495,37 @@ fn client_version(headers: &HeaderMap) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+/// Erase one note. Not behind the same setting as delivery: withdrawing content must work
+/// even where sharing has since been switched off.
+async fn post_erase(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let token = bearer(&headers);
+    let now = jiff::Timestamp::now().to_string();
+    let mut hub = match state.hub.lock() {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("hub record unavailable: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    match super::erase_note(&mut hub, token.as_deref(), &body, &now) {
+        Ok(c) => (StatusCode::OK, Json(json!(c))).into_response(),
+        Err(refusal) => {
+            let code = match &refusal {
+                Refusal::NotAuthorised(_) => StatusCode::UNAUTHORIZED,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (code, Json(json!({ "error": refusal.to_string() }))).into_response()
+        }
+    }
 }
 
 /// Take a delivery of notes. Same authentication as `post_ingest`, different cargo, and a

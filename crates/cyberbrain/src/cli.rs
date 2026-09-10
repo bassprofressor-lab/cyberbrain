@@ -630,6 +630,14 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: PrincipalCommand,
     },
+    /// Ask the hub to erase its copy of a note (GDPR Art. 17). Works even where sharing has
+    /// since been switched off: withdrawing is not the same act as sharing.
+    Erase {
+        /// The note's name.
+        name: String,
+        #[arg(long)]
+        bereich: String,
+    },
     /// Notes two machines changed without seeing each other, and deciding which stands.
     Conflicts {
         /// One bereich, or all of them when omitted.

@@ -65,7 +65,7 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
         EgressPurpose::ModelDownload => Error::Embed(msg),
         EgressPurpose::LocalInference => Error::Llm(msg),
         EgressPurpose::AuditSync => Error::Index(msg),
-        EgressPurpose::NoteSync => Error::Index(msg),
+        EgressPurpose::NoteSync | EgressPurpose::NoteErasure => Error::Index(msg),
         // Unreachable by construction: the transport is only entered through `permit`, and
         // the terminal never calls it. Spelled out rather than left to a wildcard, so that
         // the day somebody does route a request through here, this line is the question.

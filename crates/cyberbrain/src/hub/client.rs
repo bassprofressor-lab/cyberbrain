@@ -213,6 +213,46 @@ pub enum Reply {
     },
 }
 
+/// Ask the hub to erase one note. Its own egress purpose, and deliberately not behind
+/// `allow_note_sync`: switching sharing off must not also switch off the ability to
+/// withdraw what was shared while it was on.
+pub async fn erase_at_hub(
+    egress: &cyberbrain_policy::Egress,
+    actor: &cyberbrain_policy::Actor,
+    hub_url: &str,
+    token: &str,
+    pin: Option<&str>,
+    bereich: &str,
+    name: &str,
+) -> Result<Reply> {
+    let url = format!("{}/api/v1/erase", hub_url.trim_end_matches('/'));
+    let pin = pin
+        .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
+        .transpose()?;
+    let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::NoteErasure, &url)?;
+    let payload = serde_json::json!({ "bereich": bereich, "name": name }).to_string();
+    let resp = cyberbrain_policy::egress::transport::post_bearer(
+        &ticket, &url, token, &[], payload, pin,
+    )
+    .await?;
+    let body = String::from_utf8_lossy(&resp.body).to_string();
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let message = json
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or(body.trim())
+        .to_string();
+    Ok(match resp.status {
+        200 => Reply::Ok(Delivered {
+            accepted: json.get("notes").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
+            total_rows: json.get("conflicts").and_then(|v| v.as_i64()).unwrap_or(0),
+            hub: hub_url.to_string(),
+        }),
+        503 => Reply::NotCollecting(message),
+        status => Reply::Refused { status, message },
+    })
+}
+
 /// Deliver notes. The same shape as `deliver`, and deliberately a separate function with a
 /// separate egress purpose: what leaves here is content, not evidence, and a reader of
 /// `cyberbrain policy egress` must be able to tell the two apart.

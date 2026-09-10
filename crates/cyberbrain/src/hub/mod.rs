@@ -240,6 +240,72 @@ pub struct RefusedNote {
     pub why: String,
 }
 
+/// A request to erase one note everywhere the hub holds it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EraseRequest {
+    pub bereich: String,
+    pub name: String,
+}
+
+/// Erase a note on behalf of a device.
+///
+/// Held to a different rule than a delivery: a device may erase in any bereich it was
+/// granted in *either* direction. Withdrawing content is not the same act as sharing it,
+/// and a receive-only device that finds something it should not have must be able to say
+/// so. What it may never do is erase a bereich it has nothing to do with.
+pub fn erase_note(
+    hub: &mut store::HubStore,
+    token: Option<&str>,
+    body: &str,
+    now: &str,
+) -> std::result::Result<store::ErasureCount, Refusal> {
+    let token = token.ok_or_else(|| {
+        Refusal::NotAuthorised("no device token; send it as `Authorization: Bearer …`".into())
+    })?;
+    let device = hub
+        .device_by_token(token)
+        .map_err(|e| Refusal::NotAuthorised(format!("cannot check the token: {e}")))?
+        .ok_or_else(|| Refusal::NotAuthorised("unknown device token".into()))?;
+    if !device.is_active() {
+        return Err(Refusal::NotAuthorised(format!(
+            "device {} was revoked",
+            device.name
+        )));
+    }
+    let req: EraseRequest = serde_json::from_str(body)
+        .map_err(|e| Refusal::BadBundle(format!("not an erase request: {e}")))?;
+
+    let grants = hub
+        .grants_for_device(&device.id)
+        .map_err(|e| Refusal::BadBundle(format!("cannot read this device's grants: {e}")))?;
+    let allowed = grants
+        .iter()
+        .any(|g| g.is_active() && g.bereich == req.bereich);
+    if !allowed {
+        return Err(Refusal::NotAuthorised(format!(
+            "device {} has no grant in bereich {}",
+            device.name, req.bereich
+        )));
+    }
+
+    let count = hub
+        .erase_note(&req.bereich, &req.name, &device.id, now)
+        .map_err(|e| Refusal::BadBundle(format!("erasure failed: {e}")))?;
+    // The audit row says what was removed and from where. It does not say what it said.
+    let _ = hub.record(
+        &device.id,
+        "notes.erased",
+        serde_json::json!({
+            "bereich": req.bereich,
+            "name": req.name,
+            "notes_removed": count.notes,
+            "conflict_rows_removed": count.conflicts,
+        }),
+        now,
+    );
+    Ok(count)
+}
+
 /// Take a delivery of notes from a device.
 ///
 /// Every note is checked here even though the sender checked it first. That is not
@@ -319,6 +385,28 @@ pub fn ingest_notes(
             });
             continue;
         };
+        // A machine that still has its own copy must not be able to put back what somebody
+        // asked to have removed. Checked before the note is looked at, not after.
+        match hub.erased_at(bereich, &n.name) {
+            Ok(Some(when)) => {
+                out.refused.push(RefusedNote {
+                    name: n.name,
+                    why: format!(
+                        "erased at {when}; delete your copy rather than re-offering it \
+                         (GDPR Art. 17)"
+                    ),
+                });
+                continue;
+            }
+            Ok(None) => {}
+            Err(e) => {
+                out.refused.push(RefusedNote {
+                    name: n.name,
+                    why: format!("cannot check whether it was erased: {e}"),
+                });
+                continue;
+            }
+        }
         match hub.offer_synced_note(
             &n.id,
             bereich,

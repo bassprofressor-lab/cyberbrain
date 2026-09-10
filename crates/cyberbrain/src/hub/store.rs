@@ -52,6 +52,13 @@ pub enum NoteOutcome {
     Conflict { id: String, held_updated: String },
 }
 
+/// What an erasure actually removed. Counted rather than assumed.
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct ErasureCount {
+    pub notes: usize,
+    pub conflicts: usize,
+}
+
 /// Two versions of one note that nobody has reconciled yet.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct NoteConflict {
@@ -308,7 +315,19 @@ impl HubStore {
                  resolution          TEXT
              );
              CREATE INDEX IF NOT EXISTS note_conflicts_open
-                 ON note_conflicts(bereich, name) WHERE resolved_at IS NULL;",
+                 ON note_conflicts(bereich, name) WHERE resolved_at IS NULL;
+
+             -- A note that was erased. Deliberately carries no text: a record that an
+             -- erasure happened must not be a copy of what was erased. It exists so a
+             -- machine that delivers the note again learns it was withdrawn, rather than
+             -- quietly recreating it (GDPR Art. 17).
+             CREATE TABLE IF NOT EXISTS erasures (
+                 bereich     TEXT NOT NULL,
+                 name        TEXT NOT NULL,
+                 erased_at   TEXT NOT NULL,
+                 by_device   TEXT NOT NULL,
+                 PRIMARY KEY (bereich, name)
+             );",
         ))?;
         self.add_missing_columns()
     }
@@ -894,6 +913,94 @@ impl HubStore {
             ],
         ))?;
         Ok(())
+    }
+
+    /// Erase a note the hub holds, everywhere it holds it.
+    ///
+    /// Four places carry the text, not one: the held note's body and frontmatter, and the
+    /// offered body and frontmatter of every conflict about it. An erasure that only clears
+    /// `synced_notes` leaves the text sitting in a conflict row, which is the same data with
+    /// a different column name.
+    ///
+    /// Returns how many rows in each, so the caller can say what was actually removed rather
+    /// than assert that something was.
+    pub fn erase_note(
+        &self,
+        bereich: &str,
+        name: &str,
+        by_device: &str,
+        now: &str,
+    ) -> Result<ErasureCount> {
+        let notes = ix(self.conn.execute(
+            "DELETE FROM synced_notes WHERE bereich = ? AND name = ?",
+            params![bereich, name],
+        ))?;
+        let conflicts = ix(self.conn.execute(
+            "DELETE FROM note_conflicts WHERE bereich = ? AND name = ?",
+            params![bereich, name],
+        ))?;
+        // The tombstone carries no text. It is what stops the next delivery from recreating
+        // what somebody asked to have removed.
+        ix(self.conn.execute(
+            "INSERT INTO erasures (bereich, name, erased_at, by_device)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(bereich, name) DO UPDATE SET
+                erased_at = excluded.erased_at, by_device = excluded.by_device",
+            params![bereich, name, now, by_device],
+        ))?;
+        Ok(ErasureCount {
+            notes,
+            conflicts,
+        })
+    }
+
+    /// Was this note erased, and when? Checked before taking a delivery, so a machine that
+    /// still has its own copy cannot put it back.
+    pub fn erased_at(&self, bereich: &str, name: &str) -> Result<Option<String>> {
+        ix(self
+            .conn
+            .query_row(
+                "SELECT erased_at FROM erasures WHERE bereich = ? AND name = ?",
+                params![bereich, name],
+                |r| r.get::<_, String>(0),
+            )
+            .optional())
+    }
+
+    /// Every text column of every table, concatenated. Only for the erasure test, which
+    /// checks the whole record rather than a list of columns: a table added later must not
+    /// be able to reintroduce erased text without that test noticing.
+    #[cfg(test)]
+    pub fn dump_all_text(&self) -> Result<String> {
+        let mut out = String::new();
+        let mut tables = Vec::new();
+        {
+            let mut stmt = ix(self
+                .conn
+                .prepare("SELECT name FROM sqlite_master WHERE type = 'table'"))?;
+            let rows = ix(stmt.query_map([], |r| r.get::<_, String>(0)))?;
+            for r in rows {
+                tables.push(ix(r)?);
+            }
+        }
+        for t in tables {
+            let mut stmt = ix(self.conn.prepare(&format!("SELECT * FROM \"{t}\"")))?;
+            let cols = stmt.column_count();
+            let rows = ix(stmt.query_map([], move |r| {
+                let mut line = String::new();
+                for i in 0..cols {
+                    if let Ok(v) = r.get::<_, String>(i) {
+                        line.push_str(&v);
+                        line.push('\n');
+                    }
+                }
+                Ok(line)
+            }))?;
+            for r in rows {
+                out.push_str(&ix(r)?);
+            }
+        }
+        Ok(out)
     }
 
     /// Conflicts nobody has decided yet. Open ones only: a resolved conflict is history and

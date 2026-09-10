@@ -238,6 +238,13 @@ pub enum EgressPurpose {
     /// Rings 0 and 1 are never eligible, and that is a property of the code rather than of
     /// this setting (`hub::sync_access`). A note without a bereich is never eligible either.
     NoteSync,
+    /// A request to erase one note everywhere the hub holds it. Carries a bereich and a
+    /// name, never a body: withdrawing content must not be another way of sending it.
+    ///
+    /// Deliberately not behind `allow_note_sync`. Turning sharing off must not also turn
+    /// off the ability to withdraw what was already shared — a setting that can strand data
+    /// somewhere it may no longer be is a setting that breaks Art. 17 on purpose.
+    NoteErasure,
     /// A program the user started in a terminal this program opened for them (SPEC §8.3).
     ///
     /// Listed rather than gated, and that distinction is the point. This is the one entry
@@ -267,6 +274,10 @@ impl EgressPurpose {
             EgressPurpose::NoteSync => concat!(
                 "sends note content to the hub you enrolled with, for the bereiche this ",
                 "device was granted; never rings 0 or 1, and never a note without a bereich"
+            ),
+            EgressPurpose::NoteErasure => concat!(
+                "asks the hub to erase one note: a bereich and a name leave this machine, ",
+                "never the note itself"
             ),
         }
     }

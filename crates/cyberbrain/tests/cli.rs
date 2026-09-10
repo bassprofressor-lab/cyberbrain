@@ -762,7 +762,7 @@ fn policy_subcommands_work_over_a_real_store() {
     // the terminal is listed as a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 5);
+    assert_eq!(entries.len(), 6);
     // Note sync is listed and off: an unenrolled store is not one that shares notes.
     let note_sync = entries
         .iter()

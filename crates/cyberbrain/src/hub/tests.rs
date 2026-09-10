@@ -2375,3 +2375,139 @@ fn a_revoked_device_delivers_no_notes() {
     let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW);
     assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
 }
+
+// ---- cut 4: erasure reaches the copies (GDPR Art. 17) ----
+
+/// The trap this cut is about. A conflict row holds a full copy of the offered text. An
+/// erasure that only clears `synced_notes` leaves that copy sitting there under a different
+/// column name, and the person who asked to be forgotten has not been.
+#[test]
+fn erasing_a_note_also_clears_the_text_held_in_its_conflicts() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+
+    // A note, then a concurrent change so a conflict row exists with the text in it.
+    let base = deliver(vec![wire_from(
+        "personalie",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Erste Fassung mit personenbezogenen Angaben.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &base, NOW).unwrap();
+    let concurrent = deliver(vec![wire_from(
+        "personalie",
+        "disposition",
+        "2026-09-10T11:00:00Z",
+        Some("2026-08-01T00:00:00Z"),
+        "Zweite Fassung, ebenfalls mit Angaben.",
+    )]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &concurrent, NOW).unwrap();
+    assert_eq!(r.conflicts.len(), 1, "a conflict must exist for this test");
+    assert_eq!(hub.open_conflicts("disposition").unwrap().len(), 1);
+
+    // Now erase it.
+    let req = serde_json::json!({ "bereich": "disposition", "name": "personalie" }).to_string();
+    let count = super::erase_note(&mut hub, Some(&token), &req, NOW).unwrap();
+    assert_eq!(count.notes, 1);
+    assert_eq!(count.conflicts, 1, "the conflict copy has to go too");
+
+    // Nothing left anywhere.
+    assert!(hub.synced_notes("disposition").unwrap().is_empty());
+    assert!(hub.open_conflicts("disposition").unwrap().is_empty());
+}
+
+/// The tombstone records that an erasure happened, never what was erased.
+#[test]
+fn the_tombstone_carries_no_text() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    let secret = "Streng vertraulicher Satz, der nirgends bleiben darf.";
+    let n = deliver(vec![wire_from(
+        "geheim",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Harmlose erste Fassung.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &n, NOW).unwrap();
+    // Deliberately put the sensitive text into a *conflict* row rather than the held note.
+    // A version of this test without a conflict stays green while the conflict copy is left
+    // behind, which is the failure it is supposed to catch — it was written that way first.
+    let concurrent = deliver(vec![wire_from(
+        "geheim",
+        "disposition",
+        "2026-09-10T11:00:00Z",
+        Some("2026-01-01T00:00:00Z"),
+        secret,
+    )]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &concurrent, NOW).unwrap();
+    assert_eq!(r.conflicts.len(), 1, "the text must be in a conflict row");
+    let req = serde_json::json!({ "bereich": "disposition", "name": "geheim" }).to_string();
+    super::erase_note(&mut hub, Some(&token), &req, NOW).unwrap();
+
+    // Whatever remains in the record must not contain the text. Checked against the whole
+    // file rather than a column list, so a table added later cannot quietly reintroduce it.
+    let dump = hub.dump_all_text().unwrap();
+    assert!(
+        !dump.contains(secret),
+        "the erased text is still somewhere in the hub record"
+    );
+    assert!(hub.erased_at("disposition", "geheim").unwrap().is_some());
+}
+
+/// A machine that kept its own copy must not be able to put it back.
+#[test]
+fn an_erased_note_cannot_be_re_offered() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    let n = deliver(vec![wire_from(
+        "weg",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Text.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &n, NOW).unwrap();
+    let req = serde_json::json!({ "bereich": "disposition", "name": "weg" }).to_string();
+    super::erase_note(&mut hub, Some(&token), &req, NOW).unwrap();
+
+    let again = super::ingest_notes(&mut hub, &collecting(), Some(&token), &n, NOW).unwrap();
+    assert_eq!(again.accepted, 0);
+    assert_eq!(again.refused.len(), 1);
+    assert!(again.refused[0].why.contains("erased at"));
+    assert!(hub.synced_notes("disposition").unwrap().is_empty());
+}
+
+/// Withdrawing is not sharing: a device granted only `receive` may still ask for an erasure,
+/// because finding something that should not be there is exactly what a reader does.
+#[test]
+fn a_receive_only_device_may_still_erase() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Receive,
+        "nur lesen",
+        "a",
+        NOW,
+    )
+    .unwrap();
+    let req = serde_json::json!({ "bereich": "disposition", "name": "irgendwas" }).to_string();
+    assert!(super::erase_note(&mut hub, Some(&token), &req, NOW).is_ok());
+}
+
+/// But not in a bereich it has nothing to do with.
+#[test]
+fn a_device_cannot_erase_a_bereich_it_has_no_grant_in() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    let req = serde_json::json!({ "bereich": "hr", "name": "gehalt" }).to_string();
+    let r = super::erase_note(&mut hub, Some(&token), &req, NOW);
+    assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
+}

@@ -1144,8 +1144,8 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     let paths = e["paths"].as_array().unwrap();
     assert_eq!(
         paths.len(),
-        5,
-        "model download, local inference, audit sync, note sync, terminal"
+        6,
+        "model download, local inference, audit sync, note sync, note erasure, terminal"
     );
     assert_eq!(paths[0]["purpose"], "model-download");
     // Audit sync is in the register whether or not the store is enrolled, and says which

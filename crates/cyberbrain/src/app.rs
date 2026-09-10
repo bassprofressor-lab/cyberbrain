@@ -2719,6 +2719,65 @@ impl App {
     /// bereich. Rings 0 and 1 are not filtered out as a courtesy — they are not eligible,
     /// and the hub refuses them again on arrival. A reviewer who wants to know what this
     /// machine offers reads this function and is done.
+    /// If this note carries a bereich and this store delivers to a hub, the pieces needed
+    /// to say so. Returns nothing when there is nothing to warn about, so the caller has no
+    /// condition of its own to get wrong.
+    pub fn shared_copy_hint(&self, target: &str) -> Option<(String, String, String)> {
+        let hub = self.config.hub.url.clone()?;
+        let note = self.store.read(target).ok()?;
+        let bereich = note.front.bereich.clone()?;
+        Some((bereich, note.front.name.clone(), hub))
+    }
+
+    /// Ask the hub to erase its copy.
+    pub async fn erase_at_hub(
+        &self,
+        bereich: &str,
+        name: &str,
+    ) -> Result<(serde_json::Value, i32)> {
+        use crate::hub::client::{self, Reply};
+        let hub_url = self.config.hub.url.clone().ok_or_else(|| {
+            Error::Config("this store is not enrolled with a hub".into())
+        })?;
+        let token = client::token_for(&hub_url)?;
+        let pin = client::pin_for(&hub_url);
+        let reply = client::erase_at_hub(
+            self.policy.egress(),
+            &cyberbrain_policy::Actor::Operator,
+            &hub_url,
+            &token,
+            pin.as_deref(),
+            bereich,
+            name,
+        )
+        .await?;
+        let mut v = serde_json::json!({ "bereich": bereich, "name": name, "hub": hub_url });
+        let code = match reply {
+            Reply::Ok(d) => {
+                v["notes_removed"] = serde_json::json!(d.accepted);
+                v["conflict_rows_removed"] = serde_json::json!(d.total_rows);
+                v["message"] = serde_json::json!(format!(
+                    "{name} erased at {hub_url}: {} note row(s) and {} conflict row(s) removed",
+                    d.accepted, d.total_rows
+                ));
+                0
+            }
+            Reply::NotCollecting(m) => {
+                v["message"] = serde_json::json!(m);
+                1
+            }
+            Reply::Gap { expected } => {
+                v["message"] = serde_json::json!(format!("unexpected: {expected}"));
+                1
+            }
+            Reply::Refused { status, message } => {
+                v["message"] = serde_json::json!(format!("refused ({status}): {message}"));
+                1
+            }
+        };
+        Ok((v, code))
+    }
+
     pub async fn push_notes_to_hub(
         &self,
         bereich: Option<&str>,

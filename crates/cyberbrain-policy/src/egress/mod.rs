@@ -43,11 +43,12 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 5] = [
+pub const PURPOSES: [EgressPurpose; 6] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
     EgressPurpose::NoteSync,
+    EgressPurpose::NoteErasure,
     EgressPurpose::Terminal,
 ];
 
@@ -79,6 +80,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::LocalInference => "local-inference",
         EgressPurpose::AuditSync => "audit-sync",
         EgressPurpose::NoteSync => "note-sync",
+        EgressPurpose::NoteErasure => "note-erasure",
     }
 }
 
@@ -299,6 +301,54 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 state,
             }
         }
+            EgressPurpose::NoteErasure => {
+                // Only enrolment, on purpose. This is the one hub path that stays open when
+                // sharing is switched off: a setting that can leave data somewhere it may no
+                // longer be would break Art. 17 by configuration.
+                let (enabled, state) = match &cfg.hub_endpoint {
+                    None => (
+                        false,
+                        "disabled: this store is not enrolled with a hub".to_string(),
+                    ),
+                    Some(url) => match Destination::parse(url) {
+                        Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
+                        Ok(d) => match d.literal_locality() {
+                            Some(Locality::Public) if !cfg.allow_public_hub => (
+                                false,
+                                format!(
+                                    "disabled: {} is a public address and allow_public_hub is false",
+                                    d.host
+                                ),
+                            ),
+                            Some(Locality::NotUnicast) => (
+                                false,
+                                format!("disabled: {} is not a unicast address", d.host),
+                            ),
+                            _ => (true, format!("enabled: erasures reach {url}")),
+                        },
+                    },
+                };
+                EgressEntry {
+                    purpose,
+                    destination: format!(
+                        "the hub this store was enrolled with ({})",
+                        cfg.hub_endpoint.as_deref().unwrap_or("none configured")
+                    ),
+                    data: concat!(
+                        "HTTP POST of a bereich and a note name, so the hub can remove its ",
+                        "copy. The note itself is not in the request"
+                    ),
+                    carries_note_content: false,
+                    requires: concat!(
+                        "the store was enrolled with a hub. Deliberately not gated on ",
+                        "allow_note_sync: withdrawing what was shared must not depend on ",
+                        "sharing still being on"
+                    ),
+                    permitted_by: ALL_PROFILES,
+                    enabled,
+                    state,
+                }
+            }
             EgressPurpose::NoteSync => {
                 // Stricter than AuditSync by one condition, and that condition is the point:
                 // being enrolled with a hub is a decision about evidence, sharing notes is a
@@ -789,6 +839,23 @@ impl Egress {
                     return Err("inference requests do not follow redirects".into());
                 }
             }
+            EgressPurpose::NoteErasure => {
+                if via.is_some() {
+                    return Err("erasure requests do not follow redirects".into());
+                }
+                let Some(hub) = &self.cfg.hub_endpoint else {
+                    return Err("this store is not enrolled with a hub".into());
+                };
+                let configured = Destination::parse(hub)
+                    .map_err(|e| format!("configured hub endpoint is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the hub this store is enrolled with ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
             EgressPurpose::NoteSync => {
                 if via.is_some() {
                     return Err("note deliveries do not follow redirects".into());
@@ -1143,6 +1210,7 @@ mod tests {
                 "local-inference",
                 "audit-sync",
                 "note-sync",
+                "note-erasure",
                 "terminal"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
@@ -1154,6 +1222,7 @@ mod tests {
                 | EgressPurpose::LocalInference
                 | EgressPurpose::AuditSync
                 | EgressPurpose::NoteSync
+                | EgressPurpose::NoteErasure
                 | EgressPurpose::Terminal => {}
             }
         }
@@ -1280,6 +1349,29 @@ mod tests {
             .find(|e| e.purpose == EgressPurpose::NoteSync)
             .unwrap();
         assert!(on.enabled, "{}", on.state);
+    }
+
+    /// Art. 17 must not depend on a sharing switch. A store that shared notes and then
+    /// turned sharing off can still ask the hub to erase what it sent.
+    #[test]
+    fn erasure_survives_sharing_being_turned_off() {
+        let shared_then_stopped = PolicyConfig {
+            hub_endpoint: Some("https://hub.example.internal/".into()),
+            allow_note_sync: false,
+            ..cfg()
+        };
+        let reg = register(&shared_then_stopped);
+        let by = |p: EgressPurpose| reg.iter().find(|e| e.purpose == p).unwrap();
+        assert!(
+            !by(EgressPurpose::NoteSync).enabled,
+            "sharing is off, as configured"
+        );
+        assert!(
+            by(EgressPurpose::NoteErasure).enabled,
+            "but withdrawing must still work: {}",
+            by(EgressPurpose::NoteErasure).state
+        );
+        assert!(!by(EgressPurpose::NoteErasure).carries_note_content);
     }
 
     /// The register's own claim about each path. `carries_note_content` is what a reader
