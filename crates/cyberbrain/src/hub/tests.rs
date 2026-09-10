@@ -1459,13 +1459,16 @@ fn a_session_lasts_until_it_is_closed() {
     let s = admin::Sessions::default();
     let now: jiff::Timestamp = NOW.parse().unwrap();
     let token = s.open(now);
-    assert!(s.holds(&token, now));
+    assert!(s.who(&token, now).is_some());
     assert!(
-        !s.holds("something else", now),
+        s.who("something else", now).is_none(),
         "an unknown cookie is not a session"
     );
     s.close(&token);
-    assert!(!s.holds(&token, now), "signing out has to mean something");
+    assert!(
+        s.who(&token, now).is_none(),
+        "signing out has to mean something"
+    );
 }
 
 #[test]
@@ -1475,14 +1478,17 @@ fn a_session_does_not_last_forever_and_using_it_keeps_it_alive() {
     let token = s.open(now);
     let day = now + jiff::Span::new().hours(24);
     // Untouched for a day: gone.
-    assert!(!s.holds(&token, day));
+    assert!(s.who(&token, day).is_none());
 
     // Used every few hours: still there a day later, because each use pushes it out.
     let token = s.open(now);
     let mut t = now;
     for _ in 0..6 {
         t += jiff::Span::new().hours(4);
-        assert!(s.holds(&token, t), "a session in use was dropped at {t}");
+        assert!(
+            s.who(&token, t).is_some(),
+            "a session in use was dropped at {t}"
+        );
     }
 }
 
@@ -1560,6 +1566,72 @@ fn cookie_of(r: &axum::response::Response) -> String {
         .get(axum::http::header::SET_COOKIE)
         .map(|v| v.to_str().unwrap().to_string())
         .unwrap_or_default()
+}
+
+/// A signed-in principal is not the administrator.
+///
+/// The hub has one login box and two kinds of caller behind it. When the question asked of
+/// the cookie was only "is this session live", every one of them came out as the
+/// administrator — an editor, whose whole point is that they see conflicts in their own
+/// bereiche and nothing else, could hand themselves a grant to any bereich on the hub.
+#[tokio::test]
+async fn an_editors_session_does_not_administer_the_hub() {
+    let hub = hub_with_password("correct horse battery");
+    let (_editor, token) = hub
+        .add_principal("Rita", super::access::Role::Editor, NOW)
+        .unwrap();
+    // A real device, so that the only thing standing between this form and a row in
+    // `bereich_grants` is the answer to "who is asking". A grant naming a device the hub
+    // does not know fails on the foreign key, and a test that passes because of that is a
+    // test that would keep passing with the check taken out.
+    let (device, _) = hub.add_device("laptop-rita", NOW).unwrap();
+    let state = state_for(hub, true);
+
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &token).await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER, "the editor may sign in");
+    let cookie = cookie_of(&r);
+    assert!(cookie.contains("cyberbrain_hub="), "{cookie}");
+    let cookie = cookie.split(';').next().unwrap().to_string();
+
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/grants")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", &cookie)
+        .body(Body::from(format!(
+            "device={}&bereich=hr&direction=send&reason=weil ich kann",
+            device.id
+        )))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    // The record first, because it is the thing that would still be wrong if the page were
+    // right: a refusal that has already written the row is not a refusal.
+    assert!(
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .grants_for_device(&device.id)
+            .unwrap()
+            .is_empty(),
+        "an editor handed themselves a grant to a bereich that is not theirs"
+    );
+    let body = axum::body::to_bytes(r.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let body = String::from_utf8_lossy(&body);
+    assert!(
+        body.contains("password") || body.contains("credential"),
+        "an editor posting to /grants belongs at the login box, got: {body}"
+    );
 }
 
 #[tokio::test]
@@ -2154,9 +2226,24 @@ fn the_hub_refuses_rings_0_and_1_even_when_offered() {
     .unwrap();
 
     let body = deliver(vec![
-        wire("eine-invariante", 0, Some("disposition"), "2026-09-10T10:00:00Z"),
-        wire("das-protokoll", 1, Some("disposition"), "2026-09-10T10:00:00Z"),
-        wire("normales-wissen", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire(
+            "eine-invariante",
+            0,
+            Some("disposition"),
+            "2026-09-10T10:00:00Z",
+        ),
+        wire(
+            "das-protokoll",
+            1,
+            Some("disposition"),
+            "2026-09-10T10:00:00Z",
+        ),
+        wire(
+            "normales-wissen",
+            2,
+            Some("disposition"),
+            "2026-09-10T10:00:00Z",
+        ),
     ]);
     let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW).unwrap();
 
@@ -2267,7 +2354,11 @@ fn an_older_delivery_does_not_overwrite_a_newer_note() {
     let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &older, NOW).unwrap();
     assert_eq!(r.accepted, 1, "it passed the rules");
     assert_eq!(r.stored, 0, "but it did not replace what is held");
-    assert_eq!(r.conflicts.len(), 1, "and it was not silently dropped either");
+    assert_eq!(
+        r.conflicts.len(),
+        1,
+        "and it was not silently dropped either"
+    );
 
     let held = hub.synced_notes("disposition").unwrap();
     assert_eq!(held.len(), 1);
@@ -2282,8 +2373,16 @@ fn an_older_delivery_does_not_overwrite_a_newer_note() {
 #[test]
 fn concurrent_edits_are_kept_and_named_not_silently_dropped() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
 
     // The version both machines started from.
     let base = deliver(vec![wire_from(
@@ -2337,8 +2436,16 @@ fn concurrent_edits_are_kept_and_named_not_silently_dropped() {
 #[test]
 fn a_resend_is_not_a_conflict() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
     let n = deliver(vec![wire_from(
         "x",
         "disposition",
@@ -2386,8 +2493,16 @@ fn a_revoked_device_delivers_no_notes() {
 #[test]
 fn erasing_a_note_also_clears_the_text_held_in_its_conflicts() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
 
     // A note, then a concurrent change so a conflict row exists with the text in it.
     let base = deliver(vec![wire_from(
@@ -2424,8 +2539,16 @@ fn erasing_a_note_also_clears_the_text_held_in_its_conflicts() {
 #[test]
 fn the_tombstone_carries_no_text() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
     let secret = "Streng vertraulicher Satz, der nirgends bleiben darf.";
     let n = deliver(vec![wire_from(
         "geheim",
@@ -2464,8 +2587,16 @@ fn the_tombstone_carries_no_text() {
 #[test]
 fn an_erased_note_cannot_be_re_offered() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
     let n = deliver(vec![wire_from(
         "weg",
         "disposition",
@@ -2507,8 +2638,16 @@ fn a_receive_only_device_may_still_erase() {
 #[test]
 fn a_device_cannot_erase_a_bereich_it_has_no_grant_in() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
     let req = serde_json::json!({ "bereich": "hr", "name": "gehalt" }).to_string();
     let r = super::erase_note(&mut hub, Some(&token), &req, NOW);
     assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
@@ -2523,8 +2662,16 @@ fn a_fetch_returns_only_granted_bereiche() {
     let hub = HubStore::in_memory().unwrap();
     let (disp, disp_token) = hub.add_device("disposition-laptop", NOW).unwrap();
     let (hr, hr_token) = hub.add_device("hr-laptop", NOW).unwrap();
-    hub.grant_bereich("g1", &disp.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    hub.grant_bereich(
+        "g1",
+        &disp.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "a",
+        NOW,
+    )
+    .unwrap();
     hub.grant_bereich("g2", &hr.id, "hr", Direction::Both, "r", "a", NOW)
         .unwrap();
     for (b, n) in [("disposition", "tour"), ("hr", "gehalt")] {

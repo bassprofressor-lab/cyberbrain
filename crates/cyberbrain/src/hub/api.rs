@@ -120,8 +120,13 @@ fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Wh
     }
     let cookie =
         super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
-    match cookie {
-        Some(t) if state.sessions.holds(&t, jiff::Timestamp::now()) => Who::Admin,
+    // The role decides, not the mere existence of a session. A principal signs in through
+    // the same login and gets the same cookie; asking only whether the cookie was live made
+    // every signed-in editor, auditor and countersigner an administrator on every page and
+    // form that asks this question — including the one that hands out bereich grants.
+    match cookie.and_then(|t| state.sessions.who(&t, jiff::Timestamp::now())) {
+        Some(super::admin::Who::Admin) => Who::Admin,
+        Some(super::admin::Who::Principal { role, .. }) if role.administers() => Who::Admin,
         _ => Who::Stranger,
     }
 }
@@ -550,8 +555,8 @@ async fn add_grant(
         if form.reason.trim().is_empty() {
             return Err("a grant needs a reason: it is what an auditor reads later".into());
         }
-        let dir = super::sync_access::Direction::parse(&form.direction)
-            .map_err(|e| e.to_string())?;
+        let dir =
+            super::sync_access::Direction::parse(&form.direction).map_err(|e| e.to_string())?;
         let id = format!("bg_{}", cyberbrain_core::NoteId::generate());
         hub.grant_bereich(
             &id,
@@ -607,11 +612,11 @@ fn editor_of(state: &HubState, headers: &HeaderMap) -> Option<(String, String)> 
     let token =
         super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))?;
     match state.sessions.who(&token, jiff::Timestamp::now())? {
-        super::admin::Who::Principal { id, name, role }
-            if role == super::access::Role::Editor =>
-        {
-            Some((id, name))
-        }
+        super::admin::Who::Principal {
+            id,
+            name,
+            role: super::access::Role::Editor,
+        } => Some((id, name)),
         _ => None,
     }
 }

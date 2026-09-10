@@ -122,7 +122,14 @@ impl Sessions {
         token
     }
 
-    /// Who this cookie belongs to, if it is still good. Same expiry handling as `holds`.
+    /// Who this cookie belongs to, if it is still good — and if so, push its expiry out
+    /// again.
+    ///
+    /// The only question there is. There used to be a second one, `holds`, which answered
+    /// "is this cookie live" without saying whose it was; the caller that asked it took the
+    /// answer to mean "this is the administrator", and a principal's cookie is live too.
+    /// Expired is not distinguished from unknown on purpose: the answer to the person is
+    /// the same, and saying which would tell an unknown caller that a token nearly worked.
     pub fn who(&self, token: &str, now: jiff::Timestamp) -> Option<Who> {
         let mut open = self.open.lock().ok()?;
         let (until, who) = open.get(token)?.clone();
@@ -134,25 +141,6 @@ impl Sessions {
             (now + jiff::Span::new().hours(SESSION_HOURS), who.clone()),
         );
         Some(who)
-    }
-
-    /// Is this cookie still good — and if so, push its expiry out again.
-    pub fn holds(&self, token: &str, now: jiff::Timestamp) -> bool {
-        let Ok(mut open) = self.open.lock() else {
-            return false;
-        };
-        match open.get(token).cloned() {
-            Some((until, who)) if until > now => {
-                open.insert(
-                    token.to_string(),
-                    (now + jiff::Span::new().hours(SESSION_HOURS), who),
-                );
-                true
-            }
-            // Expired rather than unknown, but the answer to the person is the same, and
-            // saying which would tell an unknown caller that a token nearly worked.
-            _ => false,
-        }
     }
 
     pub fn close(&self, token: &str) {

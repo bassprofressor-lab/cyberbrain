@@ -728,8 +728,6 @@ pub struct HubEvent {
 }
 
 impl HubStore {
-    /// Append to the hub's own chain. Every call in this file that changes who may see what
-    /// goes through here, so "it happened but was not recorded" is not a reachable state.
     // ----- note sync: grants and the notes themselves ------------------------------------
 
     /// Every grant recorded for a device, revoked ones included. `sync_access::may_move`
@@ -771,6 +769,10 @@ impl HubStore {
     }
 
     /// Record a grant. The caller checks that the granter is an administrator; this writes.
+    ///
+    /// One argument per column, and a struct to carry them would be a second name for the
+    /// row that already has one.
+    #[allow(clippy::too_many_arguments)]
     pub fn grant_bereich(
         &self,
         id: &str,
@@ -785,7 +787,15 @@ impl HubStore {
             "INSERT INTO bereich_grants
                 (id, device, bereich, direction, reason, granted_by, created_at)
              VALUES (?, ?, ?, ?, ?, ?, ?)",
-            params![id, device, bereich, direction.as_str(), reason, granted_by, now],
+            params![
+                id,
+                device,
+                bereich,
+                direction.as_str(),
+                reason,
+                granted_by,
+                now
+            ],
         ))?;
         Ok(())
     }
@@ -919,7 +929,16 @@ impl HubStore {
                 body = excluded.body, from_device = excluded.from_device,
                 received_at = excluded.received_at",
             params![
-                id, bereich, name, ring, kind, updated, frontmatter, body, from_device, now
+                id,
+                bereich,
+                name,
+                ring,
+                kind,
+                updated,
+                frontmatter,
+                body,
+                from_device,
+                now
             ],
         ))?;
         Ok(())
@@ -958,10 +977,7 @@ impl HubStore {
                 erased_at = excluded.erased_at, by_device = excluded.by_device",
             params![bereich, name, now, by_device],
         ))?;
-        Ok(ErasureCount {
-            notes,
-            conflicts,
-        })
+        Ok(ErasureCount { notes, conflicts })
     }
 
     /// Was this note erased, and when? Checked before taking a delivery, so a machine that
@@ -1017,11 +1033,7 @@ impl HubStore {
     /// in, changed since `since`. The filter is by grant and not by request, so asking for a
     /// bereich you were not granted returns nothing rather than an error — a fetch is not a
     /// place to learn which departments exist.
-    pub fn notes_for_device(
-        &self,
-        device: &str,
-        since: Option<&str>,
-    ) -> Result<Vec<SyncedNote>> {
+    pub fn notes_for_device(&self, device: &str, since: Option<&str>) -> Result<Vec<SyncedNote>> {
         let grants = self.grants_for_device(device)?;
         let mut out = Vec::new();
         for g in grants.iter().filter(|g| {
@@ -1236,11 +1248,7 @@ impl HubStore {
         }
         ix(self.conn.execute(
             "UPDATE note_conflicts SET resolved_at = ?, resolution = ? WHERE id = ?",
-            params![
-                now,
-                if take_offered { "offered" } else { "held" },
-                id
-            ],
+            params![now, if take_offered { "offered" } else { "held" }, id],
         ))?;
         Ok(true)
     }
@@ -1271,6 +1279,8 @@ impl HubStore {
         Ok(out)
     }
 
+    /// Append to the hub's own chain. Every call in this file that changes who may see what
+    /// goes through here, so "it happened but was not recorded" is not a reachable state.
     pub fn record(
         &self,
         actor: &str,

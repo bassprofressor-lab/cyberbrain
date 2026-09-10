@@ -53,6 +53,16 @@ pub enum Role {
 }
 
 impl Role {
+    /// Whether this role runs the hub: hands out bereich grants, and sees the pages that
+    /// are about the machine rather than about the work.
+    ///
+    /// Stated here rather than at each call site, because it is one rule and it was
+    /// answered by three different questions before — one of which was "does this cookie
+    /// belong to a live session", which every signed-in editor and auditor also passes.
+    pub fn administers(self) -> bool {
+        matches!(self, Role::Admin)
+    }
+
     pub fn parse(s: &str) -> Result<Self> {
         match s {
             "admin" => Ok(Role::Admin),

@@ -13,7 +13,6 @@
 //!   * A note without a bereich is never eligible. Nothing to check against is not the
 //!     same as permission, and a sync that treats it as one leaks by default.
 
-use super::access::Role;
 use cyberbrain_core::{Error, Result, Ring};
 use serde::Serialize;
 
@@ -153,9 +152,7 @@ pub fn may_move(
 ) -> std::result::Result<(), SyncDenied> {
     // Checked before anything else, and never against a grant: see the module note.
     if matches!(ring, Ring::Invariant | Ring::Protocol) {
-        return Err(SyncDenied::RingNeverLeaves {
-            ring: ring.as_u8(),
-        });
+        return Err(SyncDenied::RingNeverLeaves { ring: ring.as_u8() });
     }
     let Some(bereich) = bereich else {
         return Err(SyncDenied::NoteHasNoBereich);
@@ -198,12 +195,6 @@ pub fn may_move(
     })
 }
 
-/// Only an administrator hands out a grant. Kept here rather than at the call site so the
-/// rule is stated once and tested once.
-pub fn may_grant(role: Role) -> bool {
-    matches!(role, Role::Admin)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,9 +231,7 @@ mod tests {
             );
             assert_eq!(
                 r,
-                Err(SyncDenied::RingNeverLeaves {
-                    ring: ring.as_u8()
-                }),
+                Err(SyncDenied::RingNeverLeaves { ring: ring.as_u8() }),
                 "ring {ring:?} was allowed to leave"
             );
         }
@@ -388,13 +377,6 @@ mod tests {
             )
             .is_ok()
         );
-    }
-
-    #[test]
-    fn only_an_administrator_grants() {
-        assert!(may_grant(Role::Admin));
-        assert!(!may_grant(Role::Auditor));
-        assert!(!may_grant(Role::Countersigner));
     }
 
     /// Every refusal has to name what would fix it; a wall without a door gets worked
