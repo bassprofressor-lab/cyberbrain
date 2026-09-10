@@ -78,6 +78,11 @@ export interface Frontmatter {
   links?: string[];
   /** ISO-8601 duration; absent means indefinite. */
   retention?: string;
+  /**
+   * Department, team or domain. Absent for most notes, and that is the safe state: a note
+   * without one is never shared with a hub, whatever else is configured.
+   */
+  bereich?: string;
   pii: PiiState;
 }
 
@@ -261,6 +266,8 @@ export interface NoteSummary {
   created: string;
   /** Absent when unset. */
   retention?: string;
+  /** Department, team or domain. Absent means this note is never shared. */
+  bereich?: string;
   pii: PiiState;
   blocks: number;
   /** File size on disk. */
@@ -326,14 +333,18 @@ export interface NoteWriteRequest {
   /**
    * Optional frontmatter edits. `id`, `created`, `updated`, `links` and `pii` are
    * server-owned: sending any of them is 400 `bad-frontmatter`, as is any unknown key.
-   * `retention: null` (or `""`) clears the retention.
+   * `retention: null` (or `""`) clears the retention, and `bereich` behaves the same way:
+   * absent leaves it alone, null or `""` removes it.
    *
    * On PUT, `name` must equal the current name: a rename is refused with 400
    * `bad-request` (it would create a second note with a new id rather than move this one).
    * A `ring` different from the current one is refused by the store with 400
    * `bad-frontmatter` ("already exists in ring rN; remove it first to move the note").
    */
-  front?: Partial<Pick<Frontmatter, "name" | "ring" | "kind" | "tags">> & { retention?: string | null };
+  front?: Partial<Pick<Frontmatter, "name" | "ring" | "kind" | "tags">> & {
+    retention?: string | null;
+    bereich?: string | null;
+  };
   /**
    * Optimistic concurrency: the `updated` you last saw. 409 `write-conflict` (with
    * `current_updated`) if it moved. The server treats an absent value as "do not check";

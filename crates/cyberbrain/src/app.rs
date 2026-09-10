@@ -228,7 +228,11 @@ pub struct WriteRequest {
     pub body: String,
     pub tags: Vec<String>,
     /// Which department, team or domain the note belongs to. Filters recall, never ranks.
-    pub bereich: Option<String>,
+    ///
+    /// Three states, not two: `None` leaves whatever the note has, `Some(None)` removes it,
+    /// `Some(Some(b))` sets it. A plain `Option` cannot tell "not mentioned" from "clear
+    /// it", and a caller that means the second gets the first — silently.
+    pub bereich: Option<Option<String>>,
     pub retention: Option<String>,
     /// Write despite findings, stamping `flagged`. The CLI's `--force`.
     pub force: bool,
@@ -1806,12 +1810,11 @@ impl App {
             updated: now,
             tags,
             links: link_targets(&body),
-            // A request that names no bereich keeps the one the note already had: an update
-            // that omits a field must not silently drop it.
-            bereich: req
-                .bereich
-                .clone()
-                .or_else(|| existing.as_ref().and_then(|n| n.front.bereich.clone())),
+            // Absent keeps what the note has; an explicit `Some(None)` removes it.
+            bereich: match req.bereich.clone() {
+                None => existing.as_ref().and_then(|n| n.front.bereich.clone()),
+                Some(v) => v,
+            },
             retention: req.retention,
             pii,
         };
@@ -1980,7 +1983,7 @@ impl App {
                 updated: now,
                 tags,
                 links: link_targets(&body),
-                bereich: req.bereich,
+                bereich: req.bereich.flatten(),
                 retention: req.retention,
                 pii,
             },
@@ -2811,7 +2814,7 @@ impl App {
                     name: name.clone(),
                     body: n["body"].as_str().unwrap_or_default().to_string(),
                     tags: Vec::new(),
-                    bereich: n["bereich"].as_str().map(str::to_string),
+                    bereich: Some(n["bereich"].as_str().map(str::to_string)),
                     retention: None,
                     force: true,
                     choice: None,

@@ -276,6 +276,12 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
             <span title={absTime(f.updated)}>{relTime(f.updated)}</span>
           </Field>
           <Field label={t.note.field.retention}>{f.retention ? <span title={f.retention}>{duration(f.retention)}</span> : <span className="text-fg-muted">{t.common.indefinite}</span>}</Field>
+          {/* Absent is the safe state and says so: a note with no bereich is never
+              shared with a hub, whatever else is configured. Shown even when empty,
+              because "not shared" is a fact about a note, not the absence of one. */}
+          <Field label={t.note.field.bereich}>
+            {f.bereich ? <span>{f.bereich}</span> : <span className="text-fg-muted">{t.note.notShared}</span>}
+          </Field>
           <Field label={t.note.field.ring}>
             {f.ring} · {t.rings.label[f.ring]}
           </Field>

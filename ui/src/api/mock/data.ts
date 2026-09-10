@@ -14,6 +14,8 @@ export interface SeedNote {
   created: number;
   updated: number;
   retention?: string;
+  /** Department, team or domain. Absent for almost every note, as in a real store. */
+  bereich?: string;
   /** Default "none": written through the tool, scanned, nothing found. Imported files are "unscanned". */
   pii?: PiiState;
   body: string;

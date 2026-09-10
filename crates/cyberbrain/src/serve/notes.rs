@@ -193,6 +193,7 @@ fn summary(tree: &Tree, n: &Loaded) -> NoteSummary {
         tags: f.tags.clone(),
         updated: f.updated,
         created: f.created,
+        bereich: f.bereich.clone(),
         retention: f.retention.clone(),
         pii: f.pii,
         blocks: n.blocks.len(),
@@ -373,6 +374,10 @@ struct FrontEdits {
     ring: Option<Ring>,
     kind: Option<NoteKind>,
     tags: Option<Vec<String>>,
+    /// `Some(None)` is an explicit `null`: clear it. Same shape as `retention`, because
+    /// "leave it alone" and "remove it" are different requests and a bare `None` cannot say
+    /// which one was meant.
+    bereich: Option<Option<String>>,
     /// `Some(None)` is an explicit `null`: clear the retention.
     retention: Option<Option<String>>,
 }
@@ -440,6 +445,18 @@ fn parse_write(v: &Value) -> ApiResult<ParsedWrite> {
                         front.tags = Some(serde_json::from_value(val.clone()).map_err(|_| {
                             bad_front("`front.tags` must be an array of strings")
                         })?)
+                    }
+                    "bereich" => {
+                        front.bereich = Some(match val {
+                            Value::Null => None,
+                            Value::String(s) if s.trim().is_empty() => None,
+                            Value::String(s) => {
+                                cyberbrain_core::frontmatter::validate_bereich(s)
+                                    .map_err(|r| bad_front(format!("`front.bereich`: {r}")))?;
+                                Some(s.clone())
+                            }
+                            _ => return Err(bad_front("`front.bereich` must be a string or null")),
+                        })
                     }
                     "retention" => {
                         front.retention = Some(match val {
@@ -520,7 +537,7 @@ fn run_write(
                         updated: w.updated,
                         tags: req.tags.clone(),
                         links: link_targets(&body),
-                        bereich: req.bereich.clone(),
+                        bereich: req.bereich.clone().flatten(),
                         retention: req.retention.clone(),
                         pii: w.pii,
                     },
@@ -606,9 +623,10 @@ pub async fn put_note(
             name: cur.name.clone(),
             body: parsed.body,
             tags: parsed.front.tags.unwrap_or_else(|| cur.tags.clone()),
-            // The API has no bereich field yet; app.write() keeps the note's own, so an
-            // edit through the UI cannot silently drop it.
-            bereich: None,
+            // Absent means "leave it alone", and `app.write` keeps what the note has. An
+            // explicit null arrives here as `Some(None)` and clears it.
+            // Passed through as-is: the three states are the same three the API has.
+            bereich: parsed.front.bereich.clone(),
             retention: match parsed.front.retention {
                 Some(r) => r,
                 None => cur.retention.clone(),
@@ -666,7 +684,7 @@ pub async fn post_note(
             name,
             body: parsed.body,
             tags: parsed.front.tags.unwrap_or_default(),
-            bereich: None,
+            bereich: parsed.front.bereich.clone(),
             retention: parsed.front.retention.flatten(),
             force: false,
             choice: None,

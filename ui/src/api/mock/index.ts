@@ -179,18 +179,21 @@ function splitBlocks(noteId: string, ring: Ring, body: string): MockBlock[] {
 const linkTargets = (body: string) => [...new Set([...body.matchAll(WIKILINK)].map((m) => (m[1] ?? "").trim()))];
 
 /** Core's `Frontmatter` skips empty `tags`/`links` and an unset `retention`. */
-function frontmatterOf(n: { id: NoteId; name: string; ring: Ring; kind: Frontmatter["kind"]; created: string; updated: string; tags: string[]; links: string[]; retention?: string | undefined; pii: PiiState }): Frontmatter {
+function frontmatterOf(n: { id: NoteId; name: string; ring: Ring; kind: Frontmatter["kind"]; created: string; updated: string; tags: string[]; links: string[]; retention?: string | undefined; bereich?: string | undefined; pii: PiiState }): Frontmatter {
   const f: Frontmatter = { id: n.id, name: n.name, ring: n.ring, kind: n.kind, created: n.created, updated: n.updated, pii: n.pii };
   if (n.tags.length) f.tags = n.tags;
   if (n.links.length) f.links = n.links;
   if (n.retention) f.retention = n.retention;
+  // Skipped when unset, the same as core does, so the mock and the real thing agree about
+  // what an absent bereich looks like on the wire.
+  if (n.bereich) f.bereich = n.bereich;
   return f;
 }
 
 function makeNote(seed: SeedNote, tsMs: number): MockNote {
   const id = ulid(tsMs);
   const outbound = linkTargets(seed.body);
-  const front = frontmatterOf({ id, name: seed.name, ring: seed.ring, kind: seed.kind, created: daysAgo(seed.created), updated: daysAgo(seed.updated), tags: seed.tags, links: outbound, retention: seed.retention, pii: seed.pii ?? "none" });
+  const front = frontmatterOf({ id, name: seed.name, ring: seed.ring, kind: seed.kind, created: daysAgo(seed.created), updated: daysAgo(seed.updated), tags: seed.tags, links: outbound, retention: seed.retention, bereich: seed.bereich, pii: seed.pii ?? "none" });
   return { front, body: seed.body, path: `notes/r${seed.ring}/${seed.name}.md`, blocks: splitBlocks(id, seed.ring, seed.body), outbound };
 }
 

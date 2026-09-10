@@ -586,7 +586,7 @@ fn write_one(
         name: c.name.clone(),
         body: c.body.clone(),
         tags: c.tags.clone(),
-        bereich: c.bereich.clone(),
+        bereich: c.bereich.clone().map(Some),
         retention: c.retention.clone(),
         force: false,
         choice: plan.accept_pii.then_some(OperatorChoice::MarkReviewed),

@@ -521,7 +521,7 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         name: a.string_required("name")?,
         body: a.string_required("body")?,
         tags: a.string_list("tags")?.unwrap_or_default(),
-        bereich: a.string("bereich")?,
+        bereich: a.string("bereich")?.map(Some),
         retention: a.string("retention")?,
         force: a.boolean("force")?.unwrap_or(false),
         choice,

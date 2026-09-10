@@ -176,6 +176,10 @@ pub struct NoteSummary {
     pub tags: Vec<String>,
     pub updated: jiff::Timestamp,
     pub created: jiff::Timestamp,
+    /// The department, team or domain this note belongs to. Absent for most notes: it is
+    /// what decides whether a note may be shared, and nothing is shared by default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bereich: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retention: Option<String>,
     pub pii: PiiState,
