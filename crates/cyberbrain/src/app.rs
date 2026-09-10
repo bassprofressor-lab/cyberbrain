@@ -233,14 +233,37 @@ pub struct WriteRequest {
     /// `Some(Some(b))` sets it. A plain `Option` cannot tell "not mentioned" from "clear
     /// it", and a caller that means the second gets the first — silently.
     pub bereich: Option<Option<String>>,
-    pub retention: Option<String>,
+    /// How long the note is kept. Three states, like `bereich` and for the same reason:
+    /// `None` leaves whatever the note has, `Some(None)` removes it, `Some(Some(p))` sets
+    /// it. As a plain `Option` an ordinary edit that did not mention a period dropped the
+    /// one the note had — an agreed deletion date, gone because somebody fixed a typo.
+    pub retention: Option<Option<String>>,
     /// Write despite findings, stamping `flagged`. The CLI's `--force`.
     pub force: bool,
     /// The operator's answer to a hold, when the caller already asked (the UI, §8.1).
     pub choice: Option<OperatorChoice>,
     /// §8.1: refuse to overwrite a note somebody else changed in the meantime.
     pub expected_updated: Option<jiff::Timestamp>,
+    /// Set only when the note was written on another machine and is arriving here.
+    ///
+    /// Everything in it is identity the note already has: its id, when it was created, when
+    /// it was last changed, its tags, its retention. Without it a pull invented all five,
+    /// and each one cost something — a citation that resolved on one machine and nowhere
+    /// else, a retention clock restarted, an agreed deletion date dropped, and an `updated`
+    /// of "now" that made the next real change from the other machine look older than a
+    /// note this machine had never touched.
+    pub arriving: Option<Arriving>,
     pub dry_run: bool,
+}
+
+/// The identity a note keeps when it moves between machines.
+#[derive(Debug, Clone)]
+pub struct Arriving {
+    pub id: NoteId,
+    pub created: jiff::Timestamp,
+    pub updated: jiff::Timestamp,
+    pub tags: Vec<String>,
+    pub retention: Option<String>,
 }
 
 /// What `propose` did, or what it is waiting to be told.
@@ -1762,7 +1785,7 @@ impl App {
             path: PathBuf::from(format!("{name}.md")),
             reason: format!("name `{name}`: {why}"),
         })?;
-        if let Some(r) = &req.retention {
+        if let Some(Some(r)) = &req.retention {
             frontmatter::validate_retention(r).map_err(|why| Error::Frontmatter {
                 path: PathBuf::from(format!("{name}.md")),
                 reason: format!("retention `{r}`: {why}"),
@@ -1820,24 +1843,47 @@ impl App {
                 tags.push(t);
             }
         }
+        let arriving = req.arriving.clone();
+        // An arriving note keeps what it already is. The local note's id still wins when
+        // there is one — two ids for one name is a store that contradicts itself, and the
+        // note here was written first as far as this machine can tell.
         let front = Frontmatter {
             id: existing
                 .as_ref()
                 .map(|n| n.front.id)
+                .or(arriving.as_ref().map(|a| a.id))
                 .unwrap_or_else(NoteId::generate),
             name: name.clone(),
             ring: req.ring,
             kind: req.kind,
-            created: existing.as_ref().map(|n| n.front.created).unwrap_or(now),
-            updated: now,
-            tags,
+            created: existing
+                .as_ref()
+                .map(|n| n.front.created)
+                .or(arriving.as_ref().map(|a| a.created))
+                .unwrap_or(now),
+            // The sender's stamp, not ours. Ours would be newer than every version the hub
+            // still has to offer, so the next real change from the other machine would be
+            // kept back as "this machine changed it since" — which this machine never did.
+            updated: arriving.as_ref().map(|a| a.updated).unwrap_or(now),
+            tags: match &arriving {
+                Some(a) if tags.is_empty() => a.tags.clone(),
+                _ => tags,
+            },
             links: link_targets(&body),
             // Absent keeps what the note has; an explicit `Some(None)` removes it.
             bereich: match req.bereich.clone() {
                 None => existing.as_ref().and_then(|n| n.front.bereich.clone()),
                 Some(v) => v,
             },
-            retention: req.retention,
+            // Absent keeps what the note has, then what arrived with it; an explicit
+            // `Some(None)` removes it.
+            retention: match req.retention.clone() {
+                None => existing
+                    .as_ref()
+                    .and_then(|n| n.front.retention.clone())
+                    .or_else(|| arriving.as_ref().and_then(|a| a.retention.clone())),
+                Some(v) => v,
+            },
             pii,
         };
         let note = Note {
@@ -1947,7 +1993,7 @@ impl App {
             path: PathBuf::from(format!("{name}.md")),
             reason: format!("name `{name}`: {why}"),
         })?;
-        if let Some(r) = &req.retention {
+        if let Some(Some(r)) = &req.retention {
             frontmatter::validate_retention(r).map_err(|why| Error::Frontmatter {
                 path: PathBuf::from(format!("{name}.md")),
                 reason: format!("retention `{r}`: {why}"),
@@ -2014,7 +2060,7 @@ impl App {
                 tags,
                 links: link_targets(&body),
                 bereich: req.bereich.flatten(),
-                retention: req.retention,
+                retention: req.retention.flatten(),
                 pii,
             },
             body,
@@ -2835,7 +2881,43 @@ impl App {
                     continue;
                 }
             }
-            written.push(serde_json::json!({ "name": name, "updated": incoming_updated }));
+            // The hub carries the sender's frontmatter verbatim, and until now the pull
+            // read five fields out of the wire note and rebuilt the rest. Everything it
+            // rebuilt was wrong in the same direction: a new id (so a citation from the
+            // other machine resolved nowhere), `created` of now (so a retention clock
+            // started over), no tags, no retention (so an agreed deletion date quietly
+            // stopped applying) and `updated` of now.
+            let sent_text = n["frontmatter"].as_str().unwrap_or_default();
+            let sent = frontmatter::parse(std::path::Path::new(&name), sent_text)
+                .ok()
+                .map(|p| p.front);
+            let incoming_id = sent
+                .as_ref()
+                .map(|f| f.id)
+                .unwrap_or_else(cyberbrain_core::NoteId::generate);
+            let incoming_stamp = match incoming_updated.parse::<jiff::Timestamp>() {
+                Ok(t) => t,
+                // A note whose stamp we cannot read is not a note we can order against the
+                // local one, and taking it with a stamp of our own is what caused the
+                // trouble. Refused and named, rather than taken on a guess.
+                Err(e) => {
+                    refused.push(serde_json::json!({
+                        "name": name,
+                        "why": format!("its `updated` is not a timestamp: {e}"),
+                    }));
+                    continue;
+                }
+            };
+            let incoming_created = sent.as_ref().map(|f| f.created).unwrap_or(incoming_stamp);
+            let incoming_tags = sent.as_ref().map(|f| f.tags.clone()).unwrap_or_default();
+            let incoming_retention = sent.as_ref().and_then(|f| f.retention.clone());
+
+            written.push(serde_json::json!({
+                "name": name,
+                "updated": incoming_updated,
+                "retention": incoming_retention,
+                "tags": incoming_tags,
+            }));
             if !dry_run {
                 let req = WriteRequest {
                     ring: Ring::try_from(ring_u8)?,
@@ -2849,6 +2931,13 @@ impl App {
                     force: true,
                     choice: None,
                     expected_updated: None,
+                    arriving: Some(Arriving {
+                        id: incoming_id,
+                        created: incoming_created,
+                        updated: incoming_stamp,
+                        tags: incoming_tags,
+                        retention: incoming_retention,
+                    }),
                     dry_run: false,
                 };
                 self.write(req)?;

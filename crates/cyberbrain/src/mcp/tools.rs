@@ -522,10 +522,11 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         body: a.string_required("body")?,
         tags: a.string_list("tags")?.unwrap_or_default(),
         bereich: a.string("bereich")?.map(Some),
-        retention: a.string("retention")?,
+        retention: a.string("retention")?.map(Some),
         force: a.boolean("force")?.unwrap_or(false),
         choice,
         expected_updated,
+        arriving: None,
         dry_run: a.boolean("dry_run")?.unwrap_or(false),
     };
     Ok(match app.write(req) {

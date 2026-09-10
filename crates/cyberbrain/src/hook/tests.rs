@@ -58,6 +58,7 @@ impl Fixture {
                 force: true,
                 choice: None,
                 expected_updated: None,
+                arriving: None,
                 dry_run: false,
             })
             .unwrap();
@@ -1066,4 +1067,91 @@ impl Drop for EnvGuard {
 fn cwd_lock() -> &'static std::sync::Mutex<()> {
     static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
     &L
+}
+
+/// A note that was written on another machine keeps what it is when it arrives here.
+///
+/// `hub pull` builds a `WriteRequest` from a wire note, and until this existed it invented
+/// five things the sender had already decided: a fresh id, `created` of now, no tags, no
+/// retention, and `updated` of now. Each cost something, and the last one cost the most —
+/// a stamp newer than any version the hub could still offer, so the next real change from
+/// the other machine was kept back as "this machine changed it since", which it had not.
+///
+/// Calibrated against the state before: with `arriving` ignored in `App::write`, every
+/// assertion below fails except the body.
+#[test]
+fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
+    let fx = fixture();
+    let app = fx.open();
+
+    let id = cyberbrain_core::NoteId::generate();
+    let created: jiff::Timestamp = "2026-01-02T03:04:05Z".parse().unwrap();
+    let updated: jiff::Timestamp = "2026-05-06T07:08:09Z".parse().unwrap();
+    let out = app
+        .write(WriteRequest {
+            ring: Ring::Knowledge,
+            kind: NoteKind::Knowledge,
+            name: "von-drueben".into(),
+            body: "*Für: kam von woanders*".into(),
+            tags: vec![],
+            bereich: Some(Some("disposition".into())),
+            retention: None,
+            force: true,
+            choice: None,
+            expected_updated: None,
+            arriving: Some(crate::app::Arriving {
+                id,
+                created,
+                updated,
+                tags: vec!["wichtig".into(), "dsgvo".into()],
+                retention: Some("P2Y".into()),
+            }),
+            dry_run: false,
+        })
+        .unwrap();
+    assert!(matches!(out, crate::app::WriteOutcome::Written(_)));
+
+    let note = app.store().read("von-drueben").unwrap();
+    assert_eq!(
+        note.front.id, id,
+        "a new id here resolves no citation there"
+    );
+    assert_eq!(note.front.created, created, "the retention clock restarted");
+    assert_eq!(
+        note.front.updated, updated,
+        "our own stamp makes the next change from the other machine look older"
+    );
+    assert_eq!(note.front.tags, vec!["wichtig", "dsgvo"]);
+    assert_eq!(
+        note.front.retention.as_deref(),
+        Some("P2Y"),
+        "an agreed deletion date must survive the journey"
+    );
+
+    // An edit made here afterwards is an ordinary local write: it takes the local clock and
+    // keeps the note's id, so arriving does not turn into a permanent stamp.
+    let before = note.front.updated;
+    app.write(WriteRequest {
+        ring: Ring::Knowledge,
+        kind: NoteKind::Knowledge,
+        name: "von-drueben".into(),
+        body: "*Für: hier geändert*".into(),
+        tags: vec![],
+        bereich: None,
+        retention: None,
+        force: true,
+        choice: None,
+        expected_updated: None,
+        arriving: None,
+        dry_run: false,
+    })
+    .unwrap();
+    let note = app.store().read("von-drueben").unwrap();
+    assert_eq!(note.front.id, id);
+    assert!(note.front.updated > before);
+    assert_eq!(
+        note.front.retention.as_deref(),
+        Some("P2Y"),
+        "a local edit must not drop the retention either"
+    );
 }

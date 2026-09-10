@@ -742,6 +742,7 @@ fn stdout_carries_protocol_only_over_real_pipes() {
                 force: false,
                 choice: None,
                 expected_updated: None,
+                arriving: None,
                 dry_run: false,
             })
             .unwrap();

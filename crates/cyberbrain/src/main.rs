@@ -283,10 +283,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 body,
                 tags,
                 bereich: bereich.clone().map(Some),
-                retention,
+                retention: retention.clone().map(Some),
                 force,
                 choice: None,
                 expected_updated: None,
+                arriving: None,
                 dry_run,
             };
             let outcome = app.write(req)?;
@@ -333,10 +334,11 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 body,
                 tags,
                 bereich: bereich.clone().map(Some),
-                retention,
+                retention: retention.clone().map(Some),
                 force,
                 choice: None,
                 expected_updated: None,
+                arriving: None,
                 dry_run,
             };
             let outcome = app.propose(req, &who)?;

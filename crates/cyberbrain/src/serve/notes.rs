@@ -538,7 +538,7 @@ fn run_write(
                         tags: req.tags.clone(),
                         links: link_targets(&body),
                         bereich: req.bereich.clone().flatten(),
-                        retention: req.retention.clone(),
+                        retention: req.retention.clone().flatten(),
                         pii: w.pii,
                     },
                     body,
@@ -627,13 +627,14 @@ pub async fn put_note(
             // explicit null arrives here as `Some(None)` and clears it.
             // Passed through as-is: the three states are the same three the API has.
             bereich: parsed.front.bereich.clone(),
-            retention: match parsed.front.retention {
-                Some(r) => r,
-                None => cur.retention.clone(),
-            },
+            // Passed through as-is, like `bereich` beside it: the three states here are
+            // the three states `app.write` has, and flattening them was what let an edit
+            // that never mentioned a period drop the one the note had.
+            retention: parsed.front.retention.clone(),
             force: false,
             choice: None,
             expected_updated: parsed.expected_updated,
+            arriving: None,
             dry_run: dry.is_on(),
         };
         run_write(&st, req, false, Some(cur.created), None)
@@ -685,10 +686,11 @@ pub async fn post_note(
             body: parsed.body,
             tags: parsed.front.tags.unwrap_or_default(),
             bereich: parsed.front.bereich.clone(),
-            retention: parsed.front.retention.flatten(),
+            retention: parsed.front.retention.clone(),
             force: false,
             choice: None,
             expected_updated: None,
+            arriving: None,
             dry_run: dry.is_on(),
         };
         run_write(&st, req, true, None, None)

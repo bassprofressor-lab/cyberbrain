@@ -588,10 +588,11 @@ fn write_one(
         body: c.body.clone(),
         tags: c.tags.clone(),
         bereich: c.bereich.clone().map(Some),
-        retention: c.retention.clone(),
+        retention: c.retention.clone().map(Some),
         force: false,
         choice: plan.accept_pii.then_some(OperatorChoice::MarkReviewed),
         expected_updated: None,
+        arriving: None,
         dry_run,
     };
     Ok(match app.write(req)? {
