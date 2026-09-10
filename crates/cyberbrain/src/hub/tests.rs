@@ -791,8 +791,19 @@ fn a_period_comes_out_as_a_bundle_that_verifies_on_its_own() {
     assert_eq!(verdict.rows, 2);
 }
 
+/// A device that sent nothing is still named, and no report carries the rows themselves.
+///
+/// Two things in one test because they are one behaviour: the summary is the whole output.
+/// "This machine did nothing that week" is a finding and its absence would read as an
+/// oversight — and "here is everything that machine did" is a disclosure, which this
+/// command is not.
+///
+/// Calibrated against the state before: `write_report` wrote a `<device>.jsonl` per device
+/// from the same `device_bundle` that `disclose` hands out after two people have agreed,
+/// with no credential and no row in the hub's log. The assertion below on the directory
+/// listing is the one that failed there.
 #[test]
-fn a_device_with_nothing_in_the_period_still_gets_a_file() {
+fn a_report_names_every_device_and_carries_nobodys_rows() {
     let (mut hub, _, token) = hub_with_device();
     let (silent, _) = hub.add_device("silent", "2026-09-07T00:00:00Z").unwrap();
     let client = Client::new();
@@ -809,14 +820,28 @@ fn a_device_with_nothing_in_the_period_still_gets_a_file() {
 
     let dir = tempfile::tempdir().unwrap();
     let out = report::write_report(&hub, dir.path(), None, None, "test").unwrap();
-    let files = out["files"].as_array().unwrap();
-    assert_eq!(files.len(), 2, "both devices, including the silent one");
-    let quiet_file = dir.path().join(format!("{}.jsonl", silent.id));
-    assert!(quiet_file.is_file());
-    // "This machine did nothing that week" is a finding, and it verifies like any other.
-    let text = std::fs::read_to_string(&quiet_file).unwrap();
-    assert_eq!(cyberbrain_policy::bundle::verify(&text).unwrap().rows, 0);
-    assert!(dir.path().join("summary.txt").is_file());
+
+    let written: Vec<String> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(
+        written,
+        vec!["summary.txt".to_string()],
+        "a report is a summary; anything else here is a disclosure without a request"
+    );
+
+    let summary = out["summary"].as_str().unwrap();
+    assert!(
+        summary.contains(&silent.id),
+        "the silent device has to be named: {summary}"
+    );
+    assert!(
+        summary.contains("chain holds"),
+        "the verdict is the point of the line: {summary}"
+    );
+    // And it says where the rows are, so the reader is not left to guess that they exist.
+    assert!(summary.contains("hub disclose"), "{summary}");
 }
 
 /// A record created by an older build must keep working when the program is upgraded.
@@ -1019,6 +1044,10 @@ fn every_step_is_in_the_hubs_own_chain() {
     assert_eq!(
         actions,
         [
+            // The device first, because it is registered first. Its absence here used to be
+            // the shape of the gap: three roles and a disclosure were in the chain, and the
+            // machine they were all about had arrived without a word.
+            "device.registered",
             "role.granted",
             "role.granted",
             "role.granted",
@@ -1028,9 +1057,9 @@ fn every_step_is_in_the_hubs_own_chain() {
         ]
     );
     // The reason is in the record, not only in somebody's memory of the conversation.
-    let requested = &events[3];
+    let requested = &events[4];
     assert_eq!(requested.detail["reason"], "why we looked");
-    assert_eq!(hub.verify_hub_chain().unwrap(), 6);
+    assert_eq!(hub.verify_hub_chain().unwrap(), 7);
 }
 
 #[test]
@@ -2785,4 +2814,120 @@ fn the_cursor_covers_notes_and_erasures() {
     // And asking again from there returns nothing new.
     let f2 = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
     assert!(f2.notes.is_empty() && f2.erased.is_empty());
+}
+
+/// An editor sees the conflicts of their own bereiche and nobody else's.
+///
+/// The store side of what `hub conflicts` and `/conflicts` both ask. It is here rather than
+/// at the two call sites because the rule is one rule; what the call sites have to get right
+/// is asking at all, which one of them did not.
+#[test]
+fn an_editor_is_offered_the_conflicts_of_their_own_bereiche_only() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _t) = hub.add_device("laptop", NOW).unwrap();
+    for b in ["disposition", "hr"] {
+        hub.grant_bereich(&format!("g-{b}"), &d.id, b, Direction::Both, "r", "a", NOW)
+            .unwrap();
+        // Held, then a second machine offers a different text from an older base: that is
+        // what a conflict is, and it is the row that carries the turned-away note.
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            b,
+            "regel",
+            2,
+            "knowledge",
+            "2026-09-10T09:00:00Z",
+            "fm",
+            &format!("was {b} hält"),
+            None,
+            &d.id,
+            NOW,
+        )
+        .unwrap();
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            b,
+            "regel",
+            2,
+            "knowledge",
+            "2026-09-10T10:00:00Z",
+            "fm",
+            &format!("das GEHEIMNIS von {b}"),
+            Some("2026-09-10T08:00:00Z"),
+            &d.id,
+            NOW,
+        )
+        .unwrap();
+    }
+
+    let (rita, _) = hub
+        .add_principal("Rita", super::access::Role::Editor, NOW)
+        .unwrap();
+    hub.assign_bereich(&rita.id, "disposition", NOW).unwrap();
+
+    let mine = hub.conflicts_for_principal(&rita.id).unwrap();
+    assert_eq!(mine.len(), 1, "one bereich, one conflict");
+    assert_eq!(mine[0].0.bereich, "disposition");
+    let text = format!("{mine:?}");
+    assert!(
+        !text.contains("GEHEIMNIS von hr"),
+        "an editor of disposition was handed HR's note text: {text}"
+    );
+
+    // And an id from the other department is not settleable by guessing it.
+    let hrs = hub.open_conflicts("hr").unwrap();
+    assert_eq!(hrs.len(), 1);
+    assert!(
+        hub.conflict_for_principal(&rita.id, &hrs[0].id)
+            .unwrap()
+            .is_none(),
+        "a guessed id must not reach into another department"
+    );
+}
+
+/// A device does not appear or disappear without the hub's own log saying so.
+///
+/// `docs/HUB.md` says granting a role is itself an entry, and it was — for roles. A device
+/// was not: it arrived through the web form or `hub add` and left through `hub revoke`, and
+/// the chain said nothing either way. A device is a new pair of eyes on whatever bereich it
+/// is later granted, so its arrival is exactly the thing a works council reads the log for.
+///
+/// Calibrated against the state before: with the two `record` calls removed, both counts
+/// below are 0.
+#[test]
+fn a_device_arriving_and_leaving_is_in_the_hubs_own_log() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _t) = hub.add_device("laptop-rita", NOW).unwrap();
+
+    let rows = hub.hub_events(50).unwrap();
+    let registered: Vec<_> = rows
+        .iter()
+        .filter(|r| r.action == "device.registered")
+        .collect();
+    assert_eq!(registered.len(), 1, "{rows:?}");
+    assert_eq!(registered[0].detail["device"], serde_json::json!(d.id));
+    assert_eq!(
+        registered[0].detail["name"],
+        serde_json::json!("laptop-rita"),
+        "the name is what a reader recognises; the id is what the rows carry"
+    );
+
+    assert!(hub.revoke(&d.id, "2026-09-10T12:00:00Z").unwrap());
+    let rows = hub.hub_events(50).unwrap();
+    assert_eq!(
+        rows.iter().filter(|r| r.action == "device.revoked").count(),
+        1
+    );
+
+    // Twice is not two events.
+    assert!(!hub.revoke(&d.id, "2026-09-10T13:00:00Z").unwrap());
+    let rows = hub.hub_events(50).unwrap();
+    assert_eq!(
+        rows.iter().filter(|r| r.action == "device.revoked").count(),
+        1,
+        "revoking an already-revoked device is not news"
+    );
+
+    // And the chain still holds over the rows we just added.
+    assert!(hub.verify_hub_chain().is_ok());
 }

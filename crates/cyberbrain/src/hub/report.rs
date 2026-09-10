@@ -194,10 +194,18 @@ pub fn device_bundle(
     Ok((text, n))
 }
 
-/// Write a report for a period: one bundle per device plus a summary naming what is in it.
+/// Write what can be said about a period without reading anybody's activity: one line per
+/// device with its row count and whether its chain holds.
 ///
-/// A directory rather than one file, because a bundle is one chain and the hub holds one per
-/// device. Merging them would produce a file that verifies as nothing.
+/// It used to write the row bundles too, for every device, with no credential and no record
+/// — the same files `disclose` hands out after two people have agreed, from the same
+/// `device_bundle`, one subcommand away. `access.rs` promises that activity rows are
+/// unreachable through this program without an approved request, and this was the door
+/// beside that promise.
+///
+/// What stays is state: which machines report, how much they sent, whether the chain holds.
+/// That is what the hub's own page already shows its operator. The rows themselves are
+/// `hub disclose`, and the summary says so.
 pub fn write_report(
     hub: &HubStore,
     dir: &std::path::Path,
@@ -219,33 +227,32 @@ pub fn write_report(
         tool
     ));
 
-    let mut files = Vec::new();
     let mut total = 0usize;
     for d in hub.devices()? {
+        // Built and verified, not written: the count and the verdict are what this report
+        // carries, and building the bundle is how they are arrived at honestly. Every
+        // device gets a line, including the ones with nothing in the period — "this machine
+        // did nothing that week" is a finding, and its absence would read as an oversight.
         let (text, n) = device_bundle(hub, &d.id, from, to, tool)?;
-        // Every device gets a file, including the ones with nothing in the period: "this
-        // machine did nothing that week" is a finding, and its absence would read as an
-        // oversight.
-        let name = format!("{}.jsonl", d.id);
-        std::fs::write(dir.join(&name), &text).map_err(|e| Error::Io {
-            path: dir.join(&name),
-            source: e,
-        })?;
-        // Checked as written, so a broken file is found here rather than by the recipient.
         let verdict = match bundle::verify(&text) {
             Ok(r) => format!("chain holds over {} row(s)", r.rows),
             Err(e) => format!("PROBLEM: {e}"),
         };
         summary.push_str(&format!(
-            "{:<24} {:<20} {:>6} row(s)  {}\n  file: {}\n",
-            d.name, d.id, n, verdict, name
+            "{:<24} {:<20} {:>6} row(s)  {}\n",
+            d.name, d.id, n, verdict
         ));
         total += n;
-        files.push(name);
     }
     summary.push_str(&format!("\n{total} row(s) in this period\n"));
     summary.push_str(
-        "\nEach file verifies on its own:\n  cyberbrain verify-export <file>\n  \
+        "\nThe rows themselves are not in this directory. They are activity, and getting at \
+         them takes an auditor asking and somebody else approving:\n  \
+         cyberbrain hub request --reason \"...\" --as <auditor>\n  \
+         cyberbrain hub approve <id> --as <countersigner>\n  \
+         cyberbrain hub disclose <id> --out-dir <dir> --as <auditor>\n\n\
+         Each file that comes out of `disclose` verifies on its own:\n  \
+         cyberbrain verify-export <file>\n  \
          python3 scripts/verify-audit-export.py <file>\n",
     );
 
@@ -257,7 +264,7 @@ pub fn write_report(
 
     Ok(serde_json::json!({
         "directory": dir,
-        "files": files,
+        "files": [summary_path.file_name().unwrap_or_default().to_string_lossy()],
         "rows": total,
         "summary": summary,
     }))

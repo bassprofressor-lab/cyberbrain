@@ -1308,18 +1308,35 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             bereich,
             resolve,
             take_offered,
+            as_,
             data,
         } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            // The same check the web page has made all along, for the same reason, and it
+            // was missing here: the command printed every open conflict of every bereich
+            // with `offered_body` in it — the whole turned-away note text — to anybody who
+            // could open the file. Two doors, one lock.
+            let who = store
+                .principal_for(as_.as_deref(), hub::access::Role::Editor)
+                .map_err(|d| Error::Config(d.to_string()))?;
             if let Some(id) = resolve {
+                // Against this person's bereiche, not against the id alone. Otherwise a
+                // guessed id settles a conflict in a department they have nothing to do
+                // with, which the web route says in the same words.
+                if store.conflict_for_principal(&who.id, id)?.is_none() {
+                    return Err(Error::Config(format!(
+                        "{id}: no open conflict of yours has that id"
+                    )));
+                }
                 let stamp = now();
                 let done = store.resolve_conflict(id, *take_offered, &stamp)?;
                 if done {
                     let _ = store.record(
-                        "cli",
+                        &who.id,
                         "conflict.resolved",
                         serde_json::json!({
                             "id": id,
+                            "by": who.name,
                             "took": if *take_offered { "offered" } else { "held" },
                         }),
                         &stamp,
@@ -1347,10 +1364,15 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 )?;
                 return Ok(0);
             }
-            let list = match bereich {
-                Some(b) => store.open_conflicts(b)?,
-                None => store.all_open_conflicts()?,
-            };
+            // Always through the principal: `open_conflicts(bereich)` answers for a
+            // bereich, not for a person, and taking the bereich from an argument would let
+            // an editor name somebody else's.
+            let mine = store.conflicts_for_principal(&who.id)?;
+            let list: Vec<_> = mine
+                .into_iter()
+                .map(|(c, _held)| c)
+                .filter(|c| bereich.as_deref().is_none_or(|b| c.bereich == *b))
+                .collect();
             out.emit(&serde_json::json!(list), |v| {
                 let rows = v.as_array().cloned().unwrap_or_default();
                 if rows.is_empty() {
@@ -1796,7 +1818,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 hub::report::write_report(&store, out_dir, from.as_deref(), to.as_deref(), tool)?;
             out.emit(&report, |v| {
                 format!(
-                    "{}\nwritten to {}\n",
+                    "{}\nwritten to {}/summary.txt\n",
                     v["summary"].as_str().unwrap_or_default(),
                     v["directory"].as_str().unwrap_or_default()
                 )

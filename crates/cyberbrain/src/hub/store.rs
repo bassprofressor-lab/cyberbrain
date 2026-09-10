@@ -400,6 +400,16 @@ impl HubStore {
              VALUES (?, ?, ?, ?, ?)",
             params![id, name, token_hash(&token), now, GENESIS],
         ))?;
+        // In the chain, like a role grant, and for the same reason: a new device is a new
+        // pair of eyes on whatever it is later granted, and it used to appear out of
+        // nothing. Recorded inside the store rather than at the two call sites, so neither
+        // the web form nor `hub add` can be the one that forgets.
+        self.record(
+            "hub",
+            "device.registered",
+            serde_json::json!({ "device": device.id, "name": name }),
+            now,
+        )?;
         Ok((device, token))
     }
 
@@ -438,6 +448,16 @@ impl HubStore {
             "UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
             params![now, id],
         ))?;
+        // Only when something changed: revoking twice is not two events, and a log that
+        // says otherwise is a log somebody has to explain.
+        if n > 0 {
+            self.record(
+                "hub",
+                "device.revoked",
+                serde_json::json!({ "device": id }),
+                now,
+            )?;
+        }
         Ok(n > 0)
     }
 
@@ -1179,23 +1199,6 @@ impl HubStore {
         let mut out = Vec::new();
         for r in rows {
             out.push(ix(r)?);
-        }
-        Ok(out)
-    }
-
-    /// Every open conflict, across bereiche.
-    pub fn all_open_conflicts(&self) -> Result<Vec<NoteConflict>> {
-        let mut out = Vec::new();
-        let mut stmt = ix(self
-            .conn
-            .prepare("SELECT DISTINCT bereich FROM note_conflicts WHERE resolved_at IS NULL"))?;
-        let rows = ix(stmt.query_map([], |r| r.get::<_, String>(0)))?;
-        let mut bereiche = Vec::new();
-        for r in rows {
-            bereiche.push(ix(r)?);
-        }
-        for b in bereiche {
-            out.extend(self.open_conflicts(&b)?);
         }
         Ok(out)
     }

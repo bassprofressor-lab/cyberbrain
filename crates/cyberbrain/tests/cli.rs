@@ -1805,3 +1805,45 @@ fn a_write_that_cannot_be_recorded_leaves_no_trace_on_disk() {
     assert!(!text.contains("file is gone"), "{text}");
     assert!(!text.contains("not indexed"), "{text}");
 }
+
+/// `hub conflicts` needs an editor's credential, and says so instead of printing note text.
+///
+/// A conflict row carries `offered_body` — the whole note text that was turned away. The
+/// command used to list every open conflict of every bereich to whoever could open the file,
+/// while the web page at `/conflicts` checked the role and the bereich for the same data.
+///
+/// Shown against the defect first (SPEC §14.2): without the `principal_for` call the command
+/// exits 0 and prints "No open conflicts." on an empty hub, and every department's text on a
+/// hub that has some.
+#[test]
+fn hub_conflicts_without_a_credential_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("hub.db");
+
+    let out = Cb::bin()
+        .args(["hub", "conflicts", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(
+        !out.status.success(),
+        "listing conflicts without a credential has to be refused, not answered"
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("credential"), "{err}");
+    // The way out is named, because a refusal that does not say what would work sends
+    // somebody to the source.
+    assert!(err.contains("--as"), "{err}");
+
+    // Settling one is the same door.
+    let out = Cb::bin()
+        .args(["hub", "conflicts", "--resolve", "whatever", "--data"])
+        .arg(&data)
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("credential"),
+        "resolving must not be the unguarded half"
+    );
+}

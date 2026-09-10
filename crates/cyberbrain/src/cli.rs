@@ -661,17 +661,23 @@ pub enum HubCommand {
         bereich: String,
     },
     /// Notes two machines changed without seeing each other, and deciding which stands.
+    ///
+    /// An editor's work, and needs an editor's credential: a conflict is two note texts,
+    /// and `admin` is state only. There is no listing across every bereich, because there
+    /// is nobody whose job that would be.
     Conflicts {
-        /// One bereich, or all of them when omitted.
+        /// One of your bereiche, or all of yours when omitted.
         #[arg(long)]
         bereich: Option<String>,
-        /// Settle this one instead of listing.
+        /// Settle this one instead of listing. Has to be one of yours.
         #[arg(long, value_name = "ID")]
         resolve: Option<String>,
         /// With --resolve: take the version that was turned away. Without it the held
         /// version stands. Either way the conflict is closed with a record of which way.
         #[arg(long)]
         take_offered: bool,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
@@ -739,7 +745,12 @@ pub enum HubCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
-    /// Write a period as evidence: one verifiable file per device, plus a summary.
+    /// What the fleet did in a period, as state: one line per device with its row count
+    /// and whether its chain holds.
+    ///
+    /// Not the rows. Those are activity, and reaching them takes `hub request`, somebody
+    /// else's `hub approve`, and `hub disclose` — which writes the same verifiable files
+    /// this command used to write for anybody who ran it.
     Report {
         /// Directory to write into. Created if it does not exist.
         #[arg(long, value_name = "PATH")]
