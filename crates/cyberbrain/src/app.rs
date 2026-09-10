@@ -2876,6 +2876,7 @@ impl App {
         let mut written = Vec::new();
         let mut kept_local = Vec::new();
         let mut refused = Vec::new();
+        let mut flagged: Vec<String> = Vec::new();
         for n in &notes {
             let name = n["name"].as_str().unwrap_or_default().to_string();
             let ring_u8 = n["ring"].as_u64().unwrap_or(9) as u8;
@@ -2962,7 +2963,16 @@ impl App {
                     }),
                     dry_run: false,
                 };
-                self.write(req)?;
+                // `force` is what makes an unattended pull possible at all: a hold waits for
+                // an operator, and there is none at the other end of a timer. What it must
+                // not do is pass in silence — a note can arrive here carrying personal data
+                // that this machine's own gate would have stopped, and the person running
+                // the pull is the one who has to know it landed.
+                if let WriteOutcome::Written(w) = self.write(req)?
+                    && w.pii == cyberbrain_core::PiiState::Flagged
+                {
+                    flagged.push(name.clone());
+                }
             }
         }
 
@@ -3011,15 +3021,27 @@ impl App {
             "written": written,
             "kept_local": kept_local,
             "refused": refused,
+            "flagged": flagged,
             "erasures": erasures,
             "cursor_held_back": unfinished,
             "message": format!(
                 "{} note(s) taken, {} kept because this machine changed them since, {} \
-                 refused, {} erasure(s) reported{}",
+                 refused, {} erasure(s) reported{}{}",
                 written.len(),
                 kept_local.len(),
                 refused.len(),
                 erasures.len(),
+                if flagged.is_empty() {
+                    String::new()
+                } else {
+                    // Named, not counted: somebody has to be able to go and look at them.
+                    format!(
+                        ".\n{} note(s) arrived carrying personal data and were written \
+                         flagged, because a hold has nobody to ask at this end: {}",
+                        flagged.len(),
+                        flagged.join(", ")
+                    )
+                },
                 if unfinished {
                     ". The position was not advanced: an erasure is still waiting here, and \
                      it has to come round again"
