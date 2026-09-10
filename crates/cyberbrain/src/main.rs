@@ -400,11 +400,23 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             }
         }
         Command::Import {
+            suggest,
             plan,
             accept_pii,
             dry_run,
         } => {
-            let mut plan = import::load_plan(&plan)?;
+            if let Some(folder) = suggest {
+                let s = import::suggest::survey(&folder)?;
+                // The plan goes to stdout and the summary to stderr, so `> plan.toml` gives
+                // a file that runs and the person still reads what was guessed.
+                eprintln!("{}", import::suggest::summary(&s));
+                print!("{}", import::suggest::to_plan(&s));
+                return Ok(0);
+            }
+            let plan_path = plan.ok_or_else(|| {
+                Error::Config("import needs --plan <file>, or --suggest <folder>".into())
+            })?;
+            let mut plan = import::load_plan(&plan_path)?;
             if accept_pii {
                 plan.accept_pii = true;
             }

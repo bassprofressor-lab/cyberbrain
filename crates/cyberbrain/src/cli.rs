@@ -212,9 +212,17 @@ pub enum Command {
     /// knows what wrote it: every source-specific detail lives in the mapping file and none
     /// of it in the code.
     Import {
+        /// Look at a folder and print a plan for it instead of importing. Nothing is
+        /// written to the store: read the plan, fix the guesses, then run it with --plan.
+        ///
+        /// This is how a store stops being empty. Writing a mapping file means knowing the
+        /// shape of a tree you have not read, which is the first thing between a company
+        /// and a store with anything in it.
+        #[arg(long, value_name = "FOLDER", conflicts_with = "plan")]
+        suggest: Option<PathBuf>,
         /// TOML mapping file: what to take, what to skip, how to split, which ring.
-        #[arg(long)]
-        plan: PathBuf,
+        #[arg(long, required_unless_present = "suggest")]
+        plan: Option<PathBuf>,
         /// Accept every PII finding in bulk. Holding several hundred imports one at a time
         /// is unusable, and an unusable gate gets bypassed rather than obeyed.
         #[arg(long)]
