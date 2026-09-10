@@ -1251,6 +1251,39 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(0)
         }
 
+        HubCommand::Pull {
+            apply_erasures,
+            dry_run,
+        } => {
+            let app = App::open(store, Actor::Operator)?;
+            let (report, code) =
+                runtime()?.block_on(app.pull_notes_from_hub(*apply_erasures, *dry_run))?;
+            out.emit(&report, |v| {
+                let mut s = format!("{}\n", v["message"].as_str().unwrap_or_default());
+                for k in v["kept_local"].as_array().cloned().unwrap_or_default() {
+                    s.push_str(&format!(
+                        "  kept local: {} (here {}, offered {})\n",
+                        k["name"].as_str().unwrap_or_default(),
+                        k["local"].as_str().unwrap_or_default(),
+                        k["offered"].as_str().unwrap_or_default(),
+                    ));
+                }
+                for e in v["erasures"].as_array().cloned().unwrap_or_default() {
+                    if e["held_here"].as_bool().unwrap_or(false)
+                        && !e["removed"].as_bool().unwrap_or(false)
+                    {
+                        s.push_str(&format!(
+                            "  erased at the hub but still here: {} — `cyberbrain forget {}` \
+                             or pull again with --apply-erasures\n",
+                            e["name"].as_str().unwrap_or_default(),
+                            e["name"].as_str().unwrap_or_default(),
+                        ));
+                    }
+                }
+                s
+            })?;
+            Ok(code)
+        }
         HubCommand::Erase { name, bereich } => {
             let app = App::open(store, Actor::Operator)?;
             let (report, code) =

@@ -630,6 +630,20 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: PrincipalCommand,
     },
+    /// Take what the hub holds for this machine, in the bereiche it may receive.
+    ///
+    /// Timid on purpose: a note this machine changed since the last pull is reported and
+    /// left alone, never overwritten. Erasures are reported and only acted on with
+    /// --apply-erasures, because deleting a local file because a network message said so is
+    /// not something to do quietly.
+    Pull {
+        /// Also delete notes the hub says were erased.
+        #[arg(long)]
+        apply_erasures: bool,
+        /// Say what would happen and change nothing.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Ask the hub to erase its copy of a note (GDPR Art. 17). Works even where sharing has
     /// since been switched off: withdrawing is not the same act as sharing.
     Erase {

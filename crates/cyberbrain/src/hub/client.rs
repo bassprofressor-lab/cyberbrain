@@ -213,6 +213,64 @@ pub enum Reply {
     },
 }
 
+/// Where this store remembers how far it has pulled from a hub. Beside the token, keyed
+/// the same way, because it is the same relationship: one store, one hub, one position.
+pub fn cursor_path(hub_url: &str) -> Option<PathBuf> {
+    token_path(hub_url).map(|p| p.with_extension("cursor"))
+}
+
+pub fn read_cursor(hub_url: &str) -> Option<String> {
+    let p = cursor_path(hub_url)?;
+    std::fs::read_to_string(p)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+pub fn write_cursor(hub_url: &str, cursor: &str) -> Result<()> {
+    let Some(p) = cursor_path(hub_url) else {
+        return Ok(());
+    };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&p, cursor)
+        .map_err(|e| Error::Config(format!("cannot record the pull position: {e}")))
+}
+
+/// Ask the hub what there is. Changes nothing anywhere; the caller decides what to keep.
+pub async fn fetch_from_hub(
+    egress: &cyberbrain_policy::Egress,
+    actor: &cyberbrain_policy::Actor,
+    hub_url: &str,
+    token: &str,
+    pin: Option<&str>,
+    since: Option<&str>,
+) -> Result<serde_json::Value> {
+    let url = format!("{}/api/v1/fetch", hub_url.trim_end_matches('/'));
+    let pin = pin
+        .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
+        .transpose()?;
+    // NoteSync: what comes back is note content, and the register must say so for the
+    // direction that carries it, whichever way it flows.
+    let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::NoteSync, &url)?;
+    let payload = serde_json::json!({ "since": since }).to_string();
+    let resp = cyberbrain_policy::egress::transport::post_bearer(
+        &ticket, &url, token, &[], payload, pin,
+    )
+    .await?;
+    let body = String::from_utf8_lossy(&resp.body).to_string();
+    if resp.status != 200 {
+        return Err(Error::Config(format!(
+            "the hub refused the fetch ({}): {}",
+            resp.status,
+            body.trim()
+        )));
+    }
+    serde_json::from_str(&body)
+        .map_err(|e| Error::Config(format!("the hub's answer was not a fetch result: {e}")))
+}
+
 /// Ask the hub to erase one note. Its own egress purpose, and deliberately not behind
 /// `allow_note_sync`: switching sharing off must not also switch off the ability to
 /// withdraw what was shared while it was on.

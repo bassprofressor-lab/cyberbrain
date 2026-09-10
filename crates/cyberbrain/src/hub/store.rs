@@ -1003,6 +1003,68 @@ impl HubStore {
         Ok(out)
     }
 
+    /// Notes a device may fetch: everything held in the bereiche it holds a receive grant
+    /// in, changed since `since`. The filter is by grant and not by request, so asking for a
+    /// bereich you were not granted returns nothing rather than an error — a fetch is not a
+    /// place to learn which departments exist.
+    pub fn notes_for_device(
+        &self,
+        device: &str,
+        since: Option<&str>,
+    ) -> Result<Vec<SyncedNote>> {
+        let grants = self.grants_for_device(device)?;
+        let mut out = Vec::new();
+        for g in grants.iter().filter(|g| {
+            g.is_active()
+                && matches!(
+                    g.direction,
+                    super::sync_access::Direction::Receive | super::sync_access::Direction::Both
+                )
+        }) {
+            for n in self.synced_notes(&g.bereich)? {
+                if let Some(s) = since
+                    && n.updated.as_str() <= s
+                {
+                    continue;
+                }
+                out.push(n);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Erasures in the bereiche a device may receive. Sent alongside the notes so a puller
+    /// learns that something was withdrawn, not merely that it stopped being offered —
+    /// which are indistinguishable if only present notes travel.
+    pub fn erasures_for_device(
+        &self,
+        device: &str,
+        since: Option<&str>,
+    ) -> Result<Vec<(String, String, String)>> {
+        let grants = self.grants_for_device(device)?;
+        let mut out = Vec::new();
+        for g in grants.iter().filter(|g| {
+            g.is_active()
+                && matches!(
+                    g.direction,
+                    super::sync_access::Direction::Receive | super::sync_access::Direction::Both
+                )
+        }) {
+            let mut stmt = ix(self.conn.prepare(
+                "SELECT bereich, name, erased_at FROM erasures
+                 WHERE bereich = ? AND (?2 IS NULL OR erased_at > ?2)
+                 ORDER BY erased_at",
+            ))?;
+            let rows = ix(stmt.query_map(params![g.bereich, since], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            }))?;
+            for r in rows {
+                out.push(ix(r)?);
+            }
+        }
+        Ok(out)
+    }
+
     /// Conflicts nobody has decided yet. Open ones only: a resolved conflict is history and
     /// belongs in the log, not in a list of things waiting for a person.
     pub fn open_conflicts(&self, bereich: &str) -> Result<Vec<NoteConflict>> {

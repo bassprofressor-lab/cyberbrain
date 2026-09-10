@@ -240,6 +240,73 @@ pub struct RefusedNote {
     pub why: String,
 }
 
+/// What a device gets when it asks what is there for it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Fetched {
+    pub notes: Vec<store::SyncedNote>,
+    /// Notes withdrawn since `since`, as bereich, name and when. Carried alongside the
+    /// notes because "gone" and "not offered to you" look identical otherwise.
+    pub erased: Vec<ErasedElsewhere>,
+    /// The stamp to pass as `since` next time. The newest thing in this answer, so a puller
+    /// never has to reason about clocks.
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ErasedElsewhere {
+    pub bereich: String,
+    pub name: String,
+    pub erased_at: String,
+}
+
+/// Hand a device what it may read.
+///
+/// The hub decides what this device is allowed to see; the device decides what to do with
+/// it. Neither half is enough on its own, and keeping them apart is why a hub that is taken
+/// over still cannot write into anybody's store.
+pub fn fetch_notes(
+    hub: &store::HubStore,
+    token: Option<&str>,
+    since: Option<&str>,
+) -> std::result::Result<Fetched, Refusal> {
+    let token = token.ok_or_else(|| {
+        Refusal::NotAuthorised("no device token; send it as `Authorization: Bearer …`".into())
+    })?;
+    let device = hub
+        .device_by_token(token)
+        .map_err(|e| Refusal::NotAuthorised(format!("cannot check the token: {e}")))?
+        .ok_or_else(|| Refusal::NotAuthorised("unknown device token".into()))?;
+    if !device.is_active() {
+        return Err(Refusal::NotAuthorised(format!(
+            "device {} was revoked",
+            device.name
+        )));
+    }
+    let notes = hub
+        .notes_for_device(&device.id, since)
+        .map_err(|e| Refusal::BadBundle(format!("cannot read notes: {e}")))?;
+    let erased: Vec<ErasedElsewhere> = hub
+        .erasures_for_device(&device.id, since)
+        .map_err(|e| Refusal::BadBundle(format!("cannot read erasures: {e}")))?
+        .into_iter()
+        .map(|(bereich, name, erased_at)| ErasedElsewhere {
+            bereich,
+            name,
+            erased_at,
+        })
+        .collect();
+    let cursor = notes
+        .iter()
+        .map(|n| n.updated.clone())
+        .chain(erased.iter().map(|e| e.erased_at.clone()))
+        .max();
+    Ok(Fetched {
+        notes,
+        erased,
+        cursor,
+    })
+}
+
 /// A request to erase one note everywhere the hub holds it.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct EraseRequest {

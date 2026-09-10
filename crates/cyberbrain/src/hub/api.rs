@@ -49,6 +49,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/api/v1/ingest", post(post_ingest))
         .route("/api/v1/notes", post(post_notes))
         .route("/api/v1/erase", post(post_erase))
+        .route("/api/v1/fetch", post(post_fetch))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -495,6 +496,41 @@ fn client_version(headers: &HeaderMap) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+/// Hand a device the notes it may read. A GET, because it changes nothing here: the hub
+/// answers what it holds and the device decides what to keep.
+async fn post_fetch(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    // POST rather than GET only because this is the transport that is already gated,
+    // pinned and audited. It changes nothing on the hub.
+    let since = serde_json::from_str::<serde_json::Value>(&body)
+        .ok()
+        .and_then(|v| v.get("since").and_then(|s| s.as_str()).map(str::to_string));
+    let token = bearer(&headers);
+    let hub = match state.hub.lock() {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("hub record unavailable: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    match super::fetch_notes(&hub, token.as_deref(), since.as_deref()) {
+        Ok(f) => (StatusCode::OK, Json(json!(f))).into_response(),
+        Err(refusal) => {
+            let code = match &refusal {
+                Refusal::NotAuthorised(_) => StatusCode::UNAUTHORIZED,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (code, Json(json!({ "error": refusal.to_string() }))).into_response()
+        }
+    }
 }
 
 /// Erase one note. Not behind the same setting as delivery: withdrawing content must work

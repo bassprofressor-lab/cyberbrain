@@ -2511,3 +2511,129 @@ fn a_device_cannot_erase_a_bereich_it_has_no_grant_in() {
     let r = super::erase_note(&mut hub, Some(&token), &req, NOW);
     assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
 }
+
+// ---- the fetch path: what a device may take ----
+
+/// A device sees the bereiche it may receive and nothing else. Asking is not a way to learn
+/// which departments exist.
+#[test]
+fn a_fetch_returns_only_granted_bereiche() {
+    let hub = HubStore::in_memory().unwrap();
+    let (disp, disp_token) = hub.add_device("disposition-laptop", NOW).unwrap();
+    let (hr, hr_token) = hub.add_device("hr-laptop", NOW).unwrap();
+    hub.grant_bereich("g1", &disp.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    hub.grant_bereich("g2", &hr.id, "hr", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    for (b, n) in [("disposition", "tour"), ("hr", "gehalt")] {
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            b,
+            n,
+            2,
+            "knowledge",
+            "2026-09-10T09:00:00Z",
+            "fm",
+            "text",
+            None,
+            if b == "disposition" { &disp.id } else { &hr.id },
+            NOW,
+        )
+        .unwrap();
+    }
+
+    let f = super::fetch_notes(&hub, Some(&disp_token), None).unwrap();
+    assert_eq!(f.notes.len(), 1);
+    assert_eq!(f.notes[0].name, "tour");
+
+    let f2 = super::fetch_notes(&hub, Some(&hr_token), None).unwrap();
+    assert_eq!(f2.notes.len(), 1);
+    assert_eq!(f2.notes[0].name, "gehalt");
+}
+
+/// A send-only device delivers but does not read back.
+#[test]
+fn a_send_only_grant_does_not_let_anything_be_fetched() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, token) = hub.add_device("laptop", NOW).unwrap();
+    hub.grant_bereich("g1", &d.id, "disposition", Direction::Send, "r", "a", NOW)
+        .unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "tour",
+        2,
+        "knowledge",
+        "2026-09-10T09:00:00Z",
+        "fm",
+        "text",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
+    assert!(f.notes.is_empty(), "send-only must not read back");
+}
+
+/// Erasures travel with the notes. Without them "gone" and "not offered to you" look the
+/// same to a puller, and a machine keeps a copy of something that was withdrawn.
+#[test]
+fn a_fetch_reports_what_was_erased() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, token) = hub.add_device("laptop", NOW).unwrap();
+    hub.grant_bereich("g1", &d.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "weg",
+        2,
+        "knowledge",
+        "2026-09-10T09:00:00Z",
+        "fm",
+        "text",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    hub.erase_note("disposition", "weg", &d.id, "2026-09-10T15:00:00Z")
+        .unwrap();
+
+    let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
+    assert!(f.notes.is_empty(), "the note itself is gone");
+    assert_eq!(f.erased.len(), 1, "but the fact that it went must travel");
+    assert_eq!(f.erased[0].name, "weg");
+}
+
+/// The cursor is the newest thing in the answer, so a puller never reasons about clocks.
+#[test]
+fn the_cursor_covers_notes_and_erasures() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, token) = hub.add_device("laptop", NOW).unwrap();
+    hub.grant_bereich("g1", &d.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "a",
+        2,
+        "knowledge",
+        "2026-09-10T09:00:00Z",
+        "fm",
+        "text",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    hub.erase_note("disposition", "b", &d.id, "2026-09-10T17:00:00Z")
+        .unwrap();
+    let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
+    assert_eq!(f.cursor.as_deref(), Some("2026-09-10T17:00:00Z"));
+
+    // And asking again from there returns nothing new.
+    let f2 = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
+    assert!(f2.notes.is_empty() && f2.erased.is_empty());
+}

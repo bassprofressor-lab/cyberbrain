@@ -2729,6 +2729,138 @@ impl App {
         Some((bereich, note.front.name.clone(), hub))
     }
 
+    /// Take what the hub has for this machine.
+    ///
+    /// The hub decided what this device may see; this decides what to keep, and it is
+    /// deliberately timid. A note that changed here since the last pull is never overwritten
+    /// — it is reported and left alone. Erasures are reported too and only acted on when
+    /// asked, because deleting a local file on the strength of a network message is not
+    /// something to do quietly.
+    pub async fn pull_notes_from_hub(
+        &self,
+        apply_erasures: bool,
+        dry_run: bool,
+    ) -> Result<(serde_json::Value, i32)> {
+        use crate::hub::client;
+        let hub_url = self
+            .config
+            .hub
+            .url
+            .clone()
+            .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
+        let token = client::token_for(&hub_url)?;
+        let pin = client::pin_for(&hub_url);
+        let since = client::read_cursor(&hub_url);
+        let answer = client::fetch_from_hub(
+            self.policy.egress(),
+            &cyberbrain_policy::Actor::Operator,
+            &hub_url,
+            &token,
+            pin.as_deref(),
+            since.as_deref(),
+        )
+        .await?;
+
+        let notes = answer
+            .get("notes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let erased = answer
+            .get("erased")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut written = Vec::new();
+        let mut kept_local = Vec::new();
+        let mut refused = Vec::new();
+        for n in &notes {
+            let name = n["name"].as_str().unwrap_or_default().to_string();
+            let ring_u8 = n["ring"].as_u64().unwrap_or(9) as u8;
+            // The hub never holds rings 0 or 1, and this checks anyway. A store that trusts
+            // its hub about which ring something is has handed over its invariants.
+            if !(2..=4).contains(&ring_u8) {
+                refused.push(serde_json::json!({
+                    "name": name,
+                    "why": format!("ring {ring_u8} may not arrive over the network"),
+                }));
+                continue;
+            }
+            let incoming_updated = n["updated"].as_str().unwrap_or_default();
+            if let Ok(local) = self.store.read(&name) {
+                let local_updated = local.front.updated.to_string();
+                if local_updated.as_str() > incoming_updated {
+                    kept_local.push(serde_json::json!({
+                        "name": name,
+                        "local": local_updated,
+                        "offered": incoming_updated,
+                    }));
+                    continue;
+                }
+                if local_updated == incoming_updated {
+                    continue;
+                }
+            }
+            written.push(serde_json::json!({ "name": name, "updated": incoming_updated }));
+            if !dry_run {
+                let req = WriteRequest {
+                    ring: Ring::try_from(ring_u8)?,
+                    kind: serde_json::from_value(n["kind"].clone())
+                        .unwrap_or(cyberbrain_core::NoteKind::Knowledge),
+                    name: name.clone(),
+                    body: n["body"].as_str().unwrap_or_default().to_string(),
+                    tags: Vec::new(),
+                    bereich: n["bereich"].as_str().map(str::to_string),
+                    retention: None,
+                    force: true,
+                    choice: None,
+                    expected_updated: None,
+                    dry_run: false,
+                };
+                self.write(req)?;
+            }
+        }
+
+        let mut erasures = Vec::new();
+        for e in &erased {
+            let name = e["name"].as_str().unwrap_or_default().to_string();
+            let exists = self.store.read(&name).is_ok();
+            erasures.push(serde_json::json!({
+                "name": name,
+                "erased_at": e["erased_at"],
+                "held_here": exists,
+                "removed": apply_erasures && exists && !dry_run,
+            }));
+            if apply_erasures && exists && !dry_run {
+                // The same path `cyberbrain forget` takes, so a distributed erasure is not a
+                // second, weaker way of deleting things.
+                self.forget(&name, false)?;
+            }
+        }
+
+        if let Some(c) = answer.get("cursor").and_then(|v| v.as_str())
+            && !dry_run
+        {
+            client::write_cursor(&hub_url, c)?;
+        }
+
+        let v = serde_json::json!({
+            "hub": hub_url,
+            "since": since,
+            "written": written,
+            "kept_local": kept_local,
+            "refused": refused,
+            "erasures": erasures,
+            "message": format!(
+                "{} note(s) taken, {} kept because this machine changed them since, {} \
+                 refused, {} erasure(s) reported",
+                written.len(), kept_local.len(), refused.len(), erasures.len()
+            ),
+        });
+        Ok((v, 0))
+    }
+
     /// Ask the hub to erase its copy.
     pub async fn erase_at_hub(
         &self,
