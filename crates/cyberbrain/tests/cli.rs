@@ -757,12 +757,19 @@ fn policy_subcommands_work_over_a_real_store() {
     ]);
     cb.write("3", "fresh-session", "gamma");
 
-    // Egress register: the four registered purposes, each enabled or disabled with a
+    // Egress register: the five registered purposes, each enabled or disabled with a
     // reason. An unenrolled store lists audit sync as disabled rather than hiding it, and
     // the terminal is listed as a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 4);
+    assert_eq!(entries.len(), 5);
+    // Note sync is listed and off: an unenrolled store is not one that shares notes.
+    let note_sync = entries
+        .iter()
+        .find(|x| x["purpose"] == "note-sync")
+        .expect("note sync is in the register");
+    assert_eq!(note_sync["enabled"], false);
+    assert_eq!(note_sync["carries_note_content"], true);
     let terminal = entries
         .iter()
         .find(|x| x["purpose"] == "terminal")

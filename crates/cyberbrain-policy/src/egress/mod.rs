@@ -43,10 +43,11 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 4] = [
+pub const PURPOSES: [EgressPurpose; 5] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
+    EgressPurpose::NoteSync,
     EgressPurpose::Terminal,
 ];
 
@@ -77,6 +78,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::ModelDownload => "model-download",
         EgressPurpose::LocalInference => "local-inference",
         EgressPurpose::AuditSync => "audit-sync",
+        EgressPurpose::NoteSync => "note-sync",
     }
 }
 
@@ -297,6 +299,81 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 state,
             }
         }
+            EgressPurpose::NoteSync => {
+                // Stricter than AuditSync by one condition, and that condition is the point:
+                // being enrolled with a hub is a decision about evidence, sharing notes is a
+                // decision about content. An upgrade must not turn the first into the second.
+                let (enabled, state) = match (&cfg.hub_endpoint, cfg.allow_note_sync) {
+                    (None, _) => (
+                        false,
+                        "disabled: this store is not enrolled with a hub".to_string(),
+                    ),
+                    (Some(_), false) => (
+                        false,
+                        "disabled: allow_note_sync is false; enrolment alone does not share notes"
+                            .to_string(),
+                    ),
+                    (Some(url), true) => match Destination::parse(url) {
+                        Err(e) => (false, format!("disabled: hub endpoint is not usable: {e}")),
+                        Ok(d) => match d.literal_locality() {
+                            Some(Locality::Public) if !cfg.allow_public_hub => (
+                                false,
+                                format!(
+                                    "disabled: {} is a public address and allow_public_hub is false",
+                                    d.host
+                                ),
+                            ),
+                            Some(Locality::Public) => (
+                                true,
+                                format!(
+                                    concat!(
+                                        "enabled WITH allow_public_hub: {} is public; ",
+                                        "note content leaves this network"
+                                    ),
+                                    url
+                                ),
+                            ),
+                            Some(Locality::Overlay) if !cfg.allow_overlay_network => (
+                                false,
+                                format!(
+                                    concat!(
+                                        "disabled: {} is in 100.64.0.0/10 and ",
+                                        "allow_overlay_network is false"
+                                    ),
+                                    d.host
+                                ),
+                            ),
+                            Some(Locality::NotUnicast) => (
+                                false,
+                                format!("disabled: {} is not a unicast address", d.host),
+                            ),
+                            _ => (true, format!("enabled: delivering notes to {url}")),
+                        },
+                    },
+                };
+                EgressEntry {
+                    purpose,
+                    destination: format!(
+                        concat!(
+                            "the hub this store was enrolled with ({}); DNS lookup of its ",
+                            "hostname via the OS resolver if it is not an IP literal"
+                        ),
+                        cfg.hub_endpoint.as_deref().unwrap_or("none configured")
+                    ),
+                    data: concat!(
+                        "HTTP POST of whole notes: frontmatter and body, for the bereiche this ",
+                        "device was granted. Never rings 0 or 1, never a note without a bereich"
+                    ),
+                    carries_note_content: true,
+                    requires: concat!(
+                        "the store was enrolled with a hub AND allow_note_sync is set; the hub ",
+                        "is loopback or private-range unless allow_public_hub is set"
+                    ),
+                    permitted_by: ALL_PROFILES,
+                    enabled,
+                    state,
+                }
+            }
     }
 }
 
@@ -712,6 +789,31 @@ impl Egress {
                     return Err("inference requests do not follow redirects".into());
                 }
             }
+            EgressPurpose::NoteSync => {
+                if via.is_some() {
+                    return Err("note deliveries do not follow redirects".into());
+                }
+                // Checked here and not only in the register, because the register describes
+                // and this decides. A setting that only shows up in a description is the
+                // kind of guard that reads like one and permits everything.
+                if !self.cfg.allow_note_sync {
+                    return Err(
+                        "allow_note_sync is false: this store shares audit rows, not notes".into(),
+                    );
+                }
+                let Some(hub) = &self.cfg.hub_endpoint else {
+                    return Err("this store is not enrolled with a hub".into());
+                };
+                let configured = Destination::parse(hub)
+                    .map_err(|e| format!("configured hub endpoint is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the hub this store is enrolled with ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
             EgressPurpose::AuditSync => {
                 if via.is_some() {
                     return Err("audit deliveries do not follow redirects".into());
@@ -1040,6 +1142,7 @@ mod tests {
                 "model-download",
                 "local-inference",
                 "audit-sync",
+                "note-sync",
                 "terminal"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
@@ -1050,6 +1153,7 @@ mod tests {
                 EgressPurpose::ModelDownload
                 | EgressPurpose::LocalInference
                 | EgressPurpose::AuditSync
+                | EgressPurpose::NoteSync
                 | EgressPurpose::Terminal => {}
             }
         }
@@ -1135,6 +1239,66 @@ mod tests {
         assert!(
             !register(&c)[0].enabled,
             "plaintext model source is not enabled"
+        );
+    }
+
+    /// The reason `NoteSync` is a separate purpose with its own setting. A store enrolled
+    /// with a hub delivers audit rows; it must not begin delivering note content because a
+    /// new version knows how to. Calibrated: flip `allow_note_sync` and it turns on.
+    #[test]
+    fn enrolment_alone_does_not_share_notes() {
+        let enrolled = PolicyConfig {
+            hub_endpoint: Some("https://hub.example.internal/".into()),
+            ..cfg()
+        };
+        let reg = register(&enrolled);
+        let note_sync = reg
+            .iter()
+            .find(|e| e.purpose == EgressPurpose::NoteSync)
+            .expect("NoteSync is in the register");
+        assert!(
+            !note_sync.enabled,
+            "a store enrolled for audit must not share notes: {}",
+            note_sync.state
+        );
+        assert!(note_sync.state.contains("allow_note_sync"));
+
+        // Audit rows, on the same config, do travel. The two are independent.
+        let audit = reg
+            .iter()
+            .find(|e| e.purpose == EgressPurpose::AuditSync)
+            .unwrap();
+        assert!(audit.enabled, "audit sync should be on: {}", audit.state);
+
+        // And with the setting, note sync comes on.
+        let sharing = PolicyConfig {
+            allow_note_sync: true,
+            ..enrolled
+        };
+        let on = register(&sharing)
+            .into_iter()
+            .find(|e| e.purpose == EgressPurpose::NoteSync)
+            .unwrap();
+        assert!(on.enabled, "{}", on.state);
+    }
+
+    /// The register's own claim about each path. `carries_note_content` is what a reader
+    /// checks first, so the two hub paths must not agree about it.
+    #[test]
+    fn only_note_sync_admits_to_carrying_notes_to_the_hub() {
+        let reg = register(&PolicyConfig {
+            hub_endpoint: Some("https://hub.example.internal/".into()),
+            allow_note_sync: true,
+            ..cfg()
+        });
+        let by = |p: EgressPurpose| reg.iter().find(|e| e.purpose == p).unwrap();
+        assert!(!by(EgressPurpose::AuditSync).carries_note_content);
+        assert!(by(EgressPurpose::NoteSync).carries_note_content);
+        // The old promise still reads true of the path it was made about.
+        assert!(
+            by(EgressPurpose::AuditSync)
+                .data
+                .contains("What a note said is not in them")
         );
     }
 

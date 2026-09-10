@@ -1135,7 +1135,7 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
         "the AI Act line is the one a deployer comes for"
     );
 
-    // Egress register: the spec's two purposes and nothing else.
+    // Egress register: exactly the spec's purposes and nothing else.
     let e = fx.ok("/api/v1/policy/egress").await;
     assert_eq!(e["profile"], "eu");
     assert!(e["since"].is_string());
@@ -1144,8 +1144,8 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     let paths = e["paths"].as_array().unwrap();
     assert_eq!(
         paths.len(),
-        4,
-        "model download, local inference, audit sync, terminal"
+        5,
+        "model download, local inference, audit sync, note sync, terminal"
     );
     assert_eq!(paths[0]["purpose"], "model-download");
     // Audit sync is in the register whether or not the store is enrolled, and says which

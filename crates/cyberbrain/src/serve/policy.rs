@@ -84,7 +84,7 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
                     .clone()
                     .unwrap_or_else(|| "none configured".into()),
                 EgressPurpose::LocalInference => cfg.inference.base_url.clone(),
-                EgressPurpose::AuditSync => {
+                EgressPurpose::AuditSync | EgressPurpose::NoteSync => {
                     cfg.hub.url.clone().unwrap_or_else(|| "not enrolled".into())
                 }
                 // No configured destination, and that is the fact about it: where a

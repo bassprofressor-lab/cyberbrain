@@ -227,8 +227,17 @@ pub enum EgressPurpose {
     /// A request to an inference endpoint on loopback or a private range.
     LocalInference,
     /// Audit rows to a collecting hub, so a team can hold its own compliance evidence in
-    /// one place. Rows only: the request carries what happened, never what a note said.
+    /// one place. Rows only: this request carries what happened, never what a note said.
+    /// That remains true of `AuditSync` itself; note content travels, if at all, under
+    /// `NoteSync` below, which is a separate entry precisely so this one keeps its meaning.
     AuditSync,
+    /// Note content to the hub a store is enrolled with, so a team can share what it knows
+    /// and not only what it did. Off unless `allow_note_sync` is set: a store that was
+    /// merely enrolled for audit must not begin shipping notes because it was upgraded.
+    ///
+    /// Rings 0 and 1 are never eligible, and that is a property of the code rather than of
+    /// this setting (`hub::sync_access`). A note without a bereich is never eligible either.
+    NoteSync,
     /// A program the user started in a terminal this program opened for them (SPEC §8.3).
     ///
     /// Listed rather than gated, and that distinction is the point. This is the one entry
@@ -255,6 +264,10 @@ impl EgressPurpose {
             EgressPurpose::LocalInference => {
                 "sends note text to the configured inference endpoint on your own network"
             }
+            EgressPurpose::NoteSync => concat!(
+                "sends note content to the hub you enrolled with, for the bereiche this ",
+                "device was granted; never rings 0 or 1, and never a note without a bereich"
+            ),
         }
     }
 }

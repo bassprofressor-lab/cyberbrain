@@ -46,6 +46,11 @@ pub struct PolicyConfig {
     /// internet is a transfer off the premises, and it should take a deliberate act.
     pub allow_public_hub: bool,
 
+    /// Whether note content may travel to the hub at all. Separate from `hub_endpoint`, and
+    /// off by default: enrolling a store for audit is a decision about evidence, sharing its
+    /// notes is a decision about content, and one must not silently become the other.
+    pub allow_note_sync: bool,
+
     /// Where model artefacts come from. `None` means `ModelDownload` is disabled: there is
     /// nowhere registered to fetch from.
     pub model_source: Option<String>,
@@ -64,6 +69,7 @@ impl Default for PolicyConfig {
             allow_overlay_network: false,
             hub_endpoint: None,
             allow_public_hub: false,
+            allow_note_sync: false,
             model_source: None,
             model_download_consent: false,
         }
