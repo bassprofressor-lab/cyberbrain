@@ -71,6 +71,27 @@ fn lapsed() -> LicenceState {
     }
 }
 
+/// A grant that is in force: written by the operator, then countersigned by somebody else.
+///
+/// Two steps in the product and one line here, because these tests are about what moves
+/// once a bereich is shared and not about who agreed to share it. That agreement has its
+/// own tests, in `sync_access` and in `a_grant_takes_two_people` below.
+fn grant_in_force(hub: &HubStore, id: &str, device: &str, bereich: &str, dir: Direction) {
+    hub.grant_bereich(id, device, bereich, dir, "r", "admin-1", NOW)
+        .unwrap();
+    let (council, _) = hub
+        .add_principal(
+            &format!("Rat für {id}"),
+            super::access::Role::Countersigner,
+            NOW,
+        )
+        .unwrap();
+    assert_eq!(
+        hub.countersign_grant(id, &council, NOW).unwrap(),
+        super::store::CountersignOutcome::Signed
+    );
+}
+
 #[test]
 fn a_first_delivery_is_taken_and_moves_the_anchor() {
     let (mut hub, _, token) = hub_with_device();
@@ -2243,16 +2264,7 @@ fn deliver(notes: Vec<serde_json::Value>) -> String {
 #[test]
 fn the_hub_refuses_rings_0_and_1_even_when_offered() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "Schichtuebergabe",
-        "admin",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
 
     let body = deliver(vec![
         wire(
@@ -2296,16 +2308,7 @@ fn the_hub_refuses_rings_0_and_1_even_when_offered() {
 #[test]
 fn a_device_cannot_deliver_a_bereich_it_was_not_granted() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "Schichtuebergabe",
-        "admin",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
 
     let body = deliver(vec![
         wire("tour", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
@@ -2330,16 +2333,7 @@ fn a_device_cannot_deliver_a_bereich_it_was_not_granted() {
 #[test]
 fn one_bad_note_does_not_strand_the_batch() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "Schichtuebergabe",
-        "admin",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let body = deliver(vec![
         wire("a", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
         wire("verboten", 0, Some("disposition"), "2026-09-10T10:00:00Z"),
@@ -2356,16 +2350,7 @@ fn one_bad_note_does_not_strand_the_batch() {
 #[test]
 fn an_older_delivery_does_not_overwrite_a_newer_note() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "Schichtuebergabe",
-        "admin",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let newer = deliver(vec![wire(
         "regel",
         2,
@@ -2402,16 +2387,7 @@ fn an_older_delivery_does_not_overwrite_a_newer_note() {
 #[test]
 fn concurrent_edits_are_kept_and_named_not_silently_dropped() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
 
     // The version both machines started from.
     let base = deliver(vec![wire_from(
@@ -2465,16 +2441,7 @@ fn concurrent_edits_are_kept_and_named_not_silently_dropped() {
 #[test]
 fn a_resend_is_not_a_conflict() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let n = deliver(vec![wire_from(
         "x",
         "disposition",
@@ -2493,16 +2460,7 @@ fn a_resend_is_not_a_conflict() {
 #[test]
 fn a_revoked_device_delivers_no_notes() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "admin",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     hub.revoke(&device.id, NOW).unwrap();
     let body = deliver(vec![wire(
         "x",
@@ -2522,16 +2480,7 @@ fn a_revoked_device_delivers_no_notes() {
 #[test]
 fn erasing_a_note_also_clears_the_text_held_in_its_conflicts() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
 
     // A note, then a concurrent change so a conflict row exists with the text in it.
     let base = deliver(vec![wire_from(
@@ -2568,16 +2517,7 @@ fn erasing_a_note_also_clears_the_text_held_in_its_conflicts() {
 #[test]
 fn the_tombstone_carries_no_text() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let secret = "Streng vertraulicher Satz, der nirgends bleiben darf.";
     let n = deliver(vec![wire_from(
         "geheim",
@@ -2616,16 +2556,7 @@ fn the_tombstone_carries_no_text() {
 #[test]
 fn an_erased_note_cannot_be_re_offered() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let n = deliver(vec![wire_from(
         "weg",
         "disposition",
@@ -2649,16 +2580,7 @@ fn an_erased_note_cannot_be_re_offered() {
 #[test]
 fn a_receive_only_device_may_still_erase() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Receive,
-        "nur lesen",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Receive);
     let req = serde_json::json!({ "bereich": "disposition", "name": "irgendwas" }).to_string();
     assert!(super::erase_note(&mut hub, Some(&token), &req, NOW).is_ok());
 }
@@ -2667,16 +2589,7 @@ fn a_receive_only_device_may_still_erase() {
 #[test]
 fn a_device_cannot_erase_a_bereich_it_has_no_grant_in() {
     let (mut hub, device, token) = hub_with_device();
-    hub.grant_bereich(
-        "g1",
-        &device.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
     let req = serde_json::json!({ "bereich": "hr", "name": "gehalt" }).to_string();
     let r = super::erase_note(&mut hub, Some(&token), &req, NOW);
     assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
@@ -2691,18 +2604,8 @@ fn a_fetch_returns_only_granted_bereiche() {
     let hub = HubStore::in_memory().unwrap();
     let (disp, disp_token) = hub.add_device("disposition-laptop", NOW).unwrap();
     let (hr, hr_token) = hub.add_device("hr-laptop", NOW).unwrap();
-    hub.grant_bereich(
-        "g1",
-        &disp.id,
-        "disposition",
-        Direction::Both,
-        "r",
-        "a",
-        NOW,
-    )
-    .unwrap();
-    hub.grant_bereich("g2", &hr.id, "hr", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    grant_in_force(&hub, "g1", &disp.id, "disposition", Direction::Both);
+    grant_in_force(&hub, "g2", &hr.id, "hr", Direction::Both);
     for (b, n) in [("disposition", "tour"), ("hr", "gehalt")] {
         hub.offer_synced_note(
             "01ARZ3NDEKTSV4RRFFQ69G5FAV",
@@ -2734,8 +2637,7 @@ fn a_fetch_returns_only_granted_bereiche() {
 fn a_send_only_grant_does_not_let_anything_be_fetched() {
     let hub = HubStore::in_memory().unwrap();
     let (d, token) = hub.add_device("laptop", NOW).unwrap();
-    hub.grant_bereich("g1", &d.id, "disposition", Direction::Send, "r", "a", NOW)
-        .unwrap();
+    grant_in_force(&hub, "g1", &d.id, "disposition", Direction::Send);
     hub.offer_synced_note(
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "disposition",
@@ -2760,8 +2662,7 @@ fn a_send_only_grant_does_not_let_anything_be_fetched() {
 fn a_fetch_reports_what_was_erased() {
     let hub = HubStore::in_memory().unwrap();
     let (d, token) = hub.add_device("laptop", NOW).unwrap();
-    hub.grant_bereich("g1", &d.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    grant_in_force(&hub, "g1", &d.id, "disposition", Direction::Both);
     hub.offer_synced_note(
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "disposition",
@@ -2790,8 +2691,7 @@ fn a_fetch_reports_what_was_erased() {
 fn the_cursor_covers_notes_and_erasures() {
     let hub = HubStore::in_memory().unwrap();
     let (d, token) = hub.add_device("laptop", NOW).unwrap();
-    hub.grant_bereich("g1", &d.id, "disposition", Direction::Both, "r", "a", NOW)
-        .unwrap();
+    grant_in_force(&hub, "g1", &d.id, "disposition", Direction::Both);
     hub.offer_synced_note(
         "01ARZ3NDEKTSV4RRFFQ69G5FAV",
         "disposition",
@@ -2826,8 +2726,7 @@ fn an_editor_is_offered_the_conflicts_of_their_own_bereiche_only() {
     let hub = HubStore::in_memory().unwrap();
     let (d, _t) = hub.add_device("laptop", NOW).unwrap();
     for b in ["disposition", "hr"] {
-        hub.grant_bereich(&format!("g-{b}"), &d.id, b, Direction::Both, "r", "a", NOW)
-            .unwrap();
+        grant_in_force(&hub, &format!("g-{b}"), &d.id, b, Direction::Both);
         // Held, then a second machine offers a different text from an older base: that is
         // what a conflict is, and it is the row that carries the turned-away note.
         hub.offer_synced_note(
@@ -2930,4 +2829,108 @@ fn a_device_arriving_and_leaving_is_in_the_hubs_own_log() {
 
     // And the chain still holds over the rows we just added.
     assert!(hub.verify_hub_chain().is_ok());
+}
+
+/// The operator cannot route note text to a machine of their own on their own.
+///
+/// This is the whole reason for the countersignature. Whoever holds the hub password
+/// registers devices and reads their tokens out of the invitation files, so if that same
+/// person could point a bereich at one, `access.rs`'s "admin is state only" would be a
+/// house rule and every note text on the hub would be one form submission away. The walk
+/// below is exactly that attempt, in the order somebody would take it.
+///
+/// Calibrated against the state before: with `is_effective` back to `is_active`, the fetch
+/// after the grant returns the note and the first assertion fails.
+#[test]
+fn a_grant_takes_two_people_before_a_note_moves() {
+    let hub = HubStore::in_memory().unwrap();
+    // Somebody else's machine, delivering into a bereich.
+    let (theirs, their_token) = hub.add_device("laptop-disposition", NOW).unwrap();
+    hub.grant_bereich(
+        "g-send",
+        &theirs.id,
+        "disposition",
+        Direction::Send,
+        "r",
+        "admin-1",
+        NOW,
+    )
+    .unwrap();
+    let (council, _) = hub
+        .add_principal("Betriebsrat", super::access::Role::Countersigner, NOW)
+        .unwrap();
+    hub.countersign_grant("g-send", &council, NOW).unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "tourenplan",
+        2,
+        "knowledge",
+        "2026-09-10T09:00:00Z",
+        "fm",
+        "Wer am Freitag fährt und warum",
+        None,
+        &theirs.id,
+        NOW,
+    )
+    .unwrap();
+
+    // Now the operator, alone: a device of their own, and a grant to read that bereich.
+    let (mine, my_token) = hub.add_device("laptop-des-betreibers", NOW).unwrap();
+    hub.grant_bereich(
+        "g-mine",
+        &mine.id,
+        "disposition",
+        Direction::Receive,
+        "weil ich es kann",
+        "admin-1",
+        NOW,
+    )
+    .unwrap();
+
+    let f = super::fetch_notes(&hub, Some(&my_token), None).unwrap();
+    assert!(
+        f.notes.is_empty(),
+        "the operator wrote their own grant and read the department's notes with it: {:?}",
+        f.notes
+    );
+
+    // The other machine still works, so this is the countersignature biting and not the
+    // fetch being broken.
+    let f = super::fetch_notes(&hub, Some(&their_token), None).unwrap();
+    assert!(f.notes.is_empty(), "send-only reads nothing back either");
+    let denied = super::sync_access::may_move(
+        &mine.id,
+        cyberbrain_core::Ring::Knowledge,
+        Some("disposition"),
+        Direction::Receive,
+        &hub.grants_for_device(&mine.id).unwrap(),
+    )
+    .expect_err("an unsigned grant moves nothing");
+    assert!(
+        matches!(
+            denied,
+            super::sync_access::SyncDenied::AwaitingCountersignature { .. }
+        ),
+        "{denied:?}"
+    );
+
+    // And the operator cannot sign it either, even holding a countersigner credential:
+    // two signatures from one hand are one signature.
+    let (op, _) = hub
+        .add_principal("admin-1", super::access::Role::Countersigner, NOW)
+        .unwrap();
+    let op = super::access::Principal {
+        id: "admin-1".into(),
+        ..op
+    };
+    assert_eq!(
+        hub.countersign_grant("g-mine", &op, NOW).unwrap(),
+        super::store::CountersignOutcome::SamePerson
+    );
+
+    // Somebody else can, and then it works — the rule is two people, not "never".
+    hub.countersign_grant("g-mine", &council, NOW).unwrap();
+    let f = super::fetch_notes(&hub, Some(&my_token), None).unwrap();
+    assert_eq!(f.notes.len(), 1, "once two people agreed, it moves");
 }

@@ -347,7 +347,7 @@ pub fn erase_note(
         .map_err(|e| Refusal::BadBundle(format!("cannot read this device's grants: {e}")))?;
     let allowed = grants
         .iter()
-        .any(|g| g.is_active() && g.bereich == req.bereich);
+        .any(|g| g.is_effective() && g.bereich == req.bereich);
     if !allowed {
         return Err(Refusal::NotAuthorised(format!(
             "device {} has no grant in bereich {}",

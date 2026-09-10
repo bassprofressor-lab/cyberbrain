@@ -847,6 +847,19 @@ pub enum GrantCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+    /// Countersign a grant so it takes effect. Needs a countersigner, and not the one who
+    /// wrote it.
+    ///
+    /// A bereich takes two people on purpose: whoever runs the hub can register a device
+    /// and read its token out of the invitation file, so if that same person could point a
+    /// bereich at it, every note text on the hub would be one form away from them.
+    Approve {
+        id: String,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// What has been granted, to whom, and what was withdrawn.
     List {
         /// One device, or all of them when omitted.

@@ -292,13 +292,34 @@ fn grants_card(v: &View) -> String {
     let mut rows = String::new();
     for g in &v.grants {
         let live = g.is_active();
+        // Three states, not two. A grant waiting for a countersignature looked exactly like
+        // one that was working, which sent the operator looking for the fault in the client
+        // — the one place it was not.
+        let state = if !live {
+            "withdrawn"
+        } else if g.is_effective() {
+            "in force"
+        } else {
+            "waiting for a countersignature"
+        };
         rows.push_str(&format!(
-            "<tr class={cls}><td>{device}<td>{bereich}<td>{dir}<td>{reason}<td>{action}</tr>",
-            cls = if live { "ok" } else { "off" },
+            "<tr class={cls}><td>{device}<td>{bereich}<td>{dir}<td>{reason}<td>{state}\
+             <td>{action}</tr>",
+            cls = if g.is_effective() {
+                "ok"
+            } else if live {
+                "pending"
+            } else {
+                "off"
+            },
             device = esc(&g.device),
             bereich = esc(&g.bereich),
             dir = esc(g.direction.as_str()),
             reason = esc(&g.reason),
+            state = match &g.approved_by {
+                Some(by) => format!("in force, countersigned by {}", esc(by)),
+                None => state.to_string(),
+            },
             action = if live {
                 format!(
                     "<form method=post action=\"/grants/{}/revoke\">\
@@ -312,7 +333,7 @@ fn grants_card(v: &View) -> String {
     }
     format!(
         "<section class=card><h2>Sharing</h2>\
-         <table><thead><tr><th>Device<th>Bereich<th>Direction<th>Reason<th></tr></thead>\
+         <table><thead><tr><th>Device<th>Bereich<th>Direction<th>Reason<th>State<th></tr></thead>\
          <tbody>{rows}</tbody></table>{form}</section>"
     )
 }
@@ -466,7 +487,10 @@ fn fleet_card(v: &View) -> String {
     )
 }
 
-const HEAD: &str = r#"<title>Cyberbrain Hub</title>
+const HEAD: &str = r#"<!doctype html>
+<meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1">
+<title>Cyberbrain Hub</title>
 <style>
 :root{--bg:#f7f7f5;--card:#fff;--ink:#1a1a18;--dim:#6b6b64;--line:#e2e2dc;
       --ok:#1c6b3f;--okbg:#e3f2e8;--bad:#8a3312;--badbg:#fbe9e1;--off:#8a8a80}
@@ -494,6 +518,15 @@ th{text-align:left;font-weight:600;color:var(--dim);font-size:.78rem;text-transf
 td{padding:.42rem .5rem .42rem 0;border-bottom:1px solid var(--line);vertical-align:top}
 .num{font-variant-numeric:tabular-nums;text-align:right;padding-right:1.2rem}
 tr.bad td:last-child{color:var(--bad)} tr.off td{color:var(--off)}
+tr.pending td{color:var(--dim)} tr.pending td:nth-last-child(2){color:var(--bad)}
+/* The conflicts page: two versions beside each other on a desk, stacked on a phone. Its
+   markup used these three and the stylesheet had none of them, so the comparison the page
+   exists for was drawn one under the other and the note texts ran off the card. */
+.side-by-side{display:grid;grid-template-columns:1fr 1fr;gap:1rem}
+@media (max-width:720px){.side-by-side{grid-template-columns:1fr}}
+.muted{color:var(--dim);font-size:.85rem}
+pre{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);border:1px solid var(--line);
+    border-radius:6px;padding:.6rem;font:12.5px ui-monospace,Consolas,monospace;margin:.3rem 0}
 textarea{width:100%;font:13px ui-monospace,Consolas,monospace;padding:.5rem;
          border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink)}
 button{margin-top:.6rem;font:inherit;font-weight:600;padding:.45rem 1rem;border-radius:6px;

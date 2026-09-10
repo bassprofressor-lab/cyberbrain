@@ -139,6 +139,20 @@ pub(super) fn explain(e: rusqlite::Error) -> String {
     format!("{text} — {hint}")
 }
 
+/// What came of a countersignature attempt. Each one is a different sentence to the person
+/// holding the credential, so they are not collapsed into a bool.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CountersignOutcome {
+    Signed,
+    Unknown,
+    Withdrawn,
+    AlreadySigned {
+        by: String,
+    },
+    /// The person who wrote the grant is the person trying to sign it.
+    SamePerson,
+}
+
 impl HubStore {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent()
@@ -273,6 +287,10 @@ impl HubStore {
                  reason     TEXT NOT NULL,
                  granted_by TEXT NOT NULL,
                  created_at TEXT NOT NULL,
+                 -- Both NULL until a second person signs. A grant in that state is written
+                 -- down and moves nothing; see `sync_access::BereichGrant::is_effective`.
+                 approved_by TEXT,
+                 approved_at TEXT,
                  revoked_at TEXT
              );
              CREATE INDEX IF NOT EXISTS bereich_grants_device
@@ -349,32 +367,57 @@ impl HubStore {
     /// query that names a new one. This record is meant to hold a decade of evidence;
     /// upgrading the program must not mean starting it over.
     fn add_missing_columns(&self) -> Result<()> {
-        let mut have = std::collections::BTreeSet::new();
-        {
-            let mut stmt = ix(self.conn.prepare("PRAGMA table_info(devices)"))?;
-            let names = ix(stmt.query_map([], |r| r.get::<_, String>(1)))?;
-            for n in names {
-                have.insert(ix(n)?);
-            }
-        }
         // Only ever additive, and only with a NULL default: a migration that rewrites rows
         // in an append-only record is a contradiction.
-        for (name, ddl) in [
-            ("version", "ALTER TABLE devices ADD COLUMN version TEXT"),
+        //
+        // `approved_by`/`approved_at` arriving NULL is the point rather than a side effect.
+        // Grants written before a countersignature was required stop moving notes when the
+        // hub is upgraded, and the refusal names the one step that revives them. The other
+        // reading — treat what is already there as signed — would carry the hole over the
+        // upgrade and call it compatibility.
+        for (table, column, ddl) in [
             (
+                "devices",
+                "version",
+                "ALTER TABLE devices ADD COLUMN version TEXT",
+            ),
+            (
+                "devices",
                 "last_refusal",
                 "ALTER TABLE devices ADD COLUMN last_refusal TEXT",
             ),
             (
+                "devices",
                 "last_refusal_at",
                 "ALTER TABLE devices ADD COLUMN last_refusal_at TEXT",
             ),
+            (
+                "bereich_grants",
+                "approved_by",
+                "ALTER TABLE bereich_grants ADD COLUMN approved_by TEXT",
+            ),
+            (
+                "bereich_grants",
+                "approved_at",
+                "ALTER TABLE bereich_grants ADD COLUMN approved_at TEXT",
+            ),
         ] {
-            if !have.contains(name) {
+            if !self.has_column(table, column)? {
                 ix(self.conn.execute(ddl, []))?;
             }
         }
         Ok(())
+    }
+
+    fn has_column(&self, table: &str, column: &str) -> Result<bool> {
+        let mut stmt = ix(self.conn.prepare(&format!("PRAGMA table_info({table})")))?;
+        let names = ix(stmt.query_map([], |r| r.get::<_, String>(1)))?;
+        for n in names {
+            if ix(n)? == column {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Register a device. Returns it with the plaintext token, which is the only time that
@@ -755,7 +798,8 @@ impl HubStore {
     /// different answers to whoever reads the refusal.
     pub fn grants_for_device(&self, device: &str) -> Result<Vec<super::sync_access::BereichGrant>> {
         let mut stmt = ix(self.conn.prepare(
-            "SELECT id, device, bereich, direction, reason, granted_by, created_at, revoked_at
+            "SELECT id, device, bereich, direction, reason, granted_by, created_at,
+                    approved_by, approved_at, revoked_at
              FROM bereich_grants WHERE device = ? ORDER BY created_at",
         ))?;
         let rows = ix(stmt.query_map(params![device], |r| {
@@ -768,12 +812,24 @@ impl HubStore {
                 r.get::<_, String>(5)?,
                 r.get::<_, String>(6)?,
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
+                r.get::<_, Option<String>>(9)?,
             ))
         }))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, device, bereich, direction, reason, granted_by, created_at, revoked_at) =
-                ix(row)?;
+            let (
+                id,
+                device,
+                bereich,
+                direction,
+                reason,
+                granted_by,
+                created_at,
+                approved_by,
+                approved_at,
+                revoked_at,
+            ) = ix(row)?;
             out.push(super::sync_access::BereichGrant {
                 id,
                 device,
@@ -782,10 +838,77 @@ impl HubStore {
                 reason,
                 granted_by,
                 created_at,
+                approved_by,
+                approved_at,
                 revoked_at,
             });
         }
         Ok(out)
+    }
+
+    /// One grant, by id.
+    pub fn grant(&self, id: &str) -> Result<Option<super::sync_access::BereichGrant>> {
+        let device: Option<String> = ix(self
+            .conn
+            .query_row(
+                "SELECT device FROM bereich_grants WHERE id = ?",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional())?;
+        let Some(device) = device else {
+            return Ok(None);
+        };
+        Ok(self
+            .grants_for_device(&device)?
+            .into_iter()
+            .find(|g| g.id == id))
+    }
+
+    /// Let a grant take effect. The second of the two people a bereich takes.
+    ///
+    /// Refuses the person who wrote it, whatever role they hold: two signatures from one
+    /// hand are one signature. Refuses a grant that is already signed, so "countersigned by"
+    /// names the person who actually decided rather than the last one to run the command,
+    /// and refuses a withdrawn one, because reviving it is a new decision and should look
+    /// like one.
+    pub fn countersign_grant(
+        &self,
+        id: &str,
+        who: &super::access::Principal,
+        now: &str,
+    ) -> Result<CountersignOutcome> {
+        let Some(g) = self.grant(id)? else {
+            return Ok(CountersignOutcome::Unknown);
+        };
+        if g.revoked_at.is_some() {
+            return Ok(CountersignOutcome::Withdrawn);
+        }
+        if let Some(by) = &g.approved_by {
+            return Ok(CountersignOutcome::AlreadySigned { by: by.clone() });
+        }
+        if g.granted_by == who.id {
+            return Ok(CountersignOutcome::SamePerson);
+        }
+        ix(self.conn.execute(
+            "UPDATE bereich_grants SET approved_by = ?, approved_at = ?
+             WHERE id = ? AND approved_at IS NULL",
+            params![who.id, now, id],
+        ))?;
+        self.record(
+            &who.id,
+            "grant.countersigned",
+            serde_json::json!({
+                "id": g.id,
+                "device": g.device,
+                "bereich": g.bereich,
+                "direction": g.direction.as_str(),
+                "granted_by": g.granted_by,
+                "by": who.name,
+            }),
+            now,
+        )?;
+        Ok(CountersignOutcome::Signed)
     }
 
     /// Record a grant. The caller checks that the granter is an administrator; this writes.
@@ -1056,8 +1179,12 @@ impl HubStore {
     pub fn notes_for_device(&self, device: &str, since: Option<&str>) -> Result<Vec<SyncedNote>> {
         let grants = self.grants_for_device(device)?;
         let mut out = Vec::new();
+        // `is_effective`, not `is_active`: a grant nobody countersigned is written down and
+        // inert. These two loops are the reading side of the same rule `may_move` states,
+        // and they answer without asking it — so the rule has to hold here in its own
+        // right, or the operator writes themselves a grant and reads the department.
         for g in grants.iter().filter(|g| {
-            g.is_active()
+            g.is_effective()
                 && matches!(
                     g.direction,
                     super::sync_access::Direction::Receive | super::sync_access::Direction::Both
@@ -1085,8 +1212,12 @@ impl HubStore {
     ) -> Result<Vec<(String, String, String)>> {
         let grants = self.grants_for_device(device)?;
         let mut out = Vec::new();
+        // `is_effective`, not `is_active`: a grant nobody countersigned is written down and
+        // inert. These two loops are the reading side of the same rule `may_move` states,
+        // and they answer without asking it — so the rule has to hold here in its own
+        // right, or the operator writes themselves a grant and reads the department.
         for g in grants.iter().filter(|g| {
-            g.is_active()
+            g.is_effective()
                 && matches!(
                     g.direction,
                     super::sync_access::Direction::Receive | super::sync_access::Direction::Both

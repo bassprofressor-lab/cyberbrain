@@ -63,15 +63,36 @@ pub struct BereichGrant {
     /// boundary is a purpose limitation, and a purpose nobody wrote down cannot be shown
     /// to a supervisory authority later.
     pub reason: String,
-    /// The principal who granted it. Must hold `Role::Admin`.
+    /// The principal who asked for it. Must hold `Role::Admin`.
     pub granted_by: String,
     pub created_at: String,
+    /// The countersigner who let it take effect, and when. `None` on both means the grant
+    /// exists and does nothing.
+    ///
+    /// Two people, because one is the operator and the operator is the person the promise
+    /// is about. Whoever holds the hub password can register a device and take its token
+    /// out of the invitation file; if that same person could also point a bereich at it,
+    /// then "admin is state only" would be a house rule rather than a property of the
+    /// machine, and every note text on the hub would be one form submission away.
+    pub approved_by: Option<String>,
+    pub approved_at: Option<String>,
     pub revoked_at: Option<String>,
 }
 
 impl BereichGrant {
+    /// Not withdrawn. Says nothing about whether it ever took effect.
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
+    }
+
+    /// Not withdrawn, and countersigned. The only state in which a note moves.
+    pub fn is_effective(&self) -> bool {
+        self.is_active() && self.approved_at.is_some()
+    }
+
+    /// Written, waiting for a second person.
+    pub fn is_pending(&self) -> bool {
+        self.is_active() && self.approved_at.is_none()
     }
 }
 
@@ -98,6 +119,13 @@ pub enum SyncDenied {
         device: String,
         bereich: String,
         at: String,
+    },
+    /// A grant is written and nobody has countersigned it yet.
+    AwaitingCountersignature {
+        device: String,
+        bereich: String,
+        id: String,
+        granted_by: String,
     },
 }
 
@@ -134,6 +162,24 @@ impl SyncDenied {
                 bereich,
                 at,
             } => format!("the grant of {bereich} to device {device} was withdrawn at {at}"),
+            SyncDenied::AwaitingCountersignature {
+                device,
+                bereich,
+                id,
+                granted_by,
+            } => format!(
+                concat!(
+                    "the grant of {b} to device {d} was written by {g} and nobody has ",
+                    "countersigned it: a bereich takes two people, so that whoever runs ",
+                    "the hub cannot point one at a machine of their own. Somebody holding ",
+                    "a countersigner credential runs `cyberbrain hub grant approve {i} ",
+                    "--as <credential>`"
+                ),
+                b = bereich,
+                d = device,
+                g = granted_by,
+                i = id
+            ),
         }
     }
 }
@@ -169,18 +215,31 @@ pub fn may_move(
     }
     if let Some(g) = mine
         .iter()
-        .find(|g| g.is_active() && g.direction.covers(wanted))
+        .find(|g| g.is_effective() && g.direction.covers(wanted))
     {
         let _ = g;
         return Ok(());
     }
-    // Nothing active fits. Say which of the two reasons it is.
-    if let Some(g) = mine.iter().find(|g| g.is_active()) {
+    // Nothing effective fits. Say which of the three reasons it is, in the order somebody
+    // would want to hear them: the direction is a mistake in the grant, waiting for a
+    // countersignature is a step somebody still has to take, and withdrawn is a decision.
+    if let Some(g) = mine
+        .iter()
+        .find(|g| g.is_effective() && !g.direction.covers(wanted))
+    {
         return Err(SyncDenied::WrongDirection {
             device: device.into(),
             bereich: bereich.into(),
             granted: g.direction,
             wanted,
+        });
+    }
+    if let Some(g) = mine.iter().find(|g| g.is_pending()) {
+        return Err(SyncDenied::AwaitingCountersignature {
+            device: device.into(),
+            bereich: bereich.into(),
+            id: g.id.clone(),
+            granted_by: g.granted_by.clone(),
         });
     }
     let newest = mine
@@ -199,7 +258,17 @@ pub fn may_move(
 mod tests {
     use super::*;
 
+    /// A grant in the only state that moves anything: written and countersigned.
     fn grant(device: &str, bereich: &str, dir: Direction) -> BereichGrant {
+        BereichGrant {
+            approved_by: Some("council-1".into()),
+            approved_at: Some("2026-09-10T12:05:00Z".into()),
+            ..pending(device, bereich, dir)
+        }
+    }
+
+    /// Written by the operator and waiting for the second person.
+    fn pending(device: &str, bereich: &str, dir: Direction) -> BereichGrant {
         BereichGrant {
             id: format!("g-{device}-{bereich}"),
             device: device.into(),
@@ -208,8 +277,55 @@ mod tests {
             reason: "Schichtuebergabe innerhalb der Abteilung".into(),
             granted_by: "admin-1".into(),
             created_at: "2026-09-10T12:00:00Z".into(),
+            approved_by: None,
+            approved_at: None,
             revoked_at: None,
         }
+    }
+
+    /// The rule the countersignature exists for: written is not granted.
+    ///
+    /// Whoever runs the hub registers devices and reads their tokens out of the invitation
+    /// files. If the same person could also point a bereich at one, "admin is state only"
+    /// would be a house rule and every note text on the hub would be one form away. So a
+    /// grant nobody else has signed moves nothing, and the refusal says which step is
+    /// missing rather than looking like an absent grant.
+    #[test]
+    fn a_grant_nobody_countersigned_moves_nothing() {
+        let written = vec![pending("laptop-a", "disposition", Direction::Both)];
+        let denied = may_move(
+            "laptop-a",
+            Ring::Knowledge,
+            Some("disposition"),
+            Direction::Send,
+            &written,
+        )
+        .expect_err("a grant nobody signed must not move a note");
+        assert!(
+            matches!(denied, SyncDenied::AwaitingCountersignature { .. }),
+            "{denied:?}"
+        );
+        // The refusal names the step and the command, not just the fact.
+        let line = denied.line();
+        assert!(line.contains("hub grant approve"), "{line}");
+        assert!(line.contains("g-laptop-a-disposition"), "{line}");
+        assert!(
+            line.contains("admin-1"),
+            "who wrote it belongs in the line: {line}"
+        );
+
+        // And the same grant, once signed, works.
+        let signed = vec![grant("laptop-a", "disposition", Direction::Both)];
+        assert!(
+            may_move(
+                "laptop-a",
+                Ring::Knowledge,
+                Some("disposition"),
+                Direction::Send,
+                &signed
+            )
+            .is_ok()
+        );
     }
 
     /// The rule the whole cut exists for: rings 0 and 1 are refused *even when a grant says

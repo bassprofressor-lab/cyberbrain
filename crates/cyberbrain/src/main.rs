@@ -1441,8 +1441,15 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         }),
                         |v| {
                             format!(
-                                "device {} may {} bereich {} ({})\n  reason: {}\n\n\
-                                 Rings 0 and 1 stay on the machine regardless.\n",
+                                concat!(
+                                    "grant {3} written: device {0} may {1} bereich {2}\n",
+                                    "  reason: {4}\n\n",
+                                    "It does nothing yet. A bereich takes two people, so ",
+                                    "somebody holding a countersigner credential has to ",
+                                    "run:\n  cyberbrain hub grant approve {3} --as ",
+                                    "<credential>\n\n",
+                                    "Rings 0 and 1 stay on the machine regardless.\n"
+                                ),
                                 v["device"].as_str().unwrap_or_default(),
                                 v["direction"].as_str().unwrap_or_default(),
                                 v["bereich"].as_str().unwrap_or_default(),
@@ -1452,6 +1459,44 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         },
                     )?;
                     Ok(0)
+                }
+                GrantCommand::Approve { id, as_, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let who = store
+                        .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                        .map_err(|d| Error::Config(d.to_string()))?;
+                    use hub::store::CountersignOutcome as O;
+                    let outcome = store.countersign_grant(id, &who, &now())?;
+                    let (state, line) = match &outcome {
+                        O::Signed => (
+                            "signed",
+                            format!("{id} takes effect now, countersigned by {}.", who.name),
+                        ),
+                        O::Unknown => ("unknown", format!("{id}: no grant with that id.")),
+                        O::Withdrawn => (
+                            "withdrawn",
+                            format!(
+                                "{id} was withdrawn. Reviving it is a new decision: write a \
+                                 new grant, with its reason."
+                            ),
+                        ),
+                        O::AlreadySigned { by } => (
+                            "already-signed",
+                            format!("{id} was already countersigned by {by}."),
+                        ),
+                        O::SamePerson => (
+                            "same-person",
+                            format!(
+                                "{id} was written by you. Two signatures from one hand are \
+                                 one signature; somebody else has to countersign it."
+                            ),
+                        ),
+                    };
+                    out.emit(
+                        &serde_json::json!({ "id": id, "state": state, "message": line }),
+                        |v| format!("{}\n", v["message"].as_str().unwrap_or_default()),
+                    )?;
+                    Ok(if matches!(outcome, O::Signed) { 0 } else { 1 })
                 }
                 GrantCommand::List { device, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
