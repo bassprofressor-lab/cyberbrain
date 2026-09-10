@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-09-10
+
 ### Added
 
 - **Notes can travel between machines, through the hub.** Until now the hub took audit rows
@@ -37,6 +39,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 - **`bereich` on a note**, set with `--bereich`, in the frontmatter, in the web UI, over MCP
   and over the API. It filters recall and never ranks it.
+
+- **The hub has a page for the roles it depends on.** Signing in with an auditor or
+  countersigner credential opens `/requests`: an auditor asks there and sees their own
+  requests; a countersigner sees every request with its reason, the bereich grants waiting
+  for a second signature, and the hub's own log, and acts on them with a button. Until now
+  those two roles had a credential, a login box that accepted it, and nowhere to go — their
+  work was reachable only from a shell on the hub's own machine, which is the machine whose
+  operator they are there to check.
 
 - **Age is a tie-break in recall.** Between two hits a ring apart, the ring still decides;
   between two hits of the same ring, the fresher one comes first. Deliberately smaller than
@@ -76,6 +86,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   mentioned" from "remove it", so fixing a typo silently removed an agreed deletion date.
 
 - **Erasing a shared note said nothing about the hub's copy** except at the command line.
+
+- **Signing in as anything but the operator was a dead end.** The login sent everybody to
+  `/`, which is the operator's page, so an editor, an auditor and a countersigner signed in
+  successfully and were handed the login form again — indistinguishable from a wrong
+  password. Each role lands on its own page now. `/login` answered 405 to a GET, which is
+  what the two redirects for an unauthenticated visitor pointed at; it is a page.
 
 - **Quitting the Windows launcher left `cyberbrain.exe` running**, which blocked the next
   installation. The launcher now holds every process it starts in its job object, answers
@@ -831,5 +847,7 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.0...v0.3.1
