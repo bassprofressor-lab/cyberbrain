@@ -68,6 +68,61 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}"
 !define MUI_UNICON "${ICON}"
 !define MUI_ABORTWARNING
 
+; Windows locks a running program's file, so an upgrade over a Cyberbrain that is still
+; open ends in NSIS's "Error opening file for writing", whose only offered way forward is
+; the task manager. The launcher sits in the notification area and has no window, so
+; `taskkill` without /F does not reach it either — hence `--quit`, which is a message it
+; listens for: it stops its servers, sends a last delivery and goes.
+;
+; Written as a macro because the uninstaller needs the same thing and NSIS gives it a
+; separate namespace; `${UN}` is empty for one and `un.` for the other.
+!macro CloseCyberbrain UN
+Function ${UN}CloseCyberbrain
+  ; The installation being replaced, which is where the running programs are. Nothing to
+  ; close on a first install.
+  ReadRegStr $R2 HKLM "Software\${NAME}" "InstallDir"
+  ${If} $R2 == ""
+    Return
+  ${EndIf}
+
+  ; The collector's service holds cyberbrain.exe open just as firmly, and on that one
+  ; machine an upgrade fails for the same reason. Stopped here and started again at the
+  ; end, but only if it was running: `net start` on a machine that never had the hub would
+  ; be an error message about something nobody asked for.
+  StrCpy $R3 "0"
+  nsExec::ExecToStack 'net stop "CyberbrainHub"'
+  Pop $R0
+  Pop $R1
+  ${If} $R0 == 0
+    StrCpy $R3 "1"
+    DetailPrint "Stopped the ${NAME} hub service for the duration."
+  ${EndIf}
+
+  ${If} ${FileExists} "$R2\cyberbrain-desktop.exe"
+    DetailPrint "Closing ${NAME}, if it is running..."
+    ; Exit code 0 once nothing is left running, 1 if it is still there after ten seconds.
+    nsExec::ExecToStack '"$R2\cyberbrain-desktop.exe" --quit'
+    Pop $R0
+    Pop $R1
+    ${If} $R0 != 0
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "${NAME} did not close when asked, and its files cannot be replaced while it is running.$\r$\n$\r$\nOK closes it now. Anything it had not yet saved to its hub stays in the local log and goes on the next start." IDOK +2
+      Abort
+      nsExec::ExecToStack 'taskkill /F /T /IM cyberbrain-desktop.exe'
+      Pop $R0
+      Pop $R1
+      nsExec::ExecToStack 'taskkill /F /T /IM cyberbrain.exe'
+      Pop $R0
+      Pop $R1
+      ; Windows lets go of the file handles a moment after the process is gone, and NSIS
+      ; is quick enough to arrive before that.
+      Sleep 1500
+    ${EndIf}
+  ${EndIf}
+FunctionEnd
+!macroend
+!insertmacro CloseCyberbrain ""
+!insertmacro CloseCyberbrain "un."
+
 !insertmacro MUI_PAGE_LICENSE "${LICENSE}"
 ; The optional desktop shortcut is a choice, so there is a page on which to make it.
 !insertmacro MUI_PAGE_COMPONENTS
@@ -87,6 +142,9 @@ VIAddVersionKey "LegalCopyright" "Copyright 2026 ${PUBLISHER}"
 
 Section "Cyberbrain" SecMain
   SectionIn RO
+  ; Before the first File: everything below writes into a directory whose files may still
+  ; be open.
+  Call CloseCyberbrain
   SetOutPath "$INSTDIR"
   File "${SOURCE}\cyberbrain.exe"
   File "${SOURCE}\cyberbrain-desktop.exe"
@@ -214,6 +272,18 @@ Function .onInit
   ClearErrors
 FunctionEnd
 
+; The collector's service, if it was stopped to free the file. After every section rather
+; than at the end of the main one, so that a run which also (re)registered the hub has
+; finished doing so first; `net start` on a service that is already running says so and is
+; ignored, which is why this needs no second flag.
+Function .onInstSuccess
+  ${If} $R3 == "1"
+    nsExec::ExecToStack 'net start "CyberbrainHub"'
+    Pop $R0
+    Pop $R1
+  ${EndIf}
+FunctionEnd
+
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_SecMain)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_SecDesktop)
@@ -221,6 +291,10 @@ FunctionEnd
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
 
 Section "Uninstall"
+  ; A running Cyberbrain would leave its own exe behind and the directory with it, which is
+  ; an uninstall that says it worked and did not.
+  Call un.CloseCyberbrain
+
   ; The service first, while the program that can remove it is still on disk. It is quiet
   ; about not finding one: most installations never had it.
   nsExec::ExecToStack '"$INSTDIR\cyberbrain.exe" hub service uninstall'

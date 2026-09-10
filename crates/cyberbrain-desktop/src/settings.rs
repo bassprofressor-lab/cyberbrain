@@ -21,6 +21,15 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "OpenIn::is_default")]
     pub open_in: OpenIn,
 
+    /// Whether the person has been told that closing a window does not close Cyberbrain.
+    ///
+    /// Said once per machine and never again. It is the answer to a real confusion: the
+    /// notification area is where new icons are hidden by default on Windows 11, so
+    /// closing the last window leaves a program that is running, invisible, and holding
+    /// its own file open — which the next installer then trips over.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub told_about_tray: bool,
+
     /// What every version up to 0.3.0 wrote, when a launcher held one project.
     ///
     /// Read and folded into `projects` by [`load`], never written again: `skip_serializing`

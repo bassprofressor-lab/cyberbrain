@@ -77,6 +77,16 @@ struct Ui {
 }
 
 pub fn run() {
+    // Not a mode of the launcher but a message to the one already running. It comes from an
+    // installer that cannot replace a file Windows has locked, and it exits with 1 if the
+    // launcher is still there afterwards so the caller knows to reach for force.
+    if std::env::args().skip(1).any(|a| a == "--quit") {
+        if !quit_the_one_that_is_running() {
+            std::process::exit(1);
+        }
+        return;
+    }
+
     // Before anything else, and held for the whole run: two launchers would mean two tray
     // icons, two sets of servers and no way to tell which icon holds which project.
     let instance_path = settings::instance_path();
@@ -84,6 +94,10 @@ pub fn run() {
         show_the_one_that_is_running(instance_path.as_deref());
         return;
     };
+
+    // Created straight after the mutex, so the answer to "is it running" and the way to ask
+    // it to stop appear at the same moment.
+    let quit_request = sys::QuitRequest::create();
 
     let exe_dir = std::env::current_exe()
         .ok()
@@ -253,6 +267,47 @@ pub fn run() {
             p.delivery.tick(&server_exe, &p.server.project_dir);
         }
 
+        // A window that has gone was closed by the person: the ones we close go with their
+        // entry. Forgetting it here is what makes the next Open build a new one instead of
+        // focusing a handle that is no longer a window.
+        let mut left_a_window = false;
+        for p in projects.iter_mut() {
+            if p.window.as_ref().is_some_and(|w| !w.is_open()) {
+                p.window = None;
+                left_a_window = true;
+            }
+        }
+        if panes.as_ref().is_some_and(|w| !w.is_open()) {
+            panes = None;
+            left_a_window = true;
+        }
+        // Nothing on screen any more, and the program still running. Said once per machine,
+        // because the honest reading of an empty screen is that Cyberbrain has quit — and
+        // Windows 11 hides new notification-area icons behind an arrow, so there is nothing
+        // to correct that reading. Somebody who believes it has quit reinstalls over a
+        // running program, and the installer is the one that finds out.
+        if left_a_window
+            && !settings.told_about_tray
+            && panes.is_none()
+            && projects.iter().all(|p| p.window.is_none())
+        {
+            settings.told_about_tray = true;
+            if let Some(path) = settings_path.as_deref() {
+                let _ = settings::save(path, &settings);
+            }
+            sys::info_box(
+                APP,
+                concat!(
+                    "Cyberbrain is still running.\n\n",
+                    "Closing a window closes the page, not the program: the servers stay ",
+                    "up, so your memory is there the moment you want it back. Its icon ",
+                    "lives in the notification area, next to the clock — behind the ",
+                    "arrow, if Windows has tidied it away. Quit in that icon's menu is ",
+                    "what closes Cyberbrain.\n\nSaid once.",
+                ),
+            );
+        }
+
         // A server going away on its own is not something to hide: without it that entry in
         // the menu is a button that does nothing. The others are unaffected, so only the one
         // that died goes.
@@ -315,6 +370,13 @@ pub fn run() {
             let _ = tray.set_tooltip(Some(tooltip(&projects)));
         }
 
+        // Somebody outside asked — the installer, or `cyberbrain-desktop.exe --quit`. The
+        // same way out as the menu item, so the servers are stopped, the last delivery goes
+        // and the instance file is cleared, rather than a `taskkill` that does none of it.
+        if quit_request.asked() {
+            stop = true;
+        }
+
         if stop {
             sys::Pump::Stop
         } else {
@@ -373,6 +435,25 @@ fn reopen(server_exe: &Path, settings: &Settings, job: &sys::JobObject) -> Vec<R
 /// It deliberately does not ask the first instance for anything: the addresses it left
 /// behind are enough. Liveness needs no check here — we only got this far because the mutex
 /// is held, and a launcher that died is not holding it, so its leftover file is never read.
+/// Ask a running launcher to close, and wait until it has. `false` if it is still there.
+///
+/// Silent on purpose: the caller is an installer, and a dialog behind the installer's own
+/// window reads as a program that has hung. Ten seconds, which is twice the bound on the
+/// last delivery to a hub that is not answering.
+fn quit_the_one_that_is_running() -> bool {
+    if !sys::launcher_running() {
+        return true;
+    }
+    sys::ask_running_to_quit();
+    for _ in 0..50 {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if !sys::launcher_running() {
+            return true;
+        }
+    }
+    false
+}
+
 fn show_the_one_that_is_running(instance_path: Option<&Path>) {
     if let Some(instance) = instance_path.and_then(settings::read_instance)
         && let Some(url) = instance.latest().and_then(launch::loopback_url)

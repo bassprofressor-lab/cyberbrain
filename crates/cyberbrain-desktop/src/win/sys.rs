@@ -7,13 +7,18 @@ use crate::launch::Server;
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
-use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
+use windows_sys::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
+};
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
 };
-use windows_sys::Win32::System::Threading::{CreateMutexW, ReleaseMutex};
+use windows_sys::Win32::System::Threading::{
+    CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentProcess, OpenEventW, ReleaseMutex,
+    ResetEvent, SetEvent, WaitForSingleObject,
+};
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, IDYES, KillTimer, MB_ICONERROR, MB_ICONINFORMATION,
@@ -154,6 +159,15 @@ impl JobObject {
                     size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
                 );
             }
+            // The launcher joins its own job, because job membership is inherited: from
+            // here on everything it starts is a member without being adopted by hand.
+            // Only the servers were held before, and the one child that is not a server —
+            // the `cyberbrain hub push` that a hub which does not answer leaves hanging —
+            // outlived the launcher. A stray `cyberbrain.exe` keeps the file locked, and a
+            // locked file is what the next installer runs into.
+            unsafe {
+                AssignProcessToJobObject(handle, GetCurrentProcess());
+            }
         }
         Self { handle }
     }
@@ -161,6 +175,10 @@ impl JobObject {
     /// Put a started server in the job. A failure here is not worth a dialog: the server
     /// runs, and `Server::stop` still ends it on a normal quit. What is lost is only the
     /// guarantee for the abnormal one.
+    ///
+    /// Usually a no-op now that the launcher is a member itself and the child inherits —
+    /// Windows refuses to assign a process to a job it is already in. It stays because it
+    /// is the path that still holds when assigning the launcher failed.
     pub fn adopt(&self, server: &Server) {
         if self.handle.is_null() {
             return;
@@ -223,4 +241,74 @@ impl Drop for SingleInstance {
             }
         }
     }
+}
+
+/// Whether a launcher is running, asked from outside it.
+///
+/// The single-instance mutex is the answer, because it is the same thing the launcher
+/// itself asks on startup. Taking it and letting it go again is the whole check: if it was
+/// free, nobody is holding it.
+pub fn launcher_running() -> bool {
+    SingleInstance::acquire().is_none()
+}
+
+/// The name of the event that means "please close".
+///
+/// `Local\` for the same reason as the mutex: the scope is the logon session, and one
+/// person signed in to a machine must not be able to close another's launcher.
+const QUIT_EVENT: &str = "Local\\cyberbrain-desktop-quit";
+
+/// The "please close" flag of the running launcher.
+///
+/// Manual reset and created unset. The launcher makes it at startup and looks at it once a
+/// second in the tick; anybody else — the installer, or `cyberbrain-desktop.exe --quit` —
+/// opens it by name and sets it. That is the entire protocol, and it is deliberately not a
+/// window message: this program has a tray icon and no window to send one to, which is why
+/// `taskkill` without `/F` does nothing to it and the task manager was the only way out.
+pub struct QuitRequest {
+    handle: HANDLE,
+}
+
+impl QuitRequest {
+    pub fn create() -> Self {
+        let name = wide(QUIT_EVENT);
+        // Manual reset, initially unset. If it already exists — a previous launcher that
+        // was killed rather than closed — `CreateEventW` opens that one, which may still
+        // carry a set flag. Cleared below, so a stale request cannot close the launcher
+        // that has just started.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+        let this = Self { handle };
+        if !handle.is_null() {
+            unsafe { ResetEvent(handle) };
+        }
+        this
+    }
+
+    /// Whether somebody has asked. Never waits: this runs inside the message pump.
+    pub fn asked(&self) -> bool {
+        if self.handle.is_null() {
+            return false;
+        }
+        unsafe { WaitForSingleObject(self.handle, 0) == WAIT_OBJECT_0 }
+    }
+}
+
+impl Drop for QuitRequest {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// Ask the running launcher to close. `false` when there is none listening.
+pub fn ask_running_to_quit() -> bool {
+    let name = wide(QUIT_EVENT);
+    let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return false;
+    }
+    let set = unsafe { SetEvent(handle) };
+    unsafe { CloseHandle(handle) };
+    set != 0
 }
