@@ -45,6 +45,8 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/password", post(change_password))
         .route("/licence", post(install_licence))
         .route("/devices", post(add_device))
+        .route("/grants", post(add_grant))
+        .route("/grants/{id}/revoke", post(revoke_grant))
         .route("/health", get(health))
         .route("/api/v1/ingest", post(post_ingest))
         .route("/api/v1/notes", post(post_notes))
@@ -517,6 +519,83 @@ fn client_version(headers: &HeaderMap) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+#[derive(serde::Deserialize)]
+struct GrantForm {
+    device: String,
+    bereich: String,
+    direction: String,
+    reason: String,
+}
+
+/// Grant a bereich from the administrator's page. The same checks as the command, because
+/// a form is not a second, more forgiving way in: an empty reason is refused here too.
+async fn add_grant(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<GrantForm>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let now = jiff::Timestamp::now().to_string();
+    let Ok(hub) = state.hub.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+    };
+    let problem = (|| -> Result<(), String> {
+        cyberbrain_core::frontmatter::validate_bereich(&form.bereich)
+            .map_err(|r| format!("bereich: {r}"))?;
+        if form.reason.trim().is_empty() {
+            return Err("a grant needs a reason: it is what an auditor reads later".into());
+        }
+        let dir = super::sync_access::Direction::parse(&form.direction)
+            .map_err(|e| e.to_string())?;
+        let id = format!("bg_{}", cyberbrain_core::NoteId::generate());
+        hub.grant_bereich(
+            &id,
+            &form.device,
+            &form.bereich,
+            dir,
+            form.reason.trim(),
+            "hub-page",
+            &now,
+        )
+        .map_err(|e| e.to_string())?;
+        let _ = hub.record(
+            "hub-page",
+            "grant.added",
+            json!({
+                "id": id, "device": form.device, "bereich": form.bereich,
+                "direction": dir.as_str(), "reason": form.reason.trim(),
+            }),
+            &now,
+        );
+        Ok(())
+    })();
+    match problem {
+        Ok(()) => Redirect::to("/").into_response(),
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+async fn revoke_grant(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let now = jiff::Timestamp::now().to_string();
+    if let Ok(hub) = state.hub.lock()
+        && hub.revoke_grant(&id, &now).unwrap_or(false)
+    {
+        let _ = hub.record("hub-page", "grant.revoked", json!({ "id": id }), &now);
+    }
+    Redirect::to("/").into_response()
 }
 
 /// Only an editor sees this page, and only their own bereiche. Both halves of that are

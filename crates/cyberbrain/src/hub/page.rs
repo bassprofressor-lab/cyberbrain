@@ -36,6 +36,9 @@ pub struct View {
     pub licence: LicenceState,
     pub seats: Option<(usize, usize)>,
     pub fleet: Vec<FleetRow>,
+    /// Who may share which bereich. On the administrator's page because a grant is state,
+    /// not content: it names a device, a bereich and a reason, never a word of a note.
+    pub grants: Vec<super::sync_access::BereichGrant>,
     /// A licence file lying in the data directory, for the one-click install.
     pub found_file: Option<std::path::PathBuf>,
     /// What to put in an invitation as the address clients deliver to. A guess from the
@@ -69,7 +72,16 @@ impl View {
         let installed = hub.licence_text().ok().flatten();
         let found_file = service::find_licence_file(dir)
             .filter(|p| std::fs::read_to_string(p).ok().as_deref() != installed.as_deref());
+        // Every device's grants, in the order the devices appear, so the table reads the way
+        // the one above it does.
+        let grants = report::fleet(hub, now, &version)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|r| hub.grants_for_device(&r.device.id).ok())
+            .flatten()
+            .collect();
         View {
+            grants,
             fleet: report::fleet(hub, now, &version).unwrap_or_default(),
             version,
             record: record.to_path_buf(),
@@ -203,6 +215,7 @@ pub fn render(v: &View) -> String {
 
     h.push_str(&licence_card(v));
     h.push_str(&fleet_card(v));
+    h.push_str(&grants_card(v));
 
     h.push_str(&format!(
         "<section class=card><h2>Administration</h2>\
@@ -230,6 +243,78 @@ pub fn render(v: &View) -> String {
     ));
     h.push_str("</main>");
     h
+}
+
+/// Who may share which bereich, and the form to add one.
+///
+/// A grant is state: a device, a bereich, a direction and a reason. No note text passes
+/// through here, which is why this belongs on the administrator's page while conflicts do
+/// not. The reason field is required by the form as well as by the command, because the
+/// place it is most likely to be skipped is the one where typing feels optional.
+fn grants_card(v: &View) -> String {
+    let options = v
+        .fleet
+        .iter()
+        .filter(|r| r.device.is_active())
+        .map(|r| {
+            format!(
+                "<option value=\"{}\">{}</option>",
+                esc(&r.device.id),
+                esc(&r.device.name)
+            )
+        })
+        .collect::<String>();
+
+    let form = format!(
+        "<details><summary>Grant a bereich</summary>\
+         <form method=post action=\"/grants\">\
+         <label>Device <select name=device required>{options}</select></label>\
+         <label>Bereich <input name=bereich required placeholder=\"disposition\"></label>\
+         <label>Direction <select name=direction>\
+           <option value=both>send and receive</option>\
+           <option value=send>send only</option>\
+           <option value=receive>receive only</option></select></label>\
+         <label>Reason <input name=reason required \
+           placeholder=\"why this department may share\"></label>\
+         <button type=submit>Grant it</button></form>\
+         <p class=note>Rings 0 and 1 never leave a machine, whatever is granted here.</p>\
+         </details>"
+    );
+
+    if v.grants.is_empty() {
+        return format!(
+            "<section class=card><h2>Sharing</h2>\
+             <p>No grants. Every device delivers audit rows and nothing else.</p>{form}\
+             </section>"
+        );
+    }
+
+    let mut rows = String::new();
+    for g in &v.grants {
+        let live = g.is_active();
+        rows.push_str(&format!(
+            "<tr class={cls}><td>{device}<td>{bereich}<td>{dir}<td>{reason}<td>{action}</tr>",
+            cls = if live { "ok" } else { "off" },
+            device = esc(&g.device),
+            bereich = esc(&g.bereich),
+            dir = esc(g.direction.as_str()),
+            reason = esc(&g.reason),
+            action = if live {
+                format!(
+                    "<form method=post action=\"/grants/{}/revoke\">\
+                     <button type=submit>Withdraw</button></form>",
+                    esc(&g.id)
+                )
+            } else {
+                "withdrawn".to_string()
+            },
+        ));
+    }
+    format!(
+        "<section class=card><h2>Sharing</h2>\
+         <table><thead><tr><th>Device<th>Bereich<th>Direction<th>Reason<th></tr></thead>\
+         <tbody>{rows}</tbody></table>{form}</section>"
+    )
 }
 
 fn licence_card(v: &View) -> String {

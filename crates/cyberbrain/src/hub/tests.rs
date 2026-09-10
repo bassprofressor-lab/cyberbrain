@@ -1293,6 +1293,7 @@ fn a_collecting_hub_shows_the_seats() {
     // a test that skips itself when the key is absent is a test that passes by agreeing
     // with itself on every machine but one.
     let v = View {
+        grants: Vec::new(),
         version: "0.3.0".into(),
         record: "C:\\ProgramData\\Cyberbrain\\hub.db".into(),
         licence: LicenceState::Valid {
@@ -1322,6 +1323,7 @@ fn a_collecting_hub_shows_the_seats() {
 #[test]
 fn a_licence_about_to_run_out_says_it_on_the_page() {
     let v = View {
+        grants: Vec::new(),
         version: "0.3.0".into(),
         record: "hub.db".into(),
         licence: LicenceState::Valid {
