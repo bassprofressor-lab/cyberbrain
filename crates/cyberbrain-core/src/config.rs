@@ -77,6 +77,12 @@ pub struct HubConfig {
     /// The hub must be loopback or private-range unless this is set, the same rule as the
     /// inference endpoint and for the same reason.
     pub allow_public_hub: bool,
+    /// Whether this store shares its notes with the hub, not only its audit rows. Off by
+    /// default and separate from enrolment: being enrolled is a decision about evidence,
+    /// sharing notes is a decision about content, and one must not become the other by
+    /// upgrade. Rings 0 and 1 never travel regardless of this.
+    #[serde(default)]
+    pub allow_note_sync: bool,
     /// Device id, for the operator's benefit when reading the file. The token is what
     /// authenticates; this only says which device this store believes it is.
     pub device: Option<String>,
@@ -312,6 +318,10 @@ contradiction_budget_ms = 3000
 # here on purpose: this file lives in the store, and a store lives in a repository.
 # url = "https://hub.example.internal:7788"
 allow_public_hub = false
+# Share notes with the hub, not only audit rows. Off until somebody decides otherwise:
+# enrolling a store is about evidence, sharing its notes is about content. Rings 0 and 1
+# stay on this machine either way, and so does any note without a `bereich`.
+allow_note_sync = false
 
 [policy]
 # eu | ch | off. "off" compiles the checks in and disables them.

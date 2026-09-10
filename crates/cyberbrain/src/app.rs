@@ -2839,10 +2839,26 @@ impl App {
             }
         }
 
-        if let Some(c) = answer.get("cursor").and_then(|v| v.as_str())
-            && !dry_run
-        {
-            client::write_cursor(&hub_url, c)?;
+        // An erasure this machine was told about but did not act on must come round again.
+        // Advancing the cursor past it would mean the only warning was the one nobody
+        // acted on, and the copy stays here for good.
+        let unfinished = erasures.iter().any(|e| {
+            e["held_here"].as_bool().unwrap_or(false) && !e["removed"].as_bool().unwrap_or(false)
+        });
+        if !dry_run {
+            // Everything the hub just showed us is, by definition, what it holds.
+            let mut known = client::read_known(&hub_url);
+            for n in &notes {
+                if let (Some(name), Some(u)) = (n["name"].as_str(), n["updated"].as_str()) {
+                    known.insert(name.to_string(), u.to_string());
+                }
+            }
+            let _ = client::write_known(&hub_url, &known);
+            if let Some(c) = answer.get("cursor").and_then(|v| v.as_str())
+                && !unfinished
+            {
+                client::write_cursor(&hub_url, c)?;
+            }
         }
 
         let v = serde_json::json!({
@@ -2852,10 +2868,20 @@ impl App {
             "kept_local": kept_local,
             "refused": refused,
             "erasures": erasures,
+            "cursor_held_back": unfinished,
             "message": format!(
                 "{} note(s) taken, {} kept because this machine changed them since, {} \
-                 refused, {} erasure(s) reported",
-                written.len(), kept_local.len(), refused.len(), erasures.len()
+                 refused, {} erasure(s) reported{}",
+                written.len(),
+                kept_local.len(),
+                refused.len(),
+                erasures.len(),
+                if unfinished {
+                    ". The position was not advanced: an erasure is still waiting here, and \
+                     it has to come round again"
+                } else {
+                    ""
+                }
             ),
         });
         Ok((v, 0))
@@ -2922,6 +2948,10 @@ impl App {
         // the decision made in the wrong order.
         let hub_url = self.config.hub.url.clone();
 
+        let known = match &hub_url {
+            Some(u) => client::read_known(u),
+            None => Default::default(),
+        };
         let mut offered = Vec::new();
         let mut skipped_no_bereich = 0usize;
         let mut skipped_resident = 0usize;
@@ -2950,6 +2980,9 @@ impl App {
                 "updated": f.updated.to_string(),
                 "frontmatter": cyberbrain_core::frontmatter::render(f, "")?,
                 "body": note.body,
+                // What this store last knew the hub to hold for this note. Without it every
+                // delivery from a second machine looks like a collision.
+                "based_on": known.get(&f.name),
             }));
         }
 
@@ -3000,11 +3033,39 @@ impl App {
             Reply::Ok(d) => {
                 v["accepted"] = serde_json::json!(d.accepted);
                 v["stored"] = serde_json::json!(d.total_rows);
-                v["message"] = serde_json::json!(format!(
-                    "{} of {} note(s) accepted by {}, {} newer than what it held",
-                    d.accepted, v["offered"], hub_url, d.total_rows
-                ));
-                0
+                v["conflicts"] = serde_json::json!(d.conflicts);
+                // Only what the hub actually took counts as known. A note it turned away is
+                // one this store still has no agreed version of.
+                let mut known = client::read_known(&hub_url);
+                for n in &offered {
+                    let name = n["name"].as_str().unwrap_or_default();
+                    let conflicted = d
+                        .conflicts
+                        .iter()
+                        .any(|c| c["name"].as_str() == Some(name));
+                    if !conflicted && let Some(u) = n["updated"].as_str() {
+                        known.insert(name.to_string(), u.to_string());
+                    }
+                }
+                let _ = client::write_known(&hub_url, &known);
+                v["message"] = serde_json::json!(if d.conflicts.is_empty() {
+                    format!(
+                        "{} of {} note(s) accepted by {}, {} newer than what it held",
+                        d.accepted, v["offered"], hub_url, d.total_rows
+                    )
+                } else {
+                    format!(
+                        "{} of {} note(s) accepted by {}, {} stored, {} in conflict: \
+                         another machine changed them. Nothing was overwritten — \
+                         `cyberbrain hub pull` to see the other version.",
+                        d.accepted,
+                        v["offered"],
+                        hub_url,
+                        d.total_rows,
+                        d.conflicts.len()
+                    )
+                });
+                if d.conflicts.is_empty() { 0 } else { 1 }
             }
             Reply::NotCollecting(m) => {
                 v["message"] = serde_json::json!(format!("the hub is not collecting: {m}"));

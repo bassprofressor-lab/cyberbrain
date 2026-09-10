@@ -194,6 +194,11 @@ pub struct Delivered {
     pub accepted: usize,
     pub total_rows: i64,
     pub hub: String,
+    /// Notes the hub could not take because another machine had changed them. Empty for
+    /// every path but the note delivery. Carried here rather than dropped: a client that
+    /// swallows a conflict turns "two people disagree" into "nothing happened".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conflicts: Vec<serde_json::Value>,
 }
 
 /// Read the hub's reply. Written to be explicit about the three answers that are not
@@ -236,6 +241,33 @@ pub fn write_cursor(hub_url: &str, cursor: &str) -> Result<()> {
     }
     std::fs::write(&p, cursor)
         .map_err(|e| Error::Config(format!("cannot record the pull position: {e}")))
+}
+
+/// What this store last knew the hub to hold, per note. This is what fills `based_on`, and
+/// without it every second machine's delivery looks like a conflict.
+pub fn known_path(hub_url: &str) -> Option<PathBuf> {
+    token_path(hub_url).map(|p| p.with_extension("known.json"))
+}
+
+pub fn read_known(hub_url: &str) -> std::collections::BTreeMap<String, String> {
+    known_path(hub_url)
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_known(
+    hub_url: &str,
+    map: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(p) = known_path(hub_url) else {
+        return Ok(());
+    };
+    if let Some(dir) = p.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&p, serde_json::to_string(map).unwrap_or_default())
+        .map_err(|e| Error::Config(format!("cannot record what the hub holds: {e}")))
 }
 
 /// Ask the hub what there is. Changes nothing anywhere; the caller decides what to keep.
@@ -305,6 +337,7 @@ pub async fn erase_at_hub(
             accepted: json.get("notes").and_then(|v| v.as_u64()).unwrap_or(0) as usize,
             total_rows: json.get("conflicts").and_then(|v| v.as_i64()).unwrap_or(0),
             hub: hub_url.to_string(),
+            conflicts: Vec::new(),
         }),
         503 => Reply::NotCollecting(message),
         status => Reply::Refused { status, message },
@@ -361,6 +394,11 @@ pub async fn deliver_notes(
             // rules and changed nothing. Reported as rows so one number means one thing.
             total_rows: json.get("stored").and_then(|v| v.as_i64()).unwrap_or_default(),
             hub: hub_url.to_string(),
+            conflicts: json
+                .get("conflicts")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default(),
         }),
         503 => Reply::NotCollecting(message),
         status => Reply::Refused { status, message },
@@ -421,6 +459,7 @@ pub async fn deliver(
                 .and_then(|v| v.as_i64())
                 .unwrap_or_default(),
             hub: hub_url.to_string(),
+            conflicts: Vec::new(),
         }),
         503 => Reply::NotCollecting(message),
         409 => Reply::Gap {

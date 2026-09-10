@@ -87,6 +87,7 @@ impl PolicyConfig {
             allow_overlay_network: cfg.inference.allow_overlay_network,
             hub_endpoint: cfg.hub.url.clone(),
             allow_public_hub: cfg.hub.allow_public_hub,
+            allow_note_sync: cfg.hub.allow_note_sync,
             ..Self::default()
         }
     }
