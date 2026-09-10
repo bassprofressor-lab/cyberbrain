@@ -1902,3 +1902,39 @@ fn erasing_a_shared_note_names_the_copy_this_machine_cannot_reach() {
         "a note that was never shared must not be told it might be: {err}"
     );
 }
+
+/// The program runs on a one-megabyte stack, because Windows gives its main thread one.
+///
+/// Building the command tree is recursive, and in a debug build it grew past 1 MB during the
+/// 0.5.0 work: on Windows CI every test that runs the binary failed with "thread 'main' has
+/// overflowed its stack", and `cyberbrain --version` was enough to trigger it. The release
+/// build fit, so the shipped binary was fine and the Windows half of the test suite was the
+/// part that stopped running.
+///
+/// Unix only, because `ulimit -s` is how the main thread's stack is made small from outside
+/// and Windows has no equivalent — there the real thing runs on every CI push anyway. What
+/// this guards is the direction: `main` must keep doing its work on a thread whose stack it
+/// chose, so that the platform with the smallest one is not the platform that decides.
+#[test]
+#[cfg(unix)]
+fn the_binary_runs_with_the_stack_windows_gives_its_main_thread() {
+    let exe = env!("CARGO_BIN_EXE_cyberbrain");
+    for args in [&["--version"][..], &["--help"][..]] {
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("ulimit -s 1024; exec {exe} {}", args.join(" ")))
+            .output()
+            .unwrap();
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            !err.contains("overflowed its stack"),
+            "{args:?} overflowed a 1 MB stack, which is what Windows hands the main \
+             thread:\n{err}"
+        );
+        assert!(
+            out.status.success(),
+            "{args:?} exited {:?}: {err}",
+            out.status.code()
+        );
+    }
+}

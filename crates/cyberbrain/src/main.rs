@@ -95,20 +95,49 @@ fn read_stdin() -> Result<String> {
     Ok(s)
 }
 
+/// The stack this program runs on, chosen rather than inherited.
+///
+/// The main thread's stack size is fixed by the linker and differs by platform: 8 MB on the
+/// Linux this is developed on, 1 MB on Windows. Building the command tree is recursive, and
+/// in a debug build — no inlining, every frame its full size — it is deep enough that 1 MB
+/// is not enough. `cyberbrain --version` aborted with "thread 'main' has overflowed its
+/// stack" before it had parsed anything.
+///
+/// The release build fits, which is the worst shape this bug could have: the build that
+/// overflows is the one the tests run, so the Windows half of the test suite stopped running
+/// while the shipped binary was fine. Sixteen megabytes is not a measurement of what is
+/// needed; it is far enough above it that the next few subcommands do not bring this back.
+const STACK_BYTES: usize = 16 * 1024 * 1024;
+
 fn main() {
+    // Named, because a stack overflow names the thread and "cyberbrain" is a better thing to
+    // read in that message than "unnamed".
+    let worker = std::thread::Builder::new()
+        .name("cyberbrain".to_string())
+        .stack_size(STACK_BYTES)
+        .spawn(real_main);
+    let code = match worker {
+        Ok(h) => h.join().unwrap_or(2),
+        // A machine that cannot spawn a thread has worse problems, and refusing to run at
+        // all over it would be a worse answer than running on the stack we were given.
+        Err(_) => real_main(),
+    };
+    std::process::exit(code);
+}
+
+fn real_main() -> i32 {
     let cli = Cli::parse();
     let out = Out {
         json: cli.json,
         quiet: cli.quiet,
     };
-    let code = match run(cli, out) {
+    match run(cli, out) {
         Ok(code) => code,
         Err(e) => {
             report_error(&e, out.json);
             e.exit_code()
         }
-    };
-    std::process::exit(code);
+    }
 }
 
 /// Returns the exit code. `Ok(3)` is a policy decision that is not an error: the write was
