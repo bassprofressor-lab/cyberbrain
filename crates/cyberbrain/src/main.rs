@@ -1240,6 +1240,85 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(0)
         }
 
+        HubCommand::Conflicts {
+            bereich,
+            resolve,
+            take_offered,
+            data,
+        } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            if let Some(id) = resolve {
+                let stamp = now();
+                let done = store.resolve_conflict(id, *take_offered, &stamp)?;
+                if done {
+                    let _ = store.record(
+                        "cli",
+                        "conflict.resolved",
+                        serde_json::json!({
+                            "id": id,
+                            "took": if *take_offered { "offered" } else { "held" },
+                        }),
+                        &stamp,
+                    );
+                }
+                out.emit(
+                    &serde_json::json!({
+                        "id": id, "resolved": done,
+                        "took": if *take_offered { "offered" } else { "held" }
+                    }),
+                    |v| {
+                        if v["resolved"].as_bool().unwrap_or(false) {
+                            format!(
+                                "{} settled: the {} version stands.\n",
+                                v["id"].as_str().unwrap_or_default(),
+                                v["took"].as_str().unwrap_or_default()
+                            )
+                        } else {
+                            format!(
+                                "{}: no open conflict with that id.\n",
+                                v["id"].as_str().unwrap_or_default()
+                            )
+                        }
+                    },
+                )?;
+                return Ok(0);
+            }
+            let list = match bereich {
+                Some(b) => store.open_conflicts(b)?,
+                None => store.all_open_conflicts()?,
+            };
+            out.emit(&serde_json::json!(list), |v| {
+                let rows = v.as_array().cloned().unwrap_or_default();
+                if rows.is_empty() {
+                    return "No open conflicts.\n".to_string();
+                }
+                let mut s = format!(
+                    "{} note(s) two machines changed without seeing each other.\n\
+                     Nothing was overwritten and nothing was dropped.\n\n",
+                    rows.len()
+                );
+                for c in rows {
+                    s.push_str(&format!(
+                        "  {} in {}\n    held:    {} from {}\n    offered: {} from {}\n    \
+                         {}\n    settle: cyberbrain hub conflicts --resolve {} \
+                         [--take-offered]\n\n",
+                        c["name"].as_str().unwrap_or_default(),
+                        c["bereich"].as_str().unwrap_or_default(),
+                        c["held_updated"].as_str().unwrap_or_default(),
+                        c["held_from_device"].as_str().unwrap_or_default(),
+                        c["offered_updated"].as_str().unwrap_or_default(),
+                        c["offered_from_device"].as_str().unwrap_or_default(),
+                        match c["based_on"].as_str() {
+                            Some(b) => format!("the sender started from {b}"),
+                            None => "the sender did not say what it started from".to_string(),
+                        },
+                        c["id"].as_str().unwrap_or_default(),
+                    ));
+                }
+                s
+            })?;
+            Ok(0)
+        }
         HubCommand::Grant { command } => {
             use cli::GrantCommand;
             match command {

@@ -2110,6 +2110,27 @@ fn wire(name: &str, ring: u8, bereich: Option<&str>, updated: &str) -> serde_jso
     })
 }
 
+/// The same note, declaring which version it was built on.
+fn wire_from(
+    name: &str,
+    bereich: &str,
+    updated: &str,
+    based_on: Option<&str>,
+    body: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "name": name,
+        "ring": 2,
+        "kind": "knowledge",
+        "bereich": bereich,
+        "updated": updated,
+        "frontmatter": format!("name: {name}\nring: 2\n"),
+        "body": body,
+        "based_on": based_on,
+    })
+}
+
 fn deliver(notes: Vec<serde_json::Value>) -> String {
     serde_json::json!({ "notes": notes }).to_string()
 }
@@ -2212,8 +2233,8 @@ fn one_bad_note_does_not_strand_the_batch() {
     assert_eq!(r.refused.len(), 1);
 }
 
-/// The hub relays and does not arbitrate: the newest `updated` wins, and a delivery that is
-/// behind is not an error but a sender that was.
+/// A delivery that did not start from what the hub holds is a conflict, not a loser. Before
+/// 2026-09-10 this was last-write-wins and the older version simply vanished.
 #[test]
 fn an_older_delivery_does_not_overwrite_a_newer_note() {
     let (mut hub, device, token) = hub_with_device();
@@ -2243,11 +2264,91 @@ fn an_older_delivery_does_not_overwrite_a_newer_note() {
     )]);
     let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &older, NOW).unwrap();
     assert_eq!(r.accepted, 1, "it passed the rules");
-    assert_eq!(r.stored, 0, "but it was not newer, so nothing changed");
+    assert_eq!(r.stored, 0, "but it did not replace what is held");
+    assert_eq!(r.conflicts.len(), 1, "and it was not silently dropped either");
 
     let held = hub.synced_notes("disposition").unwrap();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].updated, "2026-09-10T12:00:00Z");
+}
+
+// ---- cut 3: two machines that did not see each other ----
+
+/// The failure this cut exists for. Two devices edit the same note from the same starting
+/// point; neither saw the other. Last-write-wins would keep one and lose the other without
+/// telling anybody. Both are kept, and the delivery says so.
+#[test]
+fn concurrent_edits_are_kept_and_named_not_silently_dropped() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+
+    // The version both machines started from.
+    let base = deliver(vec![wire_from(
+        "rampe",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Rampe drei ist frei.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &base, NOW).unwrap();
+
+    // Machine A continues from it: seen, so it is taken.
+    let a = deliver(vec![wire_from(
+        "rampe",
+        "disposition",
+        "2026-09-10T10:00:00Z",
+        Some("2026-09-10T09:00:00Z"),
+        "Rampe drei ist belegt.",
+    )]);
+    let ra = super::ingest_notes(&mut hub, &collecting(), Some(&token), &a, NOW).unwrap();
+    assert_eq!(ra.stored, 1);
+    assert!(ra.conflicts.is_empty(), "a continuation is not a conflict");
+
+    // Machine B started from the same base and never saw A's change.
+    let b = deliver(vec![wire_from(
+        "rampe",
+        "disposition",
+        "2026-09-10T10:30:00Z",
+        Some("2026-09-10T09:00:00Z"),
+        "Rampe drei wird umgebaut.",
+    )]);
+    let rb = super::ingest_notes(&mut hub, &collecting(), Some(&token), &b, NOW).unwrap();
+
+    assert_eq!(rb.stored, 0, "B must not overwrite A");
+    assert_eq!(rb.conflicts.len(), 1, "and B must not be dropped either");
+    assert_eq!(rb.conflicts[0].name, "rampe");
+    assert_eq!(rb.conflicts[0].held_updated, "2026-09-10T10:00:00Z");
+
+    // A's version still stands, unchanged.
+    let held = hub.synced_notes("disposition").unwrap();
+    assert_eq!(held[0].body, "Rampe drei ist belegt.");
+
+    // And B's text is kept, not lost: this is what last-write-wins threw away.
+    let open = hub.open_conflicts("disposition").unwrap();
+    assert_eq!(open.len(), 1);
+    assert_eq!(open[0].offered_body, "Rampe drei wird umgebaut.");
+    assert_eq!(open[0].held_updated, "2026-09-10T10:00:00Z");
+}
+
+/// Re-sending what the hub already holds is neither a change nor a conflict.
+#[test]
+fn a_resend_is_not_a_conflict() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich("g1", &device.id, "disposition", Direction::Both, "r", "a", NOW)
+        .unwrap();
+    let n = deliver(vec![wire_from(
+        "x",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Text.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &n, NOW).unwrap();
+    let again = super::ingest_notes(&mut hub, &collecting(), Some(&token), &n, NOW).unwrap();
+    assert_eq!(again.accepted, 1);
+    assert_eq!(again.stored, 0);
+    assert!(again.conflicts.is_empty());
 }
 
 /// A revoked device delivers nothing, notes included.

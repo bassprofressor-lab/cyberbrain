@@ -630,6 +630,21 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: PrincipalCommand,
     },
+    /// Notes two machines changed without seeing each other, and deciding which stands.
+    Conflicts {
+        /// One bereich, or all of them when omitted.
+        #[arg(long)]
+        bereich: Option<String>,
+        /// Settle this one instead of listing.
+        #[arg(long, value_name = "ID")]
+        resolve: Option<String>,
+        /// With --resolve: take the version that was turned away. Without it the held
+        /// version stands. Either way the conflict is closed with a record of which way.
+        #[arg(long)]
+        take_offered: bool,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// Which bereich a device may share, and why. Without a grant a device delivers audit
     /// rows and nothing else; rings 0 and 1 are never eligible, whatever is granted.
     Grant {

@@ -39,6 +39,35 @@ impl Device {
     }
 }
 
+/// What became of an offered note.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
+pub enum NoteOutcome {
+    /// Taken: either the hub held nothing, or the sender built on what it holds.
+    Stored,
+    /// The sender re-sent what is already held. Not an error and not a change.
+    Unchanged,
+    /// Two machines changed it without seeing each other. Both versions are kept and
+    /// somebody has to say which one stands.
+    Conflict { id: String, held_updated: String },
+}
+
+/// Two versions of one note that nobody has reconciled yet.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct NoteConflict {
+    pub id: String,
+    pub bereich: String,
+    pub name: String,
+    pub held_updated: String,
+    pub held_from_device: String,
+    pub offered_updated: String,
+    pub offered_from_device: String,
+    pub offered_frontmatter: String,
+    pub offered_body: String,
+    pub based_on: Option<String>,
+    pub detected_at: String,
+}
+
 /// One note the hub holds for a bereich.
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct SyncedNote {
@@ -258,7 +287,28 @@ impl HubStore {
                  received_at TEXT NOT NULL,
                  PRIMARY KEY (bereich, name)
              );
-             CREATE INDEX IF NOT EXISTS synced_notes_bereich ON synced_notes(bereich);",
+             CREATE INDEX IF NOT EXISTS synced_notes_bereich ON synced_notes(bereich);
+
+             -- Two machines changed the same note without seeing each other's change. The
+             -- offered version is kept beside the held one rather than dropped: last-write-
+             -- wins is not a resolution, it is a loss that nobody was told about.
+             CREATE TABLE IF NOT EXISTS note_conflicts (
+                 id                  TEXT PRIMARY KEY,
+                 bereich             TEXT NOT NULL,
+                 name                TEXT NOT NULL,
+                 held_updated        TEXT NOT NULL,
+                 held_from_device    TEXT NOT NULL,
+                 offered_updated     TEXT NOT NULL,
+                 offered_from_device TEXT NOT NULL,
+                 offered_frontmatter TEXT NOT NULL,
+                 offered_body        TEXT NOT NULL,
+                 based_on            TEXT,
+                 detected_at         TEXT NOT NULL,
+                 resolved_at         TEXT,
+                 resolution          TEXT
+             );
+             CREATE INDEX IF NOT EXISTS note_conflicts_open
+                 ON note_conflicts(bereich, name) WHERE resolved_at IS NULL;",
         ))?;
         self.add_missing_columns()
     }
@@ -719,10 +769,104 @@ impl HubStore {
         Ok(n > 0)
     }
 
-    /// Hold a note on behalf of a bereich. Newest `updated` wins: the hub relays, it does
-    /// not arbitrate, and a delivery that is older than what is held is not an error but a
-    /// sender that was behind.
-    pub fn put_synced_note(
+    /// What became of one offered note.
+    #[allow(clippy::too_many_arguments)]
+    pub fn offer_synced_note(
+        &self,
+        id: &str,
+        bereich: &str,
+        name: &str,
+        ring: u8,
+        kind: &str,
+        updated: &str,
+        frontmatter: &str,
+        body: &str,
+        based_on: Option<&str>,
+        from_device: &str,
+        now: &str,
+    ) -> Result<NoteOutcome> {
+        let held: Option<(String, String)> = ix(self
+            .conn
+            .query_row(
+                "SELECT updated, from_device FROM synced_notes WHERE bereich = ? AND name = ?",
+                params![bereich, name],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
+
+        match held {
+            // Nothing held: nothing to conflict with.
+            None => {
+                self.write_synced_note(
+                    id,
+                    bereich,
+                    name,
+                    ring,
+                    kind,
+                    updated,
+                    frontmatter,
+                    body,
+                    from_device,
+                    now,
+                )?;
+                Ok(NoteOutcome::Stored)
+            }
+            Some((held_updated, held_device)) => {
+                // The sender says which version it started from. Equal means it saw what the
+                // hub holds and moved on from there: a continuation, and safe to take.
+                if based_on == Some(held_updated.as_str()) {
+                    self.write_synced_note(
+                        id,
+                        bereich,
+                        name,
+                        ring,
+                        kind,
+                        updated,
+                        frontmatter,
+                        body,
+                        from_device,
+                        now,
+                    )?;
+                    return Ok(NoteOutcome::Stored);
+                }
+                // Byte-identical to what is held is not a conflict, it is a re-send.
+                if updated == held_updated {
+                    return Ok(NoteOutcome::Unchanged);
+                }
+                // Anything else is two machines that did not see each other. Keep both.
+                let cid = format!("nc_{}", cyberbrain_core::NoteId::generate());
+                ix(self.conn.execute(
+                    "INSERT INTO note_conflicts
+                        (id, bereich, name, held_updated, held_from_device, offered_updated,
+                         offered_from_device, offered_frontmatter, offered_body, based_on,
+                         detected_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        cid,
+                        bereich,
+                        name,
+                        held_updated,
+                        held_device,
+                        updated,
+                        from_device,
+                        frontmatter,
+                        body,
+                        based_on,
+                        now
+                    ],
+                ))?;
+                Ok(NoteOutcome::Conflict {
+                    id: cid,
+                    held_updated,
+                })
+            }
+        }
+    }
+
+    /// Hold a note on behalf of a bereich, unconditionally. Callers reach this through
+    /// `offer_synced_note`, which is where the decision lives.
+    #[allow(clippy::too_many_arguments)]
+    fn write_synced_note(
         &self,
         id: &str,
         bereich: &str,
@@ -734,8 +878,8 @@ impl HubStore {
         body: &str,
         from_device: &str,
         now: &str,
-    ) -> Result<bool> {
-        let n = ix(self.conn.execute(
+    ) -> Result<()> {
+        ix(self.conn.execute(
             "INSERT INTO synced_notes
                 (id, bereich, name, ring, kind, updated, frontmatter, body, from_device,
                  received_at)
@@ -744,13 +888,118 @@ impl HubStore {
                 id = excluded.id, ring = excluded.ring, kind = excluded.kind,
                 updated = excluded.updated, frontmatter = excluded.frontmatter,
                 body = excluded.body, from_device = excluded.from_device,
-                received_at = excluded.received_at
-             WHERE excluded.updated > synced_notes.updated",
+                received_at = excluded.received_at",
             params![
                 id, bereich, name, ring, kind, updated, frontmatter, body, from_device, now
             ],
         ))?;
-        Ok(n > 0)
+        Ok(())
+    }
+
+    /// Conflicts nobody has decided yet. Open ones only: a resolved conflict is history and
+    /// belongs in the log, not in a list of things waiting for a person.
+    pub fn open_conflicts(&self, bereich: &str) -> Result<Vec<NoteConflict>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, bereich, name, held_updated, held_from_device, offered_updated,
+                    offered_from_device, offered_frontmatter, offered_body, based_on, detected_at
+             FROM note_conflicts
+             WHERE bereich = ? AND resolved_at IS NULL
+             ORDER BY detected_at",
+        ))?;
+        let rows = ix(stmt.query_map(params![bereich], |r| {
+            Ok(NoteConflict {
+                id: r.get(0)?,
+                bereich: r.get(1)?,
+                name: r.get(2)?,
+                held_updated: r.get(3)?,
+                held_from_device: r.get(4)?,
+                offered_updated: r.get(5)?,
+                offered_from_device: r.get(6)?,
+                offered_frontmatter: r.get(7)?,
+                offered_body: r.get(8)?,
+                based_on: r.get(9)?,
+                detected_at: r.get(10)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Every open conflict, across bereiche.
+    pub fn all_open_conflicts(&self) -> Result<Vec<NoteConflict>> {
+        let mut out = Vec::new();
+        let mut stmt = ix(self
+            .conn
+            .prepare("SELECT DISTINCT bereich FROM note_conflicts WHERE resolved_at IS NULL"))?;
+        let rows = ix(stmt.query_map([], |r| r.get::<_, String>(0)))?;
+        let mut bereiche = Vec::new();
+        for r in rows {
+            bereiche.push(ix(r)?);
+        }
+        for b in bereiche {
+            out.extend(self.open_conflicts(&b)?);
+        }
+        Ok(out)
+    }
+
+    /// Settle one conflict. `take_offered` replaces what is held with the version that was
+    /// turned away; otherwise the held version stands. Either way the conflict is closed
+    /// with a note of which way it went, so the decision is not folded into the data.
+    pub fn resolve_conflict(&self, id: &str, take_offered: bool, now: &str) -> Result<bool> {
+        let c: Option<NoteConflict> = ix(self
+            .conn
+            .query_row(
+                "SELECT id, bereich, name, held_updated, held_from_device, offered_updated,
+                        offered_from_device, offered_frontmatter, offered_body, based_on,
+                        detected_at
+                 FROM note_conflicts WHERE id = ? AND resolved_at IS NULL",
+                params![id],
+                |r| {
+                    Ok(NoteConflict {
+                        id: r.get(0)?,
+                        bereich: r.get(1)?,
+                        name: r.get(2)?,
+                        held_updated: r.get(3)?,
+                        held_from_device: r.get(4)?,
+                        offered_updated: r.get(5)?,
+                        offered_from_device: r.get(6)?,
+                        offered_frontmatter: r.get(7)?,
+                        offered_body: r.get(8)?,
+                        based_on: r.get(9)?,
+                        detected_at: r.get(10)?,
+                    })
+                },
+            )
+            .optional())?;
+        let Some(c) = c else { return Ok(false) };
+        if take_offered {
+            ix(self.conn.execute(
+                "UPDATE synced_notes
+                 SET updated = ?, frontmatter = ?, body = ?, from_device = ?, received_at = ?
+                 WHERE bereich = ? AND name = ?",
+                params![
+                    c.offered_updated,
+                    c.offered_frontmatter,
+                    c.offered_body,
+                    c.offered_from_device,
+                    now,
+                    c.bereich,
+                    c.name
+                ],
+            ))?;
+        }
+        ix(self.conn.execute(
+            "UPDATE note_conflicts SET resolved_at = ?, resolution = ? WHERE id = ?",
+            params![
+                now,
+                if take_offered { "offered" } else { "held" },
+                id
+            ],
+        ))?;
+        Ok(true)
     }
 
     /// What the hub holds for a bereich, newest first.

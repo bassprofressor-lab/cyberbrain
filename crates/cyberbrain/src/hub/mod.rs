@@ -198,6 +198,11 @@ pub struct WireNote {
     pub updated: String,
     pub frontmatter: String,
     pub body: String,
+    /// The `updated` of the version this device started from, as it last had it from the
+    /// hub. Absent means "I had nothing". It is what lets the hub tell a continuation from
+    /// two machines that never saw each other, which last-write-wins cannot.
+    #[serde(default)]
+    pub based_on: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -216,6 +221,17 @@ pub struct NotesAccepted {
     /// sender should not have offered must not strand the rest, and the sender needs to
     /// learn which one it was.
     pub refused: Vec<RefusedNote>,
+    /// Notes two machines changed independently. Both versions are held; nothing was
+    /// overwritten and nothing was dropped. Somebody has to say which one stands.
+    pub conflicts: Vec<ConflictedNote>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ConflictedNote {
+    pub name: String,
+    pub conflict: String,
+    /// What the hub holds, which this delivery did not replace.
+    pub held_updated: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -268,6 +284,7 @@ pub fn ingest_notes(
         accepted: 0,
         stored: 0,
         refused: Vec::new(),
+        conflicts: Vec::new(),
     };
     for n in delivery.notes {
         let ring = match cyberbrain_core::Ring::try_from(n.ring) {
@@ -302,7 +319,7 @@ pub fn ingest_notes(
             });
             continue;
         };
-        match hub.put_synced_note(
+        match hub.offer_synced_note(
             &n.id,
             bereich,
             &n.name,
@@ -311,14 +328,22 @@ pub fn ingest_notes(
             &n.updated,
             &n.frontmatter,
             &n.body,
+            n.based_on.as_deref(),
             &device.id,
             now,
         ) {
-            Ok(stored) => {
+            Ok(store::NoteOutcome::Stored) => {
                 out.accepted += 1;
-                if stored {
-                    out.stored += 1;
-                }
+                out.stored += 1;
+            }
+            Ok(store::NoteOutcome::Unchanged) => out.accepted += 1,
+            Ok(store::NoteOutcome::Conflict { id, held_updated }) => {
+                out.accepted += 1;
+                out.conflicts.push(ConflictedNote {
+                    name: n.name,
+                    conflict: id,
+                    held_updated,
+                });
             }
             Err(e) => out.refused.push(RefusedNote {
                 name: n.name,
@@ -335,6 +360,7 @@ pub fn ingest_notes(
             "accepted": out.accepted,
             "stored": out.stored,
             "refused": out.refused.len(),
+            "conflicts": out.conflicts.len(),
         }),
         now,
     );
