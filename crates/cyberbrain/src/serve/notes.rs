@@ -732,8 +732,14 @@ pub async fn delete_note(
             .export(&target)
             .map(|v| rel_path(st.app.root(), &v.path))
             .unwrap_or_default();
+        // Before the erasure, for the same reason the CLI reads it there.
+        let shared = st.app.shared_copy_sentence(&target);
         let r = st.app.forget(&target, dry.is_on())?;
-        Ok(Json(forget_report(r, path)))
+        let mut report = forget_report(r, path);
+        // Into `notes`, which is where this report says what it could not confirm. The copy
+        // on a hub is exactly that: erased here, and this machine cannot say for the other.
+        report.notes.extend(shared);
+        Ok(Json(report))
     })
     .await
 }

@@ -1847,3 +1847,58 @@ fn hub_conflicts_without_a_credential_is_refused() {
         "resolving must not be the unguarded half"
     );
 }
+
+/// Erasing a shared note says that the hub may still hold a copy — on every surface.
+///
+/// `forget` promises removal "in one transaction" and lists what it took. On an enrolled
+/// store that is accurate about this disk and reads as though it were about the note: the
+/// copy in `synced_notes.body` stays, and the next `hub pull` hands it back out. The CLI
+/// said so; the same erasure over the API did not, and the web page shows what the API
+/// returns.
+///
+/// Shown against the defect first (SPEC §14.2): before the sentence moved into the app and
+/// into the report's `notes`, the API answer carried no mention of the hub at all.
+#[test]
+fn erasing_a_shared_note_names_the_copy_this_machine_cannot_reach() {
+    let cb = Cb::new();
+    // Enrol by hand: `hub enrol` wants an invitation and a hub to answer, and what this
+    // test is about is what the store's own config says.
+    let cfg = cb.store.join("cyberbrain.toml");
+    let text = std::fs::read_to_string(&cfg).unwrap().replace(
+        "# url = \"https://hub.example.internal:7788\"",
+        "url = \"https://hub.example.internal:7788\"",
+    );
+    std::fs::write(&cfg, text).unwrap();
+
+    cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "geteilt",
+        "--bereich",
+        "disposition",
+        "--body",
+        "*Für: steht auch auf dem hub*",
+    ]);
+
+    let out = cb.run(&["forget", "geteilt"]);
+    assert!(out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("hub erase"),
+        "the CLI has to name the way out: {err}"
+    );
+    assert!(err.contains("disposition"), "{err}");
+
+    // And a note with no bereich was never offered anywhere, so it gets no such sentence.
+    cb.write("2", "privat", "*Für: nur hier*");
+    let out = cb.run(&["forget", "privat"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !err.contains("hub erase"),
+        "a note that was never shared must not be told it might be: {err}"
+    );
+}

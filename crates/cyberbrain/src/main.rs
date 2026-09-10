@@ -388,17 +388,13 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
 
         Command::Forget { target, dry_run } => {
             // Read before the erasure, because afterwards there is nothing left to ask.
-            let shared = app.shared_copy_hint(&target);
+            let shared = app.shared_copy_sentence(&target);
             let r = app.forget(&target, dry_run)?;
             out.emit(&r, cyberbrain_policy::erasure::render)?;
             // Art. 17 does not stop at this disk. Erasing locally and saying nothing about
             // the copy on the hub would make `forget` a promise that only half holds.
-            if let Some((bereich, name, hub)) = shared {
-                eprintln!(
-                    "\nThis note was in bereich {bereich} and this store is enrolled with \
-                     {hub}.\nThe hub may hold a copy. Erasing it there is a separate step:\n  \
-                     cyberbrain hub erase {name} --bereich {bereich}\n"
-                );
+            if let Some(sentence) = shared {
+                eprintln!("\n{sentence}\n");
             }
         }
         Command::Import {

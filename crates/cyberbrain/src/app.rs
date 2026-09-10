@@ -2808,6 +2808,28 @@ impl App {
         Some((bereich, note.front.name.clone(), hub))
     }
 
+    /// The sentence `forget` owes somebody when the note it just erased was shared.
+    ///
+    /// Worded once and used by every surface that erases. It was only ever printed by the
+    /// CLI, so the same erasure through the web page or the API said "removed: file,
+    /// blocks, vectors, fts_rows" and nothing about the copy on the hub — a report that is
+    /// accurate about this disk and reads as if it were about the note.
+    ///
+    /// Has to be called before the erasure: afterwards there is nothing left to ask.
+    pub fn shared_copy_sentence(&self, target: &str) -> Option<String> {
+        let (bereich, name, hub) = self.shared_copy_hint(target)?;
+        Some(format!(
+            concat!(
+                "This note was in bereich {b} and this store is enrolled with {h}. The hub ",
+                "may hold a copy, and erasing it there is a separate step: ",
+                "cyberbrain hub erase {n} --bereich {b}"
+            ),
+            b = bereich,
+            h = hub,
+            n = name
+        ))
+    }
+
     /// Take what the hub has for this machine.
     ///
     /// The hub decided what this device may see; this decides what to keep, and it is
