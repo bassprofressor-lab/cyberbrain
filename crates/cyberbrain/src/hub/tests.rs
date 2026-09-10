@@ -2092,3 +2092,185 @@ fn a_record_that_cannot_be_written_says_what_to_do_about_it() {
         "database disk image is malformed"
     );
 }
+
+// ---- note sync: what the hub takes and what it turns away (cut 2) ----
+
+use super::sync_access::Direction;
+
+fn wire(name: &str, ring: u8, bereich: Option<&str>, updated: &str) -> serde_json::Value {
+    serde_json::json!({
+        "id": format!("01ARZ3NDEKTSV4RRFFQ69G5{:03}", name.len()),
+        "name": name,
+        "ring": ring,
+        "kind": "knowledge",
+        "bereich": bereich,
+        "updated": updated,
+        "frontmatter": format!("name: {name}\nring: {ring}\n"),
+        "body": format!("*Für: {name}*\n\nInhalt von {name}."),
+    })
+}
+
+fn deliver(notes: Vec<serde_json::Value>) -> String {
+    serde_json::json!({ "notes": notes }).to_string()
+}
+
+/// The rule the hub enforces for itself. The sender checks first, but a sender is a program
+/// somebody can rewrite; this is the check that counts.
+#[test]
+fn the_hub_refuses_rings_0_and_1_even_when_offered() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "Schichtuebergabe",
+        "admin",
+        NOW,
+    )
+    .unwrap();
+
+    let body = deliver(vec![
+        wire("eine-invariante", 0, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire("das-protokoll", 1, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire("normales-wissen", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
+    ]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW).unwrap();
+
+    assert_eq!(r.accepted, 1, "only the ring 2 note may be taken");
+    assert_eq!(r.refused.len(), 2);
+    for ref_ in &r.refused {
+        assert!(
+            ref_.why.contains("never leaves the machine"),
+            "unexpected reason: {}",
+            ref_.why
+        );
+    }
+    // And the one that was allowed really is held.
+    let held = hub.synced_notes("disposition").unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].name, "normales-wissen");
+}
+
+/// A device may only deliver the bereiche it was granted. This is the operator's own
+/// example, enforced at the receiving end rather than trusted from the sender.
+#[test]
+fn a_device_cannot_deliver_a_bereich_it_was_not_granted() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "Schichtuebergabe",
+        "admin",
+        NOW,
+    )
+    .unwrap();
+
+    let body = deliver(vec![
+        wire("tour", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire("gehalt", 2, Some("hr"), "2026-09-10T10:00:00Z"),
+        wire("ohne", 2, None, "2026-09-10T10:00:00Z"),
+    ]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW).unwrap();
+
+    assert_eq!(r.accepted, 1);
+    assert_eq!(r.refused.len(), 2);
+    assert!(r.refused.iter().any(|x| x.name == "gehalt"));
+    assert!(
+        r.refused
+            .iter()
+            .any(|x| x.name == "ohne" && x.why.contains("no bereich"))
+    );
+    assert!(hub.synced_notes("hr").unwrap().is_empty());
+}
+
+/// A batch is not all-or-nothing: one note that should not have been offered must not
+/// strand the rest, or a single mistake stops a department from sharing anything.
+#[test]
+fn one_bad_note_does_not_strand_the_batch() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "Schichtuebergabe",
+        "admin",
+        NOW,
+    )
+    .unwrap();
+    let body = deliver(vec![
+        wire("a", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire("verboten", 0, Some("disposition"), "2026-09-10T10:00:00Z"),
+        wire("b", 2, Some("disposition"), "2026-09-10T10:00:00Z"),
+    ]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW).unwrap();
+    assert_eq!(r.accepted, 2);
+    assert_eq!(r.stored, 2);
+    assert_eq!(r.refused.len(), 1);
+}
+
+/// The hub relays and does not arbitrate: the newest `updated` wins, and a delivery that is
+/// behind is not an error but a sender that was.
+#[test]
+fn an_older_delivery_does_not_overwrite_a_newer_note() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "Schichtuebergabe",
+        "admin",
+        NOW,
+    )
+    .unwrap();
+    let newer = deliver(vec![wire(
+        "regel",
+        2,
+        Some("disposition"),
+        "2026-09-10T12:00:00Z",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&token), &newer, NOW).unwrap();
+
+    let older = deliver(vec![wire(
+        "regel",
+        2,
+        Some("disposition"),
+        "2026-09-01T08:00:00Z",
+    )]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &older, NOW).unwrap();
+    assert_eq!(r.accepted, 1, "it passed the rules");
+    assert_eq!(r.stored, 0, "but it was not newer, so nothing changed");
+
+    let held = hub.synced_notes("disposition").unwrap();
+    assert_eq!(held.len(), 1);
+    assert_eq!(held[0].updated, "2026-09-10T12:00:00Z");
+}
+
+/// A revoked device delivers nothing, notes included.
+#[test]
+fn a_revoked_device_delivers_no_notes() {
+    let (mut hub, device, token) = hub_with_device();
+    hub.grant_bereich(
+        "g1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "r",
+        "admin",
+        NOW,
+    )
+    .unwrap();
+    hub.revoke(&device.id, NOW).unwrap();
+    let body = deliver(vec![wire(
+        "x",
+        2,
+        Some("disposition"),
+        "2026-09-10T10:00:00Z",
+    )]);
+    let r = super::ingest_notes(&mut hub, &collecting(), Some(&token), &body, NOW);
+    assert!(matches!(r, Err(super::Refusal::NotAuthorised(_))));
+}

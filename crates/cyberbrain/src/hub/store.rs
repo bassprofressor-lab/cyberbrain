@@ -39,6 +39,20 @@ impl Device {
     }
 }
 
+/// One note the hub holds for a bereich.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct SyncedNote {
+    pub id: String,
+    pub bereich: String,
+    pub name: String,
+    pub ring: u8,
+    pub kind: String,
+    pub updated: String,
+    pub frontmatter: String,
+    pub body: String,
+    pub from_device: String,
+}
+
 pub struct HubStore {
     // Private, except to the tests in this module, which need to simulate the one attack
     // the triggers cannot stop: dropping them and rewriting a row. That is exactly the
@@ -210,7 +224,41 @@ impl HubStore {
                  BEGIN SELECT raise(ABORT, 'the hub audit is append-only'); END;
              CREATE TRIGGER IF NOT EXISTS hub_audit_no_delete
                  BEFORE DELETE ON hub_audit
-                 BEGIN SELECT raise(ABORT, 'the hub audit is append-only'); END;",
+                 BEGIN SELECT raise(ABORT, 'the hub audit is append-only'); END;
+
+             -- Which bereich a device may send or receive, and why. The reason is not
+             -- decoration: a department boundary is a purpose limitation, and a purpose
+             -- nobody wrote down cannot be shown to anybody later.
+             CREATE TABLE IF NOT EXISTS bereich_grants (
+                 id         TEXT PRIMARY KEY,
+                 device     TEXT NOT NULL REFERENCES devices(id),
+                 bereich    TEXT NOT NULL,
+                 direction  TEXT NOT NULL CHECK (direction IN ('send','receive','both')),
+                 reason     TEXT NOT NULL,
+                 granted_by TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 revoked_at TEXT
+             );
+             CREATE INDEX IF NOT EXISTS bereich_grants_device
+                 ON bereich_grants(device, bereich);
+
+             -- Notes the hub holds on behalf of a bereich. The hub is a relay, not the
+             -- authority: `name` is unique per bereich, and the newest `updated` wins, so a
+             -- hub that loses this table costs a re-push and not a decision.
+             CREATE TABLE IF NOT EXISTS synced_notes (
+                 id          TEXT NOT NULL,
+                 bereich     TEXT NOT NULL,
+                 name        TEXT NOT NULL,
+                 ring        INTEGER NOT NULL CHECK (ring BETWEEN 2 AND 4),
+                 kind        TEXT NOT NULL,
+                 updated     TEXT NOT NULL,
+                 body        TEXT NOT NULL,
+                 frontmatter TEXT NOT NULL,
+                 from_device TEXT NOT NULL REFERENCES devices(id),
+                 received_at TEXT NOT NULL,
+                 PRIMARY KEY (bereich, name)
+             );
+             CREATE INDEX IF NOT EXISTS synced_notes_bereich ON synced_notes(bereich);",
         ))?;
         self.add_missing_columns()
     }
@@ -603,6 +651,134 @@ pub struct HubEvent {
 impl HubStore {
     /// Append to the hub's own chain. Every call in this file that changes who may see what
     /// goes through here, so "it happened but was not recorded" is not a reachable state.
+    // ----- note sync: grants and the notes themselves ------------------------------------
+
+    /// Every grant recorded for a device, revoked ones included. `sync_access::may_move`
+    /// needs the withdrawn ones to tell "never granted" from "taken away", which are
+    /// different answers to whoever reads the refusal.
+    pub fn grants_for_device(&self, device: &str) -> Result<Vec<super::sync_access::BereichGrant>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, device, bereich, direction, reason, granted_by, created_at, revoked_at
+             FROM bereich_grants WHERE device = ? ORDER BY created_at",
+        ))?;
+        let rows = ix(stmt.query_map(params![device], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, String>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, String>(6)?,
+                r.get::<_, Option<String>>(7)?,
+            ))
+        }))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, device, bereich, direction, reason, granted_by, created_at, revoked_at) =
+                ix(row)?;
+            out.push(super::sync_access::BereichGrant {
+                id,
+                device,
+                bereich,
+                direction: super::sync_access::Direction::parse(&direction)?,
+                reason,
+                granted_by,
+                created_at,
+                revoked_at,
+            });
+        }
+        Ok(out)
+    }
+
+    /// Record a grant. The caller checks that the granter is an administrator; this writes.
+    pub fn grant_bereich(
+        &self,
+        id: &str,
+        device: &str,
+        bereich: &str,
+        direction: super::sync_access::Direction,
+        reason: &str,
+        granted_by: &str,
+        now: &str,
+    ) -> Result<()> {
+        ix(self.conn.execute(
+            "INSERT INTO bereich_grants
+                (id, device, bereich, direction, reason, granted_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![id, device, bereich, direction.as_str(), reason, granted_by, now],
+        ))?;
+        Ok(())
+    }
+
+    pub fn revoke_grant(&self, id: &str, now: &str) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "UPDATE bereich_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            params![now, id],
+        ))?;
+        Ok(n > 0)
+    }
+
+    /// Hold a note on behalf of a bereich. Newest `updated` wins: the hub relays, it does
+    /// not arbitrate, and a delivery that is older than what is held is not an error but a
+    /// sender that was behind.
+    pub fn put_synced_note(
+        &self,
+        id: &str,
+        bereich: &str,
+        name: &str,
+        ring: u8,
+        kind: &str,
+        updated: &str,
+        frontmatter: &str,
+        body: &str,
+        from_device: &str,
+        now: &str,
+    ) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "INSERT INTO synced_notes
+                (id, bereich, name, ring, kind, updated, frontmatter, body, from_device,
+                 received_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             ON CONFLICT(bereich, name) DO UPDATE SET
+                id = excluded.id, ring = excluded.ring, kind = excluded.kind,
+                updated = excluded.updated, frontmatter = excluded.frontmatter,
+                body = excluded.body, from_device = excluded.from_device,
+                received_at = excluded.received_at
+             WHERE excluded.updated > synced_notes.updated",
+            params![
+                id, bereich, name, ring, kind, updated, frontmatter, body, from_device, now
+            ],
+        ))?;
+        Ok(n > 0)
+    }
+
+    /// What the hub holds for a bereich, newest first.
+    pub fn synced_notes(&self, bereich: &str) -> Result<Vec<SyncedNote>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, bereich, name, ring, kind, updated, frontmatter, body, from_device
+             FROM synced_notes WHERE bereich = ? ORDER BY updated DESC",
+        ))?;
+        let rows = ix(stmt.query_map(params![bereich], |r| {
+            Ok(SyncedNote {
+                id: r.get(0)?,
+                bereich: r.get(1)?,
+                name: r.get(2)?,
+                ring: r.get::<_, i64>(3)? as u8,
+                kind: r.get(4)?,
+                updated: r.get(5)?,
+                frontmatter: r.get(6)?,
+                body: r.get(7)?,
+                from_device: r.get(8)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
     pub fn record(
         &self,
         actor: &str,

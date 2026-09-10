@@ -1,7 +1,14 @@
 //! The hub's HTTP surface. Four routes, and three of them are read-only.
 //!
-//! Deliberately not the store's API: no recall, no notes, no retention, nothing that can
-//! change a note anywhere. What a client may do here is hand over rows and say hello.
+//! Deliberately not the store's API: no recall, no retention, nothing that reaches into a
+//! store and changes it. What a client may do here is hand over rows, hand over notes for
+//! the bereiche it was granted, and say hello.
+//!
+//! Notes were added on 2026-09-10 and the sentence above was rewritten rather than left to
+//! age into a falsehood. What has not changed: nothing here writes into anybody's store.
+//! The hub holds what it was given, for the bereiche a device was granted, and rings 0 and
+//! 1 are refused at three separate places — the sender, `ingest_notes`, and a CHECK on the
+//! table itself.
 
 use super::{HubStore, LicenceState, Refusal, ingest};
 use axum::extract::{ConnectInfo, Form, State};
@@ -40,6 +47,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/devices", post(add_device))
         .route("/health", get(health))
         .route("/api/v1/ingest", post(post_ingest))
+        .route("/api/v1/notes", post(post_notes))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -486,6 +494,40 @@ fn client_version(headers: &HeaderMap) -> Option<String> {
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty() && s.len() <= 64)
+}
+
+/// Take a delivery of notes. Same authentication as `post_ingest`, different cargo, and a
+/// per-note answer: a batch is not all-or-nothing, so the sender learns which note it
+/// should not have offered instead of only that something was wrong.
+async fn post_notes(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let token = bearer(&headers);
+    let now = jiff::Timestamp::now().to_string();
+    let mut hub = match state.hub.lock() {
+        Ok(h) => h,
+        Err(e) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": format!("hub record unavailable: {e}") })),
+            )
+                .into_response();
+        }
+    };
+    let licence = LicenceState::read(&hub, jiff::Timestamp::now());
+    match super::ingest_notes(&mut hub, &licence, token.as_deref(), &body, &now) {
+        Ok(a) => (StatusCode::OK, Json(json!(a))).into_response(),
+        Err(refusal) => {
+            let code = match &refusal {
+                Refusal::NotAuthorised(_) => StatusCode::UNAUTHORIZED,
+                Refusal::NotCollecting(_) => StatusCode::SERVICE_UNAVAILABLE,
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (code, Json(json!({ "error": refusal.to_string() }))).into_response()
+        }
+    }
 }
 
 async fn post_ingest(

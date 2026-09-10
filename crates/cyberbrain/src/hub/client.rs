@@ -213,6 +213,62 @@ pub enum Reply {
     },
 }
 
+/// Deliver notes. The same shape as `deliver`, and deliberately a separate function with a
+/// separate egress purpose: what leaves here is content, not evidence, and a reader of
+/// `cyberbrain policy egress` must be able to tell the two apart.
+///
+/// The caller selects what to send. This function does not read the store, because the one
+/// place that decides which notes a machine offers should be the one place a reviewer has
+/// to read — not split between a selector here and a filter somewhere else.
+pub async fn deliver_notes(
+    egress: &cyberbrain_policy::Egress,
+    actor: &cyberbrain_policy::Actor,
+    hub_url: &str,
+    token: &str,
+    pin: Option<&str>,
+    version: &str,
+    batch: String,
+) -> Result<Reply> {
+    let url = format!("{}/api/v1/notes", hub_url.trim_end_matches('/'));
+    let pin = pin
+        .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
+        .transpose()?;
+    // NoteSync, not AuditSync. The gate refuses this outright unless allow_note_sync is set,
+    // so a store enrolled for audit cannot reach this path by accident.
+    let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::NoteSync, &url)?;
+    let resp = cyberbrain_policy::egress::transport::post_bearer(
+        &ticket,
+        &url,
+        token,
+        &[("x-cyberbrain-version", version)],
+        batch,
+        pin,
+    )
+    .await?;
+
+    let body = String::from_utf8_lossy(&resp.body).to_string();
+    let json: serde_json::Value = serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+    let message = json
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or(body.trim())
+        .to_string();
+    Ok(match resp.status {
+        200 => Reply::Ok(Delivered {
+            accepted: json
+                .get("accepted")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_default() as usize,
+            // `stored` is how many were newer than what the hub held; the rest passed the
+            // rules and changed nothing. Reported as rows so one number means one thing.
+            total_rows: json.get("stored").and_then(|v| v.as_i64()).unwrap_or_default(),
+            hub: hub_url.to_string(),
+        }),
+        503 => Reply::NotCollecting(message),
+        status => Reply::Refused { status, message },
+    })
+}
+
 /// Send one bundle to the hub, through the egress gate.
 ///
 /// The gate is not decoration here: it is what makes this path appear in

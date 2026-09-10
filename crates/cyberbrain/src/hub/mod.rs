@@ -187,6 +187,160 @@ impl std::fmt::Display for Refusal {
 /// because an unknown sender's file is not worth parsing. The bundle's own integrity next,
 /// because a broken file tells the sender something different from a gap. The anchor last,
 /// because that comparison is only meaningful once the chain inside the file is known good.
+/// One note as it arrives over the wire.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct WireNote {
+    pub id: String,
+    pub name: String,
+    pub ring: u8,
+    pub kind: String,
+    pub bereich: Option<String>,
+    pub updated: String,
+    pub frontmatter: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct NoteDelivery {
+    pub notes: Vec<WireNote>,
+}
+
+/// What became of a delivery of notes.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NotesAccepted {
+    /// Notes that passed every check.
+    pub accepted: usize,
+    /// Of those, the ones that were newer than what the hub held.
+    pub stored: usize,
+    /// Refused notes, each with the reason. A delivery is not all-or-nothing: one note the
+    /// sender should not have offered must not strand the rest, and the sender needs to
+    /// learn which one it was.
+    pub refused: Vec<RefusedNote>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RefusedNote {
+    pub name: String,
+    pub why: String,
+}
+
+/// Take a delivery of notes from a device.
+///
+/// Every note is checked here even though the sender checked it first. That is not
+/// redundancy: the sender's check is a courtesy that keeps traffic down, and this one is
+/// the rule. A hub that trusts its clients has no rule at all — it has a client that has
+/// not yet been rewritten.
+pub fn ingest_notes(
+    hub: &mut store::HubStore,
+    licence: &LicenceState,
+    token: Option<&str>,
+    body: &str,
+    now: &str,
+) -> std::result::Result<NotesAccepted, Refusal> {
+    if !licence.may_collect() {
+        return Err(Refusal::NotCollecting(format!(
+            "{} Keep buffering: nothing is lost, and a renewed licence takes what you held.",
+            licence.line()
+        )));
+    }
+    let token = token.ok_or_else(|| {
+        Refusal::NotAuthorised("no device token; send it as `Authorization: Bearer …`".into())
+    })?;
+    let device = hub
+        .device_by_token(token)
+        .map_err(|e| Refusal::NotAuthorised(format!("cannot check the token: {e}")))?
+        .ok_or_else(|| Refusal::NotAuthorised("unknown device token".into()))?;
+    if !device.is_active() {
+        return Err(Refusal::NotAuthorised(format!(
+            "device {} was revoked",
+            device.name
+        )));
+    }
+
+    let delivery: NoteDelivery = serde_json::from_str(body)
+        .map_err(|e| Refusal::BadBundle(format!("delivery is not a note batch: {e}")))?;
+
+    let grants = hub
+        .grants_for_device(&device.id)
+        .map_err(|e| Refusal::BadBundle(format!("cannot read this device's grants: {e}")))?;
+
+    let mut out = NotesAccepted {
+        accepted: 0,
+        stored: 0,
+        refused: Vec::new(),
+    };
+    for n in delivery.notes {
+        let ring = match cyberbrain_core::Ring::try_from(n.ring) {
+            Ok(r) => r,
+            Err(e) => {
+                out.refused.push(RefusedNote {
+                    name: n.name,
+                    why: format!("ring {}: {e}", n.ring),
+                });
+                continue;
+            }
+        };
+        if let Err(denied) = sync_access::may_move(
+            &device.id,
+            ring,
+            n.bereich.as_deref(),
+            sync_access::Direction::Send,
+            &grants,
+        ) {
+            out.refused.push(RefusedNote {
+                name: n.name,
+                why: denied.line(),
+            });
+            continue;
+        }
+        // `may_move` has already refused rings 0 and 1; this unwrap of the bereich is what
+        // it guarantees, and the table's CHECK is the third place the same rule is stated.
+        let Some(bereich) = n.bereich.as_deref() else {
+            out.refused.push(RefusedNote {
+                name: n.name,
+                why: "no bereich".into(),
+            });
+            continue;
+        };
+        match hub.put_synced_note(
+            &n.id,
+            bereich,
+            &n.name,
+            n.ring,
+            &n.kind,
+            &n.updated,
+            &n.frontmatter,
+            &n.body,
+            &device.id,
+            now,
+        ) {
+            Ok(stored) => {
+                out.accepted += 1;
+                if stored {
+                    out.stored += 1;
+                }
+            }
+            Err(e) => out.refused.push(RefusedNote {
+                name: n.name,
+                why: format!("could not be stored: {e}"),
+            }),
+        }
+    }
+
+    let _ = hub.record(
+        &device.id,
+        "notes.ingested",
+        serde_json::json!({
+            "device": device.name,
+            "accepted": out.accepted,
+            "stored": out.stored,
+            "refused": out.refused.len(),
+        }),
+        now,
+    );
+    Ok(out)
+}
+
 pub fn ingest(
     hub: &mut HubStore,
     licence: &LicenceState,
