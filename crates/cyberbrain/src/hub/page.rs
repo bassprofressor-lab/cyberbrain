@@ -598,3 +598,168 @@ pub fn conflicts_page(name: &str, conflicts: &[(super::store::NoteConflict, Stri
     ));
     h
 }
+
+/// What a countersigner or an auditor sees. Everything on it is about decisions, never rows.
+///
+/// This page exists because the two roles the hub's whole two-person rule rests on had no
+/// way in at all: they could sign in, land on the operator's page, be told they were nobody,
+/// and their actual work — approving a request, countersigning a bereich — was reachable
+/// only from a shell on the hub's own machine. Which is the machine whose operator they are
+/// there to check.
+pub struct SigningView<'a> {
+    pub name: &'a str,
+    pub role: super::access::Role,
+    /// Requests to see activity. A countersigner gets all of them; an auditor their own.
+    pub requests: Vec<(super::access::AccessRequest, super::access::RequestState)>,
+    /// Bereich grants written and waiting for a second signature. Countersigners only.
+    pub grants: Vec<super::sync_access::BereichGrant>,
+    /// The hub's own log. Countersigners only — it is the record of who looked at what.
+    pub log: Vec<super::store::HubEvent>,
+    pub devices: Vec<(String, String)>,
+    pub flash: Option<Result<String, String>>,
+}
+
+pub fn signing_page(v: &SigningView<'_>) -> String {
+    use super::access::{RequestState, Role};
+    let signing = v.role == Role::Countersigner;
+    let mut h = String::from(HEAD);
+    h.push_str(&format!(
+        "<header><h1>{title}</h1></header>\
+         <p class=note>Signed in as {name}.\
+         <form method=post action=\"/logout\" style=\"display:inline\">\
+         <button type=submit>Sign out</button></form></p>",
+        title = if signing {
+            "To countersign"
+        } else {
+            "Access requests"
+        },
+        name = esc(v.name),
+    ));
+    match &v.flash {
+        Some(Ok(m)) => h.push_str(&format!("<p class=\"flash ok\">{}</p>", esc(m))),
+        Some(Err(m)) => h.push_str(&format!("<p class=\"flash bad\">{}</p>", esc(m))),
+        None => {}
+    }
+
+    // --- bereich grants ---------------------------------------------------------------
+    if signing {
+        h.push_str("<section class=card><h2>Bereiche waiting for a second signature</h2>");
+        if v.grants.is_empty() {
+            h.push_str("<p class=muted>Nothing waiting.</p>");
+        } else {
+            h.push_str(
+                "<p class=muted>Somebody has written these down. None of them moves a note \
+                 until you sign it, and signing puts both names in the log.</p>\
+                 <table><thead><tr><th>Device<th>Bereich<th>Direction<th>Reason<th>Written by\
+                 <th></tr></thead><tbody>",
+            );
+            for g in &v.grants {
+                h.push_str(&format!(
+                    "<tr><td>{d}<td>{b}<td>{dir}<td>{why}<td>{by}\
+                     <td><form method=post action=\"/grants/{id}/approve\">\
+                     <button type=submit>Countersign</button></form></tr>",
+                    d = esc(&g.device),
+                    b = esc(&g.bereich),
+                    dir = esc(g.direction.as_str()),
+                    why = esc(&g.reason),
+                    by = esc(&g.granted_by),
+                    id = esc(&g.id),
+                ));
+            }
+            h.push_str("</tbody></table>");
+        }
+        h.push_str("</section>");
+    }
+
+    // --- access requests --------------------------------------------------------------
+    h.push_str(&format!(
+        "<section class=card><h2>{}</h2>",
+        if signing {
+            "Requests to see activity"
+        } else {
+            "Your requests"
+        }
+    ));
+    if v.requests.is_empty() {
+        h.push_str("<p class=muted>None.</p>");
+    } else {
+        h.push_str(
+            "<table><thead><tr><th>Asked by<th>What<th>Reason<th>State<th></tr></thead><tbody>",
+        );
+        for (r, state) in &v.requests {
+            let what = match &r.device {
+                Some(d) => esc(d),
+                None => "every device".to_string(),
+            };
+            let state_text = match state {
+                RequestState::Pending => "waiting".to_string(),
+                RequestState::Open => {
+                    format!("open until {}", esc(r.expires_at.as_deref().unwrap_or("?")))
+                }
+                RequestState::Closed => "window closed".to_string(),
+            };
+            let action = match (signing, state) {
+                (true, RequestState::Pending) if r.requester != v.name => format!(
+                    "<form method=post action=\"/requests/{}/approve\">\
+                     <button type=submit>Approve for 7 days</button></form>",
+                    esc(&r.id)
+                ),
+                // Named rather than hidden: a countersigner who asked for something has to
+                // see why the button is not there, or the page looks broken to them.
+                (true, RequestState::Pending) => "you asked for this one".to_string(),
+                _ => String::new(),
+            };
+            h.push_str(&format!(
+                "<tr><td>{who}<td>{what}<td>{why}<td>{state_text}<td>{action}</tr>",
+                who = esc(&r.requester_name),
+                why = esc(&r.reason),
+            ));
+        }
+        h.push_str("</tbody></table>");
+    }
+    h.push_str("</section>");
+
+    // --- ask for one ------------------------------------------------------------------
+    if v.role == Role::Auditor {
+        let mut options = String::from("<option value=\"\">every device</option>");
+        for (id, name) in &v.devices {
+            options.push_str(&format!(
+                "<option value=\"{}\">{}</option>",
+                esc(id),
+                esc(name)
+            ));
+        }
+        h.push_str(&format!(
+            "<section class=card><h2>Ask to see activity</h2>\
+             <form method=post action=\"/requests\">\
+             <label>Which machine <select name=device>{options}</select></label>\
+             <label>Why <textarea name=reason rows=3 required \
+               placeholder=\"The countersigner reads this and nothing else decides for \
+               them.\"></textarea></label>\
+             <button type=submit>Ask</button></form>\
+             <p class=note>Approving is somebody else's to do, and the rows come out with \
+             <code>cyberbrain hub disclose</code> once the window is open.</p></section>"
+        ));
+    }
+
+    // --- the log ----------------------------------------------------------------------
+    if signing {
+        h.push_str(
+            "<section class=card><h2>The hub's own log</h2>\
+             <p class=muted>Every role granted, every request, every approval, every \
+             disclosure, in a chain that cannot be edited afterwards without it showing.</p>\
+             <table><thead><tr><th>When<th>Who<th>What</tr></thead><tbody>",
+        );
+        for e in v.log.iter().rev() {
+            h.push_str(&format!(
+                "<tr><td>{}<td>{}<td>{}</tr>",
+                esc(&e.ts),
+                esc(&e.actor),
+                esc(&e.action)
+            ));
+        }
+        h.push_str("</tbody></table></section>");
+    }
+    h.push_str("</main>");
+    h
+}

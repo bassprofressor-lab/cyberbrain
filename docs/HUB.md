@@ -523,6 +523,20 @@ approval, an administrator asking for activity, an auditor trying to countersign
 auditor collecting somebody else's approval, and a window that has closed. That last one says
 to make a new request rather than extend the old one — so the reason is stated again.
 
+### The same thing without a command line
+
+Signing in with an auditor or countersigner credential opens `/requests` rather than the
+operator's page. An auditor asks there and sees their own requests and nothing else — the
+reasons other people wrote are not their business. A countersigner sees every request with
+its reason, the bereich grants waiting for a second signature, and the hub's own log, and
+approves or countersigns with a button.
+
+This matters more than a convenience. The two roles this hub's promise rests on used to have
+a credential, a login box that accepted it, and nowhere to go: their work was reachable only
+from a shell on the hub's own machine — the machine whose operator they are there to check.
+A works council that has to ask the administrator for a terminal in order to supervise the
+administrator is not a supervision anybody should accept.
+
 ### The record the works council reads
 
 ```console

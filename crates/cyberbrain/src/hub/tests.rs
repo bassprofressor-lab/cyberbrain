@@ -2934,3 +2934,171 @@ fn a_grant_takes_two_people_before_a_note_moves() {
     let f = super::fetch_notes(&hub, Some(&my_token), None).unwrap();
     assert_eq!(f.notes.len(), 1, "once two people agreed, it moves");
 }
+
+/// Every role lands somewhere it can work, and the two-person rule is reachable from a
+/// browser.
+///
+/// Before this the login redirected everybody to `/`, which is the operator's page: an
+/// editor, an auditor and a countersigner signed in successfully and were shown the login
+/// form again. `/login` was a POST target only, so the redirect an unauthenticated visitor
+/// follows answered 405. And there was no route at all for a request or an approval — the
+/// countersignature this hub's whole promise rests on was reachable only from a shell on the
+/// hub's own machine, which is the machine whose operator they are there to check.
+#[tokio::test]
+async fn each_role_lands_on_the_page_that_is_theirs() {
+    use super::access::Role;
+    let hub = hub_with_password("correct horse battery");
+    let (device, _) = hub.add_device("laptop-disposition", NOW).unwrap();
+    hub.grant_bereich(
+        "bg-1",
+        &device.id,
+        "disposition",
+        Direction::Both,
+        "Schichtübergabe",
+        "admin-1",
+        NOW,
+    )
+    .unwrap();
+    let (_editor, editor_token) = hub.add_principal("Rita", Role::Editor, NOW).unwrap();
+    let (_auditor, auditor_token) = hub.add_principal("Kraus", Role::Auditor, NOW).unwrap();
+    let (_council, council_token) = hub
+        .add_principal("Betriebsrat", Role::Countersigner, NOW)
+        .unwrap();
+    let state = state_for(hub, true);
+
+    // A GET on /login is a page, not a method error.
+    let mut req = Request::builder()
+        .method("GET")
+        .uri("/login")
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        StatusCode::OK,
+        "a GET on /login has to be a page"
+    );
+
+    // Each credential lands on its own page.
+    for (token, where_to) in [
+        (&editor_token, "/conflicts"),
+        (&auditor_token, "/requests"),
+        (&council_token, "/requests"),
+    ] {
+        let r = sign_in_from(state.clone(), "192.168.1.20:51000", token).await;
+        assert_eq!(r.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            r.headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|v| v.to_str().ok()),
+            Some(where_to),
+            "a role that lands on the operator's page is a role that sees a login form"
+        );
+    }
+
+    // The countersigner can see the waiting grant and sign it, without a shell.
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &council_token).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let body = get_as(state.clone(), "/requests", &cookie).await;
+    assert!(
+        body.contains("bg-1"),
+        "the waiting grant has to be on the page: {body}"
+    );
+    assert!(body.contains("Schichtübergabe"), "and its reason: {body}");
+
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/grants/bg-1/approve")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .grant("bg-1")
+            .unwrap()
+            .unwrap()
+            .is_effective(),
+        "the grant should be in force after a countersignature from the browser"
+    );
+
+    // An auditor is not a countersigner: the same POST does nothing for them.
+    hub_grant_pending(&state, "bg-2", &device.id);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &auditor_token).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/grants/bg-2/approve")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let _ = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert!(
+        !state
+            .hub
+            .lock()
+            .unwrap()
+            .grant("bg-2")
+            .unwrap()
+            .unwrap()
+            .is_effective(),
+        "an auditor countersigned a bereich"
+    );
+}
+
+fn hub_grant_pending(state: &Arc<super::api::HubState>, id: &str, device: &str) {
+    state
+        .hub
+        .lock()
+        .unwrap()
+        .grant_bereich(id, device, "hr", Direction::Both, "r", "admin-1", NOW)
+        .unwrap();
+}
+
+/// A GET with a cookie, returning the body as text.
+async fn get_as(state: Arc<super::api::HubState>, path: &str, cookie: &str) -> String {
+    let mut req = Request::builder()
+        .method("GET")
+        .uri(path)
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state).oneshot(req).await.unwrap();
+    let b = axum::body::to_bytes(r.into_body(), 512 * 1024)
+        .await
+        .unwrap();
+    String::from_utf8_lossy(&b).into_owned()
+}

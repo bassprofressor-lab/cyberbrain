@@ -40,7 +40,7 @@ pub fn router(state: Arc<HubState>) -> Router {
     Router::new()
         .route("/", get(page))
         .route("/claim", post(claim))
-        .route("/login", post(login))
+        .route("/login", get(login_page).post(login))
         .route("/logout", get(logout))
         .route("/password", post(change_password))
         .route("/licence", post(install_licence))
@@ -54,6 +54,9 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/api/v1/fetch", post(post_fetch))
         .route("/conflicts", get(get_conflicts))
         .route("/conflicts/{id}", post(post_conflict))
+        .route("/requests", get(get_requests).post(post_request))
+        .route("/requests/{id}/approve", post(approve))
+        .route("/grants/{id}/approve", post(countersign))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -154,7 +157,14 @@ async fn page(
         Who::Admin => {}
         Who::MayClaim => return html(super::page::claim_page(None)),
         Who::TooEarly => return (StatusCode::FORBIDDEN, ELSEWHERE).into_response(),
-        Who::Stranger => return html(super::page::login_page(None)),
+        Who::Stranger => {
+            // Signed in, just not as the operator: send them to the page that is theirs
+            // rather than to a login form they have already filled in.
+            return match signed_in(&state, &headers) {
+                Some(w) => Redirect::to(home_for(&w)).into_response(),
+                None => html(super::page::login_page(None)),
+            };
+        }
     }
     let hub = match state.hub.lock() {
         Ok(h) => h,
@@ -269,15 +279,25 @@ async fn login(
             "That is not the password or a credential this hub knows.",
         )));
     };
+    let home = home_for(&who);
     let token = state.sessions.open_as(jiff::Timestamp::now(), who);
     (
         [(
             header::SET_COOKIE,
             super::admin::set_cookie(&token, state.encrypted),
         )],
-        Redirect::to("/"),
+        Redirect::to(home),
     )
         .into_response()
+}
+
+/// The sign-in page as a page.
+///
+/// `/login` was a POST target and nothing else, so the two redirects that send an
+/// unauthenticated visitor there answered 405. A person who followed one saw a bare method
+/// error from a program that had just decided, correctly, that they should sign in.
+async fn login_page() -> Response {
+    html(super::page::login_page(None))
 }
 
 async fn logout(State(state): State<Arc<HubState>>, headers: HeaderMap) -> Response {
@@ -606,12 +626,33 @@ async fn revoke_grant(
 /// Only an editor sees this page, and only their own bereiche. Both halves of that are
 /// checked here rather than in the template: a page that decides its own audience is one
 /// mistake away from showing everything.
-fn editor_of(state: &HubState, headers: &HeaderMap) -> Option<(String, String)> {
+fn signed_in(state: &HubState, headers: &HeaderMap) -> Option<super::admin::Who> {
     // `admin::Who` and the `Who` in this module are different questions: this one is about
-    // the page a visitor gets, that one about whose session it is.
+    // whose session it is, that one about the page a visitor gets.
     let token =
         super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))?;
-    match state.sessions.who(&token, jiff::Timestamp::now())? {
+    state.sessions.who(&token, jiff::Timestamp::now())
+}
+
+/// Where somebody belongs after signing in, and where `/` sends them.
+///
+/// Every role has one page that is theirs. Before this they all landed on `/`, which is the
+/// operator's page, so an editor signed in successfully and was shown the login form again —
+/// a dead end that looked exactly like a wrong password.
+fn home_for(who: &super::admin::Who) -> &'static str {
+    use super::access::Role;
+    match who {
+        super::admin::Who::Admin => "/",
+        super::admin::Who::Principal { role, .. } => match role {
+            Role::Admin => "/",
+            Role::Editor => "/conflicts",
+            Role::Auditor | Role::Countersigner => "/requests",
+        },
+    }
+}
+
+fn editor_of(state: &HubState, headers: &HeaderMap) -> Option<(String, String)> {
+    match signed_in(state, headers)? {
         super::admin::Who::Principal {
             id,
             name,
@@ -871,4 +912,236 @@ async fn get_fleet(
         )
             .into_response(),
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// The two roles the two-person rule rests on. Before this they had a credential, a login
+// box that accepted it, and nowhere to go: approving a request and countersigning a bereich
+// were reachable only from a shell on the hub's own machine — the machine whose operator
+// they are there to check.
+
+/// The signing view, for a countersigner or an auditor. `None` for anybody else.
+fn signer_of(
+    state: &HubState,
+    headers: &HeaderMap,
+) -> Option<(String, String, super::access::Role)> {
+    use super::access::Role;
+    match signed_in(state, headers)? {
+        super::admin::Who::Principal { id, name, role }
+            if matches!(role, Role::Auditor | Role::Countersigner) =>
+        {
+            Some((id, name, role))
+        }
+        _ => None,
+    }
+}
+
+async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) -> Response {
+    use super::access::Role;
+    let Some((id, name, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    let Ok(hub) = state.hub.lock() else {
+        return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+    };
+    let now = jiff::Timestamp::now();
+    let all = hub.requests().unwrap_or_default();
+    // An auditor sees their own and nobody else's: the reasons other people wrote are not
+    // their business, and a page that lists them would make the reason field unusable.
+    let requests: Vec<_> = all
+        .into_iter()
+        .filter(|r| role == Role::Countersigner || r.requester == id)
+        .map(|r| {
+            let st = r.state(now);
+            (r, st)
+        })
+        .collect();
+    let grants = if role == Role::Countersigner {
+        hub.devices()
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|d| hub.grants_for_device(&d.id).ok())
+            .flatten()
+            .filter(|g| g.is_pending())
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let log = if role == Role::Countersigner {
+        hub.hub_events(200).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let devices = hub
+        .devices()
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|d| d.is_active())
+        .map(|d| (d.id, d.name))
+        .collect();
+    let flash = state.flash.lock().ok().and_then(|mut f| f.take());
+    let view = super::page::SigningView {
+        name: &name,
+        role,
+        requests,
+        grants,
+        log,
+        devices,
+        flash,
+    };
+    html(super::page::signing_page(&view))
+}
+
+#[derive(serde::Deserialize)]
+struct AskForm {
+    device: String,
+    reason: String,
+}
+
+async fn post_request(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    Form(form): Form<AskForm>,
+) -> Response {
+    use super::access::Role;
+    let Some((_, _, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    if role != Role::Auditor {
+        return Redirect::to("/requests").into_response();
+    }
+    let now = jiff::Timestamp::now().to_string();
+    {
+        let Ok(hub) = state.hub.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+        };
+        // Through `principal_for`, not through the session alone: it is the one place that
+        // authenticates and checks the role in a single step, and `create_request` wants a
+        // `Principal` rather than a name off a cookie.
+        let token =
+            super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+        let who = match session_principal(&state, token.as_deref(), &hub) {
+            Some(p) => p,
+            None => return Redirect::to("/login").into_response(),
+        };
+        let reason = form.reason.trim();
+        let outcome = if reason.is_empty() {
+            Err(
+                "a request needs a reason: it is the only thing the countersigner reads"
+                    .to_string(),
+            )
+        } else {
+            let device = (!form.device.trim().is_empty()).then(|| form.device.trim());
+            hub.create_request(&who, device, None, None, reason, &now)
+                .map(|r| {
+                    format!(
+                        "Asked. {} is waiting for somebody else to countersign it.",
+                        r.id
+                    )
+                })
+                .map_err(|e| e.to_string())
+        };
+        if let Ok(mut f) = state.flash.lock() {
+            *f = Some(outcome);
+        }
+    }
+    Redirect::to("/requests").into_response()
+}
+
+/// The `Principal` behind a live session, for the calls that need one.
+fn session_principal(
+    state: &HubState,
+    token: Option<&str>,
+    hub: &super::store::HubStore,
+) -> Option<super::access::Principal> {
+    let who = state.sessions.who(token?, jiff::Timestamp::now())?;
+    let super::admin::Who::Principal { id, .. } = who else {
+        return None;
+    };
+    hub.principals().ok()?.into_iter().find(|p| p.id == id)
+}
+
+async fn approve(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    use super::access::Role;
+    let Some((_, _, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    if role != Role::Countersigner {
+        return Redirect::to("/requests").into_response();
+    }
+    let now = jiff::Timestamp::now();
+    {
+        let Ok(hub) = state.hub.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+        };
+        let token =
+            super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+        let Some(who) = session_principal(&state, token.as_deref(), &hub) else {
+            return Redirect::to("/login").into_response();
+        };
+        // Seven days, which is the window `hub approve` offers by default. It is a decision
+        // with a clock on it: an approval without one is a permanent right nobody granted.
+        let until = (now + jiff::Span::new().days(7)).to_string();
+        let message = match hub.approve_request(&id, &who, &until, &now.to_string()) {
+            Ok(r) => Ok(format!(
+                "{} is open until {}.",
+                r.id,
+                r.expires_at.as_deref().unwrap_or(&until)
+            )),
+            Err(d) => Err(d.to_string()),
+        };
+        if let Ok(mut f) = state.flash.lock() {
+            *f = Some(message);
+        }
+    }
+    Redirect::to("/requests").into_response()
+}
+
+async fn countersign(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    use super::access::Role;
+    use super::store::CountersignOutcome as O;
+    let Some((_, name, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    if role != Role::Countersigner {
+        return Redirect::to("/requests").into_response();
+    }
+    let now = jiff::Timestamp::now().to_string();
+    {
+        let Ok(hub) = state.hub.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+        };
+        let token =
+            super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+        let Some(who) = session_principal(&state, token.as_deref(), &hub) else {
+            return Redirect::to("/login").into_response();
+        };
+        // Each outcome is its own sentence, and only one of them is good news. The page
+        // colours them apart, which is why they are not flattened into a string here.
+        let message = match hub.countersign_grant(&id, &who, &now) {
+            Ok(O::Signed) => Ok(format!("{id} takes effect now, countersigned by {name}.")),
+            Ok(O::Unknown) => Err(format!("{id}: no grant with that id.")),
+            Ok(O::Withdrawn) => Err(format!(
+                "{id} was withdrawn. Reviving it is a new decision: it needs a new grant, \
+                 with its reason."
+            )),
+            Ok(O::AlreadySigned { by }) => Err(format!("{id} was already countersigned by {by}.")),
+            Ok(O::SamePerson) => Err(format!(
+                "{id} was written by you. Two signatures from one hand are one signature."
+            )),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Ok(mut f) = state.flash.lock() {
+            *f = Some(message);
+        }
+    }
+    Redirect::to("/requests").into_response()
 }
