@@ -7,6 +7,7 @@ use crate::{EmbeddingProfile, Index, RecallOptions, content_hash, vectors};
 use cyberbrain_core::{
     Block, Citation, Embedder, Error, Frontmatter, Note, NoteId, NoteKind, PiiState, Result, Ring,
 };
+use rusqlite::TransactionBehavior;
 use std::path::PathBuf;
 
 // ----- fixtures ---------------------------------------------------------------------------
@@ -1549,5 +1550,61 @@ fn bereich_filters_and_says_when_it_matches_nothing() {
         none.caveats.iter().any(|c| c.contains("vertrieb")),
         "an empty bereich must be named in the caveats, got {:?}",
         none.caveats
+    );
+}
+
+/// A writer that has to wait for the lock waits for it, instead of being refused at once.
+///
+/// The bug this pins down: `Connection::transaction()` is `BEGIN DEFERRED`, so the write
+/// lock is asked for at the first writing statement — by which time this transaction is
+/// already a reader with a snapshot. SQLite cannot grant that later without breaking the
+/// snapshot, so it answers `SQLITE_BUSY` **immediately** and never consults the busy
+/// timeout. The five seconds set in `open` looked like protection and covered nothing.
+///
+/// In the field it looked like this: eight `cyberbrain write` at once, seven fine and one
+/// `index: database is locked` — after its file and its audit row were already written, so a
+/// note existed on disk and in the chain and not in the index. It only ever showed on macOS
+/// and Windows.
+///
+/// Calibrated against the defect: with `write_tx` back to `self.conn.transaction()`, the
+/// upsert below returns "database is locked" long before the holder lets go, and the last
+/// assertion fails.
+#[test]
+fn a_second_writer_waits_for_the_lock_rather_than_being_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cyberbrain.db");
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut a = Index::open(&path).unwrap();
+    a.set_embedding_profile(&profile_of(&e)).unwrap();
+    let mut b = Index::open(&path).unwrap();
+
+    // The first connection holds the write lock, and lets go after a moment.
+    let holder = a
+        .conn
+        .transaction_with_behavior(TransactionBehavior::Immediate)
+        .unwrap();
+    holder
+        .execute("INSERT INTO meta (key, value) VALUES ('busy', '1')", [])
+        .unwrap();
+
+    // Prepared before the thread starts: a `Transaction` borrows its connection and is
+    // neither Send nor Sync, so the holder stays here and the contender goes over there.
+    let n = note("wartet", Ring::Knowledge, "*Für: nebenlaeufig*", &[]);
+    let blocks = blocks_of(&n);
+    let vecs = embed_blocks(&e, &blocks);
+
+    let started = std::time::Instant::now();
+    let contender = std::thread::spawn(move || b.upsert_note(&n, &blocks, Some(&vecs)));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    holder.commit().unwrap();
+
+    let r = contender.join().unwrap();
+    assert!(
+        r.is_ok(),
+        "a writer that could have waited was refused instead: {r:?}"
+    );
+    assert!(
+        started.elapsed() >= std::time::Duration::from_millis(250),
+        "it did not actually wait, so it never contended and this test proves nothing"
     );
 }

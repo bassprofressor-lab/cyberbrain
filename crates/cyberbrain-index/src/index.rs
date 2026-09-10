@@ -175,6 +175,27 @@ impl std::fmt::Debug for Index {
     }
 }
 
+/// Begin a transaction that is going to write, and say so at `BEGIN`.
+///
+/// `Connection::transaction()` is `BEGIN DEFERRED`: the lock is taken at the first statement
+/// that needs it. A transaction that reads first and writes later therefore asks for the
+/// write lock while another writer already holds it — and SQLite answers that case with
+/// `SQLITE_BUSY` **immediately**, without consulting the busy timeout, because there is no
+/// way to grant it later without breaking the snapshot the reader already has.
+///
+/// So the five seconds set in `open` looked like protection and covered nothing. Eight
+/// `cyberbrain write` at once on macOS and Windows produced `index: database is locked` for
+/// one of them, after its file and its audit row were already written: a note on disk, in
+/// the chain, and missing from the index. Linux never showed it, which is the usual shape of
+/// this class of bug rather than a reason to think it was not there.
+///
+/// `BEGIN IMMEDIATE` takes the write lock up front, where the timeout does apply and the
+/// waiting happens instead of the refusal.
+fn write_tx(conn: &mut rusqlite::Connection) -> Result<rusqlite::Transaction<'_>> {
+    conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+        .ix()
+}
+
 impl Index {
     /// Open or create the database at `path` and migrate it to the current schema.
     pub fn open(path: &Path) -> Result<Self> {
@@ -294,7 +315,7 @@ impl Index {
                 vectors_wiped: 0,
             });
         }
-        let tx = self.conn.transaction().ix()?;
+        let tx = write_tx(&mut self.conn)?;
         let vectors_wiped = tx.execute("DELETE FROM vectors", []).ix()?;
         Self::meta_set(&tx, "embedding_profile_id", &profile.id)?;
         Self::meta_set(&tx, "embedding_dim", &profile.dim.to_string())?;
@@ -401,7 +422,7 @@ impl Index {
             }
         };
 
-        let tx = self.conn.transaction().ix()?;
+        let tx = write_tx(&mut self.conn)?;
 
         // Name uniqueness with a message better than a constraint error.
         if let Some(other) = tx
@@ -615,7 +636,7 @@ impl Index {
     /// [`Erasure`] names the note and counts what went, the caller logs it.
     pub fn delete_note(&mut self, id: &NoteId) -> Result<Erasure> {
         let id_s = id.to_string();
-        let tx = self.conn.transaction().ix()?;
+        let tx = write_tx(&mut self.conn)?;
         let (name, ring, path): (String, i64, String) = tx
             .query_row(
                 "SELECT name, ring, path FROM notes WHERE id = ?1",
@@ -651,7 +672,7 @@ impl Index {
     /// embedding profile. Cheaper than deleting the file for `scan --full`; either is
     /// safe now that the audit record lives elsewhere. Not audited here.
     pub fn clear(&mut self) -> Result<Erased> {
-        let tx = self.conn.transaction().ix()?;
+        let tx = write_tx(&mut self.conn)?;
         let vectors = tx.execute("DELETE FROM vectors", []).ix()?;
         let fts_rows = tx
             .query_row("SELECT count(*) FROM blocks_fts", [], |r| {
