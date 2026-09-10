@@ -859,8 +859,26 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(0)
         }
 
-        HubCommand::Push { since } => {
+        HubCommand::Push {
+            since,
+            notes,
+            bereich,
+            dry_run,
+        } => {
             let app = App::open(store, Actor::Operator)?;
+            if *notes {
+                let (report, code) =
+                    runtime()?.block_on(app.push_notes_to_hub(bereich.as_deref(), *dry_run))?;
+                out.emit(&report, |v| {
+                    format!("{}\n", v["message"].as_str().unwrap_or_default())
+                })?;
+                return Ok(code);
+            }
+            if bereich.is_some() {
+                return Err(Error::Config(
+                    "--bereich selects notes; it needs --notes".into(),
+                ));
+            }
             let since = since
                 .as_ref()
                 .map(|s| {
@@ -1222,6 +1240,119 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(0)
         }
 
+        HubCommand::Grant { command } => {
+            use cli::GrantCommand;
+            match command {
+                GrantCommand::Add {
+                    device,
+                    bereich,
+                    direction,
+                    reason,
+                    data,
+                } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let dir = hub::sync_access::Direction::parse(direction)?;
+                    cyberbrain_core::frontmatter::validate_bereich(bereich)
+                        .map_err(|r| Error::Config(format!("bereich `{bereich}`: {r}")))?;
+                    if reason.trim().is_empty() {
+                        return Err(Error::Config(
+                            "a grant needs a reason: it is what an auditor reads later".into(),
+                        ));
+                    }
+                    let id = format!("bg_{}", cyberbrain_core::NoteId::generate());
+                    let stamp = now();
+                    store.grant_bereich(&id, device, bereich, dir, reason, "cli", &stamp)?;
+                    let _ = store.record(
+                        "cli",
+                        "grant.added",
+                        serde_json::json!({
+                            "id": id, "device": device, "bereich": bereich,
+                            "direction": dir.as_str(), "reason": reason,
+                        }),
+                        &stamp,
+                    );
+                    out.emit(
+                        &serde_json::json!({
+                            "id": id, "device": device, "bereich": bereich,
+                            "direction": dir.as_str(), "reason": reason
+                        }),
+                        |v| {
+                            format!(
+                                "device {} may {} bereich {} ({})\n  reason: {}\n\n\
+                                 Rings 0 and 1 stay on the machine regardless.\n",
+                                v["device"].as_str().unwrap_or_default(),
+                                v["direction"].as_str().unwrap_or_default(),
+                                v["bereich"].as_str().unwrap_or_default(),
+                                v["id"].as_str().unwrap_or_default(),
+                                v["reason"].as_str().unwrap_or_default(),
+                            )
+                        },
+                    )?;
+                    Ok(0)
+                }
+                GrantCommand::List { device, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let devices = match device {
+                        Some(d) => vec![d.clone()],
+                        None => store.devices()?.into_iter().map(|d| d.id).collect(),
+                    };
+                    let mut all = Vec::new();
+                    for d in devices {
+                        all.extend(store.grants_for_device(&d)?);
+                    }
+                    out.emit(&serde_json::json!(all), |v| {
+                        let rows = v.as_array().cloned().unwrap_or_default();
+                        if rows.is_empty() {
+                            return "No grants. Without one a device delivers audit rows and \
+                                    nothing else.\n"
+                                .to_string();
+                        }
+                        let mut s = format!("{} grant(s)\n\n", rows.len());
+                        for g in rows {
+                            let live = g["revoked_at"].is_null();
+                            s.push_str(&format!(
+                                "  {:9} {:14} {:7} {}\n      {}\n",
+                                g["device"].as_str().unwrap_or_default(),
+                                g["bereich"].as_str().unwrap_or_default(),
+                                g["direction"].as_str().unwrap_or_default(),
+                                if live { "" } else { "(withdrawn)" },
+                                g["reason"].as_str().unwrap_or_default(),
+                            ));
+                        }
+                        s
+                    })?;
+                    Ok(0)
+                }
+                GrantCommand::Revoke { id, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let stamp = now();
+                    let gone = store.revoke_grant(id, &stamp)?;
+                    if gone {
+                        let _ = store.record(
+                            "cli",
+                            "grant.revoked",
+                            serde_json::json!({ "id": id }),
+                            &stamp,
+                        );
+                    }
+                    out.emit(&serde_json::json!({ "id": id, "revoked": gone }), |v| {
+                        if v["revoked"].as_bool().unwrap_or(false) {
+                            format!(
+                                "{} withdrawn. What was delivered stays; what stops is \
+                                 delivery from now on.\n",
+                                v["id"].as_str().unwrap_or_default()
+                            )
+                        } else {
+                            format!(
+                                "{}: no such grant, or it was already withdrawn.\n",
+                                v["id"].as_str().unwrap_or_default()
+                            )
+                        }
+                    })?;
+                    Ok(0)
+                }
+            }
+        }
         HubCommand::Principal { command } => {
             use cli::PrincipalCommand;
             match command {

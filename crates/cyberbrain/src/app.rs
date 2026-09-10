@@ -2713,6 +2713,124 @@ impl App {
     /// Returns the report and the exit code. A hub that is not collecting, and a gap it can
     /// still close, are **not** failures of this command: they are states a timer should see
     /// and carry on from. Only something the operator has to fix exits non-zero.
+    /// Offer this store's notes to the hub.
+    ///
+    /// The selection lives here and only here: rings 2 to 4, and only notes that carry a
+    /// bereich. Rings 0 and 1 are not filtered out as a courtesy — they are not eligible,
+    /// and the hub refuses them again on arrival. A reviewer who wants to know what this
+    /// machine offers reads this function and is done.
+    pub async fn push_notes_to_hub(
+        &self,
+        bereich: Option<&str>,
+        dry_run: bool,
+    ) -> Result<(serde_json::Value, i32)> {
+        use crate::hub::client::{self, Reply};
+
+        // Not required for a dry run. "What would I be giving away?" is a question to answer
+        // before enrolling, not after — refusing to answer it until a hub is configured gets
+        // the decision made in the wrong order.
+        let hub_url = self.config.hub.url.clone();
+
+        let mut offered = Vec::new();
+        let mut skipped_no_bereich = 0usize;
+        let mut skipped_resident = 0usize;
+        for entry in self.store.list()?.entries {
+            let note = self.store.read(&entry.name)?;
+            let f = &note.front;
+            if matches!(f.ring, Ring::Invariant | Ring::Protocol) {
+                skipped_resident += 1;
+                continue;
+            }
+            let Some(b) = f.bereich.as_deref() else {
+                skipped_no_bereich += 1;
+                continue;
+            };
+            if let Some(want) = bereich
+                && want != b
+            {
+                continue;
+            }
+            offered.push(serde_json::json!({
+                "id": f.id.to_string(),
+                "name": f.name,
+                "ring": f.ring.as_u8(),
+                "kind": kind_name(f.kind),
+                "bereich": b,
+                "updated": f.updated.to_string(),
+                "frontmatter": cyberbrain_core::frontmatter::render(f, "")?,
+                "body": note.body,
+            }));
+        }
+
+        let summary = serde_json::json!({
+            "hub": hub_url.clone(),
+            "offered": offered.len(),
+            "skipped_without_bereich": skipped_no_bereich,
+            "skipped_rings_0_1": skipped_resident,
+        });
+        if dry_run {
+            let mut v = summary;
+            v["message"] = serde_json::json!(format!(
+                "{} note(s) would be offered to {}. {} carry no bereich and {} are ring 0 or 1, \
+                 which never leave this machine.",
+                v["offered"],
+                hub_url.as_deref().unwrap_or("a hub, once this store is enrolled with one"),
+                skipped_no_bereich,
+                skipped_resident
+            ));
+            return Ok((v, 0));
+        }
+
+        let hub_url = hub_url.ok_or_else(|| {
+            Error::Config(
+                "this store is not enrolled with a hub; run `cyberbrain hub enrol <invitation>`"
+                    .into(),
+            )
+        })?;
+        let token = client::token_for(&hub_url)?;
+        let version = env!("CARGO_PKG_VERSION");
+        let egress = self.policy.egress();
+        let actor = cyberbrain_policy::Actor::Operator;
+        let pin = client::pin_for(&hub_url);
+        let batch = serde_json::json!({ "notes": offered }).to_string();
+        let reply = client::deliver_notes(
+            egress,
+            &actor,
+            &hub_url,
+            &token,
+            pin.as_deref(),
+            version,
+            batch,
+        )
+        .await?;
+
+        let mut v = summary;
+        let code = match reply {
+            Reply::Ok(d) => {
+                v["accepted"] = serde_json::json!(d.accepted);
+                v["stored"] = serde_json::json!(d.total_rows);
+                v["message"] = serde_json::json!(format!(
+                    "{} of {} note(s) accepted by {}, {} newer than what it held",
+                    d.accepted, v["offered"], hub_url, d.total_rows
+                ));
+                0
+            }
+            Reply::NotCollecting(m) => {
+                v["message"] = serde_json::json!(format!("the hub is not collecting: {m}"));
+                0
+            }
+            Reply::Gap { expected } => {
+                v["message"] = serde_json::json!(format!("the hub expected {expected}"));
+                1
+            }
+            Reply::Refused { status, message } => {
+                v["message"] = serde_json::json!(format!("refused ({status}): {message}"));
+                1
+            }
+        };
+        Ok((v, code))
+    }
+
     pub async fn push_to_hub(
         &self,
         since: Option<jiff::Timestamp>,

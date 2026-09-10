@@ -597,6 +597,18 @@ pub enum HubCommand {
         /// already has, so a generous window costs bandwidth and nothing else.
         #[arg(long, value_name = "TIMESTAMP")]
         since: Option<String>,
+        /// Send notes instead of audit rows: the ones carrying a bereich, in rings 2 to 4.
+        /// A separate flag and a separate egress purpose, because content and evidence are
+        /// different decisions. Refused unless allow_note_sync is set.
+        #[arg(long)]
+        notes: bool,
+        /// Only this bereich. Without it, every bereich this store has notes for is offered
+        /// and the hub keeps what this device was granted.
+        #[arg(long)]
+        bereich: Option<String>,
+        /// Say what would be sent and send nothing.
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Install, inspect or issue a licence.
     Licence {
@@ -617,6 +629,12 @@ pub enum HubCommand {
     Principal {
         #[command(subcommand)]
         command: PrincipalCommand,
+    },
+    /// Which bereich a device may share, and why. Without a grant a device delivers audit
+    /// rows and nothing else; rings 0 and 1 are never eligible, whatever is granted.
+    Grant {
+        #[command(subcommand)]
+        command: GrantCommand,
     },
     /// Ask to see activity. Needs an auditor credential, and somebody else to approve it.
     Request {
@@ -750,6 +768,42 @@ pub enum LicenceCommand {
         /// Where to write it. Prints to stdout when absent.
         #[arg(long, value_name = "PATH")]
         out: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum GrantCommand {
+    /// Grant a device one bereich, in one direction.
+    Add {
+        #[arg(long, value_name = "DEVICE")]
+        device: String,
+        #[arg(long)]
+        bereich: String,
+        /// send, receive or both. Receiving admits foreign content and sending discloses
+        /// your own; they are different risks, so they are separate rights.
+        #[arg(long, default_value = "both")]
+        direction: String,
+        /// Why this department may share with that one. A countersigner or an auditor reads
+        /// this later, and under Art. 5(1)(b) GDPR a purpose nobody wrote down is one that
+        /// cannot be shown.
+        #[arg(long)]
+        reason: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// What has been granted, to whom, and what was withdrawn.
+    List {
+        /// One device, or all of them when omitted.
+        #[arg(long, value_name = "DEVICE")]
+        device: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Withdraw a grant. The record of it stays; what stops is future delivery.
+    Revoke {
+        id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
     },
 }
 
