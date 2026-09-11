@@ -17,7 +17,7 @@
 
 use cyberbrain_core::{Error, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Env var for a token, for setups that would rather not have a file.
 pub const TOKEN_ENV: &str = "CYBERBRAIN_HUB_TOKEN";
@@ -65,37 +65,87 @@ pub fn parse_invitation(text: &str) -> Result<Invitation> {
     Ok(inv)
 }
 
-/// Where the token for a hub is kept: one file per hub, named after the URL's shape rather
-/// than the URL itself, so a path cannot be turned into a directory traversal.
-pub fn token_path(hub_url: &str) -> Option<PathBuf> {
-    let base = if cfg!(windows) {
+/// The user's configuration directory, where tokens, pins and pull positions live.
+fn config_base() -> Option<PathBuf> {
+    if cfg!(windows) {
         std::env::var_os("APPDATA").map(PathBuf::from)
     } else {
         std::env::var_os("XDG_CONFIG_HOME")
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
-    }?;
-    let name = blake3::hash(hub_url.as_bytes()).to_hex().to_string();
-    Some(
-        base.join("cyberbrain")
-            .join("hub-tokens")
-            .join(format!("{}.token", &name[..32])),
-    )
+    }
 }
 
-/// The token for this hub: environment first, then the file.
+/// One file for one store's relationship with a hub, named by a hash so that a URL cannot be
+/// turned into a directory traversal.
+///
+/// Keyed by the hub's address **and** the device. It used to be the address alone, and a
+/// machine with two projects enrolled with one hub then had one token file between them: the
+/// second enrolment overwrote the first, both stores delivered as the second device, and the
+/// hub turned one of the two chains away at its anchor. The pull position and the list of
+/// known notes were shared the same way. Without a device, which is a store enrolled before
+/// this or a file about the hub itself (its pin), the key is the address alone, as before.
+fn hub_file_in(base: &Path, hub_url: &str, device: Option<&str>, ext: &str) -> PathBuf {
+    let key = match device {
+        Some(d) => format!("{hub_url}\n{d}"),
+        None => hub_url.to_string(),
+    };
+    let name = blake3::hash(key.as_bytes()).to_hex().to_string();
+    base.join("cyberbrain")
+        .join("hub-tokens")
+        .join(format!("{}.{ext}", &name[..32]))
+}
+
+/// This store's file if it has one, else the one for the address alone: a store enrolled
+/// before files were kept per device finds its state there until it writes its own.
+fn existing_in(base: &Path, hub_url: &str, device: Option<&str>, ext: &str) -> PathBuf {
+    let own = hub_file_in(base, hub_url, device, ext);
+    if device.is_none() || own.exists() {
+        own
+    } else {
+        hub_file_in(base, hub_url, None, ext)
+    }
+}
+
+fn write_in(
+    base: &Path,
+    hub_url: &str,
+    device: Option<&str>,
+    ext: &str,
+    text: &str,
+) -> Result<PathBuf> {
+    let path = hub_file_in(base, hub_url, device, ext);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+    std::fs::write(&path, text).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
+    Ok(path)
+}
+
+/// The token for this store at this hub: environment first, then the file.
 ///
 /// Environment first so a service can be handed one without touching disk, and so a
 /// temporary override does not require moving a file somebody will forget to move back.
-pub fn token_for(hub_url: &str) -> Result<String> {
+pub fn token_for(hub_url: &str, device: Option<&str>) -> Result<String> {
     if let Ok(t) = std::env::var(TOKEN_ENV) {
         let t = t.trim().to_string();
         if !t.is_empty() {
             return Ok(t);
         }
     }
-    let path = token_path(hub_url)
+    let base = config_base()
         .ok_or_else(|| Error::Config("no configuration directory to read a token from".into()))?;
+    token_in(&base, hub_url, device)
+}
+
+fn token_in(base: &Path, hub_url: &str, device: Option<&str>) -> Result<String> {
+    let path = existing_in(base, hub_url, device, "token");
     let text = std::fs::read_to_string(&path).map_err(|e| {
         Error::Config(format!(
             "no token for {hub_url}: {} ({e}). Enrol with `cyberbrain hub enrol <invitation>`, \
@@ -106,9 +156,10 @@ pub fn token_for(hub_url: &str) -> Result<String> {
     Ok(text.trim().to_string())
 }
 
-/// Where the pin for a hub is kept: beside its token, one file per hub, same naming.
+/// Where the pin for a hub is kept. One per hub rather than per device: it describes the hub's
+/// certificate, which is the same for every store that delivers to it.
 pub fn pin_path(hub_url: &str) -> Option<PathBuf> {
-    token_path(hub_url).map(|p| p.with_extension("pin"))
+    Some(hub_file_in(&config_base()?, hub_url, None, "pin"))
 }
 
 /// The certificate this machine was invited to expect from a hub, if it was invited with one.
@@ -158,19 +209,15 @@ pub fn forget_pin(hub_url: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn save_token(hub_url: &str, token: &str) -> Result<PathBuf> {
-    let path = token_path(hub_url)
+/// Keep a device's token, under that device: see [`hub_file_in`] for why not under the hub.
+pub fn save_token(hub_url: &str, device: &str, token: &str) -> Result<PathBuf> {
+    let base = config_base()
         .ok_or_else(|| Error::Config("no configuration directory to write a token to".into()))?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| Error::Io {
-            path: parent.to_path_buf(),
-            source: e,
-        })?;
-    }
-    std::fs::write(&path, format!("{token}\n")).map_err(|e| Error::Io {
-        path: path.clone(),
-        source: e,
-    })?;
+    save_token_in(&base, hub_url, device, token)
+}
+
+fn save_token_in(base: &Path, hub_url: &str, device: &str, token: &str) -> Result<PathBuf> {
+    let path = write_in(base, hub_url, Some(device), "token", &format!("{token}\n"))?;
     restrict(&path);
     Ok(path)
 }
@@ -220,44 +267,47 @@ pub enum Reply {
 
 /// Where this store remembers how far it has pulled from a hub. Beside the token, keyed
 /// the same way, because it is the same relationship: one store, one hub, one position.
-pub fn cursor_path(hub_url: &str) -> Option<PathBuf> {
-    token_path(hub_url).map(|p| p.with_extension("cursor"))
-}
-
-pub fn read_cursor(hub_url: &str) -> Option<String> {
-    let p = cursor_path(hub_url)?;
-    std::fs::read_to_string(p)
+pub fn read_cursor(hub_url: &str, device: Option<&str>) -> Option<String> {
+    let base = config_base()?;
+    std::fs::read_to_string(existing_in(&base, hub_url, device, "cursor"))
         .ok()
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
 }
 
-pub fn write_cursor(hub_url: &str, cursor: &str) -> Result<()> {
-    let Some(p) = cursor_path(hub_url) else {
+pub fn write_cursor(hub_url: &str, device: Option<&str>, cursor: &str) -> Result<()> {
+    let Some(base) = config_base() else {
         return Ok(());
     };
-    if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    std::fs::write(&p, cursor)
+    write_in(&base, hub_url, device, "cursor", cursor)
+        .map(|_| ())
         .map_err(|e| Error::Config(format!("cannot record the pull position: {e}")))
 }
 
 /// What this store last knew the hub to hold, per note. This is what fills `based_on`, and
 /// without it every second machine's delivery looks like a conflict.
-pub fn known_path(hub_url: &str) -> Option<PathBuf> {
-    token_path(hub_url).map(|p| p.with_extension("known.json"))
+pub fn known_path(hub_url: &str, device: Option<&str>) -> Option<PathBuf> {
+    Some(hub_file_in(&config_base()?, hub_url, device, "known.json"))
 }
 
-pub fn read_known(hub_url: &str) -> std::collections::BTreeMap<String, String> {
-    known_path(hub_url)
-        .and_then(|p| std::fs::read_to_string(p).ok())
+pub fn read_known(
+    hub_url: &str,
+    device: Option<&str>,
+) -> std::collections::BTreeMap<String, String> {
+    config_base()
+        .and_then(|base| {
+            std::fs::read_to_string(existing_in(&base, hub_url, device, "known.json")).ok()
+        })
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or_default()
 }
 
-pub fn write_known(hub_url: &str, map: &std::collections::BTreeMap<String, String>) -> Result<()> {
-    let Some(p) = known_path(hub_url) else {
+pub fn write_known(
+    hub_url: &str,
+    device: Option<&str>,
+    map: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let Some(p) = known_path(hub_url, device) else {
         return Ok(());
     };
     if let Some(dir) = p.parent() {
@@ -656,17 +706,48 @@ profile = \"eu\"
         assert!(err.contains("names no hub address"), "{err}");
     }
 
+    /// Two projects on one machine, enrolled with one hub as two devices, keep two tokens and
+    /// two pull positions.
+    #[test]
+    fn two_stores_enrolled_with_one_hub_keep_their_own_token_and_position() {
+        let dir = tempfile::tempdir().unwrap();
+        let (base, hub) = (dir.path(), "https://hub.internal:7788");
+        save_token_in(base, hub, "dev_a", "token-a").unwrap();
+        save_token_in(base, hub, "dev_b", "token-b").unwrap();
+        assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "token-a");
+        assert_eq!(token_in(base, hub, Some("dev_b")).unwrap(), "token-b");
+
+        write_in(base, hub, Some("dev_a"), "cursor", "cursor-a").unwrap();
+        write_in(base, hub, Some("dev_b"), "cursor", "cursor-b").unwrap();
+        let read = |d| std::fs::read_to_string(existing_in(base, hub, Some(d), "cursor")).unwrap();
+        assert_eq!(
+            (read("dev_a"), read("dev_b")),
+            ("cursor-a".into(), "cursor-b".into())
+        );
+    }
+
+    /// A store enrolled before files were kept per device still finds its token, until it
+    /// enrols again and gets one of its own.
+    #[test]
+    fn a_store_enrolled_before_keeps_its_token_until_it_enrols_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (base, hub) = (dir.path(), "https://hub.internal:7788");
+        write_in(base, hub, None, "token", "old-token\n").unwrap();
+        assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "old-token");
+        save_token_in(base, hub, "dev_a", "new-token").unwrap();
+        assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "new-token");
+    }
+
     #[test]
     fn a_token_file_is_one_per_hub() {
-        let a = token_path("https://a.internal:7788");
-        let b = token_path("https://b.internal:7788");
+        let base = std::path::Path::new("/cfg");
+        let a = hub_file_in(base, "https://a.internal:7788", None, "token");
+        let b = hub_file_in(base, "https://b.internal:7788", None, "token");
         assert_ne!(a, b, "two hubs, two tokens");
-        if let Some(p) = a {
-            let name = p.file_name().unwrap().to_string_lossy().to_string();
-            assert!(
-                !name.contains('/') && !name.contains(':'),
-                "the file name is a hash, not the URL: {name}"
-            );
-        }
+        let name = a.file_name().unwrap().to_string_lossy().to_string();
+        assert!(
+            !name.contains('/') && !name.contains(':'),
+            "the file name is a hash, not the URL: {name}"
+        );
     }
 }

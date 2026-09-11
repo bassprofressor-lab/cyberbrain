@@ -1046,6 +1046,58 @@ fn a_name_keeps_its_umlaut_and_the_decomposed_spelling_is_the_same_note() {
     assert_eq!(code, 1, "{err}");
 }
 
+/// Two projects on one machine, enrolled with one hub, keep one token each.
+///
+/// The token was kept per hub address, so the second `hub enrol` overwrote the first: both
+/// stores then delivered as the second device, and the hub refused one chain at its anchor.
+/// The launcher keeps a list of projects, so this is the ordinary case, not an edge.
+#[test]
+fn two_projects_enrolled_with_one_hub_keep_one_token_each() {
+    let config = tempfile::tempdir().unwrap();
+    let invite = |dir: &std::path::Path, device: &str, token: &str| {
+        let path = dir.join(format!("{device}.json"));
+        std::fs::write(
+            &path,
+            serde_json::json!({
+                "kind": "cyberbrain.hub.invitation", "version": 2,
+                "device": device, "name": device, "token": token,
+                "hub_url": "https://hub.internal:7788", "inference_url": null,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        path
+    };
+    for (device, token) in [("dev_a", "token-a"), ("dev_b", "token-b")] {
+        let cb = Cb::new();
+        let file = invite(config.path(), device, token);
+        let out = Cb::bin()
+            .env("APPDATA", config.path())
+            .env("XDG_CONFIG_HOME", config.path())
+            .arg("--store")
+            .arg(&cb.store)
+            .args(["hub", "enrol"])
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let tokens: Vec<String> =
+        std::fs::read_dir(config.path().join("cyberbrain").join("hub-tokens"))
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .filter(|p| p.extension().is_some_and(|x| x == "token"))
+            .map(|p| std::fs::read_to_string(p).unwrap().trim().to_string())
+            .collect();
+    let mut sorted = tokens.clone();
+    sorted.sort();
+    assert_eq!(sorted, ["token-a", "token-b"], "{tokens:?}");
+}
+
 /// An `--action` filter that matches nothing must be refused, not answered with an empty
 /// table. In an audit tool those are opposite statements: "there is no such action name"
 /// and "nothing of that kind ever happened". Someone checking whether erasures occurred

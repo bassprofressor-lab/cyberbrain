@@ -71,6 +71,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Fixed
 
+- **Two projects on one machine enrolled with the same hub delivered as one device.** The
+  token was kept per user and hub address, so the second `hub enrol` overwrote the first
+  project's token; both stores then delivered as the second device, and the hub turned one
+  of the two chains away at its anchor, which looked like a machine that had gone quiet. The
+  pull position and the list of known notes were shared the same way, so a second store could
+  skip notes. All three are kept per device now. A store enrolled with an earlier version
+  keeps working from its old file. **If you enrolled two projects with one hub before this,
+  enrol the first one again** with its own invitation: its old file holds the other's token.
+
 - **One note a machine could not write stopped the whole hub pull, for good.** The notes after
   it never arrived, the cursor did not move, and every later pull stopped at the same place.
   Such a note is refused and named now, the rest of the delivery arrives, and the cursor waits

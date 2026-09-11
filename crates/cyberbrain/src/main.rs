@@ -862,7 +862,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             let hub_url = inv.hub_url.clone().expect("checked while parsing");
 
             let app = App::open(store, Actor::Operator)?;
-            let token_at = hub::client::save_token(&hub_url, &inv.token)?;
+            let token_at = hub::client::save_token(&hub_url, &inv.device, &inv.token)?;
             // Taken from the invitation and written down, or taken away again: enrolling
             // afresh with a hub that has since moved behind an ordinary certificate must not
             // leave this machine expecting the old key for ever.

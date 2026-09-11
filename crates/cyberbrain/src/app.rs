@@ -3007,9 +3007,9 @@ impl App {
             .url
             .clone()
             .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
-        let token = client::token_for(&hub_url)?;
+        let token = client::token_for(&hub_url, self.config.hub.device.as_deref())?;
         let pin = client::pin_for(&hub_url);
-        let since = client::read_cursor(&hub_url);
+        let since = client::read_cursor(&hub_url, self.config.hub.device.as_deref());
         let answer = client::fetch_from_hub(
             self.policy.egress(),
             &cyberbrain_policy::Actor::Operator,
@@ -3050,17 +3050,17 @@ impl App {
         let unfinished = unfinished || retry;
         if !dry_run {
             // Everything the hub just showed us is, by definition, what it holds.
-            let mut known = client::read_known(&hub_url);
+            let mut known = client::read_known(&hub_url, self.config.hub.device.as_deref());
             for n in &notes {
                 if let (Some(name), Some(u)) = (n["name"].as_str(), n["updated"].as_str()) {
                     known.insert(name.to_string(), u.to_string());
                 }
             }
-            let _ = client::write_known(&hub_url, &known);
+            let _ = client::write_known(&hub_url, self.config.hub.device.as_deref(), &known);
             if let Some(c) = answer.get("cursor").and_then(|v| v.as_str())
                 && !unfinished
             {
-                client::write_cursor(&hub_url, c)?;
+                client::write_cursor(&hub_url, self.config.hub.device.as_deref(), c)?;
             }
         }
 
@@ -3115,7 +3115,7 @@ impl App {
             .url
             .clone()
             .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
-        let token = client::token_for(&hub_url)?;
+        let token = client::token_for(&hub_url, self.config.hub.device.as_deref())?;
         let pin = client::pin_for(&hub_url);
         let reply = client::erase_at_hub(
             self.policy.egress(),
@@ -3167,7 +3167,7 @@ impl App {
         let hub_url = self.config.hub.url.clone();
 
         let known = match &hub_url {
-            Some(u) => client::read_known(u),
+            Some(u) => client::read_known(u, self.config.hub.device.as_deref()),
             None => Default::default(),
         };
         let mut offered = Vec::new();
@@ -3231,7 +3231,7 @@ impl App {
                     .into(),
             )
         })?;
-        let token = client::token_for(&hub_url)?;
+        let token = client::token_for(&hub_url, self.config.hub.device.as_deref())?;
         let version = env!("CARGO_PKG_VERSION");
         let egress = self.policy.egress();
         let actor = cyberbrain_policy::Actor::Operator;
@@ -3256,7 +3256,7 @@ impl App {
                 v["conflicts"] = serde_json::json!(d.conflicts);
                 // Only what the hub actually took counts as known. A note it turned away is
                 // one this store still has no agreed version of.
-                let mut known = client::read_known(&hub_url);
+                let mut known = client::read_known(&hub_url, self.config.hub.device.as_deref());
                 for n in &offered {
                     let name = n["name"].as_str().unwrap_or_default();
                     let conflicted = d.conflicts.iter().any(|c| c["name"].as_str() == Some(name));
@@ -3264,7 +3264,7 @@ impl App {
                         known.insert(name.to_string(), u.to_string());
                     }
                 }
-                let _ = client::write_known(&hub_url, &known);
+                let _ = client::write_known(&hub_url, self.config.hub.device.as_deref(), &known);
                 v["message"] = serde_json::json!(if d.conflicts.is_empty() {
                     format!(
                         "{} of {} note(s) accepted by {}, {} newer than what it held",
@@ -3312,7 +3312,7 @@ impl App {
                     .into(),
             )
         })?;
-        let token = client::token_for(&hub_url)?;
+        let token = client::token_for(&hub_url, self.config.hub.device.as_deref())?;
         let version = env!("CARGO_PKG_VERSION");
 
         let filter = cyberbrain_policy::AuditFilter {

@@ -325,8 +325,10 @@ delivered 11 new row(s) to https://hub.example.internal:7788; the hub now holds 
 
 **The token is not in the store.** `cyberbrain.toml` lives inside the store, a store is meant
 to live in a repository, and a credential there gets committed by the second person who runs
-`git add .`. It goes into the user's configuration directory instead, one file per hub, or
-into `CYBERBRAIN_HUB_TOKEN` for a service account.
+`git add .`. It goes into the user's configuration directory instead, one file per store and hub, or
+into `CYBERBRAIN_HUB_TOKEN` for a service account. Per store, not per hub: every project a
+person opens is its own store with its own chain, so each is its own device on the hub, and
+two of them sharing one token would deliver two chains as one device.
 
 **Nothing is buffered separately.** The audit log *is* the buffer: it already holds every row
 in order, and the hub says where it stopped. A failed delivery changes nothing locally — the
