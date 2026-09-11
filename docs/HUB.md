@@ -92,7 +92,8 @@ $ cyberbrain hub add "ws-021" --data hub.db --invite ws-021.json \
 ```
 
 The file carries the token: hand it over the way you would a password, and delete it once the
-machine is set up. Reading it on the client is the next slice.
+machine is set up. On the machine, `cyberbrain hub enrol ws-021.json` reads it (see *Delivering
+to it*).
 
 ### A fleet invitation, for many machines
 
@@ -128,6 +129,11 @@ done:
 $ cyberbrain hub invite list --data /var/lib/cyberbrain/hub.db
 $ cyberbrain hub invite revoke ec_01M2… --data /var/lib/cyberbrain/hub.db
 ```
+
+On Windows a rollout does not need anybody to run that command: the installer's
+`/INVITE=<file>` puts the invitation in `%ProgramData%\Cyberbrain`, and the launcher asks once
+per project whether to connect it. A whole rollout, step by step, is in
+[`docs/ROLLOUT.md`](ROLLOUT.md).
 
 It is the one request a machine makes before it is enrolled, so it has its own entry in the
 egress register, `hub-enrolment`. It goes only to the address in the file, follows no

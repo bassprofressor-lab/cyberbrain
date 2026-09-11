@@ -660,3 +660,57 @@ fn a_windows_path_is_not_in_json_unless_its_backslashes_are_doubled() {
         "and the doubled one is"
     );
 }
+
+#[test]
+fn a_central_invitation_is_found_only_where_a_rollout_puts_it() {
+    let tmp = tempfile::tempdir().unwrap();
+    assert!(central_invitation_in(tmp.path()).is_none());
+    std::fs::write(tmp.path().join("fleet-invitation.json"), "{}").unwrap();
+    assert_eq!(
+        central_invitation_in(tmp.path()),
+        Some(tmp.path().join("fleet-invitation.json"))
+    );
+}
+
+/// The company hub is offered once per project, only once a delivery has shown the project is
+/// not connected, and never against an earlier no.
+#[test]
+fn the_company_hub_is_offered_once_and_never_against_a_no() {
+    let inv = PathBuf::from("/ProgramData/Cyberbrain/fleet-invitation.json");
+    let proj = PathBuf::from("/home/x/angebote");
+    let unenrolled = Delivery {
+        enrolled: Some(false),
+        ..Default::default()
+    };
+    let enrolled = Delivery {
+        enrolled: Some(true),
+        ..Default::default()
+    };
+    assert!(should_offer_hub(Some(&inv), &unenrolled, &proj, &[], false));
+    assert!(
+        !should_offer_hub(None, &unenrolled, &proj, &[], false),
+        "no invitation on the machine"
+    );
+    assert!(
+        !should_offer_hub(Some(&inv), &Delivery::default(), &proj, &[], false),
+        "before a delivery has answered"
+    );
+    assert!(
+        !should_offer_hub(Some(&inv), &enrolled, &proj, &[], false),
+        "already connected"
+    );
+    assert!(
+        !should_offer_hub(Some(&inv), &unenrolled, &proj, &[], true),
+        "asked this session"
+    );
+    assert!(
+        !should_offer_hub(
+            Some(&inv),
+            &unenrolled,
+            &proj,
+            std::slice::from_ref(&proj),
+            false
+        ),
+        "said no before"
+    );
+}

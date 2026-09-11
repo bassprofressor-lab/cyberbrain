@@ -15,6 +15,11 @@ pub struct Settings {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub projects: Vec<PathBuf>,
 
+    /// Projects whose person said no when the launcher offered the company hub, so they are
+    /// not asked again. Only that answer adds to it; connecting from the menu still works.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hub_declined: Vec<PathBuf>,
+
     /// Where a project's page opens. Everyone decides this for themselves, which is why it
     /// is a setting and not a replacement: the browser was the only way until now, and
     /// somebody who wants their memory in the same window as their tabs is not wrong.
@@ -230,6 +235,19 @@ mod tests {
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(!text.contains("project_dir"), "{text}");
         assert!(text.contains("projects"), "{text}");
+    }
+
+    #[test]
+    fn a_no_to_the_company_hub_is_remembered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("desktop.toml");
+        let s = Settings {
+            projects: vec![PathBuf::from("/home/x/privat")],
+            hub_declined: vec![PathBuf::from("/home/x/privat")],
+            ..Settings::default()
+        };
+        save(&file, &s).unwrap();
+        assert_eq!(load(&file), s);
     }
 
     #[test]

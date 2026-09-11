@@ -47,6 +47,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   before a store is enrolled, so it is a new registered egress purpose, `hub-enrolment`, that
   reaches only the address in the file. `hub invite list` and `hub invite revoke` manage them.
 
+- **A rollout can leave its fleet invitation on every machine, and the launcher asks once per
+  project.** `cyberbrain-setup.exe /S /INVITE=<file>` places the invitation in
+  `%ProgramData%\Cyberbrain`, and the uninstaller removes it again. When a project turns out
+  not to be connected, the launcher asks whether to connect it to the company hub; yes enrols
+  it, no is remembered for that project and never asked again. Nothing is connected without
+  that answer, because a project on a company machine can still be somebody's own.
+  `docs/ROLLOUT.md` walks through a rollout, and CI now installs over a running installation
+  to check that the hub service comes back and the invitation arrives.
+
 - **A seat is a machine, not a project.** Every project is its own store and so its own
   device, and counting devices charged a person with three projects three seats, which is not
   what the licence says. Deliveries now carry the machine's name, the hub counts seats by

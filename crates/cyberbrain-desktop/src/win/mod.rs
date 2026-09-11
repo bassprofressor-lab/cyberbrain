@@ -34,6 +34,8 @@ struct Running {
     /// and stale after the person closes it — closing a window closes a window, not a
     /// project, so the next Open makes a new one.
     window: Option<window::ProjectWindow>,
+    /// Whether the company hub was offered for this project in this session.
+    hub_asked: bool,
 }
 
 impl Running {
@@ -42,6 +44,7 @@ impl Running {
             server,
             delivery: launch::Delivery::default(),
             window: None,
+            hub_asked: false,
         }
     }
 
@@ -265,6 +268,54 @@ pub fn run() {
         }
         for p in projects.iter_mut() {
             p.delivery.tick(&server_exe, &p.server.project_dir);
+        }
+
+        // A rollout that left a fleet invitation on this machine gets one question per
+        // project, and only once a delivery has shown the project is not connected. That
+        // answer arrives on a tick, which is why this comes straight after them.
+        let central = launch::central_invitation();
+        for p in projects.iter_mut() {
+            if !launch::should_offer_hub(
+                central.as_deref(),
+                &p.delivery,
+                &p.server.project_dir,
+                &settings.hub_declined,
+                p.hub_asked,
+            ) {
+                continue;
+            }
+            let Some(invitation) = central.as_deref() else {
+                continue;
+            };
+            p.hub_asked = true;
+            let name = p
+                .server
+                .project_dir
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| p.server.project_dir.display().to_string());
+            let question = format!(
+                "Your company has set this computer up to connect projects to its hub.\n\n\
+                 Connect \"{name}\"? It will deliver its audit trail: what happened, not what a \
+                 note says. Sharing notes is a separate setting, and it stays off.\n\n\
+                 No is remembered for this project. You can still connect it later from its menu."
+            );
+            if sys::ask_yes_no(APP, &question) {
+                match launch::enrol(&server_exe, &p.server.project_dir, invitation) {
+                    Ok(said) => {
+                        sys::info_box(APP, &said);
+                        p.delivery = launch::Delivery::now();
+                    }
+                    Err(why) => {
+                        sys::error_box(APP, &format!("The project was not connected.\n\n{why}"))
+                    }
+                }
+            } else {
+                settings.hub_declined.push(p.server.project_dir.clone());
+                if let Some(path) = settings_path.as_deref() {
+                    let _ = settings::save(path, &settings);
+                }
+            }
         }
 
         // A window that has gone was closed by the person: the ones we close go with their

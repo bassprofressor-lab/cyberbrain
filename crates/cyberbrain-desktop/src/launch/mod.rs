@@ -568,6 +568,43 @@ fn append(buf: &Arc<Mutex<String>>, line: &str) {
     }
 }
 
+/// Where a rollout leaves a fleet invitation for every project on the machine: in
+/// `%ProgramData%\Cyberbrain` on Windows, `/etc/cyberbrain` elsewhere. The installer's
+/// `/INVITE=<file>` puts it there; the launcher only reads it, and only offers it.
+pub fn central_invitation() -> Option<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("PROGRAMDATA").map(|p| PathBuf::from(p).join("Cyberbrain"))
+    } else {
+        Some(PathBuf::from("/etc/cyberbrain"))
+    }?;
+    central_invitation_in(&base)
+}
+
+fn central_invitation_in(base: &Path) -> Option<PathBuf> {
+    let path = base.join("fleet-invitation.json");
+    path.is_file().then_some(path)
+}
+
+/// Whether to ask the person about connecting this project to the company hub.
+///
+/// Only when a rollout left an invitation on the machine, a delivery has already shown that
+/// this project is not connected, it has not been asked this session, and the person has not
+/// said no for this project before. Asked, never done: a project on a company machine can still
+/// be somebody's own, and a question that comes back every start teaches people to click it
+/// away.
+pub fn should_offer_hub(
+    central: Option<&Path>,
+    delivery: &Delivery,
+    project: &Path,
+    declined: &[PathBuf],
+    asked: bool,
+) -> bool {
+    central.is_some()
+        && delivery.is_known_unenrolled()
+        && !asked
+        && !declined.iter().any(|d| d == project)
+}
+
 /// How often an enrolled machine delivers, in ticks of the one-second message loop.
 ///
 /// A quarter of an hour: often enough that the fleet view's two-day silence threshold means
@@ -601,6 +638,13 @@ impl Delivery {
             next: Some(0),
             ..Default::default()
         }
+    }
+
+    /// Whether a delivery has shown that this store belongs to no hub. `false` until one has
+    /// answered, which is what keeps the company-hub question from coming before it can be
+    /// true.
+    pub fn is_known_unenrolled(&self) -> bool {
+        self.enrolled == Some(false)
     }
 
     pub fn tick(&mut self, server_exe: &Path, project_dir: &Path) {

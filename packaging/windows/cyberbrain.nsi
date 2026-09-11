@@ -52,6 +52,9 @@ InstallDirRegKey HKLM "Software\${NAME}" "InstallDir"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
 
+; The fleet invitation handed in with /INVITE=<file>, if any.
+Var InviteFile
+
 VIProductVersion "${VIVERSION}.0"
 VIAddVersionKey "ProductName" "${NAME}"
 VIAddVersionKey "FileDescription" "${NAME} installer"
@@ -196,6 +199,22 @@ Section "Cyberbrain" SecMain
     DetailPrint "Could not change the PATH ($0). Use the full path, or add $INSTDIR by hand."
   ${EndIf}
 
+  ; A fleet invitation for the projects on this machine, when a rollout hands one in with
+  ; /INVITE=<file>. The launcher offers it once per project and enrols nothing by itself. A
+  ; copy that fails fails the installation: a rollout that believes machines are set up to
+  ; connect, when they are not, finds out only when the fleet view stays empty.
+  ${If} $InviteFile != ""
+    CreateDirectory "$COMMONPROGRAMDATA\${NAME}"
+    ClearErrors
+    CopyFiles /SILENT "$InviteFile" "$COMMONPROGRAMDATA\${NAME}\fleet-invitation.json"
+    ${If} ${Errors}
+      DetailPrint "The invitation $InviteFile could not be copied."
+      SetErrorLevel 2
+    ${Else}
+      DetailPrint "Placed the fleet invitation for the projects on this machine."
+    ${EndIf}
+  ${EndIf}
+
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
@@ -271,6 +290,13 @@ Function .onInit
     !insertmacro SelectSection ${SecHub}
   ${EndIf}
   ClearErrors
+  ;   cyberbrain-setup.exe /S /INVITE=\\server\rollout\rollout.json
+  ;                                     and a fleet invitation for the projects on it
+  ${GetOptions} $R0 "/INVITE=" $InviteFile
+  ${If} ${Errors}
+    StrCpy $InviteFile ""
+  ${EndIf}
+  ClearErrors
 FunctionEnd
 
 ; The collector's service, if it was stopped to free the file. After every section rather
@@ -330,6 +356,9 @@ Section "Uninstall"
   Delete "$SMPROGRAMS\${NAME}\Hub data folder.lnk"
   RMDir "$SMPROGRAMS\${NAME}"
   Delete "$DESKTOP\${NAME}.lnk"
+  ; The fleet invitation goes with the program. It is a credential for every enrolment it has
+  ; left, readable by every account on the machine, and nothing is left to use it.
+  Delete "$COMMONPROGRAMDATA\${NAME}\fleet-invitation.json"
 
   DeleteRegKey HKLM "${REGKEY}"
   DeleteRegKey HKLM "Software\${NAME}"

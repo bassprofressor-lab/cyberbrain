@@ -210,6 +210,25 @@ jobs:
           # `exit $LASTEXITCODE`: left alone, passing this check would fail the job.
           $global:LASTEXITCODE = 0
 
+      # An update is the same installer run again, while the old one is still running. The
+      # collector's service holds cyberbrain.exe open, so this is the path where a stop and
+      # start that went wrong would leave a machine without its hub, and /INVITE is how a
+      # rollout puts its fleet invitation on every machine.
+      - name: installing over a running installation keeps the hub and places an invitation
+        shell: pwsh
+        run: |
+          if ((Get-Service CyberbrainHub).Status -ne 'Running') { throw "the hub service is not running before the update" }
+          $invite = "$env:RUNNER_TEMP\rollout.json"
+          Set-Content -Path $invite -Value '{"kind":"cyberbrain.hub.fleet-invitation","version":1,"code":"cbe_ci","label":"CI","hub_url":"https://127.0.0.1:7788","expires_at":"2099-01-01T00:00:00Z"}'
+          $setup = "packaging/windows/cyberbrain-setup-0.0.0-ci.exe"
+          $p = Start-Process -FilePath $setup -ArgumentList '/S','/HUB',"/INVITE=$invite" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "installing over a running installation exited $($p.ExitCode)" }
+          Start-Sleep -Seconds 5
+          if ((Get-Service CyberbrainHub).Status -ne 'Running') { throw "the hub service did not come back after the update" }
+          $placed = "$env:ProgramData\Cyberbrain\fleet-invitation.json"
+          if (-not (Test-Path $placed)) { throw "/INVITE did not place the invitation" }
+          if ((Get-Content $placed -Raw) -notmatch 'cbe_ci') { throw "the placed invitation is not the one handed in" }
+
       - name: uninstalling takes the service and the PATH entry with it
         shell: pwsh
         run: |
@@ -225,6 +244,8 @@ jobs:
           # The record is deliberately left behind: it is the evidence, and removing the
           # software must not remove it.
           if (-not (Test-Path "$env:ProgramData\Cyberbrain\hub.db")) { throw "uninstalling deleted the record" }
+          # The invitation is not the record: it is a credential, and it goes with the program.
+          if (Test-Path "$env:ProgramData\Cyberbrain\fleet-invitation.json") { throw "uninstalling left the fleet invitation behind" }
           # `sc query` was meant to fail; see above.
           $global:LASTEXITCODE = 0
 
