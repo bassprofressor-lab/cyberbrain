@@ -147,7 +147,8 @@ pub type NoteId = ulid::Ulid;
 pub struct Frontmatter {
     /// Immutable. Assigned once at creation and never rewritten, so citations survive renames.
     pub id: NoteId,
-    /// kebab-case slug, unique within the store. May change.
+    /// Slug of lowercase Latin letters (accents allowed), digits and hyphens, in NFC; unique
+    /// within the store. May change.
     pub name: String,
     pub ring: Ring,
     pub kind: NoteKind,

@@ -151,7 +151,8 @@ impl Store {
     /// Where a proposal with this name lives. Validates the name for the same reason
     /// [`note_path`](Self::note_path) does: a name must never become a path.
     pub fn proposal_path(&self, name: &str) -> Result<PathBuf> {
-        frontmatter::validate_name(name).map_err(|why| Error::Frontmatter {
+        let name = frontmatter::normalize_name(name);
+        frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: self.proposals_dir().join(format!("{name}.{NOTE_EXT}")),
             reason: format!("name `{name}`: {why}"),
         })?;
@@ -246,9 +247,11 @@ impl Store {
     }
 
     /// Where a note with this ring and name lives. Validates the name so that a name can
-    /// never become a path outside its ring directory.
+    /// never become a path outside its ring directory, after composing it to NFC, so that
+    /// `für` typed decomposed finds the file written composed (every lookup comes here).
     pub fn note_path(&self, ring: Ring, name: &str) -> Result<PathBuf> {
-        frontmatter::validate_name(name).map_err(|why| Error::Frontmatter {
+        let name = frontmatter::normalize_name(name);
+        frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: self.ring_dir(ring).join(format!("{name}.{NOTE_EXT}")),
             reason: format!("name `{name}`: {why}"),
         })?;

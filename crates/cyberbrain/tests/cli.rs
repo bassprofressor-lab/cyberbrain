@@ -735,7 +735,7 @@ fn a_pii_hold_is_a_decision_with_exit_3_and_force_writes_it_flagged() {
         "x",
     ]);
     assert_eq!(code, 1, "{err}");
-    assert!(err.contains("kebab-case"), "{err}");
+    assert!(err.contains("must be a slug"), "{err}");
 }
 
 #[test]
@@ -980,6 +980,70 @@ fn export_gives_the_file_back_or_a_json_view() {
     let out = cb.run(&["hook", "pre-tool-use"]);
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
+}
+
+/// A name may carry the letters of the language it is written in (SPEC §3.1).
+///
+/// Names were ASCII until now, so `auslieferung-für-kunden` was refused and a German team
+/// wrote "fuer" into every name. Beyond "it is accepted", two things are checked here
+/// because nobody would see them go wrong: the same word spelled decomposed (u followed by
+/// a combining diaeresis, which some keyboards and file dialogs produce) is the same note
+/// and not a second file, and a name in Cyrillic letters that reads like a Latin one is
+/// refused, because a look-alike name is a way to put words in another note's place.
+#[test]
+fn a_name_keeps_its_umlaut_and_the_decomposed_spelling_is_the_same_note() {
+    let cb = Cb::new();
+    cb.write("2", "auslieferung-für-kunden", "Erst nach der Freigabe.");
+    assert!(cb.note_path("2", "auslieferung-für-kunden").is_file());
+
+    let decomposed = "auslieferung-fu\u{308}r-kunden";
+    let out = cb.run(&["export", decomposed, "--format", "json"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["front"]["name"], "auslieferung-für-kunden");
+
+    // Written under the decomposed spelling, it changes that note instead of adding a file.
+    let (_, code, err) = cb.json(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        decomposed,
+        "--body",
+        "Erst nach der Freigabe, und nie freitags.",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let files: Vec<_> = std::fs::read_dir(
+        cb.note_path("2", "auslieferung-für-kunden")
+            .parent()
+            .unwrap(),
+    )
+    .unwrap()
+    .map(|e| e.unwrap().file_name())
+    .collect();
+    assert_eq!(files.len(), 1, "{files:?}");
+    let text = std::fs::read_to_string(cb.note_path("2", "auslieferung-für-kunden")).unwrap();
+    assert!(text.contains("nie freitags"), "{text}");
+
+    // "раss", in Cyrillic, reads as "pass".
+    let (_, code, err) = cb.json(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "\u{440}\u{430}ss",
+        "--body",
+        "x",
+    ]);
+    assert_eq!(code, 1, "{err}");
 }
 
 /// An `--action` filter that matches nothing must be refused, not answered with an empty

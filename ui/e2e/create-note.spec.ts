@@ -29,14 +29,14 @@ test("the simple view writes a note into ring 2, under a name made from the titl
   await page.getByRole("button", { name: /new note/i }).first().click();
 
   await page.getByRole("textbox", { name: /^title/i }).fill("Auslieferung für Kunden");
-  // Names are ASCII slugs; the title is not, and must not have to be.
-  await expect(page.getByRole("textbox", { name: /short name/i })).toHaveValue("auslieferung-fuer-kunden");
+  // The umlaut stays; spaces and capitals do not.
+  await expect(page.getByRole("textbox", { name: /short name/i })).toHaveValue("auslieferung-für-kunden");
   await page.getByRole("textbox", { name: /^text/i }).fill("Kunden bekommen eine Auslieferung erst nach der Freigabe.");
   await page.getByRole("button", { name: /^save/i }).click();
 
-  await expect(page.getByRole("heading", { level: 1 })).toContainText(/auslieferung fuer kunden/i);
-  expect(existsSync(noteFile(2, "auslieferung-fuer-kunden"))).toBe(true);
-  expect(readFileSync(noteFile(2, "auslieferung-fuer-kunden"), "utf8")).toContain("erst nach der Freigabe");
+  await expect(page.getByRole("heading", { level: 1 })).toContainText(/auslieferung für kunden/i);
+  expect(existsSync(noteFile(2, "auslieferung-für-kunden"))).toBe(true);
+  expect(readFileSync(noteFile(2, "auslieferung-für-kunden"), "utf8")).toContain("erst nach der Freigabe");
 });
 
 test("a second note with the same name is refused and the first stays as it was", async ({ page }) => {
@@ -49,7 +49,7 @@ test("a second note with the same name is refused and the first stays as it was"
   await page.getByRole("button", { name: /^save/i }).click();
 
   await expect(page.getByRole("alert")).toContainText(/already/i);
-  expect(readFileSync(noteFile(2, "auslieferung-fuer-kunden"), "utf8")).not.toContain("nicht ersetzen");
+  expect(readFileSync(noteFile(2, "auslieferung-für-kunden"), "utf8")).not.toContain("nicht ersetzen");
 });
 
 test("the full view creates in rings 2 to 4 and offers nothing above them", async ({ page }) => {

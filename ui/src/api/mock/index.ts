@@ -57,6 +57,7 @@ import {
   type UsageReport,
   type SubjectAccessReport,
 } from "../types";
+import { isValidName } from "../../lib/slug";
 import { CLUSTERS, FILLER_SENTENCES, SEED_NOTES, type SeedNote } from "./data";
 
 // ───────────────────────────────────────────────────────────────────── deterministic helpers
@@ -137,8 +138,6 @@ interface MockNote {
 const WIKILINK = /\[\[([^\]\n]+?)\]\]/g;
 const approxTokens = (s: string) => Math.max(1, Math.round(s.split(/\s+/).filter(Boolean).length * 1.3));
 
-/** `cyberbrain_core::validate_name`: kebab-case slug. Anything else can never be a note. */
-const VALID_NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 /** `cyberbrain_core::frontmatter::validate_retention`, the shape the UI can check. */
 const VALID_RETENTION = /^P(?:\d+Y)?(?:\d+M)?(?:\d+W)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+S)?)?$/;
 
@@ -748,8 +747,8 @@ export const mockClient: CyberbrainApi = {
 
   async createNote(req) {
     const f = req.front;
-    if (!VALID_NAME.test(f.name) || f.name.length > 120) {
-      throw err(400, "bad-frontmatter", `name \`${f.name}\`: must be a kebab-case slug: lowercase ascii letters, digits and hyphens`, { variant: "frontmatter" });
+    if (!isValidName(f.name)) {
+      throw err(400, "bad-frontmatter", `name \`${f.name}\`: must be a slug: lowercase Latin letters (accents allowed), digits and hyphens`, { variant: "frontmatter" });
     }
     const existing = byName().get(f.name);
     if (existing) {
@@ -1066,12 +1065,12 @@ export const mockClient: CyberbrainApi = {
     for (const n of notes) {
       for (const t of n.outbound) {
         if (names.has(t)) continue;
-        if (VALID_NAME.test(t)) findings.push({ severity: "warn", check: "dangling-link", subject: n.front.name, message: `${n.front.name} links to [[${t}]] which does not exist yet (valid name: it names intent)` });
+        if (isValidName(t)) findings.push({ severity: "warn", check: "dangling-link", subject: n.front.name, message: `${n.front.name} links to [[${t}]] which does not exist yet (valid name: it names intent)` });
         else {
           // The server's `doctor_subject` has no arm for this check and falls back to "store".
           const normalised = t.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
           const hint = names.has(normalised) ? `; did you mean [[${normalised}]]?` : "";
-          findings.push({ severity: "warn", check: "unresolvable-links", subject: "store", message: `${n.front.name} links to [[${t}]], which can never resolve: a note name must be a kebab-case slug${hint}` });
+          findings.push({ severity: "warn", check: "unresolvable-links", subject: "store", message: `${n.front.name} links to [[${t}]], which can never resolve: a note name must be a slug: lowercase Latin letters (accents allowed), digits and hyphens${hint}` });
         }
       }
     }

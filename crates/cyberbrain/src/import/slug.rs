@@ -1,9 +1,11 @@
-//! Names. A note name is a kebab-case slug (SPEC §3.1, `frontmatter::validate_name`);
-//! this module derives one from a heading or file name and fills a template.
+//! Names. A note name is a slug (SPEC §3.1, `frontmatter::validate_name`); this module
+//! derives one from a heading or file name and fills a template.
 //!
 //! The corpus is German, so umlauts are transliterated (`ä` → `ae`) rather than dropped:
 //! `Nächste` becoming `nchste` is unreadable, and unreadable names are ones the operator
-//! cannot type back. Other Latin diacritics fold to their base letter; everything else
+//! cannot type back. Names may carry accented letters by now, and import still spells them
+//! out, on purpose: a repeated import finds its notes by name, so changing how a heading
+//! becomes a name would make every re-import of an existing source write a second note. Other Latin diacritics fold to their base letter; everything else
 //! that is not a letter or digit becomes a hyphen. The result can be empty (a heading of
 //! emoji only); the caller falls back and says so.
 

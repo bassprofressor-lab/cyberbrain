@@ -19,7 +19,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   line. Both views have a "New note" button now. The simple view asks for a title and a text
   and writes into ring 2 as knowledge, shared with nobody. The full view adds ring, kind,
   bereich and tags. The name is made from the title, "Auslieferung für Kunden" becomes
-  `auslieferung-fuer-kunden`, and is shown before saving so it can be changed. A name that
+  `auslieferung-für-kunden`, and is shown before saving so it can be changed. A name that
   exists already is refused in words, never overwritten, and a write held for personal data
   gets the same dialog as an edit.
 
@@ -28,7 +28,33 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   line. That is a choice of the page, not a refusal of the server: the API still accepts any
   ring.
 
+### Changed
+
+- **A note name may carry accented Latin letters.** `auslieferung-für-kunden`, `straße` and
+  `łódź` are names now; until this version they were refused, and a German team wrote "fuer"
+  into every name. Names stay lowercase, with digits and single hyphens, at most 120
+  characters and 240 bytes, because a name is also a file name.
+
+  Two things come with it. `ü` has two spellings in Unicode that print alike and are
+  different file names, so every name taken from outside, in a write, a lookup or a
+  `[[link]]`, is composed to NFC first, and the other spelling finds the same note instead of
+  making a second one. And letters of other scripts stay out: a Cyrillic `а` cannot be told
+  from a Latin `a`, and a name that reads like another note's is a way to put words in its
+  place.
+
+  `cyberbrain import` still spells umlauts out, on purpose. A repeated import finds its notes
+  by name, and a different name for the same heading would write a second note on every run.
+
+  **Update every machine on a hub before the first such name is shared.** An older machine
+  cannot write it; see the pull fix below for what it does instead from this version on.
+
 ### Fixed
+
+- **One note a machine could not write stopped the whole hub pull, for good.** The notes after
+  it never arrived, the cursor did not move, and every later pull stopped at the same place.
+  Such a note is refused and named now, the rest of the delivery arrives, and the cursor waits
+  so the note is offered again once the machine can take it. A machine still on an older
+  version keeps the old behaviour, which is why the note above asks to update first.
 
 - **The question page said "Everything is in order" when it could not find out.** The health
   line only checked the status when it had one, so a failed status call left a green dot. It

@@ -1780,7 +1780,7 @@ impl App {
     }
 
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
-        let name = req.name.trim().to_string();
+        let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: PathBuf::from(format!("{name}.md")),
             reason: format!("name `{name}`: {why}"),
@@ -1988,7 +1988,7 @@ impl App {
     /// the one who answers for it. It runs again at acceptance over the same body, because
     /// the profile may have changed in between.
     pub fn propose(&self, req: WriteRequest, who: &str) -> Result<Proposed> {
-        let name = req.name.trim().to_string();
+        let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: PathBuf::from(format!("{name}.md")),
             reason: format!("name `{name}`: {why}"),
@@ -2451,7 +2451,7 @@ impl App {
                         ),
                     ),
                     Err(reason) => {
-                        // Offer the kebab-case form when a note actually sits under it.
+                        // Offer the name form when a note actually sits under it.
                         // Most of these come from another tool's file names, and the
                         // note the author meant is often already in the store.
                         let normalised = normalise_link_target(&l.to_name);
@@ -2830,54 +2830,21 @@ impl App {
         ))
     }
 
-    /// Take what the hub has for this machine.
-    ///
-    /// The hub decided what this device may see; this decides what to keep, and it is
-    /// deliberately timid. A note that changed here since the last pull is never overwritten
-    /// — it is reported and left alone. Erasures are reported too and only acted on when
-    /// asked, because deleting a local file on the strength of a network message is not
-    /// something to do quietly.
-    pub async fn pull_notes_from_hub(
+    /// What a pull does with the hub's answer: everything except fetching it and moving
+    /// the cursor. Separate so it can be tested without a hub at the other end of a socket.
+    pub(crate) fn apply_pulled(
         &self,
+        notes: &[serde_json::Value],
+        erased: &[serde_json::Value],
         apply_erasures: bool,
         dry_run: bool,
-    ) -> Result<(serde_json::Value, i32)> {
-        use crate::hub::client;
-        let hub_url = self
-            .config
-            .hub
-            .url
-            .clone()
-            .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
-        let token = client::token_for(&hub_url)?;
-        let pin = client::pin_for(&hub_url);
-        let since = client::read_cursor(&hub_url);
-        let answer = client::fetch_from_hub(
-            self.policy.egress(),
-            &cyberbrain_policy::Actor::Operator,
-            &hub_url,
-            &token,
-            pin.as_deref(),
-            since.as_deref(),
-        )
-        .await?;
-
-        let notes = answer
-            .get("notes")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-        let erased = answer
-            .get("erased")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
+    ) -> Result<Pulled> {
         let mut written = Vec::new();
         let mut kept_local = Vec::new();
         let mut refused = Vec::new();
         let mut flagged: Vec<String> = Vec::new();
-        for n in &notes {
+        let mut retry = false;
+        for n in notes {
             let name = n["name"].as_str().unwrap_or_default().to_string();
             let ring_u8 = n["ring"].as_u64().unwrap_or(9) as u8;
             // The hub never holds rings 0 or 1, and this checks anyway. A store that trusts
@@ -2935,12 +2902,12 @@ impl App {
             let incoming_tags = sent.as_ref().map(|f| f.tags.clone()).unwrap_or_default();
             let incoming_retention = sent.as_ref().and_then(|f| f.retention.clone());
 
-            written.push(serde_json::json!({
+            let taken = serde_json::json!({
                 "name": name,
                 "updated": incoming_updated,
                 "retention": incoming_retention,
                 "tags": incoming_tags,
-            }));
+            });
             if !dry_run {
                 let req = WriteRequest {
                     ring: Ring::try_from(ring_u8)?,
@@ -2968,16 +2935,34 @@ impl App {
                 // not do is pass in silence — a note can arrive here carrying personal data
                 // that this machine's own gate would have stopped, and the person running
                 // the pull is the one who has to know it landed.
-                if let WriteOutcome::Written(w) = self.write(req)?
-                    && w.pii == cyberbrain_core::PiiState::Flagged
-                {
-                    flagged.push(name.clone());
+                match self.write(req) {
+                    Ok(WriteOutcome::Written(w)) => {
+                        if w.pii == cyberbrain_core::PiiState::Flagged {
+                            flagged.push(name.clone());
+                        }
+                    }
+                    Ok(_) => {}
+                    // A note this machine cannot write is named and left out, and the rest of
+                    // the delivery still arrives. Returning here, as it did, stopped every
+                    // note after it, and the next pull stopped at the same place, for good:
+                    // what an older machine meets the first time a newer one shares a name
+                    // it cannot read. The cursor is held back, so the note comes again and
+                    // lands once this machine can take it.
+                    Err(e) => {
+                        refused.push(serde_json::json!({
+                            "name": name,
+                            "why": e.to_string(),
+                        }));
+                        retry = true;
+                        continue;
+                    }
                 }
             }
+            written.push(taken);
         }
 
         let mut erasures = Vec::new();
-        for e in &erased {
+        for e in erased {
             let name = e["name"].as_str().unwrap_or_default().to_string();
             let exists = self.store.read(&name).is_ok();
             erasures.push(serde_json::json!({
@@ -2993,12 +2978,76 @@ impl App {
             }
         }
 
+        Ok(Pulled {
+            written,
+            kept_local,
+            refused,
+            flagged,
+            erasures,
+            retry,
+        })
+    }
+
+    /// Take what the hub has for this machine.
+    ///
+    /// The hub decided what this device may see; this decides what to keep, and it is
+    /// deliberately timid. A note that changed here since the last pull is never overwritten
+    /// — it is reported and left alone. Erasures are reported too and only acted on when
+    /// asked, because deleting a local file on the strength of a network message is not
+    /// something to do quietly.
+    pub async fn pull_notes_from_hub(
+        &self,
+        apply_erasures: bool,
+        dry_run: bool,
+    ) -> Result<(serde_json::Value, i32)> {
+        use crate::hub::client;
+        let hub_url = self
+            .config
+            .hub
+            .url
+            .clone()
+            .ok_or_else(|| Error::Config("this store is not enrolled with a hub".into()))?;
+        let token = client::token_for(&hub_url)?;
+        let pin = client::pin_for(&hub_url);
+        let since = client::read_cursor(&hub_url);
+        let answer = client::fetch_from_hub(
+            self.policy.egress(),
+            &cyberbrain_policy::Actor::Operator,
+            &hub_url,
+            &token,
+            pin.as_deref(),
+            since.as_deref(),
+        )
+        .await?;
+
+        let notes = answer
+            .get("notes")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        let erased = answer
+            .get("erased")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let Pulled {
+            written,
+            kept_local,
+            refused,
+            flagged,
+            erasures,
+            retry,
+        } = self.apply_pulled(&notes, &erased, apply_erasures, dry_run)?;
+
         // An erasure this machine was told about but did not act on must come round again.
         // Advancing the cursor past it would mean the only warning was the one nobody
         // acted on, and the copy stays here for good.
         let unfinished = erasures.iter().any(|e| {
             e["held_here"].as_bool().unwrap_or(false) && !e["removed"].as_bool().unwrap_or(false)
         });
+        // The same for a note this machine could not write: it has to be offered again.
+        let unfinished = unfinished || retry;
         if !dry_run {
             // Everything the hub just showed us is, by definition, what it holds.
             let mut known = client::read_known(&hub_url);
@@ -3621,16 +3670,32 @@ impl SubjectSource for IndexSubjectSource<'_> {
     }
 }
 
-/// The kebab-case form of a link target, for suggesting what the author probably meant.
-/// Underscores and spaces become hyphens, capitals fold down, everything else is dropped,
-/// and runs of hyphens collapse. Only ever used to look up an existing note, never to
-/// rewrite a link: a `[[target]]` in a note is the author's text and stays theirs.
+/// The part of a hub pull that touches this store.
+pub(crate) struct Pulled {
+    pub written: Vec<serde_json::Value>,
+    pub kept_local: Vec<serde_json::Value>,
+    pub refused: Vec<serde_json::Value>,
+    pub flagged: Vec<String>,
+    pub erasures: Vec<serde_json::Value>,
+    /// A note could not be written here, so the cursor must not move past it.
+    pub retry: bool,
+}
+
+/// The name form of a link target, for suggesting what the author probably meant.
+/// Underscores and spaces become hyphens, capitals fold down (`Für` to `für`, which is a name
+/// now), everything else is dropped, and runs of hyphens collapse. Only ever used to look up
+/// an existing note, never to rewrite a link: a `[[target]]` in a note is the author's text
+/// and stays theirs.
 fn normalise_link_target(name: &str) -> String {
+    use cyberbrain_core::frontmatter::{is_name_letter, normalize_name};
     let mut out = String::with_capacity(name.len());
-    for ch in name.chars() {
+    for ch in normalize_name(name).chars() {
         match ch {
-            'a'..='z' | '0'..='9' => out.push(ch),
-            'A'..='Z' => out.push(ch.to_ascii_lowercase()),
+            '0'..='9' => out.push(ch),
+            c if is_name_letter(c) => out.push(c),
+            c if c.is_uppercase() && c.to_lowercase().all(is_name_letter) => {
+                out.extend(c.to_lowercase())
+            }
             '_' | ' ' | '-' | '.' | '/' if !out.ends_with('-') => out.push('-'),
             _ => {}
         }
@@ -3847,5 +3912,52 @@ mod path_rendering_tests {
             let detail = finding["detail"].as_str().unwrap();
             assert!(!detail.contains('\\'), "{detail}");
         }
+    }
+}
+
+#[cfg(test)]
+mod pull_tests {
+    use super::*;
+
+    fn wire_note(name: &str, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "name": name,
+            "ring": 2,
+            "kind": "knowledge",
+            "updated": "2026-09-11T08:00:00Z",
+            "bereich": "disposition",
+            "frontmatter": "",
+            "body": body,
+        })
+    }
+
+    /// One note this machine cannot take must not cost it the rest of the delivery.
+    ///
+    /// Before, `self.write(req)?` ended the pull at the first such note: the notes after it
+    /// never arrived, the cursor did not move, and the next pull stopped at the same place,
+    /// for good. An older machine meets exactly that the first time a newer one shares a
+    /// name it does not know how to read.
+    #[test]
+    fn a_note_this_machine_cannot_take_is_refused_and_the_rest_still_arrive() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &cyberbrain_policy::Actor::Operator).unwrap();
+        let app = App::open(Some(&root), cyberbrain_policy::Actor::Operator).unwrap();
+
+        let notes = [
+            wire_note("Not A Name", "arrives first and cannot be written"),
+            wire_note("arrives-anyway", "arrives second"),
+        ];
+        let pulled = app.apply_pulled(&notes, &[], false, false).unwrap();
+
+        assert_eq!(pulled.refused.len(), 1, "{:?}", pulled.refused);
+        assert_eq!(pulled.refused[0]["name"], "Not A Name");
+        assert_eq!(pulled.written.len(), 1, "{:?}", pulled.written);
+        assert_eq!(pulled.written[0]["name"], "arrives-anyway");
+        assert!(app.store.read("arrives-anyway").is_ok());
+        assert!(
+            pulled.retry,
+            "the cursor must wait for the note that did not land"
+        );
     }
 }

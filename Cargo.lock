@@ -665,6 +665,7 @@ name = "cyberbrain-core"
 version = "0.5.1"
 dependencies = [
  "blake3",
+ "icu_normalizer",
  "ignore",
  "jiff",
  "serde",

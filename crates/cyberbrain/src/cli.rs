@@ -93,7 +93,7 @@ pub enum Command {
         /// What the note records. Drives filtering and the write template, not retrieval.
         #[arg(long)]
         kind: NoteKindArg,
-        /// kebab-case slug, unique in the store.
+        /// Slug, unique in the store: lowercase letters (accents allowed), digits, hyphens.
         #[arg(long)]
         name: String,
         /// The note body as Markdown. Omit to read it from stdin.

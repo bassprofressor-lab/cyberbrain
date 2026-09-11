@@ -11,7 +11,8 @@
 //! target is the part before the first `|` or `#`, trimmed. The spec only shows the bare
 //! form; the two extensions are the common hand-written variants and cost nothing to
 //! read. Targets are returned as written and are not validated as slugs, so `doctor` can
-//! say "this link can never resolve" rather than this module silently dropping it.
+//! say "this link can never resolve" rather than this module silently dropping it. The
+//! one change is composition to NFC, so `[[für]]` typed either way names the same note.
 
 use crate::blocks::Fence;
 
@@ -97,7 +98,7 @@ fn scan_paragraph(text: &str, first_line: u32, out: &mut Vec<Link>) {
                     if !target.is_empty() {
                         let line = first_line + text[..i].matches('\n').count() as u32;
                         out.push(Link {
-                            target: target.to_string(),
+                            target: crate::frontmatter::normalize_name(target).into_owned(),
                             line,
                         });
                     }
@@ -161,6 +162,14 @@ mod tests {
                     line: 3
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_decomposed_target_names_the_same_note_as_a_composed_one() {
+        assert_eq!(
+            targets("[[fu\u{308}r-kunden]] and [[für-kunden]]"),
+            ["für-kunden", "für-kunden"]
         );
     }
 

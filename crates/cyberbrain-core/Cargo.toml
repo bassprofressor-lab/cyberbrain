@@ -11,6 +11,7 @@ description = "Types, config and block splitting for Cyberbrain, a cited local m
 
 [dependencies]
 blake3 = "1.8.7"
+icu_normalizer = { version = "2.3.0", default-features = false, features = ["compiled_data"] }
 ignore = "0.4.33"
 jiff = { version = "0.2.35", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }

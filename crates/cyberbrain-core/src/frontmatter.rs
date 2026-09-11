@@ -7,8 +7,9 @@
 //!   `tags:` would otherwise parse cleanly into an empty list and nobody would notice.
 //! - Rendering writes fields in the order the spec lists them, which is the declaration
 //!   order of [`Frontmatter`], so a parse → render round-trip is byte-stable.
-//! - `name` is a kebab-case slug. It doubles as the file name inside the ring directory,
-//!   so anything that is not a slug is rejected here before it can become a path.
+//! - `name` is a slug of lowercase Latin letters (accents allowed), digits and hyphens, in
+//!   NFC. It doubles as the file name inside the ring directory, so anything that is not a
+//!   slug is rejected here before it can become a path.
 
 use crate::error::{Error, Result};
 use crate::types::Frontmatter;
@@ -129,11 +130,6 @@ pub fn render(front: &Frontmatter, body: &str) -> Result<String> {
     Ok(out)
 }
 
-/// Why a string is not an acceptable note name, or `Ok` if it is.
-///
-/// A name is a kebab-case slug: ASCII lowercase letters and digits, single hyphens
-/// between them, 1..=120 characters. It becomes `<name>.md` inside a ring directory, so
-/// the rule also rules out every path-traversal shape (`..`, `/`, `\`, drive letters).
 /// A `bereich` names a department, team or domain. It is typed in filters and on the command
 /// line, so it may not carry whitespace or path separators; beyond that it stays free, because
 /// an organisation's own labels ("30-Assets", "Disposition") are not ours to reshape.
@@ -156,12 +152,45 @@ pub fn validate_bereich(bereich: &str) -> std::result::Result<(), &'static str> 
     Ok(())
 }
 
+/// A note name in its one spelling: Unicode NFC.
+///
+/// `ü` can be one code point, or `u` followed by a combining diaeresis. Both print the same,
+/// and as a file name or a key they are two different strings: two notes that read as one,
+/// or a link that never finds the note it names. Everything that takes a name from outside
+/// (a write, a lookup, a link target) passes it through here first, so only the composed
+/// form is ever stored, and [`validate_name`] refuses the other one.
+pub fn normalize_name(name: &str) -> std::borrow::Cow<'_, str> {
+    icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(name)
+}
+
+/// A lowercase Latin letter, with or without an accent: Basic Latin, Latin-1 Supplement,
+/// Latin Extended-A and -B, Latin Extended Additional. `÷` sits inside Latin-1 and is not a
+/// letter; `is_lowercase` settles that and every capital in the same blocks.
+pub fn is_name_letter(c: char) -> bool {
+    c.is_ascii_lowercase()
+        || (matches!(c, '\u{00DF}'..='\u{00FF}' | '\u{0100}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}')
+            && c.is_lowercase())
+}
+
+/// Why a string is not an acceptable note name, or `Ok` if it is.
+///
+/// A name is a slug: lowercase letters and digits with single hyphens between them. The
+/// letters are Latin, accented or not (`für`, `straße`, `łódź`), so a team can name things in
+/// its own language. Other scripts stay out: a Cyrillic `а` cannot be told from a Latin `a`,
+/// and a name that reads like another note's is a way to put words in its place.
+///
+/// The name must be NFC ([`normalize_name`]) and at most 120 characters and 240 bytes. It
+/// becomes `<name>.md` inside a ring directory, and 255 bytes is where file systems stop. The
+/// character rule also rules out every path-traversal shape (`..`, `/`, `\`, drive letters).
 pub fn validate_name(name: &str) -> std::result::Result<(), &'static str> {
     if name.is_empty() {
         return Err("must not be empty");
     }
-    if name.len() > 120 {
+    if name.chars().count() > 120 {
         return Err("must be at most 120 characters");
+    }
+    if name.len() > 240 {
+        return Err("must be at most 240 bytes");
     }
     if name.starts_with('-') || name.ends_with('-') {
         return Err("must not start or end with a hyphen");
@@ -169,11 +198,18 @@ pub fn validate_name(name: &str) -> std::result::Result<(), &'static str> {
     if name.contains("--") {
         return Err("must not contain consecutive hyphens");
     }
+    if !icu_normalizer::ComposingNormalizerBorrowed::new_nfc().is_normalized(name) {
+        return Err(
+            "must be in Unicode NFC: an accented letter as one character, not a letter followed by a combining mark",
+        );
+    }
     if !name
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+        .chars()
+        .all(|c| is_name_letter(c) || c.is_ascii_digit() || c == '-')
     {
-        return Err("must be a kebab-case slug: lowercase ascii letters, digits and hyphens");
+        return Err(
+            "must be a slug: lowercase Latin letters (accents allowed), digits and hyphens",
+        );
     }
     Ok(())
 }
@@ -500,7 +536,6 @@ Body in Markdown. Links to other notes are written [[like-this]].
             "trailing-",
             "double--hyphen",
             "space here",
-            "ümlaut",
         ] {
             assert!(validate_name(bad).is_err(), "{bad:?} should be rejected");
         }
@@ -512,6 +547,58 @@ Body in Markdown. Links to other notes are written [[like-this]].
              created: 2026-09-05T09:12:03Z\nupdated: 2026-09-05T09:12:03Z\n---\n",
             "name `../escape`",
         );
+    }
+
+    #[test]
+    fn latin_letters_with_accents_make_a_name() {
+        for good in [
+            "ümlaut",
+            "für",
+            "auslieferung-für-kunden",
+            "straße",
+            "łódź",
+            "café-crème",
+            "ångström-2",
+        ] {
+            assert!(validate_name(good).is_ok(), "{good:?} should be accepted");
+        }
+        // 120 letters of two bytes each is at the limit and still fits a file name.
+        assert!(validate_name(&"ü".repeat(120)).is_ok());
+    }
+
+    /// What stays out now that names are not ASCII only, and why each one matters.
+    #[test]
+    fn a_name_is_not_uppercase_decomposed_a_lookalike_or_too_long() {
+        let bad: [(String, &str); 7] = [
+            (
+                "Für".into(),
+                "capitals fold differently on every file system",
+            ),
+            (
+                "fu\u{308}r".into(),
+                "`für` in other bytes: two files that read as one name",
+            ),
+            (
+                "\u{440}\u{430}ss".into(),
+                "Cyrillic р and а read as the Latin `pass`",
+            ),
+            ("αβγ".into(), "not a Latin letter"),
+            ("a÷b".into(), "in the Latin-1 block, but not a letter"),
+            (
+                "ü".repeat(60) + &"a".repeat(61),
+                "121 characters in 181 bytes: the character limit, not the byte limit",
+            ),
+            (
+                "ệ".repeat(81),
+                "81 characters, but 243 bytes: past what a file name holds with `.md`",
+            ),
+        ];
+        for (name, why) in &bad {
+            assert!(
+                validate_name(name).is_err(),
+                "{name:?} should be rejected: {why}"
+            );
+        }
     }
 
     #[test]

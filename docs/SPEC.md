@@ -69,7 +69,7 @@ The unit of storage is a Markdown file with YAML frontmatter.
 ```markdown
 ---
 id: 01JQZ8...            # ULID, immutable, assigned on creation
-name: pg18-moves-pgdata  # kebab-case slug, unique within the store
+name: pg18-moves-pgdata  # slug, unique within the store (rules below)
 ring: 2                  # 0..4
 kind: knowledge | bug | lesson | decision | reference | session
 created: 2026-09-05T09:12:03Z
@@ -87,6 +87,11 @@ Body in Markdown. Links to other notes are written [[like-this]].
 Rules:
 
 - `id` never changes. `name` may change; renames are tracked so citations survive.
+- `name` is a slug: lowercase Latin letters with or without accents (`für`, `straße`,
+  `łódź`), digits, and single hyphens between them; Unicode NFC; at most 120 characters and
+  240 bytes, because it is also the file name. Other scripts are refused: a letter that looks
+  Latin and is not makes a name that reads like another note's. A name taken from outside,
+  in a write, a lookup or a `[[link]]`, is composed to NFC before it is used.
 - A `[[link]]` to a non-existent note is **valid** and denotes intent. It is reported by
   `cyberbrain doctor` as a dangling link, never auto-created, never an error.
 - The file on disk is authoritative. The index is a cache and must be rebuildable from
