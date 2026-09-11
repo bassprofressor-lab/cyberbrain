@@ -165,12 +165,17 @@ function HealthLine() {
   const t = useT();
   const s = useAsync<StatusReport>(() => api.status(), []);
   const d = s.data;
-  const healthy = d ? d.index.stale_notes === 0 && d.index.orphan_vectors === 0 && d.embedding.matches_index !== false && d.index.fts_ok : true;
+  // No answer is not a healthy answer. This used to default to "in order" whenever there was
+  // no data, so a status call that failed showed a green dot: the one line whose job is to
+  // say whether something is wrong said the opposite exactly when it could not tell.
+  const state = s.loading ? "checking" : s.error || !d ? "unknown" : d.index.stale_notes === 0 && d.index.orphan_vectors === 0 && d.embedding.matches_index !== false && d.index.fts_ok ? "ok" : "trouble";
+  const dot = { checking: "var(--fg-faint)", ok: "var(--ok)", trouble: "var(--warn)", unknown: "var(--danger)" }[state];
+  const label = { checking: t.ask.checking, ok: t.ask.allGood, trouble: t.ask.trouble, unknown: t.ask.unknown }[state];
 
   return (
     <div className="mt-2 pt-4 border-t flex items-center gap-2.5 text-2xs text-fg-muted">
-      <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: s.loading ? "var(--fg-faint)" : healthy ? "var(--ok)" : "var(--warn)" }} aria-hidden />
-      <span>{s.loading ? t.ask.checking : healthy ? t.ask.allGood : t.ask.trouble}</span>
+      <span className="inline-block w-2 h-2 rounded-full shrink-0" style={{ background: dot }} aria-hidden />
+      <span>{label}</span>
       {d?.index.last_scan ? <span className="text-fg-faint">{t.ask.changed(relTime(d.index.last_scan))}</span> : null}
       <button
         className="btn btn-sm ml-auto"

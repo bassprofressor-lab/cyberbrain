@@ -735,6 +735,7 @@ export const en = {
     allGood: "Everything is in order.",
     checking: "checking…",
     trouble: "Something needs attention.",
+    unknown: "The state could not be checked.",
     details: "Technical details",
   },
   simpleNotes: {

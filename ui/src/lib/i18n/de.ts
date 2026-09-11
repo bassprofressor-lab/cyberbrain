@@ -724,6 +724,7 @@ export const de: Dict = {
     allGood: "Alles in Ordnung.",
     checking: "prüft…",
     trouble: "Etwas braucht Aufmerksamkeit.",
+    unknown: "Der Zustand ließ sich nicht prüfen.",
     details: "Technische Details",
   },
   simpleNotes: {

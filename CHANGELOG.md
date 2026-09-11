@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- **The question page said "Everything is in order" when it could not find out.** The health
+  line only checked the status when it had one, so a failed status call left a green dot. It
+  now says the state could not be checked.
+
 ## [0.5.1] — 2026-09-11
 
 ### Fixed
