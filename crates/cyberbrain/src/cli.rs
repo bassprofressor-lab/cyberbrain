@@ -600,6 +600,15 @@ pub enum HubCommand {
     },
     /// Set this store up to deliver to a hub, from an invitation file.
     Enrol { invitation: PathBuf },
+    /// Fleet invitations: one file that enrols many projects, for a rollout.
+    ///
+    /// A personal invitation (`hub add --invite`) is one device and its token. A fleet
+    /// invitation is a code: each project that enrols with it gets a device of its own from
+    /// the hub, until the code runs out or expires.
+    Invite {
+        #[command(subcommand)]
+        command: InviteCommand,
+    },
     /// Deliver this store's audit rows to the hub it was enrolled with.
     ///
     /// Nothing is buffered separately: the audit log is the buffer, and a failed delivery
@@ -786,6 +795,44 @@ pub enum HubCommand {
         data: Option<PathBuf>,
     },
     /// Stop a device from sending. Its rows stay: revoking is not a deletion.
+    Revoke {
+        id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum InviteCommand {
+    /// Write a fleet invitation file.
+    Create {
+        /// How many projects it may enrol.
+        #[arg(long)]
+        uses: i64,
+        /// How long it works, in days or weeks, at most P90D.
+        #[arg(long, default_value = "P14D")]
+        expires: String,
+        /// Which rollout this is. The log names it for every device it enrolls.
+        #[arg(long)]
+        label: String,
+        /// Address the machines reach the hub at.
+        #[arg(long, value_name = "URL")]
+        hub_url: String,
+        /// Address of the shared inference endpoint, if there is one.
+        #[arg(long, value_name = "URL")]
+        inference_url: Option<String>,
+        /// The file to write. Never written over.
+        #[arg(long, value_name = "PATH")]
+        out: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Every fleet invitation: how often it was used and whether it still works.
+    List {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Withdraw a fleet invitation. What it enrolled stays; nobody further gets in.
     Revoke {
         id: String,
         #[arg(long, value_name = "PATH")]

@@ -261,6 +261,21 @@ impl HubStore {
              CREATE TRIGGER IF NOT EXISTS entries_no_update
                  BEFORE UPDATE ON entries
                  BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;
+             -- A fleet invitation: one code that enrols up to `max_uses` projects until
+             -- `expires_at`. Only its hash is kept, like a device token, so a copy of the
+             -- record is not a working invitation.
+             CREATE TABLE IF NOT EXISTS enrolment_codes (
+                 id         TEXT PRIMARY KEY,
+                 code_hash  TEXT NOT NULL UNIQUE,
+                 label      TEXT NOT NULL,
+                 max_uses   INTEGER NOT NULL,
+                 uses       INTEGER NOT NULL DEFAULT 0,
+                 expires_at TEXT NOT NULL,
+                 created_by TEXT NOT NULL,
+                 created_at TEXT NOT NULL,
+                 revoked_at TEXT
+             );
+
              -- A purge of old activity rows under the hub's retention period: written down by
              -- one person, carried out when a second one signs (`countersign_purge`).
              CREATE TABLE IF NOT EXISTS purges (
@@ -2328,4 +2343,302 @@ pub fn cutoff_for(period: &str, now: &str) -> Result<String> {
     jiff::Timestamp::from_second(then.as_second())
         .map(|t| t.to_string())
         .map_err(|e| bad(format!("{e}")))
+}
+
+// ---------------------------------------------------------------------------------------
+// Fleet invitations: one code that enrols many projects, until it runs out or expires.
+
+/// A fleet invitation's code as the hub keeps it: a hash, a limit and an end.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct EnrolmentCode {
+    pub id: String,
+    pub label: String,
+    pub max_uses: i64,
+    pub uses: i64,
+    pub expires_at: String,
+    pub created_by: String,
+    pub created_at: String,
+    pub revoked_at: Option<String>,
+}
+
+/// Why a machine was not enrolled.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "refused", content = "detail", rename_all = "kebab-case")]
+pub enum EnrolRefusal {
+    /// No such code, or one that was withdrawn. One answer for both, so a guessed code
+    /// learns nothing from the reply.
+    UnknownCode,
+    Expired(String),
+    UsedUp(i64),
+    NotLicensed(String),
+    NoSeat(usize),
+    BadRequest(String),
+}
+
+impl std::fmt::Display for EnrolRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            EnrolRefusal::UnknownCode => write!(
+                f,
+                "the hub does not know this invitation's code, or it was withdrawn; ask for a new invitation"
+            ),
+            EnrolRefusal::Expired(at) => {
+                write!(f, "this invitation expired at {at}; ask for a new one")
+            }
+            EnrolRefusal::UsedUp(n) => write!(
+                f,
+                "this invitation has enrolled {n} project(s), which is all it allows; ask for a new one"
+            ),
+            EnrolRefusal::NotLicensed(line) => write!(f, "{line}"),
+            EnrolRefusal::NoSeat(seats) => write!(
+                f,
+                "the licence covers {seats} machine(s) and all of them are in use; revoke a machine \
+                 that is gone, or extend the licence"
+            ),
+            EnrolRefusal::BadRequest(m) => write!(f, "{m}"),
+        }
+    }
+}
+
+/// The part of a device's name that says which project it is: the folder's name, as one word.
+pub fn project_label(raw: &str) -> Option<String> {
+    let joined = raw.split_whitespace().collect::<Vec<_>>().join("-");
+    let label: String = joined
+        .chars()
+        .filter(|c| !c.is_control() && *c != '/' && *c != '\\')
+        .take(64)
+        .collect();
+    (!label.is_empty()).then_some(label)
+}
+
+/// When an invitation stops working: `now` plus a period in days or weeks, at most ninety
+/// days. A code is a credential for many machines, and one that outlives its rollout is one
+/// that somebody finds in a mailbox next year.
+pub fn invitation_expiry(period: &str, now: &str) -> Result<String> {
+    let bad = |why: String| Error::Config(format!("--expires `{period}`: {why}"));
+    cyberbrain_core::frontmatter::validate_retention(period).map_err(|w| bad(w.to_string()))?;
+    if !period
+        .chars()
+        .skip(1)
+        .all(|c| c.is_ascii_digit() || c == 'D' || c == 'W')
+    {
+        return Err(bad("give it in days or weeks, e.g. P14D".into()));
+    }
+    let span: jiff::Span = period.parse().map_err(|e| bad(format!("{e}")))?;
+    let start: jiff::Timestamp = now
+        .parse()
+        .map_err(|e| Error::Config(format!("timestamp `{now}`: {e}")))?;
+    let zoned = start.to_zoned(jiff::tz::TimeZone::UTC);
+    let end = zoned
+        .checked_add(span)
+        .map_err(|e| bad(format!("{e}")))?
+        .timestamp();
+    let limit = zoned
+        .checked_add(jiff::Span::new().days(90))
+        .map_err(|e| bad(format!("{e}")))?
+        .timestamp();
+    if end <= start {
+        return Err(bad(
+            "an invitation that expires at once enrols nobody".into()
+        ));
+    }
+    if end > limit {
+        return Err(bad(
+            "at most 90 days: a code for many machines should not outlive its rollout".into(),
+        ));
+    }
+    jiff::Timestamp::from_second(end.as_second())
+        .map(|t| t.to_string())
+        .map_err(|e| bad(format!("{e}")))
+}
+
+impl HubStore {
+    /// Issue a fleet invitation's code. Returns the code once; the record keeps its hash.
+    pub fn create_enrolment_code(
+        &self,
+        label: &str,
+        max_uses: i64,
+        expires: &str,
+        by: &str,
+        now: &str,
+    ) -> Result<(EnrolmentCode, String)> {
+        if label.trim().is_empty() {
+            return Err(Error::Config(
+                "an invitation needs a label: it is how the log says which rollout a device came from"
+                    .into(),
+            ));
+        }
+        if !(1..=1000).contains(&max_uses) {
+            return Err(Error::Config("--uses has to be between 1 and 1000".into()));
+        }
+        let expires_at = invitation_expiry(expires, now)?;
+        let code = format!("cbe_{}", cyberbrain_core::NoteId::generate());
+        let c = EnrolmentCode {
+            id: format!("ec_{}", cyberbrain_core::NoteId::generate()),
+            label: label.trim().to_string(),
+            max_uses,
+            uses: 0,
+            expires_at,
+            created_by: by.to_string(),
+            created_at: now.to_string(),
+            revoked_at: None,
+        };
+        ix(self.conn.execute(
+            "INSERT INTO enrolment_codes
+                 (id, code_hash, label, max_uses, expires_at, created_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
+            params![
+                c.id,
+                token_hash(&code),
+                c.label,
+                c.max_uses,
+                c.expires_at,
+                c.created_by,
+                c.created_at
+            ],
+        ))?;
+        self.record(
+            by,
+            "invitation.created",
+            serde_json::json!({
+                "id": c.id, "label": c.label, "max_uses": c.max_uses, "expires_at": c.expires_at,
+            }),
+            now,
+        )?;
+        Ok((c, code))
+    }
+
+    /// Every fleet invitation ever issued, oldest first.
+    pub fn enrolment_codes(&self) -> Result<Vec<EnrolmentCode>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, label, max_uses, uses, expires_at, created_by, created_at, revoked_at
+             FROM enrolment_codes ORDER BY created_at, id",
+        ))?;
+        let rows = ix(stmt.query_map([], |r| {
+            Ok(EnrolmentCode {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                max_uses: r.get(2)?,
+                uses: r.get(3)?,
+                expires_at: r.get(4)?,
+                created_by: r.get(5)?,
+                created_at: r.get(6)?,
+                revoked_at: r.get(7)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Withdraw an invitation. Devices it already enrolled stay; nobody further gets in.
+    pub fn revoke_enrolment_code(&self, id: &str, by: &str, now: &str) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "UPDATE enrolment_codes SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+            params![now, id],
+        ))?;
+        if n > 0 {
+            self.record(
+                by,
+                "invitation.revoked",
+                serde_json::json!({ "id": id }),
+                now,
+            )?;
+        }
+        Ok(n > 0)
+    }
+
+    /// A machine asking for a device of its own with a fleet invitation's code.
+    ///
+    /// One transaction around the checks and the registration, so two machines using the last
+    /// use of a code at the same moment cannot both get in. The order is the order of the
+    /// questions: is this a code at all, is it still good, is there a licence, is there a seat
+    /// for this machine. A second project on a machine that already has a seat takes none.
+    pub fn enrol_with_code(
+        &self,
+        code: &str,
+        machine: &str,
+        project: &str,
+        licence: &super::LicenceState,
+        now: &str,
+    ) -> Result<std::result::Result<(Device, String), EnrolRefusal>> {
+        let Some(machine) = super::normalise_machine(machine) else {
+            return Ok(Err(EnrolRefusal::BadRequest(
+                "the machine name is empty or not one word".into(),
+            )));
+        };
+        let Some(project) = project_label(project) else {
+            return Ok(Err(EnrolRefusal::BadRequest(
+                "the project name is empty".into(),
+            )));
+        };
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let outcome = (|| -> Result<std::result::Result<(Device, String), EnrolRefusal>> {
+            let row: Option<(String, String, i64, i64, String, Option<String>)> = ix(self
+                .conn
+                .query_row(
+                    "SELECT id, label, max_uses, uses, expires_at, revoked_at
+                     FROM enrolment_codes WHERE code_hash = ?",
+                    params![token_hash(code)],
+                    |r| {
+                        Ok((
+                            r.get(0)?,
+                            r.get(1)?,
+                            r.get(2)?,
+                            r.get(3)?,
+                            r.get(4)?,
+                            r.get(5)?,
+                        ))
+                    },
+                )
+                .optional())?;
+            let Some((id, label, max_uses, uses, expires_at, revoked_at)) = row else {
+                return Ok(Err(EnrolRefusal::UnknownCode));
+            };
+            if revoked_at.is_some() {
+                return Ok(Err(EnrolRefusal::UnknownCode));
+            }
+            if now >= expires_at.as_str() {
+                return Ok(Err(EnrolRefusal::Expired(expires_at)));
+            }
+            if uses >= max_uses {
+                return Ok(Err(EnrolRefusal::UsedUp(uses)));
+            }
+            let Some(seats) = licence.seats() else {
+                return Ok(Err(EnrolRefusal::NotLicensed(licence.line())));
+            };
+            if self.needs_seat(Some(&machine))? && self.seats_in_use()? >= seats {
+                return Ok(Err(EnrolRefusal::NoSeat(seats)));
+            }
+            let (mut device, token) = self.add_device(&format!("{machine}/{project}"), now)?;
+            self.set_machine(&device.id, &machine)?;
+            device.machine = Some(machine.clone());
+            ix(self.conn.execute(
+                "UPDATE enrolment_codes SET uses = uses + 1 WHERE id = ?",
+                params![id],
+            ))?;
+            self.record(
+                "enrolment",
+                "device.enrolled",
+                serde_json::json!({
+                    "device": device.id, "machine": machine, "project": project,
+                    "invitation": id, "label": label,
+                }),
+                now,
+            )?;
+            Ok(Ok((device, token)))
+        })();
+        match outcome {
+            Ok(o) => {
+                ix(self.conn.execute_batch("COMMIT"))?;
+                Ok(o)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
 }

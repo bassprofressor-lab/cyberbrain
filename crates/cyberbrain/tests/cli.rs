@@ -757,12 +757,18 @@ fn policy_subcommands_work_over_a_real_store() {
     ]);
     cb.write("3", "fresh-session", "gamma");
 
-    // Egress register: the five registered purposes, each enabled or disabled with a
-    // reason. An unenrolled store lists audit sync as disabled rather than hiding it, and
-    // the terminal is listed as a path this gate does not mediate rather than left out.
+    // Egress register: every purpose, each enabled or disabled with a reason. An unenrolled
+    // store lists audit sync as disabled rather than hiding it, and the terminal is listed as
+    // a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 6);
+    assert_eq!(entries.len(), 7);
+    // Enrolling with a fleet invitation is its own path, and carries no note.
+    let enrolment = entries
+        .iter()
+        .find(|x| x["purpose"] == "hub-enrolment")
+        .expect("enrolment is in the register");
+    assert_eq!(enrolment["carries_note_content"], false);
     // Note sync is listed and off: an unenrolled store is not one that shares notes.
     let note_sync = entries
         .iter()
@@ -2053,4 +2059,79 @@ fn the_binary_runs_with_the_stack_windows_gives_its_main_thread() {
             out.status.code()
         );
     }
+}
+
+/// A fleet invitation is a file with a code in it, the hub keeps only the code's hash, the file
+/// is never written over, and an enrolment that cannot reach the hub leaves nothing behind.
+#[test]
+fn a_fleet_invitation_is_written_and_a_failed_enrolment_leaves_no_trace() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("hub.db");
+    let file = dir.path().join("rollout.json");
+    let create = || {
+        Cb::bin()
+            .args([
+                "hub",
+                "invite",
+                "create",
+                "--uses",
+                "40",
+                "--expires",
+                "P14D",
+                "--label",
+                "Rollout Disposition",
+                "--hub-url",
+                "http://127.0.0.1:9",
+            ])
+            .arg("--out")
+            .arg(&file)
+            .arg("--data")
+            .arg(&data)
+            .output()
+            .unwrap()
+    };
+    let out = create();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let inv: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(inv["kind"], "cyberbrain.hub.fleet-invitation");
+    let code = inv["code"].as_str().unwrap().to_string();
+    for part in ["hub.db", "hub.db-wal"] {
+        if let Ok(bytes) = std::fs::read(dir.path().join(part)) {
+            assert!(
+                !bytes.windows(code.len()).any(|w| w == code.as_bytes()),
+                "{part} holds the code itself"
+            );
+        }
+    }
+    assert!(
+        !create().status.success(),
+        "an invitation is never written over"
+    );
+
+    let config = tempfile::tempdir().unwrap();
+    let cb = Cb::new();
+    let before = std::fs::read_to_string(cb.store.join("cyberbrain.toml")).unwrap();
+    let out = Cb::bin()
+        .env("APPDATA", config.path())
+        .env("XDG_CONFIG_HOME", config.path())
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["hub", "enrol"])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "nothing listens on port 9");
+    assert_eq!(
+        std::fs::read_to_string(cb.store.join("cyberbrain.toml")).unwrap(),
+        before,
+        "a failed enrolment must not enrol the store"
+    );
+    assert!(
+        !config.path().join("cyberbrain").join("hub-tokens").exists(),
+        "a failed enrolment must not leave a token"
+    );
 }

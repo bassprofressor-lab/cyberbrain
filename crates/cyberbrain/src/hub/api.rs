@@ -49,6 +49,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/grants/{id}/revoke", post(revoke_grant))
         .route("/health", get(health))
         .route("/api/v1/ingest", post(post_ingest))
+        .route("/api/v1/enrol", post(post_enrol))
         .route("/api/v1/notes", post(post_notes))
         .route("/api/v1/erase", post(post_erase))
         .route("/api/v1/fetch", post(post_fetch))
@@ -1062,6 +1063,66 @@ async fn countersign_purge(
         }
     }
     Redirect::to("/requests").into_response()
+}
+
+#[derive(serde::Deserialize)]
+struct EnrolBody {
+    code: String,
+    machine: String,
+    project: String,
+}
+
+/// A machine asking for a device of its own, with the code from a fleet invitation.
+///
+/// No token: the code is the credential, and only its hash is on record. Every refusal is a
+/// reason a person can act on, except an unknown code, which gets the same answer whether it
+/// never existed or was withdrawn.
+async fn post_enrol(State(state): State<Arc<HubState>>, Json(body): Json<EnrolBody>) -> Response {
+    use super::store::EnrolRefusal as R;
+    let now = jiff::Timestamp::now();
+    let Ok(hub) = state.hub.lock() else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": "hub record unavailable" })),
+        )
+            .into_response();
+    };
+    let licence = LicenceState::read(&hub, now);
+    match hub.enrol_with_code(
+        &body.code,
+        &body.machine,
+        &body.project,
+        &licence,
+        &now.to_string(),
+    ) {
+        Ok(Ok((device, token))) => (
+            StatusCode::OK,
+            Json(json!({
+                "device": device.id, "name": device.name, "machine": device.machine,
+                "token": token, "hub_cert_sha256": super::pin_to_offer(&hub),
+            })),
+        )
+            .into_response(),
+        Ok(Err(refusal)) => {
+            let status = match &refusal {
+                R::UnknownCode => StatusCode::UNAUTHORIZED,
+                R::Expired(_) | R::UsedUp(_) => StatusCode::FORBIDDEN,
+                R::NotLicensed(_) => StatusCode::SERVICE_UNAVAILABLE,
+                R::NoSeat(_) => StatusCode::CONFLICT,
+                R::BadRequest(_) => StatusCode::BAD_REQUEST,
+            };
+            (
+                status,
+                Json(json!({ "error": refusal.to_string(), "refused": refusal })),
+            )
+                .into_response()
+        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 #[derive(serde::Deserialize)]

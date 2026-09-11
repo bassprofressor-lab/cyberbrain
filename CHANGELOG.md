@@ -36,6 +36,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   before. It exits non-zero otherwise, never writes over a file, and puts the backup in the
   hub's own log. `docs/HUB.md` says how to restore one.
 
+- **Fleet invitations: one file enrols a rollout.** One invitation per device is fine for
+  three machines and a chore for forty, and every project a person opens is a device of its
+  own. `hub invite create --uses 60 --expires P14D --label … --hub-url …` writes one file;
+  `hub enrol` with it, or the launcher's **Connect to the company hub…**, asks the hub for a
+  device of that project's own, named after the machine and the project folder. The hub keeps
+  only the code's hash, refuses a code that expired, ran out or was withdrawn (a withdrawn
+  code reads the same as an unknown one), counts seats by machine, and logs every enrolment.
+  Nothing is written on the machine until the hub has answered. It is the one request made
+  before a store is enrolled, so it is a new registered egress purpose, `hub-enrolment`, that
+  reaches only the address in the file. `hub invite list` and `hub invite revoke` manage them.
+
 - **A seat is a machine, not a project.** Every project is its own store and so its own
   device, and counting devices charged a person with three projects three seats, which is not
   what the licence says. Deliveries now carry the machine's name, the hub counts seats by

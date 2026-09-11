@@ -94,6 +94,46 @@ $ cyberbrain hub add "ws-021" --data hub.db --invite ws-021.json \
 The file carries the token: hand it over the way you would a password, and delete it once the
 machine is set up. Reading it on the client is the next slice.
 
+### A fleet invitation, for many machines
+
+One invitation per device is fine for three machines and a chore for forty, and every project a
+person opens is a device of its own. A fleet invitation is one file for a whole rollout:
+
+```console
+$ cyberbrain hub invite create --uses 60 --expires P14D --label "Rollout Disposition" \
+    --hub-url https://hub.example.internal:7788 --out rollout.json --data /var/lib/cyberbrain/hub.db
+invitation ec_01M2… written to rollout.json
+  label: Rollout Disposition
+  enrols up to 60 project(s) until 2026-09-25T09:00:00Z
+```
+
+On each machine, in each project, `cyberbrain hub enrol rollout.json`, or **Connect to the
+company hub…** in the launcher, asks the hub for a device of that project's own. The file's
+code, the machine's name and the project folder's name go to the hub, and a device named after
+them, `ws-021/Angebote`, comes back with its token. Nothing is written on the machine until the
+hub has answered, so an enrolment that is refused or cannot reach the hub leaves no
+half-enrolled store behind.
+
+The hub keeps only the code's hash. It refuses a code that has expired, that has enrolled as
+many projects as it allows, or that was withdrawn, and a withdrawn code gets the same answer as
+one that never existed. A seat is still a machine: a second project on a machine that already
+has one takes none, and a machine that would need a new seat on a full licence is turned away.
+Every enrolment is in the hub's own log, with the invitation it used.
+
+The file is a credential for every enrolment it has left. Keep `--expires` short (at most 90
+days), hand the file out the way you would a password, and withdraw it once the rollout is
+done:
+
+```console
+$ cyberbrain hub invite list --data /var/lib/cyberbrain/hub.db
+$ cyberbrain hub invite revoke ec_01M2… --data /var/lib/cyberbrain/hub.db
+```
+
+It is the one request a machine makes before it is enrolled, so it has its own entry in the
+egress register, `hub-enrolment`. It goes only to the address in the file, follows no
+redirect, keeps the rule that a public address needs `allow_public_hub`, and carries no note
+and no audit row.
+
 ## As a service
 
 A hub is only as useful as it is boring, and a program that is up only while somebody is

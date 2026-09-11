@@ -43,12 +43,13 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 6] = [
+pub const PURPOSES: [EgressPurpose; 7] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
     EgressPurpose::NoteSync,
     EgressPurpose::NoteErasure,
+    EgressPurpose::HubEnrolment,
     EgressPurpose::Terminal,
 ];
 
@@ -81,6 +82,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::AuditSync => "audit-sync",
         EgressPurpose::NoteSync => "note-sync",
         EgressPurpose::NoteErasure => "note-erasure",
+        EgressPurpose::HubEnrolment => "hub-enrolment",
     }
 }
 
@@ -301,6 +303,32 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 state,
             }
         }
+        EgressPurpose::HubEnrolment => EgressEntry {
+            purpose,
+            destination: concat!(
+                "the hub address in the fleet invitation given to `cyberbrain hub enrol`; DNS ",
+                "lookup of its hostname via the OS resolver if it is not an IP literal"
+            )
+            .to_string(),
+            data: concat!(
+                "HTTP POST of the invitation's code, this machine's name and the project ",
+                "folder's name. No note and no audit row"
+            ),
+            carries_note_content: false,
+            requires: concat!(
+                "somebody runs `cyberbrain hub enrol` with a fleet invitation; the hub is ",
+                "loopback or private-range unless allow_public_hub is set"
+            ),
+            permitted_by: ALL_PROFILES,
+            // Not a standing path: nothing uses it until a person enrols with an invitation,
+            // and then once. "Enabled" says it may be used when asked, which is true.
+            enabled: true,
+            state: concat!(
+                "available on request: used once, when a fleet invitation is enrolled, ",
+                "never on a timer"
+            )
+            .to_string(),
+        },
         EgressPurpose::NoteErasure => {
             // Only enrolment, on purpose. This is the one hub path that stays open when
             // sharing is switched off: a setting that can leave data somewhere it may no
@@ -839,6 +867,26 @@ impl Egress {
                     return Err("inference requests do not follow redirects".into());
                 }
             }
+            EgressPurpose::HubEnrolment => {
+                if via.is_some() {
+                    return Err("enrolment requests do not follow redirects".into());
+                }
+                // The gate for this one call is built with the invitation's address as its
+                // hub, because the store has no hub of its own yet. From there the rule is the
+                // delivery rule: that address and no other.
+                let Some(hub) = &self.cfg.hub_endpoint else {
+                    return Err("there is no hub address to enrol with".into());
+                };
+                let named = Destination::parse(hub)
+                    .map_err(|e| format!("the invitation's hub address is unusable: {e}"))?;
+                if !dest.same_endpoint(&named) {
+                    return Err(format!(
+                        "{} is not the hub named in the invitation ({})",
+                        dest.origin(),
+                        named.origin()
+                    ));
+                }
+            }
             EgressPurpose::NoteErasure => {
                 if via.is_some() {
                     return Err("erasure requests do not follow redirects".into());
@@ -919,10 +967,10 @@ impl Egress {
         // "audit rows may leave this network". They are different decisions.
         if matches!(
             purpose,
-            EgressPurpose::LocalInference | EgressPurpose::AuditSync
+            EgressPurpose::LocalInference | EgressPurpose::AuditSync | EgressPurpose::HubEnrolment
         ) {
             let allow_public = match purpose {
-                EgressPurpose::AuditSync => self.cfg.allow_public_hub,
+                EgressPurpose::AuditSync | EgressPurpose::HubEnrolment => self.cfg.allow_public_hub,
                 _ => self.cfg.allow_public_endpoint,
             };
             for a in &dest.addrs {
@@ -1197,6 +1245,72 @@ mod tests {
 
     const LOCAL: &str = "http://127.0.0.1:11434/v1/chat/completions";
 
+    /// Enrolling with a fleet invitation reaches the address in the invitation and no other,
+    /// keeps the delivery rule for public addresses, and has nowhere to go without an address.
+    #[test]
+    fn enrolment_reaches_only_the_hub_the_invitation_names() {
+        let named = PolicyConfig {
+            hub_endpoint: Some("http://192.168.1.30:7788".into()),
+            ..cfg()
+        };
+        let (g, _) = gate(named);
+        assert!(
+            g.open(
+                &Actor::Cli,
+                EgressPurpose::HubEnrolment,
+                "http://192.168.1.30:7788/api/v1/enrol"
+            )
+            .is_ok()
+        );
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::HubEnrolment,
+                "http://ollama.lan:7788/api/v1/enrol",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not the hub named in the invitation"), "{err}");
+
+        let public = PolicyConfig {
+            hub_endpoint: Some("https://evil.example.org".into()),
+            ..cfg()
+        };
+        let (g, _) = gate(public.clone());
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::HubEnrolment,
+                "https://evil.example.org/api/v1/enrol",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("public address"), "{err}");
+        let (g, _) = gate(PolicyConfig {
+            allow_public_hub: true,
+            ..public
+        });
+        assert!(
+            g.open(
+                &Actor::Cli,
+                EgressPurpose::HubEnrolment,
+                "https://evil.example.org/api/v1/enrol"
+            )
+            .is_ok()
+        );
+
+        let (g, _) = gate(cfg());
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::HubEnrolment,
+                "http://192.168.1.30:7788/api/v1/enrol",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no hub address"), "{err}");
+    }
+
     // ---- the register ----
 
     #[test]
@@ -1211,6 +1325,7 @@ mod tests {
                 "audit-sync",
                 "note-sync",
                 "note-erasure",
+                "hub-enrolment",
                 "terminal"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
@@ -1223,6 +1338,7 @@ mod tests {
                 | EgressPurpose::AuditSync
                 | EgressPurpose::NoteSync
                 | EgressPurpose::NoteErasure
+                | EgressPurpose::HubEnrolment
                 | EgressPurpose::Terminal => {}
             }
         }

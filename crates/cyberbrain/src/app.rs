@@ -2756,6 +2756,44 @@ impl App {
         Ok(inference_url.map(str::to_owned))
     }
 
+    /// Enrol with a fleet invitation: ask the hub it names for a device of this store's own.
+    ///
+    /// The gate for this one call gets the invitation's address as its hub, because the store
+    /// has none yet, and nothing is written here. The caller stores the token and the config
+    /// only once the hub has answered, so a refused or unreachable enrolment leaves nothing but
+    /// the audit rows of the attempt.
+    pub async fn enrol_with_fleet_invitation(
+        &self,
+        inv: &crate::hub::client::FleetInvitation,
+        machine: &str,
+    ) -> Result<crate::hub::client::Enrolled> {
+        let mut cfg = self.policy.config().clone();
+        cfg.hub_endpoint = Some(inv.hub_url.clone());
+        let gate = cyberbrain_policy::Egress::new(
+            cfg,
+            self.policy.audit().clone(),
+            self.policy.actor().clone(),
+        );
+        crate::hub::client::enrol_at_hub(
+            &gate,
+            self.policy.actor(),
+            inv,
+            machine,
+            &self.project_label(),
+        )
+        .await
+    }
+
+    /// This store's project as a device name on a hub shows it: the folder the store sits in.
+    pub fn project_label(&self) -> String {
+        self.root
+            .parent()
+            .and_then(|p| p.file_name())
+            .or_else(|| self.root.file_name())
+            .and_then(|f| crate::hub::store::project_label(&f.to_string_lossy()))
+            .unwrap_or_else(|| "store".to_string())
+    }
+
     /// What this machine is, as far as a company hub is concerned.
     ///
     /// The dashboard's own question. Somebody looking at their notes cannot tell from that

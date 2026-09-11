@@ -3370,3 +3370,166 @@ async fn get_as(state: Arc<super::api::HubState>, path: &str, cookie: &str) -> S
         .unwrap();
     String::from_utf8_lossy(&b).into_owned()
 }
+
+// ---- fleet invitations ----
+
+fn licensed(seats: usize) -> LicenceState {
+    LicenceState::Valid {
+        customer: "Test GmbH".into(),
+        seats,
+        valid_until: "2099-01-01T00:00:00Z".into(),
+        warning: None,
+    }
+}
+
+/// One code enrols as many projects as it allows and no more, and only its hash is on record.
+#[test]
+fn a_fleet_invitation_enrols_up_to_its_limit_and_keeps_only_a_hash() {
+    use super::store::EnrolRefusal;
+    let hub = HubStore::in_memory().unwrap();
+    let (_, code) = hub
+        .create_enrolment_code("Rollout Disposition", 2, "P14D", "cli", NOW)
+        .unwrap();
+    let (a, token) = hub
+        .enrol_with_code(&code, "WS-021", "Angebote 2026", &licensed(5), NOW)
+        .unwrap()
+        .unwrap();
+    assert_eq!(a.name, "ws-021/Angebote-2026");
+    assert_eq!(a.machine.as_deref(), Some("ws-021"));
+    assert!(
+        hub.device_by_token(&token).unwrap().is_some(),
+        "the token it hands out works"
+    );
+    hub.enrol_with_code(&code, "ws-022", "Dispo", &licensed(5), NOW)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        hub.enrol_with_code(&code, "ws-023", "Dispo", &licensed(5), NOW)
+            .unwrap()
+            .unwrap_err(),
+        EnrolRefusal::UsedUp(2)
+    );
+    assert_eq!(hub.devices().unwrap().len(), 2);
+    assert_eq!(hub.enrolment_codes().unwrap()[0].uses, 2);
+    assert!(
+        !hub.dump_all_text().unwrap().contains(&code),
+        "a copy of the record must not be a working invitation"
+    );
+    let enrolled = hub
+        .hub_events(1000)
+        .unwrap()
+        .iter()
+        .filter(|e| e.action == "device.enrolled")
+        .count();
+    assert_eq!(enrolled, 2);
+}
+
+#[test]
+fn an_expired_withdrawn_or_unknown_invitation_enrols_nobody() {
+    use super::store::EnrolRefusal;
+    let hub = HubStore::in_memory().unwrap();
+    let (row, code) = hub
+        .create_enrolment_code("Rollout", 10, "P1D", "cli", NOW)
+        .unwrap();
+    assert!(matches!(
+        hub.enrol_with_code(&code, "ws-021", "a", &licensed(5), "2026-09-09T12:00:00Z")
+            .unwrap(),
+        Err(EnrolRefusal::Expired(_))
+    ));
+    assert_eq!(
+        hub.enrol_with_code("cbe_guessed", "ws-021", "a", &licensed(5), NOW)
+            .unwrap()
+            .unwrap_err(),
+        EnrolRefusal::UnknownCode
+    );
+    assert!(hub.revoke_enrolment_code(&row.id, "cli", NOW).unwrap());
+    assert_eq!(
+        hub.enrol_with_code(&code, "ws-021", "a", &licensed(5), NOW)
+            .unwrap()
+            .unwrap_err(),
+        EnrolRefusal::UnknownCode,
+        "withdrawn reads the same as never issued"
+    );
+    assert!(hub.devices().unwrap().is_empty());
+}
+
+#[test]
+fn a_fleet_invitation_counts_seats_by_machine_and_needs_a_licence() {
+    use super::store::EnrolRefusal;
+    let hub = HubStore::in_memory().unwrap();
+    let (_, code) = hub
+        .create_enrolment_code("Rollout", 10, "P14D", "cli", NOW)
+        .unwrap();
+    hub.enrol_with_code(&code, "ws-021", "angebote", &licensed(1), NOW)
+        .unwrap()
+        .unwrap();
+    hub.enrol_with_code(&code, "ws-021", "dispo", &licensed(1), NOW)
+        .unwrap()
+        .expect("a second project on the same machine takes no seat");
+    assert_eq!(
+        hub.enrol_with_code(&code, "ws-022", "angebote", &licensed(1), NOW)
+            .unwrap()
+            .unwrap_err(),
+        EnrolRefusal::NoSeat(1)
+    );
+    assert!(matches!(
+        hub.enrol_with_code(&code, "ws-021", "x", &lapsed(), NOW)
+            .unwrap(),
+        Err(EnrolRefusal::NotLicensed(_))
+    ));
+    assert_eq!(
+        hub.enrolment_codes().unwrap()[0].uses,
+        2,
+        "a refusal uses nothing up"
+    );
+}
+
+#[test]
+fn an_invitation_works_for_at_most_ninety_days() {
+    for bad in ["P91D", "P1Y", "P0D", "PT12H", "P1M"] {
+        assert!(super::store::invitation_expiry(bad, NOW).is_err(), "{bad}");
+    }
+    assert_eq!(
+        super::store::invitation_expiry("P2W", NOW).unwrap(),
+        "2026-09-21T12:00:00Z"
+    );
+}
+
+/// The route: an unknown code is 401, and a good code on a hub with no licence enrols nobody.
+#[tokio::test]
+async fn the_enrolment_route_refuses_an_unknown_code_and_an_unlicensed_hub() {
+    let hub = HubStore::in_memory().unwrap();
+    let (_, code) = hub
+        .create_enrolment_code(
+            "Rollout",
+            5,
+            "P14D",
+            "cli",
+            &jiff::Timestamp::now().to_string(),
+        )
+        .unwrap();
+    let state = state_for(hub, true);
+    let post = |body: serde_json::Value| {
+        Request::builder()
+            .method("POST")
+            .uri("/api/v1/enrol")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    };
+    let r = super::api::router(state.clone())
+        .oneshot(post(
+            serde_json::json!({ "code": "cbe_guessed", "machine": "ws-021", "project": "a" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
+    let r = super::api::router(state.clone())
+        .oneshot(post(
+            serde_json::json!({ "code": code, "machine": "ws-021", "project": "a" }),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(state.hub.lock().unwrap().devices().unwrap().is_empty());
+}

@@ -65,6 +65,105 @@ pub fn parse_invitation(text: &str) -> Result<Invitation> {
     Ok(inv)
 }
 
+pub const FLEET_INVITATION_KIND: &str = "cyberbrain.hub.fleet-invitation";
+
+/// What `hub invite create` wrote: one code that enrols many projects, until it expires.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FleetInvitation {
+    pub kind: String,
+    pub version: u32,
+    pub code: String,
+    pub label: String,
+    pub hub_url: String,
+    #[serde(default)]
+    pub inference_url: Option<String>,
+    #[serde(default)]
+    pub hub_cert_sha256: Option<String>,
+    pub expires_at: String,
+}
+
+/// Either kind of invitation.
+pub enum AnyInvitation {
+    /// A device and its token, made for one store.
+    Device(Invitation),
+    /// A code, for as many stores as it allows; the hub makes the device when asked.
+    Fleet(FleetInvitation),
+}
+
+/// Tell the two kinds apart by `kind` before reading anything else.
+pub fn parse_any_invitation(text: &str) -> Result<AnyInvitation> {
+    let v: serde_json::Value = serde_json::from_str(text)
+        .map_err(|e| Error::Config(format!("not an invitation file: {e}")))?;
+    if v.get("kind").and_then(|k| k.as_str()) == Some(FLEET_INVITATION_KIND) {
+        let inv: FleetInvitation = serde_json::from_value(v)
+            .map_err(|e| Error::Config(format!("not a readable fleet invitation: {e}")))?;
+        if inv.version != 1 {
+            return Err(Error::Config(format!(
+                "fleet invitation version {} is newer than this program understands; upgrade it",
+                inv.version
+            )));
+        }
+        return Ok(AnyInvitation::Fleet(inv));
+    }
+    parse_invitation(text).map(AnyInvitation::Device)
+}
+
+/// What a hub answered to an enrolment.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Enrolled {
+    pub device: String,
+    pub name: String,
+    pub token: String,
+}
+
+/// Ask the hub named in a fleet invitation for a device of this store's own.
+///
+/// Through the gate under `HubEnrolment`, with the invitation's pin when it carries one.
+/// Writes nothing: storing the token and the config is the caller's, once there is one.
+pub async fn enrol_at_hub(
+    egress: &cyberbrain_policy::Egress,
+    actor: &cyberbrain_policy::Actor,
+    inv: &FleetInvitation,
+    machine: &str,
+    project: &str,
+) -> Result<Enrolled> {
+    let url = format!("{}/api/v1/enrol", inv.hub_url.trim_end_matches('/'));
+    let pin = inv
+        .hub_cert_sha256
+        .as_deref()
+        .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
+        .transpose()?;
+    let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::HubEnrolment, &url)?;
+    let body =
+        serde_json::json!({ "code": inv.code, "machine": machine, "project": project }).to_string();
+    let resp = cyberbrain_policy::egress::transport::post_json(
+        &ticket,
+        &url,
+        &[("x-cyberbrain-version", env!("CARGO_PKG_VERSION"))],
+        body,
+        pin,
+    )
+    .await?;
+    let text = String::from_utf8_lossy(&resp.body).to_string();
+    if resp.status == 200 {
+        return serde_json::from_str(&text).map_err(|e| {
+            Error::Config(format!(
+                "the hub's answer to the enrolment is not readable: {e}"
+            ))
+        });
+    }
+    let json: serde_json::Value = serde_json::from_str(&text).unwrap_or(serde_json::Value::Null);
+    let message = json
+        .get("error")
+        .and_then(|v| v.as_str())
+        .unwrap_or(text.trim())
+        .to_string();
+    Err(Error::Config(format!(
+        "the hub did not enrol this project ({}): {message}",
+        resp.status
+    )))
+}
+
 /// The user's configuration directory, where tokens, pins and pull positions live.
 fn config_base() -> Option<PathBuf> {
     if cfg!(windows) {

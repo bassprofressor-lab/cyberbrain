@@ -66,6 +66,9 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
         EgressPurpose::LocalInference => Error::Llm(msg),
         EgressPurpose::AuditSync => Error::Index(msg),
         EgressPurpose::NoteSync | EgressPurpose::NoteErasure => Error::Index(msg),
+        // Something a person asked for and can act on: a code that expired, a hub that is
+        // not reachable. A user error, not an internal one.
+        EgressPurpose::HubEnrolment => Error::Config(msg),
         // Unreachable by construction: the transport is only entered through `permit`, and
         // the terminal never calls it. Spelled out rather than left to a wildcard, so that
         // the day somebody does route a request through here, this line is the question.
@@ -288,6 +291,41 @@ pub async fn post_bearer(
     body: String,
     pin: Option<CertificatePin>,
 ) -> Result<Response> {
+    post_with(
+        ticket,
+        url,
+        Some(token),
+        "application/x-ndjson",
+        headers,
+        body,
+        pin,
+    )
+    .await
+}
+
+/// HTTP POST of a JSON body with no credential. The URL must be covered by the ticket.
+///
+/// Used by enrolment with a fleet invitation, which is the one request made before this
+/// store holds a token: what authenticates it is the code in the body.
+pub async fn post_json(
+    ticket: &EgressTicket,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: String,
+    pin: Option<CertificatePin>,
+) -> Result<Response> {
+    post_with(ticket, url, None, "application/json", headers, body, pin).await
+}
+
+async fn post_with(
+    ticket: &EgressTicket,
+    url: &str,
+    token: Option<&str>,
+    content_type: &str,
+    headers: &[(&str, &str)],
+    body: String,
+    pin: Option<CertificatePin>,
+) -> Result<Response> {
     let u = check(ticket, url)?;
     if pin.is_some() && u.scheme() != "https" {
         return Err(err_for(
@@ -304,8 +342,10 @@ pub async fn post_bearer(
     let c = client(ticket, pin)?;
     let mut req = c
         .post(u)
-        .bearer_auth(token)
-        .header(reqwest::header::CONTENT_TYPE, "application/x-ndjson");
+        .header(reqwest::header::CONTENT_TYPE, content_type);
+    if let Some(t) = token {
+        req = req.bearer_auth(t);
+    }
     for (k, v) in headers {
         req = req.header(*k, *v);
     }

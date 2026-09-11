@@ -246,6 +246,13 @@ pub enum EgressPurpose {
     /// off the ability to withdraw what was already shared — a setting that can strand data
     /// somewhere it may no longer be is a setting that breaks Art. 17 on purpose.
     NoteErasure,
+    /// Asking a hub for a device of this store's own, with the code in a fleet invitation.
+    ///
+    /// The one hub path that runs before a store is enrolled, so its destination is the
+    /// address in the invitation somebody handed over rather than one from the config. It
+    /// carries the code, this machine's name and the project folder's name; never a note and
+    /// never an audit row. Used once per enrolment, never on a timer.
+    HubEnrolment,
     /// A program the user started in a terminal this program opened for them (SPEC §8.3).
     ///
     /// Listed rather than gated, and that distinction is the point. This is the one entry
@@ -280,6 +287,10 @@ impl EgressPurpose {
             EgressPurpose::NoteErasure => concat!(
                 "asks the hub to erase one note: a bereich and a name leave this machine, ",
                 "never the note itself"
+            ),
+            EgressPurpose::HubEnrolment => concat!(
+                "asks the hub named in a fleet invitation for a device of this store's own: ",
+                "the invitation's code, this machine's name and the project folder's name"
             ),
         }
     }

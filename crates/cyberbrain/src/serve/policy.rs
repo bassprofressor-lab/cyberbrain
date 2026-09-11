@@ -87,6 +87,9 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
                 EgressPurpose::AuditSync | EgressPurpose::NoteSync | EgressPurpose::NoteErasure => {
                     cfg.hub.url.clone().unwrap_or_else(|| "not enrolled".into())
                 }
+                EgressPurpose::HubEnrolment => {
+                    "the address in a fleet invitation, when one is enrolled".to_string()
+                }
                 // No configured destination, and that is the fact about it: where a
                 // terminal connects is decided by whoever is typing in it.
                 EgressPurpose::Terminal => "wherever you point it".to_string(),

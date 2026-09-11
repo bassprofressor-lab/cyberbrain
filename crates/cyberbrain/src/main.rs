@@ -861,36 +861,70 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 path: invitation.clone(),
                 source: e,
             })?;
-            let inv = hub::client::parse_invitation(&text)?;
-            let hub_url = inv.hub_url.clone().expect("checked while parsing");
-
             let app = App::open(store, Actor::Operator)?;
-            let token_at = hub::client::save_token(&hub_url, &inv.device, &inv.token)?;
+            // Two kinds. A personal invitation already carries a device and its token; a fleet
+            // invitation carries a code, and the hub makes the device when it is asked.
+            let (hub_url, device, token, pin, inference_url, fleet_name) =
+                match hub::client::parse_any_invitation(&text)? {
+                    hub::client::AnyInvitation::Device(inv) => (
+                        inv.hub_url.clone().expect("checked while parsing"),
+                        inv.device,
+                        inv.token,
+                        inv.hub_cert_sha256,
+                        inv.inference_url,
+                        None,
+                    ),
+                    hub::client::AnyInvitation::Fleet(inv) => {
+                        let machine = hub::client::machine_name().ok_or_else(|| {
+                            Error::Config(
+                                "this machine reports no name, so the hub could not count its \
+                                 seat; ask for a personal invitation (`hub add --invite`)"
+                                    .into(),
+                            )
+                        })?;
+                        let enrolled =
+                            runtime()?.block_on(app.enrol_with_fleet_invitation(&inv, &machine))?;
+                        (
+                            inv.hub_url.clone(),
+                            enrolled.device,
+                            enrolled.token,
+                            inv.hub_cert_sha256.clone(),
+                            inv.inference_url.clone(),
+                            Some(enrolled.name),
+                        )
+                    }
+                };
+
+            let token_at = hub::client::save_token(&hub_url, &device, &token)?;
             // Taken from the invitation and written down, or taken away again: enrolling
             // afresh with a hub that has since moved behind an ordinary certificate must not
             // leave this machine expecting the old key for ever.
-            match &inv.hub_cert_sha256 {
-                Some(pin) => {
-                    hub::client::save_pin(&hub_url, pin)?;
+            match &pin {
+                Some(p) => {
+                    hub::client::save_pin(&hub_url, p)?;
                 }
                 None => hub::client::forget_pin(&hub_url)?,
             }
-            let inference =
-                app.enrol_with_hub(&hub_url, &inv.device, inv.inference_url.as_deref())?;
+            let inference = app.enrol_with_hub(&hub_url, &device, inference_url.as_deref())?;
 
             out.emit(
                 &serde_json::json!({
                     "hub": hub_url,
-                    "device": inv.device,
+                    "device": device,
+                    "name": fleet_name,
                     "token_stored_at": token_at,
-                    "pinned_certificate": inv.hub_cert_sha256,
+                    "pinned_certificate": pin,
                     "inference_endpoint": inference,
                 }),
                 |v| {
                     let mut s = format!(
-                        "enrolled with {} as {}\ntoken stored at {}\n",
+                        "enrolled with {} as {}{}\ntoken stored at {}\n",
                         v["hub"].as_str().unwrap_or_default(),
                         v["device"].as_str().unwrap_or_default(),
+                        v["name"]
+                            .as_str()
+                            .map(|n| format!(" ({n})"))
+                            .unwrap_or_default(),
                         v["token_stored_at"].as_str().unwrap_or_default()
                     );
                     if let Some(p) = v["pinned_certificate"].as_str() {
@@ -902,14 +936,131 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     if let Some(e) = v["inference_endpoint"].as_str() {
                         s.push_str(&format!("inference endpoint set to {e}\n"));
                     }
-                    s.push_str(
+                    s.push_str(if v["name"].is_string() {
+                        "\nThe invitation enrols further projects until it runs out or expires.\n\
+                         Deliver with `cyberbrain hub push`, on a timer.\n"
+                    } else {
                         "\nDelete the invitation file: it carries the token.\n\
-                         Deliver with `cyberbrain hub push`, on a timer.\n",
-                    );
+                         Deliver with `cyberbrain hub push`, on a timer.\n"
+                    });
                     s
                 },
             )?;
             Ok(0)
+        }
+
+        HubCommand::Invite { command } => {
+            use cli::InviteCommand;
+            match command {
+                InviteCommand::Create {
+                    uses,
+                    expires,
+                    label,
+                    hub_url,
+                    inference_url,
+                    out: path,
+                    data,
+                } => {
+                    if path.exists() {
+                        return Err(Error::Config(format!(
+                            "{} exists already; an invitation is never written over a file",
+                            path.display()
+                        )));
+                    }
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let (row, code) =
+                        store.create_enrolment_code(label, *uses, expires, "cli", &now())?;
+                    let invitation = serde_json::json!({
+                        "kind": hub::client::FLEET_INVITATION_KIND,
+                        "version": 1,
+                        "code": code,
+                        "label": row.label,
+                        "hub_url": hub_url,
+                        "inference_url": inference_url,
+                        "hub_cert_sha256": hub::pin_to_offer(&store),
+                        "expires_at": row.expires_at,
+                    });
+                    let text = serde_json::to_string_pretty(&invitation).map_err(|e| {
+                        Error::Config(format!("invitation does not serialise: {e}"))
+                    })?;
+                    std::fs::write(path, format!("{text}\n")).map_err(|e| Error::Io {
+                        path: path.clone(),
+                        source: e,
+                    })?;
+                    out.emit(
+                        &serde_json::json!({
+                            "id": row.id, "label": row.label, "uses": row.max_uses,
+                            "expires_at": row.expires_at, "file": path.display().to_string(),
+                        }),
+                        |v| {
+                            format!(
+                                "invitation {id} written to {}\n  label: {}\n  enrols up to {} \
+                                 project(s) until {}\n\nThe file is a credential for every one of \
+                                 them. Hand it out the way you would a password, for example from \
+                                 a share only the rollout can read, and withdraw it once the \
+                                 rollout is done:\n  cyberbrain hub invite revoke {id}\n",
+                                v["file"].as_str().unwrap_or_default(),
+                                v["label"].as_str().unwrap_or_default(),
+                                v["uses"],
+                                v["expires_at"].as_str().unwrap_or_default(),
+                                id = v["id"].as_str().unwrap_or_default(),
+                            )
+                        },
+                    )?;
+                    Ok(0)
+                }
+                InviteCommand::List { data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let stamp = now();
+                    let all = store.enrolment_codes()?;
+                    out.emit(&serde_json::json!(all), |v| {
+                        let rows = v.as_array().cloned().unwrap_or_default();
+                        if rows.is_empty() {
+                            return "No fleet invitations.\n".to_string();
+                        }
+                        let mut s = String::new();
+                        for c in rows {
+                            let state = if c["revoked_at"].is_string() {
+                                "withdrawn".to_string()
+                            } else if c["expires_at"].as_str().unwrap_or_default() <= stamp.as_str()
+                            {
+                                "expired".to_string()
+                            } else if c["uses"].as_i64() >= c["max_uses"].as_i64() {
+                                "used up".to_string()
+                            } else {
+                                format!(
+                                    "works until {}",
+                                    c["expires_at"].as_str().unwrap_or_default()
+                                )
+                            };
+                            s.push_str(&format!(
+                                "  {}  {}  {}/{} used  {state}\n",
+                                c["id"].as_str().unwrap_or_default(),
+                                c["label"].as_str().unwrap_or_default(),
+                                c["uses"],
+                                c["max_uses"],
+                            ));
+                        }
+                        s
+                    })?;
+                    Ok(0)
+                }
+                InviteCommand::Revoke { id, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let done = store.revoke_enrolment_code(id, "cli", &now())?;
+                    out.emit(&serde_json::json!({ "id": id, "revoked": done }), |v| {
+                        if v["revoked"].as_bool().unwrap_or(false) {
+                            format!(
+                                "{id} withdrawn. The projects it enrolled stay; nobody further \
+                                 gets in with it.\n"
+                            )
+                        } else {
+                            format!("{id}: no such invitation, or it was already withdrawn.\n")
+                        }
+                    })?;
+                    Ok(if done { 0 } else { 1 })
+                }
+            }
         }
 
         HubCommand::Push {
