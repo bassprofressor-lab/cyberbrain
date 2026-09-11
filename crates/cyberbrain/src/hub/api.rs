@@ -57,6 +57,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/requests", get(get_requests).post(post_request))
         .route("/requests/{id}/approve", post(approve))
         .route("/grants/{id}/approve", post(countersign))
+        .route("/purges/{id}/approve", post(countersign_purge))
         .route("/api/v1/fleet", get(get_fleet))
         .with_state(state)
 }
@@ -967,6 +968,15 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
     } else {
         Vec::new()
     };
+    let purges = if role == Role::Countersigner {
+        hub.purges()
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|p| p.is_pending())
+            .collect()
+    } else {
+        Vec::new()
+    };
     let log = if role == Role::Countersigner {
         hub.hub_events(200).unwrap_or_default()
     } else {
@@ -985,11 +995,57 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
         role,
         requests,
         grants,
+        purges,
         log,
         devices,
         flash,
     };
     html(super::page::signing_page(&view))
+}
+
+/// The second signature on a purge, from the page. Carries it out, like the command does.
+async fn countersign_purge(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    use super::access::Role;
+    use super::store::PurgeOutcome as O;
+    let Some((_, name, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    if role != Role::Countersigner {
+        return Redirect::to("/requests").into_response();
+    }
+    let now = jiff::Timestamp::now().to_string();
+    {
+        let Ok(hub) = state.hub.lock() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+        };
+        let token =
+            super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+        let Some(who) = session_principal(&state, token.as_deref(), &hub) else {
+            return Redirect::to("/login").into_response();
+        };
+        let message = match hub.countersign_purge(&id, &who, &now) {
+            Ok(O::CarriedOut { rows, devices }) => Ok(format!(
+                "{id} carried out, countersigned by {name}: {rows} row(s) removed from {} device(s).",
+                devices.len()
+            )),
+            Ok(O::Unknown) => Err(format!("{id}: no purge with that id.")),
+            Ok(O::AlreadyDone { by }) => Err(format!(
+                "{id} was already carried out, countersigned by {by}."
+            )),
+            Ok(O::SamePerson) => Err(format!(
+                "{id} was proposed by you. Two signatures from one hand are one signature."
+            )),
+            Err(e) => Err(e.to_string()),
+        };
+        if let Ok(mut f) = state.flash.lock() {
+            *f = Some(message);
+        }
+    }
+    Redirect::to("/requests").into_response()
 }
 
 #[derive(serde::Deserialize)]

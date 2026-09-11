@@ -620,6 +620,62 @@ log unless told otherwise, and the hub takes what it does not have (see *Overlap
 gap is not*), so rows that arrived after the copy come back from the machines that still
 hold them.
 
+## How long it keeps things
+
+Nothing in the hub expires on its own, and nothing is removed without two people.
+
+| What | Kept until | Why |
+|---|---|---|
+| Activity rows | a purge removes them | the evidence the hub collects, and data about the people at those machines |
+| Shared note texts | the note is erased (`hub erase`) | a copy held on behalf of a bereich |
+| The text of a conflict | the conflict is resolved | the decision is the record; the version that lost has no further use |
+| The hub's own log, requests, grants, people, erasure and purge records | the life of the hub | who decided what, and who looked; removing it would remove the proof that a removal was agreed |
+
+### Purging activity rows
+
+```console
+$ cyberbrain hub retention set P2Y --data /var/lib/cyberbrain/hub.db
+activity rows are kept for P2Y
+
+$ cyberbrain hub retention propose --reason "Betriebsvereinbarung §7: 24 Monate" --data /var/lib/cyberbrain/hub.db
+purge pg_01M2… written: rows older than 2024-09-11T09:00:00Z (P2Y), 18233 row(s) today
+
+$ cyberbrain hub retention approve pg_01M2… --as <countersigner credential> --data /var/lib/cyberbrain/hub.db
+pg_01M2… carried out, countersigned by Betriebsrat: 18233 row(s) removed from 12 device(s).
+```
+
+Setting a period removes nothing, so a typo cannot delete a year. A purge is written down with
+a reason, and carried out when somebody holding a countersigner credential signs it, either
+with the command above or with a button on `/requests`. The person who proposed it cannot sign
+it. The proposal, the signature, the cutoff and how many rows went from which device all go
+into the hub's own log. `hub retention show` says what a purge would remove today, and
+`hub retention list` every purge there has been.
+
+The period is days, weeks, months or years (`P90D`, `P18M`, `P2Y`). Hours are refused, and so
+is a period of nothing. The cutoff is fixed when the purge is proposed.
+
+**What goes is the start of each chain, never a selection.** Everything before the first row
+that is not old enough is removed, and nothing after it. A device whose clock once ran
+backwards has an old-looking row after a newer one, and that row stays, because removing it
+would cut a hole in the middle of the chain. The hash of the last removed row becomes the
+device's floor, and `hub verify` checks what remains from there:
+
+```console
+laptop-anna              chain holds over 3120 row(s), from row 9361 (rows before it were purged)
+```
+
+A floor proves that the remaining rows are intact and start where they say. It cannot show the
+rows that were purged; that is what the purge's entry in the hub's own log is for.
+
+The delete trigger stays in place. It lets a row go only inside the transaction that carries
+out a signed purge, and only below the point that purge stopped at for that device. As before,
+it does not stop somebody with file access to the database; the chains and the log are what
+show that.
+
+**Backups keep what was purged.** A copy taken before a purge still holds those rows. If the
+period is a promise to the people whose activity this is, the backups have to be rotated
+within the same period.
+
 ## A report for a period
 
 ```console

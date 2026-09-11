@@ -839,6 +839,121 @@ fn a_backup_never_writes_over_an_existing_file() {
     assert_eq!(std::fs::read(&to).unwrap(), b"last night's backup");
 }
 
+/// A device with rows whose timestamps are chosen, chained the way a real client chains them.
+///
+/// The chain hash covers a row's `_chain.at`, not its `ts`, so a client's rows can be re-dated
+/// for a test without breaking the chain.
+fn hub_with_rows_at(stamps: &[&str]) -> HubStore {
+    let mut hub = HubStore::in_memory().unwrap();
+    let (device, _) = hub.add_device("laptop", NOW).unwrap();
+    let client = Client::new();
+    for i in 0..stamps.len() {
+        client.act(&format!("n{i}"));
+    }
+    let mut rows = client.sink.rows();
+    for (row, ts) in rows.iter_mut().zip(stamps) {
+        row.ts = ts.parse().unwrap();
+    }
+    let last = rows
+        .last()
+        .and_then(|r| r.chain_hash())
+        .unwrap()
+        .to_string();
+    hub.append(&device, &rows, &last, None, NOW).unwrap();
+    hub
+}
+
+fn countersigner(hub: &HubStore, name: &str) -> super::access::Principal {
+    hub.add_principal(name, super::access::Role::Countersigner, NOW)
+        .unwrap()
+        .0
+}
+
+/// Old activity rows go only when a second person signs, and what is left still verifies.
+#[test]
+fn a_purge_takes_two_people_and_what_is_left_still_verifies() {
+    use super::store::PurgeOutcome;
+    let hub = hub_with_rows_at(&[
+        "2023-01-10T00:00:00Z",
+        "2023-06-01T00:00:00Z",
+        "2026-08-01T00:00:00Z",
+    ]);
+    // Setting a period removes nothing.
+    hub.set_retention("P2Y", "cli", NOW).unwrap();
+    assert_eq!(hub.total_entries().unwrap(), 3);
+
+    let alice = countersigner(&hub, "Alice");
+    let (purge, would) = hub
+        .propose_purge("Betriebsvereinbarung §7: 24 Monate", &alice.id, NOW)
+        .unwrap();
+    assert_eq!(would, 2);
+    assert_eq!(purge.cutoff, "2024-09-07T12:00:00Z");
+    assert_eq!(
+        hub.countersign_purge(&purge.id, &alice, NOW).unwrap(),
+        PurgeOutcome::SamePerson
+    );
+    assert_eq!(
+        hub.total_entries().unwrap(),
+        3,
+        "one person must not purge alone"
+    );
+
+    let bob = countersigner(&hub, "Bob");
+    match hub.countersign_purge(&purge.id, &bob, NOW).unwrap() {
+        PurgeOutcome::CarriedOut { rows, .. } => assert_eq!(rows, 2),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(hub.total_entries().unwrap(), 1);
+    let r = report::verify(&hub).unwrap();
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.devices[0].floor_seq, Some(2));
+    assert!(
+        hub.hub_events(1000)
+            .unwrap()
+            .iter()
+            .any(|e| e.action == "purge.carried_out")
+    );
+    assert!(matches!(
+        hub.countersign_purge(&purge.id, &bob, NOW).unwrap(),
+        PurgeOutcome::AlreadyDone { .. }
+    ));
+}
+
+/// A device whose clock once ran backwards loses only the unbroken start of its chain.
+#[test]
+fn a_purge_removes_a_prefix_and_never_cuts_a_hole() {
+    let hub = hub_with_rows_at(&[
+        "2023-01-10T00:00:00Z",
+        "2026-08-01T00:00:00Z",
+        "2023-02-01T00:00:00Z",
+    ]);
+    hub.set_retention("P2Y", "cli", NOW).unwrap();
+    let (purge, would) = hub.propose_purge("24 Monate", "cli", NOW).unwrap();
+    assert_eq!(
+        would, 1,
+        "the old-looking third row sits after a new one and stays"
+    );
+    hub.countersign_purge(&purge.id, &countersigner(&hub, "Rat"), NOW)
+        .unwrap();
+    assert_eq!(hub.total_entries().unwrap(), 2);
+    let r = report::verify(&hub).unwrap();
+    assert!(r.ok, "{r:?}");
+}
+
+#[test]
+fn a_retention_period_is_a_calendar_period_of_more_than_nothing() {
+    for bad in ["PT12H", "P0D", "2 years", ""] {
+        assert!(super::store::cutoff_for(bad, NOW).is_err(), "{bad:?}");
+    }
+    assert_eq!(
+        super::store::cutoff_for("P18M", NOW).unwrap(),
+        "2025-03-07T12:00:00Z"
+    );
+    let hub = HubStore::in_memory().unwrap();
+    let err = hub.propose_purge("x", "cli", NOW).unwrap_err().to_string();
+    assert!(err.contains("no retention period"), "{err}");
+}
+
 #[test]
 fn a_period_comes_out_as_a_bundle_that_verifies_on_its_own() {
     let (mut hub, device, token) = hub_with_device();
@@ -3122,6 +3237,69 @@ async fn each_role_lands_on_the_page_that_is_theirs() {
             .unwrap()
             .is_effective(),
         "an auditor countersigned a bereich"
+    );
+}
+
+/// A purge is signed from the browser by a countersigner, and by nobody else.
+#[tokio::test]
+async fn a_countersigner_carries_out_a_purge_from_the_page_and_an_auditor_cannot() {
+    use super::access::Role;
+    let hub = hub_with_password("correct horse battery");
+    let (_auditor, auditor_token) = hub.add_principal("Kraus", Role::Auditor, NOW).unwrap();
+    let (_council, council_token) = hub
+        .add_principal("Betriebsrat", Role::Countersigner, NOW)
+        .unwrap();
+    hub.set_retention("P2Y", "cli", NOW).unwrap();
+    let (purge, _) = hub
+        .propose_purge("Betriebsvereinbarung §7", "cli", NOW)
+        .unwrap();
+    let state = state_for(hub, true);
+    let post = |cookie: String, uri: String| {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri(uri)
+            .header("cookie", cookie)
+            .body(Body::empty())
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(
+            "192.168.1.20:51000"
+                .parse::<std::net::SocketAddr>()
+                .unwrap(),
+        ));
+        req
+    };
+    let pending = |state: &Arc<super::api::HubState>| {
+        state.hub.lock().unwrap().purges().unwrap()[0].is_pending()
+    };
+    let uri = format!("/purges/{}/approve", purge.id);
+
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &auditor_token).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let _ = super::api::router(state.clone())
+        .oneshot(post(cookie, uri.clone()))
+        .await
+        .unwrap();
+    assert!(pending(&state), "an auditor carried out a purge");
+
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &council_token).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let body = get_as(state.clone(), "/requests", &cookie).await;
+    assert!(
+        body.contains(&purge.id),
+        "the waiting purge has to be on the page: {body}"
+    );
+    assert!(
+        body.contains("Betriebsvereinbarung"),
+        "and its reason: {body}"
+    );
+    let r = super::api::router(state.clone())
+        .oneshot(post(cookie, uri))
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        !pending(&state),
+        "the purge should be carried out after a countersignature from the browser"
     );
 }
 

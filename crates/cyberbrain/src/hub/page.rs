@@ -613,6 +613,8 @@ pub struct SigningView<'a> {
     pub requests: Vec<(super::access::AccessRequest, super::access::RequestState)>,
     /// Bereich grants written and waiting for a second signature. Countersigners only.
     pub grants: Vec<super::sync_access::BereichGrant>,
+    /// Purges of old activity rows waiting for a second signature. Countersigners only.
+    pub purges: Vec<super::store::Purge>,
     /// The hub's own log. Countersigners only — it is the record of who looked at what.
     pub log: Vec<super::store::HubEvent>,
     pub devices: Vec<(String, String)>,
@@ -664,6 +666,36 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
                     why = esc(&g.reason),
                     by = esc(&g.granted_by),
                     id = esc(&g.id),
+                ));
+            }
+            h.push_str("</tbody></table>");
+        }
+        h.push_str("</section>");
+    }
+
+    // --- purges -----------------------------------------------------------------------
+    if signing {
+        h.push_str("<section class=card><h2>Purges waiting for a second signature</h2>");
+        if v.purges.is_empty() {
+            h.push_str("<p class=muted>Nothing waiting.</p>");
+        } else {
+            h.push_str(
+                "<p class=muted>Each of these removes, from every device and for good, the \
+                 activity rows older than its cutoff. Nothing goes until you sign; signing \
+                 carries it out at once and puts both names in the log.</p>\
+                 <table><thead><tr><th>Rows before<th>Period<th>Reason<th>Written by\
+                 <th></tr></thead><tbody>",
+            );
+            for p in &v.purges {
+                h.push_str(&format!(
+                    "<tr><td>{cutoff}<td>{period}<td>{why}<td>{by}\
+                     <td><form method=post action=\"/purges/{id}/approve\">\
+                     <button type=submit>Countersign and carry out</button></form></tr>",
+                    cutoff = esc(&p.cutoff),
+                    period = esc(&p.retention),
+                    why = esc(&p.reason),
+                    by = esc(&p.proposed_by),
+                    id = esc(&p.id),
                 ));
             }
             h.push_str("</tbody></table>");

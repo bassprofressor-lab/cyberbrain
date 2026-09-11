@@ -31,6 +31,11 @@ pub struct Device {
     /// Why this device's last delivery was turned away, if one was.
     pub last_refusal: Option<String>,
     pub last_refusal_at: Option<String>,
+    /// Where this device's chain starts on the hub after a purge: the hash of the last row
+    /// removed, and its seq. `None` until something was purged, and then the chain starts at
+    /// the genesis marker as it always did.
+    pub floor_hash: Option<String>,
+    pub floor_seq: Option<i64>,
 }
 
 impl Device {
@@ -253,9 +258,27 @@ impl HubStore {
              CREATE TRIGGER IF NOT EXISTS entries_no_update
                  BEFORE UPDATE ON entries
                  BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;
-             CREATE TRIGGER IF NOT EXISTS entries_no_delete
-                 BEFORE DELETE ON entries
-                 BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;
+             -- A purge of old activity rows under the hub's retention period: written down by
+             -- one person, carried out when a second one signs (`countersign_purge`).
+             CREATE TABLE IF NOT EXISTS purges (
+                 id           TEXT PRIMARY KEY,
+                 cutoff       TEXT NOT NULL,
+                 retention    TEXT NOT NULL,
+                 reason       TEXT NOT NULL,
+                 proposed_by  TEXT NOT NULL,
+                 created_at   TEXT NOT NULL,
+                 approved_by  TEXT,
+                 approved_at  TEXT,
+                 rows_removed INTEGER
+             );
+
+             -- Holds a row only inside the transaction that carries out a purge. The delete
+             -- trigger on `entries` (see `upgrade_delete_trigger`) lets a row go only while its
+             -- device has a window here and the row lies below it.
+             CREATE TABLE IF NOT EXISTS purge_window (
+                 device    TEXT PRIMARY KEY,
+                 below_seq INTEGER NOT NULL
+             );
 
              CREATE INDEX IF NOT EXISTS entries_by_ts ON entries(ts);
 
@@ -392,7 +415,38 @@ impl HubStore {
                  PRIMARY KEY (bereich, name)
              );",
         ))?;
-        self.add_missing_columns()
+        self.add_missing_columns()?;
+        self.upgrade_delete_trigger()
+    }
+
+    /// The one delete trigger on `entries`, created here rather than in the schema batch.
+    ///
+    /// It refuses every delete except inside a purge, and there only below the window the
+    /// purge opened for that device. A hub created before purges existed has the
+    /// unconditional version, and `CREATE TRIGGER IF NOT EXISTS` would leave it that way
+    /// forever, so it is replaced once, recognisably: the new one names `purge_window`.
+    fn upgrade_delete_trigger(&self) -> Result<()> {
+        let sql: Option<String> = ix(self
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = 'entries_no_delete'",
+                [],
+                |r| r.get(0),
+            )
+            .optional())?;
+        if sql.as_deref().is_some_and(|s| s.contains("purge_window")) {
+            return Ok(());
+        }
+        ix(self.conn.execute_batch(
+            "BEGIN IMMEDIATE;
+             DROP TRIGGER IF EXISTS entries_no_delete;
+             CREATE TRIGGER entries_no_delete
+                 BEFORE DELETE ON entries
+                 WHEN NOT EXISTS (SELECT 1 FROM purge_window w
+                                  WHERE w.device = old.device AND old.seq < w.below_seq)
+                 BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;
+             COMMIT;",
+        ))
     }
 
     /// Bring an existing record up to the current shape.
@@ -436,6 +490,16 @@ impl HubStore {
                 "approved_at",
                 "ALTER TABLE bereich_grants ADD COLUMN approved_at TEXT",
             ),
+            (
+                "devices",
+                "floor_hash",
+                "ALTER TABLE devices ADD COLUMN floor_hash TEXT",
+            ),
+            (
+                "devices",
+                "floor_seq",
+                "ALTER TABLE devices ADD COLUMN floor_seq INTEGER",
+            ),
         ] {
             if !self.has_column(table, column)? {
                 ix(self.conn.execute(ddl, []))?;
@@ -472,6 +536,8 @@ impl HubStore {
             version: None,
             last_refusal: None,
             last_refusal_at: None,
+            floor_hash: None,
+            floor_seq: None,
         };
         ix(self.conn.execute(
             "INSERT INTO devices (id, name, token_hash, created_at, anchor)
@@ -497,7 +563,7 @@ impl HubStore {
             .conn
             .query_row(
                 "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                        last_refusal, last_refusal_at
+                        last_refusal, last_refusal_at, floor_hash, floor_seq
                  FROM devices WHERE token_hash = ?",
                 params![hash],
                 row_to_device,
@@ -508,7 +574,7 @@ impl HubStore {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let mut stmt = ix(self.conn.prepare(
             "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                    last_refusal, last_refusal_at
+                    last_refusal, last_refusal_at, floor_hash, floor_seq
              FROM devices ORDER BY created_at, id",
         ))?;
         let rows = ix(stmt.query_map([], row_to_device))?;
@@ -734,6 +800,8 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         version: r.get(7)?,
         last_refusal: r.get(8)?,
         last_refusal_at: r.get(9)?,
+        floor_hash: r.get(10)?,
+        floor_seq: r.get(11)?,
     })
 }
 
@@ -806,6 +874,127 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(delete.contains("append-only"), "{delete}");
+    }
+
+    fn rows(n: usize) -> Vec<AuditEvent> {
+        (1..=n)
+            .map(|i| AuditEvent {
+                ts: format!("2026-09-07T00:00:0{i}Z").parse().unwrap(),
+                actor: "operator".into(),
+                action: "note.write".into(),
+                subject: format!("note:{i}"),
+                detail: serde_json::json!({}),
+            })
+            .collect()
+    }
+
+    /// The window a purge opens admits the rows below it, for its own device, and nothing else.
+    #[test]
+    fn a_purge_window_lets_only_rows_below_it_go() {
+        let mut s = HubStore::in_memory().unwrap();
+        let (d, _) = s.add_device("laptop", "2026-09-07T00:00:00Z").unwrap();
+        let (other, _) = s.add_device("desk", "2026-09-07T00:00:00Z").unwrap();
+        s.append(&d, &rows(3), "a", None, "2026-09-07T00:00:04Z")
+            .unwrap();
+        s.append(&other, &rows(3), "b", None, "2026-09-07T00:00:04Z")
+            .unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO purge_window (device, below_seq) VALUES (?, 2)",
+                params![d.id],
+            )
+            .unwrap();
+
+        let above = s
+            .conn
+            .execute(
+                "DELETE FROM entries WHERE device = ? AND seq >= 2",
+                params![d.id],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(above.contains("append-only"), "{above}");
+        let elsewhere = s
+            .conn
+            .execute(
+                "DELETE FROM entries WHERE device = ? AND seq < 2",
+                params![other.id],
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(elsewhere.contains("append-only"), "{elsewhere}");
+        assert_eq!(
+            s.conn
+                .execute(
+                    "DELETE FROM entries WHERE device = ? AND seq < 2",
+                    params![d.id]
+                )
+                .unwrap(),
+            1
+        );
+    }
+
+    /// A hub created before purges existed has the unconditional trigger; opening it replaces
+    /// that once, and the replacement still refuses a delete outside a purge.
+    #[test]
+    fn a_hub_from_before_purges_gets_the_trigger_that_knows_them() {
+        let mut s = HubStore::in_memory().unwrap();
+        s.conn
+            .execute_batch(
+                "DROP TRIGGER entries_no_delete;
+                 CREATE TRIGGER entries_no_delete BEFORE DELETE ON entries
+                 BEGIN SELECT raise(ABORT, 'the hub record is append-only'); END;",
+            )
+            .unwrap();
+        s.upgrade_delete_trigger().unwrap();
+        let sql: String = s
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'entries_no_delete'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(sql.contains("purge_window"), "{sql}");
+
+        let (d, _) = s.add_device("laptop", "2026-09-07T00:00:00Z").unwrap();
+        s.append(&d, &rows(1), "a", None, "2026-09-07T00:00:02Z")
+            .unwrap();
+        let delete = s
+            .conn
+            .execute("DELETE FROM entries", [])
+            .unwrap_err()
+            .to_string();
+        assert!(delete.contains("append-only"), "{delete}");
+    }
+
+    #[test]
+    fn a_resolved_conflict_keeps_its_decision_and_drops_the_texts() {
+        let s = HubStore::in_memory().unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO note_conflicts (id, bereich, name, held_updated, held_from_device,
+                     offered_updated, offered_from_device, offered_frontmatter, offered_body,
+                     detected_at)
+                 VALUES ('c1', 'dispo', 'tour', 't1', 'dev_a', 't2', 'dev_b', 'name: tour',
+                         'Die abgelehnte Fassung', 't3')",
+                [],
+            )
+            .unwrap();
+        assert!(
+            s.resolve_conflict("c1", false, "2026-09-07T00:00:05Z")
+                .unwrap()
+        );
+        let (body, front, resolution): (String, String, String) = s
+            .conn
+            .query_row(
+                "SELECT offered_body, offered_frontmatter, resolution FROM note_conflicts",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!((body.as_str(), front.as_str()), ("", ""));
+        assert_eq!(resolution, "held");
     }
 }
 
@@ -1416,7 +1605,11 @@ impl HubStore {
             ))?;
         }
         ix(self.conn.execute(
-            "UPDATE note_conflicts SET resolved_at = ?, resolution = ? WHERE id = ?",
+            // The texts go with the resolution. The decision (which way, when) is the record;
+            // keeping the version that lost would keep a second copy of a department's
+            // text for as long as the hub lives, for no purpose anybody could name.
+            "UPDATE note_conflicts SET resolved_at = ?, resolution = ?,
+                 offered_frontmatter = '', offered_body = '' WHERE id = ?",
             params![now, if take_offered { "offered" } else { "held" }, id],
         ))?;
         Ok(true)
@@ -1801,4 +1994,288 @@ fn row_to_request(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccessRequest> {
         expires_at: r.get(11)?,
         disclosures: r.get(12)?,
     })
+}
+
+// ---------------------------------------------------------------------------------------
+// How long activity rows are kept, and removing the ones past that (retention).
+
+/// A purge: every device's rows older than `cutoff` go, once a second person has signed.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Purge {
+    pub id: String,
+    pub cutoff: String,
+    pub retention: String,
+    pub reason: String,
+    pub proposed_by: String,
+    pub created_at: String,
+    pub approved_by: Option<String>,
+    pub approved_at: Option<String>,
+    pub rows_removed: Option<i64>,
+}
+
+impl Purge {
+    pub fn is_pending(&self) -> bool {
+        self.approved_at.is_none()
+    }
+}
+
+/// What became of a countersignature on a purge.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "outcome", rename_all = "kebab-case")]
+pub enum PurgeOutcome {
+    /// Carried out: how many rows went, in total and per device.
+    CarriedOut {
+        rows: i64,
+        devices: Vec<(String, i64)>,
+    },
+    Unknown,
+    AlreadyDone {
+        by: String,
+    },
+    /// The person who proposed it is the person trying to sign it.
+    SamePerson,
+}
+
+impl HubStore {
+    /// The retention period, as an ISO-8601 duration, if one was set.
+    pub fn retention(&self) -> Result<Option<String>> {
+        self.setting("retention")
+    }
+
+    /// Set how long activity rows are kept. Setting it removes nothing: a purge is a separate,
+    /// countersigned step, because a typo in a period must not be able to delete a year.
+    pub fn set_retention(&self, period: &str, by: &str, now: &str) -> Result<()> {
+        cutoff_for(period, now)?;
+        self.set_setting("retention", period)?;
+        self.record(
+            by,
+            "retention.set",
+            serde_json::json!({ "retention": period }),
+            now,
+        )?;
+        Ok(())
+    }
+
+    /// Per device: how many rows a purge with this cutoff removes, and the seq it stops below.
+    ///
+    /// A prefix of the chain, never a selection. Everything before the first row that is not
+    /// old enough goes, and nothing after it, even a row that looks old: a device whose clock
+    /// once ran backwards has one, and removing it would cut a hole no floor can bridge.
+    pub fn purge_plan(&self, cutoff: &str) -> Result<Vec<(String, i64, i64)>> {
+        let mut out = Vec::new();
+        for d in self.devices()? {
+            let boundary: i64 = ix(self.conn.query_row(
+                "SELECT coalesce(
+                     (SELECT min(seq) FROM entries WHERE device = ?1 AND ts >= ?2),
+                     (SELECT coalesce(max(seq), 0) + 1 FROM entries WHERE device = ?1))",
+                params![d.id, cutoff],
+                |r| r.get(0),
+            ))?;
+            let n: i64 = ix(self.conn.query_row(
+                "SELECT count(*) FROM entries WHERE device = ? AND seq < ?",
+                params![d.id, boundary],
+                |r| r.get(0),
+            ))?;
+            out.push((d.id, n, boundary));
+        }
+        Ok(out)
+    }
+
+    /// Write a purge down. Removes nothing; the countersignature does.
+    pub fn propose_purge(&self, reason: &str, by: &str, now: &str) -> Result<(Purge, i64)> {
+        if reason.trim().is_empty() {
+            return Err(Error::Config(
+                "a purge needs a reason: the countersigner reads it, and so does an auditor later"
+                    .into(),
+            ));
+        }
+        let Some(retention) = self.retention()? else {
+            return Err(Error::Config(
+                "no retention period is set; run `cyberbrain hub retention set <period>` first"
+                    .into(),
+            ));
+        };
+        let cutoff = cutoff_for(&retention, now)?;
+        let would = self
+            .purge_plan(&cutoff)?
+            .iter()
+            .map(|(_, n, _)| n)
+            .sum::<i64>();
+        let p = Purge {
+            id: format!("pg_{}", cyberbrain_core::NoteId::generate()),
+            cutoff,
+            retention,
+            reason: reason.to_string(),
+            proposed_by: by.to_string(),
+            created_at: now.to_string(),
+            approved_by: None,
+            approved_at: None,
+            rows_removed: None,
+        };
+        ix(self.conn.execute(
+            "INSERT INTO purges (id, cutoff, retention, reason, proposed_by, created_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![
+                p.id,
+                p.cutoff,
+                p.retention,
+                p.reason,
+                p.proposed_by,
+                p.created_at
+            ],
+        ))?;
+        self.record(
+            by,
+            "purge.proposed",
+            serde_json::json!({
+                "id": p.id, "cutoff": p.cutoff, "retention": p.retention,
+                "reason": p.reason, "would_remove": would,
+            }),
+            now,
+        )?;
+        Ok((p, would))
+    }
+
+    /// Every purge, oldest first.
+    pub fn purges(&self) -> Result<Vec<Purge>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT id, cutoff, retention, reason, proposed_by, created_at, approved_by,
+                    approved_at, rows_removed
+             FROM purges ORDER BY created_at, id",
+        ))?;
+        let rows = ix(stmt.query_map([], |r| {
+            Ok(Purge {
+                id: r.get(0)?,
+                cutoff: r.get(1)?,
+                retention: r.get(2)?,
+                reason: r.get(3)?,
+                proposed_by: r.get(4)?,
+                created_at: r.get(5)?,
+                approved_by: r.get(6)?,
+                approved_at: r.get(7)?,
+                rows_removed: r.get(8)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// The second signature, and the purge itself.
+    ///
+    /// One transaction around all of it, the record included: rows removed without the entry
+    /// that says so, or an entry for rows that are still there, are both states nobody should
+    /// be able to find. Each device's chain gets a floor, the hash of its last removed row,
+    /// so what remains still verifies (`report::verify` starts there).
+    pub fn countersign_purge(
+        &self,
+        id: &str,
+        who: &super::access::Principal,
+        now: &str,
+    ) -> Result<PurgeOutcome> {
+        let Some(p) = self.purges()?.into_iter().find(|p| p.id == id) else {
+            return Ok(PurgeOutcome::Unknown);
+        };
+        if let Some(by) = &p.approved_by {
+            return Ok(PurgeOutcome::AlreadyDone { by: by.clone() });
+        }
+        if p.proposed_by == who.id {
+            return Ok(PurgeOutcome::SamePerson);
+        }
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let carried = (|| -> Result<PurgeOutcome> {
+            let mut devices = Vec::new();
+            let mut total = 0i64;
+            for (device, n, boundary) in self.purge_plan(&p.cutoff)? {
+                if n == 0 {
+                    continue;
+                }
+                let (floor_seq, floor_hash): (i64, String) = ix(self.conn.query_row(
+                    "SELECT seq, hash FROM entries WHERE device = ? AND seq < ?
+                     ORDER BY seq DESC LIMIT 1",
+                    params![device, boundary],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                ))?;
+                ix(self.conn.execute(
+                    "INSERT INTO purge_window (device, below_seq) VALUES (?, ?)",
+                    params![device, boundary],
+                ))?;
+                let removed = ix(self.conn.execute(
+                    "DELETE FROM entries WHERE device = ? AND seq < ?",
+                    params![device, boundary],
+                ))? as i64;
+                ix(self
+                    .conn
+                    .execute("DELETE FROM purge_window WHERE device = ?", params![device]))?;
+                ix(self.conn.execute(
+                    "UPDATE devices SET floor_hash = ?, floor_seq = ? WHERE id = ?",
+                    params![floor_hash, floor_seq, device],
+                ))?;
+                total += removed;
+                devices.push((device, removed));
+            }
+            ix(self.conn.execute(
+                "UPDATE purges SET approved_by = ?, approved_at = ?, rows_removed = ? WHERE id = ?",
+                params![who.id, now, total, id],
+            ))?;
+            self.record(
+                &who.id,
+                "purge.carried_out",
+                serde_json::json!({
+                    "id": id, "cutoff": p.cutoff, "retention": p.retention,
+                    "proposed_by": p.proposed_by, "by": who.name, "rows": total,
+                    "devices": devices.iter()
+                        .map(|(d, n)| serde_json::json!({ "device": d, "rows": n }))
+                        .collect::<Vec<_>>(),
+                }),
+                now,
+            )?;
+            Ok(PurgeOutcome::CarriedOut {
+                rows: total,
+                devices,
+            })
+        })();
+        match carried {
+            Ok(outcome) => {
+                ix(self.conn.execute_batch("COMMIT"))?;
+                Ok(outcome)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+}
+
+/// `now` minus a retention period, in whole seconds so it compares the way the stored
+/// timestamps do. Only calendar periods of more than nothing: `PT12H` is a valid duration and
+/// no retention period, and `P0D` would purge everything the moment it is signed.
+pub fn cutoff_for(period: &str, now: &str) -> Result<String> {
+    let bad = |why: String| Error::Config(format!("retention `{period}`: {why}"));
+    cyberbrain_core::frontmatter::validate_retention(period).map_err(|w| bad(w.to_string()))?;
+    if period.contains('T') {
+        return Err(bad(
+            "give it in days, weeks, months or years; hours are not a retention period".into(),
+        ));
+    }
+    let span: jiff::Span = period.parse().map_err(|e| bad(format!("{e}")))?;
+    if span.is_zero() {
+        return Err(bad(
+            "a retention period of nothing would purge everything".into()
+        ));
+    }
+    let now: jiff::Timestamp = now
+        .parse()
+        .map_err(|e| Error::Config(format!("timestamp `{now}`: {e}")))?;
+    let then = now
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .checked_sub(span)
+        .map_err(|e| bad(format!("{e}")))?
+        .timestamp();
+    jiff::Timestamp::from_second(then.as_second())
+        .map(|t| t.to_string())
+        .map_err(|e| bad(format!("{e}")))
 }

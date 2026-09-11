@@ -1852,7 +1852,13 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 let mut s = String::new();
                 for d in v["devices"].as_array().cloned().unwrap_or_default() {
                     let verdict = match d["chain"].get("Ok") {
-                        Some(n) => format!("chain holds over {} row(s)", n),
+                        Some(n) => match d["floor_seq"].as_i64() {
+                            Some(f) => format!(
+                                "chain holds over {n} row(s), from row {} (rows before it were purged)",
+                                f + 1
+                            ),
+                            None => format!("chain holds over {} row(s)", n),
+                        },
                         None => format!(
                             "BROKEN: {}",
                             d["chain"]["Err"].as_str().unwrap_or("unknown")
@@ -1906,6 +1912,162 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 )
             })?;
             Ok(if ok { 0 } else { 1 })
+        }
+
+        HubCommand::Retention { command } => {
+            use cli::RetentionCommand;
+            match command {
+                RetentionCommand::Set { period, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    store.set_retention(period, "cli", &now())?;
+                    out.emit(&serde_json::json!({ "retention": period }), |v| {
+                        format!(
+                            "activity rows are kept for {}\n\nNothing was removed. A purge is its own \
+                             step: `cyberbrain hub retention propose --reason <why>`, and then a \
+                             countersigner.\n",
+                            v["retention"].as_str().unwrap_or_default()
+                        )
+                    })?;
+                    Ok(0)
+                }
+                RetentionCommand::Show { data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let stamp = now();
+                    let period = store.retention()?;
+                    let (cutoff, would) = match &period {
+                        Some(p) => {
+                            let c = hub::store::cutoff_for(p, &stamp)?;
+                            let n: i64 = store.purge_plan(&c)?.iter().map(|(_, n, _)| n).sum();
+                            (Some(c), n)
+                        }
+                        None => (None, 0),
+                    };
+                    let pending: Vec<_> = store
+                        .purges()?
+                        .into_iter()
+                        .filter(|p| p.is_pending())
+                        .collect();
+                    out.emit(
+                        &serde_json::json!({
+                            "retention": period, "cutoff": cutoff,
+                            "would_remove": would, "pending": pending,
+                        }),
+                        |v| match v["retention"].as_str() {
+                            None => "No retention period is set. The hub keeps every activity row \
+                                     until one is, and no purge can be proposed.\n"
+                                .to_string(),
+                            Some(p) => format!(
+                                "activity rows are kept for {p}\n\
+                                 a purge today would remove {} row(s) older than {}\n\
+                                 {} purge(s) waiting for a countersignature\n",
+                                v["would_remove"],
+                                v["cutoff"].as_str().unwrap_or_default(),
+                                v["pending"].as_array().map(|a| a.len()).unwrap_or(0)
+                            ),
+                        },
+                    )?;
+                    Ok(0)
+                }
+                RetentionCommand::Propose { reason, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let (p, would) = store.propose_purge(reason, "cli", &now())?;
+                    out.emit(
+                        &serde_json::json!({
+                            "id": p.id, "cutoff": p.cutoff, "retention": p.retention,
+                            "reason": p.reason, "would_remove": would,
+                        }),
+                        |v| {
+                            let id = v["id"].as_str().unwrap_or_default();
+                            format!(
+                                "purge {id} written: rows older than {} ({}), {} row(s) today\n\
+                                 \x20 reason: {}\n\n\
+                                 Nothing is removed yet. Somebody holding a countersigner \
+                                 credential has to sign it:\n\
+                                 \x20 cyberbrain hub retention approve {id} --as <credential>\n\
+                                 or on the hub's page, under /requests.\n",
+                                v["cutoff"].as_str().unwrap_or_default(),
+                                v["retention"].as_str().unwrap_or_default(),
+                                v["would_remove"],
+                                v["reason"].as_str().unwrap_or_default(),
+                            )
+                        },
+                    )?;
+                    Ok(0)
+                }
+                RetentionCommand::Approve { id, as_, data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let who = store
+                        .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                        .map_err(|d| Error::Config(d.to_string()))?;
+                    use hub::store::PurgeOutcome as O;
+                    let outcome = store.countersign_purge(id, &who, &now())?;
+                    let (state, line) = match &outcome {
+                        O::CarriedOut { rows, devices } => (
+                            "carried-out",
+                            format!(
+                                "{id} carried out, countersigned by {}: {rows} row(s) removed from \
+                                 {} device(s). Each remaining chain is checked from where the \
+                                 purge stopped.",
+                                who.name,
+                                devices.len()
+                            ),
+                        ),
+                        O::Unknown => ("unknown", format!("{id}: no purge with that id.")),
+                        O::AlreadyDone { by } => (
+                            "already-done",
+                            format!("{id} was already carried out, countersigned by {by}."),
+                        ),
+                        O::SamePerson => (
+                            "same-person",
+                            format!(
+                                "{id} was proposed by you. Two signatures from one hand are one \
+                                 signature; somebody else has to countersign it."
+                            ),
+                        ),
+                    };
+                    out.emit(
+                        &serde_json::json!({ "id": id, "state": state, "message": line, "outcome": outcome }),
+                        |v| format!("{}\n", v["message"].as_str().unwrap_or_default()),
+                    )?;
+                    Ok(if matches!(outcome, O::CarriedOut { .. }) {
+                        0
+                    } else {
+                        1
+                    })
+                }
+                RetentionCommand::List { data } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let all = store.purges()?;
+                    out.emit(&serde_json::json!(all), |v| {
+                        let rows = v.as_array().cloned().unwrap_or_default();
+                        if rows.is_empty() {
+                            return "No purges. Every activity row the hub received is still \
+                                    there.\n"
+                                .to_string();
+                        }
+                        let mut s = format!("{} purge(s)\n\n", rows.len());
+                        for p in rows {
+                            let state = match p["approved_by"].as_str() {
+                                Some(by) => format!(
+                                    "carried out {} by {by}, {} row(s) removed",
+                                    p["approved_at"].as_str().unwrap_or_default(),
+                                    p["rows_removed"]
+                                ),
+                                None => "waiting for a countersignature".to_string(),
+                            };
+                            s.push_str(&format!(
+                                "  {}  rows before {} ({})\n      reason: {}\n      {state}\n",
+                                p["id"].as_str().unwrap_or_default(),
+                                p["cutoff"].as_str().unwrap_or_default(),
+                                p["retention"].as_str().unwrap_or_default(),
+                                p["reason"].as_str().unwrap_or_default(),
+                            ));
+                        }
+                        s
+                    })?;
+                    Ok(0)
+                }
+            }
         }
 
         HubCommand::Report {

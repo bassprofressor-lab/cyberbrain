@@ -36,6 +36,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   before. It exits non-zero otherwise, never writes over a file, and puts the backup in the
   hub's own log. `docs/HUB.md` says how to restore one.
 
+- **A hub keeps activity rows for a set period, and removing older ones takes two people.**
+  Until now it kept every row for ever: the record was append-only with no way out, which a
+  works agreement cannot accept. `hub retention set P2Y` sets the period and removes nothing.
+  `hub retention propose --reason …` writes a purge down, and it is carried out when a
+  countersigner signs it, on the command line or with a button on `/requests`. What goes is
+  the start of each device's chain up to the first row that is not old enough, never a
+  selection, so a device whose clock once ran backwards keeps an unbroken chain; the hash of
+  the last removed row becomes the floor `hub verify` checks from. Every step is in the hub's
+  own log. Backups keep purged rows until they are rotated, which `docs/HUB.md` says plainly.
+
+- **A resolved conflict no longer keeps the text of the version that lost.** The decision
+  stays on record; the second copy of a department's text does not.
+
 ### Changed
 
 - **A note name may carry accented Latin letters.** `auslieferung-für-kunden`, `straße` and

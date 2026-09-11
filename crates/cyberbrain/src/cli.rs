@@ -756,6 +756,14 @@ pub enum HubCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+    /// How long activity rows are kept, and removing the ones past that.
+    ///
+    /// Setting a period removes nothing. A purge is written down by one person and carried
+    /// out when a countersigner signs it, and every step goes into the hub's own log.
+    Retention {
+        #[command(subcommand)]
+        command: RetentionCommand,
+    },
     /// What the fleet did in a period, as state: one line per device with its row count
     /// and whether its chain holds.
     ///
@@ -776,6 +784,44 @@ pub enum HubCommand {
     /// Stop a device from sending. Its rows stay: revoking is not a deletion.
     Revoke {
         id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum RetentionCommand {
+    /// Set the period, in days, weeks, months or years: P90D, P18M, P2Y.
+    Set {
+        period: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// The period, what a purge would remove today, and what is waiting to be signed.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Write down a purge of every activity row older than the period. Removes nothing yet.
+    Propose {
+        /// Why, e.g. the clause of the works agreement. The countersigner reads it, and so
+        /// does an auditor later.
+        #[arg(long)]
+        reason: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Countersign a purge, which carries it out at once. Needs a countersigner, and not the
+    /// person who proposed it.
+    Approve {
+        id: String,
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Every purge: when, why, who signed, and how many rows went.
+    List {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },

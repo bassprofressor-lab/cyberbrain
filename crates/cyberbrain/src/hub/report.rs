@@ -132,6 +132,8 @@ pub struct DeviceChain {
     pub device: String,
     pub name: String,
     pub rows: usize,
+    /// Seq of the last row a purge removed, if one did. The chain is checked from there.
+    pub floor_seq: Option<i64>,
     /// `Ok(rows checked)` or the first break.
     pub chain: std::result::Result<usize, String>,
 }
@@ -147,8 +149,11 @@ pub fn verify(hub: &HubStore) -> Result<VerifyReport> {
     let mut ok = true;
     for d in hub.devices()? {
         let rows = hub.rows_of(&d.id)?;
-        let chain = cyberbrain_policy::verify_chain_from(super::store::GENESIS, &rows)
-            .map_err(|e| e.to_string());
+        // After a purge the chain starts at the floor, the hash of the last row removed. The
+        // arithmetic is the same as from genesis; what a floor cannot show is the purged rows
+        // themselves, which is what the purge entry in the hub's own log is for.
+        let anchor = d.floor_hash.as_deref().unwrap_or(super::store::GENESIS);
+        let chain = cyberbrain_policy::verify_chain_from(anchor, &rows).map_err(|e| e.to_string());
         if chain.is_err() {
             ok = false;
         }
@@ -156,6 +161,7 @@ pub fn verify(hub: &HubStore) -> Result<VerifyReport> {
             device: d.id,
             name: d.name,
             rows: rows.len(),
+            floor_seq: d.floor_seq,
             chain,
         });
     }
