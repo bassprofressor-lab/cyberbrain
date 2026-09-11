@@ -38,6 +38,7 @@ import {
   type NoteId,
   type NoteListParams,
   type NoteSummary,
+  type NoteCreateRequest,
   type NoteWriteRequest,
   type ObligationsView,
   type PiiFinding,
@@ -538,7 +539,8 @@ function scanPii(body: string): PiiFinding[] {
   return out;
 }
 
-const holds = new Map<string, { hold: PiiHold; nameOrId: string; req: NoteWriteRequest; findings: PiiFinding[] }>();
+/** `create` is set when the held write was a POST: there is no note to resolve against yet. */
+const holds = new Map<string, { hold: PiiHold; nameOrId: string; req: NoteWriteRequest; findings: PiiFinding[]; create?: NoteCreateRequest }>();
 
 function applyWrite(n: MockNote, req: NoteWriteRequest, pii: PiiState) {
   n.body = req.body;
@@ -550,6 +552,18 @@ function applyWrite(n: MockNote, req: NoteWriteRequest, pii: PiiState) {
   n.front = frontmatterOf({ id: n.front.id, name: n.front.name, ring: n.front.ring, kind, created: n.front.created, updated: new Date().toISOString(), tags, links: n.outbound, retention, pii });
   n.blocks = splitBlocks(n.front.id, n.front.ring, n.body);
   log(0, OPERATOR, "note.write", `note:${n.front.name}`, { name: n.front.name, ring: n.front.ring, kind: n.front.kind, bytes: new TextEncoder().encode(n.body).length + 180, pii, scanned: true });
+}
+
+/** A new note, as POST /notes leaves it. */
+function insertNote(req: NoteCreateRequest, pii: PiiState): MockNote {
+  const f = req.front;
+  const seed: SeedNote = { name: f.name, ring: f.ring, kind: f.kind, tags: f.tags ?? [], created: 0, updated: 0, body: req.body, pii };
+  if (f.retention) seed.retention = f.retention;
+  if (f.bereich) seed.bereich = f.bereich;
+  const n = makeNote(seed, Date.now());
+  notes.push(n);
+  log(0, OPERATOR, "note.write", `note:${n.front.name}`, { name: n.front.name, ring: n.front.ring, kind: n.front.kind, bytes: new TextEncoder().encode(n.body).length + 180, pii, scanned: true });
+  return n;
 }
 
 function forgetImpl(n: MockNote, dryRun: boolean, reason: "operator-forget" | "retention-expired"): ForgetReport {
@@ -732,6 +746,33 @@ export const mockClient: CyberbrainApi = {
     return latency(detail(findNote(nameOrId)));
   },
 
+  async createNote(req) {
+    const f = req.front;
+    if (!VALID_NAME.test(f.name) || f.name.length > 120) {
+      throw err(400, "bad-frontmatter", `name \`${f.name}\`: must be a kebab-case slug: lowercase ascii letters, digits and hyphens`, { variant: "frontmatter" });
+    }
+    const existing = byName().get(f.name);
+    if (existing) {
+      throw err(409, "write-conflict", `note \`${f.name}\` already exists (ring ${existing.front.ring}); edit it with PUT /api/v1/notes/${f.name}`, { current_updated: existing.front.updated });
+    }
+    if (f.retention && !VALID_RETENTION.test(f.retention)) {
+      throw err(400, "bad-frontmatter", `retention \`${f.retention}\`: must start with \`P\``, { variant: "frontmatter" });
+    }
+    if (f.ring <= 1) {
+      const used = notes.filter((x) => x.front.ring <= 1).reduce((a, x) => a + x.blocks.reduce((b, y) => b + y.token_count, 0), 0);
+      const wouldBe = used + approxTokens(req.body);
+      if (wouldBe > RESIDENT_CAP) throw err(400, "ring-cap-exceeded", `rings 0+1 would hold ${wouldBe} tokens, cap is ${RESIDENT_CAP}`, { cap: { tokens: RESIDENT_CAP, used, would_be: wouldBe }, variant: "ring-cap-exceeded" });
+    }
+    const findings = scanPii(req.body);
+    if (findings.length) {
+      const hold: PiiHold = { hold_id: ulid(Date.now()), note: f.name, findings, expires_at: iso(-15 * 60_000) };
+      holds.set(hold.hold_id, { hold, nameOrId: f.name, req: { body: req.body, expected_updated: "" }, findings, create: req });
+      log(0, OPERATOR, "note.write.held", `note:${f.name}`, { profile: PROFILE, findings: findings.map((x) => ({ kind: x.kind, start: x.col, end: x.col + x.excerpt.length, confidence: "high" })) });
+      throw err(409, "pii-held", `write of \`${f.name}\` held: ${findings.length} possible personal data item${findings.length === 1 ? "" : "s"} found (profile ${PROFILE}); redact, mark reviewed, proceed flagged, or discard`, { hold });
+    }
+    return latency(detail(insertNote(req, "none")));
+  },
+
   async writeNote(nameOrId, req) {
     const n = findNote(nameOrId);
     if (req.front) {
@@ -773,9 +814,10 @@ export const mockClient: CyberbrainApi = {
     const h = holds.get(holdId);
     if (!h) throw err(404, "not-found", `hold ${holdId} is unknown or has expired; resubmit the write`);
     holds.delete(holdId);
-    const n = findNote(h.nameOrId);
+    // A held creation has no note to find yet; an edit resolves against the note it edits.
+    const subject = h.create ? h.create.front.name : findNote(h.nameOrId).front.name;
     if (res.action === "discard") {
-      log(0, OPERATOR, "note.write.discarded", `note:${n.front.name}`, { findings: h.findings.length, dry_run: false, hold: holdId });
+      log(0, OPERATOR, "note.write.discarded", `note:${subject}`, { findings: h.findings.length, dry_run: false, hold: holdId });
       return latency(null);
     }
     let body = h.req.body;
@@ -783,7 +825,9 @@ export const mockClient: CyberbrainApi = {
       for (const p of PII_PATTERNS) body = body.replace(p.re, `[redacted:${p.kind}]`);
     }
     const pii: PiiState = res.action === "redact" ? "none" : res.action === "mark-reviewed" ? "reviewed" : "flagged";
-    log(0, OPERATOR, "note.write.resolved", `note:${n.front.name}`, { choice: res.action === "proceed" ? "proceed-flagged" : res.action, pii, redacted: res.action === "redact" ? h.findings.length : 0, remaining: res.action === "redact" ? 0 : h.findings.length });
+    log(0, OPERATOR, "note.write.resolved", `note:${subject}`, { choice: res.action === "proceed" ? "proceed-flagged" : res.action, pii, redacted: res.action === "redact" ? h.findings.length : 0, remaining: res.action === "redact" ? 0 : h.findings.length });
+    if (h.create) return latency(detail(insertNote({ ...h.create, body }, pii)));
+    const n = findNote(h.nameOrId);
     applyWrite(n, { ...h.req, body }, pii);
     return latency(detail(n));
   },

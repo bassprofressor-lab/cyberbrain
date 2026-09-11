@@ -12,6 +12,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **A note can be written from the page.** The server has taken `POST /api/v1/notes` all
+  along; the page never called it, and the empty store told a colleague to open a command
+  line. Both views have a "New note" button now. The simple view asks for a title and a text
+  and writes into ring 2 as knowledge, shared with nobody. The full view adds ring, kind,
+  bereich and tags. The name is made from the title, "Auslieferung für Kunden" becomes
+  `auslieferung-fuer-kunden`, and is shown before saving so it can be changed. A name that
+  exists already is refused in words, never overwritten, and a write held for personal data
+  gets the same dialog as an edit.
+
+  The page offers rings 2 to 4 only. Rings 0 and 1 are loaded into every agent session on the
+  machine and outrank everything else, so setting one stays a deliberate act on the command
+  line. That is a choice of the page, not a refusal of the server: the API still accepts any
+  ring.
+
 ### Fixed
 
 - **The question page said "Everything is in order" when it could not find out.** The health

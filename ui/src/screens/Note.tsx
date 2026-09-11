@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, type ForgetReport, type NoteDetail, type NoteKind, type NoteSummary, type PiiHold, type Ring } from "@/api/client";
 import { CitationChip } from "@/components/Citation";
+import { HoldDialog } from "@/components/HoldDialog";
+import { NewNoteForm } from "@/components/NewNote";
 import { RingBadge, RingGlyph } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
 import { Empty, ErrorBanner, Field, Kbd, Loading, Pill } from "@/components/ui";
@@ -16,6 +18,7 @@ const KINDS: NoteKind[] = ["knowledge", "bug", "lesson", "decision", "reference"
 export function NoteScreen({ route }: { route: Route }) {
   const t = useT();
   const selectedName = route.screen === "note" ? route.param : null;
+  const creating = route.screen === "notes" && route.query.has("new");
   const [filter, setFilter] = useState(route.query.get("q") ?? "");
   const [ring, setRing] = useState<Ring | null>(route.query.has("ring") ? (Number(route.query.get("ring")) as Ring) : null);
   const [kind, setKind] = useState<NoteKind | "">("");
@@ -43,7 +46,7 @@ export function NoteScreen({ route }: { route: Route }) {
 
   useShortcuts(
     "notes",
-    editing
+    editing || creating
       ? []
       : [
           { keys: "j", label: t.notes.keys.next, run: () => setCursor((c) => Math.min(notes.length - 1, c + 1)) },
@@ -54,14 +57,19 @@ export function NoteScreen({ route }: { route: Route }) {
           { keys: "/", label: t.notes.keys.filter, run: () => filterRef.current?.select() },
           { keys: "e", label: t.notes.keys.edit, run: () => selectedName && setEditing(true) },
         ],
-    [notes, cursor, selectedName, editing, t],
+    [notes, cursor, selectedName, editing, creating, t],
   );
 
   return (
     <div className="grid h-full grid-cols-1 md:grid-cols-[19rem_1fr]">
       <aside className="border-r flex flex-col min-h-0 max-h-[40vh] md:max-h-none">
         <div className="p-3 border-b space-y-2">
-          <input ref={filterRef} className="input w-full" placeholder={t.notes.filterPlaceholder} value={filter} onChange={(e) => setFilter(e.target.value)} aria-label={t.notes.filterAria} />
+          <div className="flex gap-1.5">
+            <input ref={filterRef} className="input w-full min-w-0" placeholder={t.notes.filterPlaceholder} value={filter} onChange={(e) => setFilter(e.target.value)} aria-label={t.notes.filterAria} />
+            <button className="btn btn-sm shrink-0" onClick={() => navigate(href("notes", null, { new: 1 }))}>
+              + {t.newNote.button}
+            </button>
+          </div>
           <div className="flex gap-1 flex-wrap">
             {([null, 0, 1, 2, 3, 4] as Array<Ring | null>).map((r) => (
               <button key={String(r)} className={`btn btn-sm ${ring === r ? "btn-primary" : ""}`} onClick={() => setRing(r)} style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}>
@@ -94,7 +102,19 @@ export function NoteScreen({ route }: { route: Route }) {
         </div>
       </aside>
       <main className="min-h-0 overflow-auto scroll-thin">
-        {selectedName ? (
+        {creating ? (
+          <div className="p-5 max-w-3xl">
+            <h1 className="text-lg font-semibold mb-4">{t.newNote.heading}</h1>
+            <NewNoteForm
+              full
+              onCreated={(d) => {
+                list.reload();
+                navigate(href("note", d.front.name));
+              }}
+              onCancel={() => navigate(href("notes"))}
+            />
+          </div>
+        ) : selectedName ? (
           <NoteDetailView key={selectedName} nameOrId={selectedName} resolves={(nm) => names.has(nm)} editing={editing} setEditing={setEditing} block={route.query.get("block")} onChanged={list.reload} />
         ) : (
           <Empty title={t.notes.selectTitle}>
@@ -398,48 +418,6 @@ function BlockAnchors({ detail }: { detail: NoteDetail }) {
         <span key={b.idx} id={`block-${b.idx}`} className="block h-0" aria-hidden />
       ))}
     </>
-  );
-}
-
-function HoldDialog({ hold, onResolve }: { hold: PiiHold; onResolve: (a: "redact" | "mark-reviewed" | "proceed" | "discard") => void }) {
-  const t = useT();
-  return (
-    <div className="fixed inset-0 z-40 bg-bg/70 flex items-center justify-center p-4" role="dialog" aria-modal aria-label={t.note.hold.aria}>
-      <div className="panel shadow-panel w-[min(36rem,100%)]">
-        <header className="px-4 h-10 border-b flex items-center gap-2">
-          <Pill tone="warn">{t.note.hold.badge}</Pill>
-          <h2 className="text-sm font-semibold">{t.note.hold.title(hold.note)}</h2>
-        </header>
-        <div className="p-4 text-sm space-y-3">
-          <p className="text-fg-muted">{t.note.hold.body}</p>
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="text-left label">
-                <th className="py-1 font-medium">{t.note.hold.colKind}</th>
-                <th className="py-1 font-medium">{t.note.hold.colExcerpt}</th>
-                <th className="py-1 font-medium tnum">{t.note.hold.colPos}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {hold.findings.map((f, i) => (
-                <tr key={i} className="border-t">
-                  <td className="py-1"><Pill tone="warn">{f.kind}</Pill></td>
-                  <td className="py-1 font-mono">{f.excerpt}</td>
-                  <td className="py-1 font-mono tnum text-fg-muted">{f.line}:{f.col}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="flex flex-wrap gap-1.5 justify-end pt-1">
-            <button className="btn btn-sm" onClick={() => onResolve("discard")}>{t.note.hold.discard}</button>
-            <button className="btn btn-sm" onClick={() => onResolve("proceed")} title={t.note.hold.proceedTitle}>{t.note.hold.proceed}</button>
-            <button className="btn btn-sm" onClick={() => onResolve("mark-reviewed")} title={t.note.hold.markReviewedTitle}>{t.note.hold.markReviewed}</button>
-            <button className="btn btn-sm btn-primary" onClick={() => onResolve("redact")}>{t.note.hold.redact}</button>
-          </div>
-          <div className="text-2xs text-fg-faint">{t.note.hold.expires(relTime(hold.expires_at))}</div>
-        </div>
-      </div>
-    </div>
   );
 }
 

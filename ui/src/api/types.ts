@@ -354,6 +354,19 @@ export interface NoteWriteRequest {
 }
 
 /**
+ * POST /api/v1/notes body: a new note. `name`, `ring` and `kind` are required; the server
+ * accepts any ring, and the page offers 2 to 4 (`CREATABLE_RINGS`).
+ */
+export interface NoteCreateRequest {
+  body: string;
+  front: Pick<Frontmatter, "name" | "ring" | "kind"> & {
+    tags?: string[];
+    retention?: string;
+    bereich?: string;
+  };
+}
+
+/**
  * `wire::PiiFinding`, rendered by `serve::notes::render_findings`. `kind` folds the policy
  * crate's `ipv4`/`ipv6` into `ip`. `line`/`col` are 1-based, col in chars.
  */
@@ -1207,6 +1220,8 @@ export interface CyberbrainApi {
 
   listNotes(params?: NoteListParams): Promise<NoteSummary[]>;
   getNote(nameOrId: string): Promise<NoteDetail>;
+  /** A name that already exists is 409 `write-conflict`: creation never updates in place. */
+  createNote(req: NoteCreateRequest): Promise<NoteDetail>;
   writeNote(nameOrId: string, req: NoteWriteRequest): Promise<NoteDetail>;
   resolveHold(holdId: string, res: PiiHoldResolution): Promise<NoteDetail | null>;
   forget(nameOrId: string, dryRun: boolean): Promise<ForgetReport>;

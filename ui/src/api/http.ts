@@ -16,6 +16,7 @@ import {
   type ForgetReport,
   type Graph,
   type ModelCard,
+  type NoteCreateRequest,
   type NoteDetail,
   type NoteListParams,
   type NoteSummary,
@@ -99,6 +100,7 @@ export const httpClient: CyberbrainApi = {
 
   listNotes: (p: NoteListParams = {}) => request<NoteSummary[]>("GET", `/notes${qs({ ring: p.ring, kind: p.kind, q: p.q, sort: p.sort })}`),
   getNote: (nameOrId) => request<NoteDetail>("GET", `/notes/${encodeURIComponent(nameOrId)}`),
+  createNote: (req: NoteCreateRequest) => request<NoteDetail>("POST", "/notes", req),
   writeNote: (nameOrId, req: NoteWriteRequest) => request<NoteDetail>("PUT", `/notes/${encodeURIComponent(nameOrId)}`, req),
   resolveHold: (holdId, res: PiiHoldResolution) => request<NoteDetail | null>("POST", `/holds/${encodeURIComponent(holdId)}`, res),
   forget: (nameOrId, dryRun) => request<ForgetReport>("DELETE", `/notes/${encodeURIComponent(nameOrId)}${qs({ dry_run: dryRun })}`),
