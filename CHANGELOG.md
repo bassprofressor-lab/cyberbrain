@@ -12,6 +12,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-09-11
+
+### Fixed
+
+- **A note could be written and still be missing from recall.** With several `cyberbrain
+  write` running at once on macOS or Windows, one could stop with `index: database is
+  locked` after its file and its audit row were already there. The index began its writing
+  transactions deferred, so SQLite refused the lock straight away instead of waiting the five
+  seconds that had been set for exactly this. It takes the lock at the start now, where the
+  wait applies. Linux never showed it, at eight writers or at thirty-two. A note left behind
+  this way comes back with `cyberbrain scan`, which indexes every file it has not seen.
+
+- **A debug build on Windows overflowed its stack before it had parsed anything.**
+  `cyberbrain --version` was enough. The command tree had grown past the 1 MB Windows gives
+  a main thread; Linux gives 8 MB. The released binaries fit and were not affected, but every
+  Windows test that starts the binary was. The program now runs on a thread whose stack it
+  chooses itself.
+
 ## [0.5.0] — 2026-09-10
 
 ### Added
@@ -847,7 +865,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.3.0...v0.3.1

@@ -52,7 +52,7 @@ Ordinary crashes, wrong results and unhelpful errors are welcome as normal issue
 
 ## What happens next
 
-This is a small project, at v0.5.0, maintained alongside other work. You will get an
+This is a small project, at v0.5.1, maintained alongside other work. You will get an
 acknowledgement that a person read it. There is no bounty and no response-time guarantee, and
 promising one here would be a claim we could not keep.
 
