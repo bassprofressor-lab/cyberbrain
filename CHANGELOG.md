@@ -94,6 +94,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   so the note is offered again once the machine can take it. A machine still on an older
   version keeps the old behaviour, which is why the note above asks to update first.
 
+- **The Windows launcher told a person who had just enrolled that what a note says never
+  leaves the computer.** That stopped being true with note sharing in 0.5.0, and the docs were
+  corrected then; the launcher's dialog was not. It now says what enrolment sends, and that
+  sharing notes is a separate setting that is off.
+
 - **The question page said "Everything is in order" when it could not find out.** The health
   line only checked the status when it had one, so a failed status call left a green dot. It
   now says the state could not be checked.

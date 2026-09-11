@@ -710,8 +710,9 @@ fn connect_to_hub(server_exe: &Path, project_dir: &Path) -> bool {
             sys::info_box(
                 APP,
                 &format!(
-                    "{said}\n\nThis machine will now deliver its audit trail to that hub. \
-                     Your notes stay here: what a note says never leaves this computer."
+                    "{said}\n\nThis machine will now deliver its audit trail to that hub: what \
+                     happened, not what a note says. Sharing notes is a separate setting, \
+                     and it is off unless somebody turns it on."
                 ),
             );
             true
