@@ -788,6 +788,57 @@ fn verify_re_derives_the_chains_from_what_is_on_disk() {
     assert_eq!(r.devices[0].chain.as_ref().unwrap(), &2);
 }
 
+/// A backup taken while the hub runs holds every row, and verifies as a file of its own.
+///
+/// The record runs in WAL mode, so the newest rows can still sit in `hub.db-wal` when
+/// somebody copies `hub.db`. Watched failing against a plain file copy first.
+#[test]
+fn a_backup_taken_while_the_hub_runs_holds_every_row_and_verifies() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut hub = HubStore::open(&dir.path().join("hub.db")).unwrap();
+    let (_, token) = hub.add_device("laptop", NOW).unwrap();
+    let client = Client::new();
+    client.act("a");
+    client.act("b");
+    ingest(
+        &mut hub,
+        &collecting(),
+        Some(&token),
+        &client.all(),
+        None,
+        NOW,
+    )
+    .unwrap();
+
+    let to = dir.path().join("sicherung").join("hub-2026-09-11.db");
+    let r = report::backup(&hub, &to, NOW).unwrap();
+    assert!(r.ok, "{r:?}");
+    assert_eq!(r.verify.rows, 2, "{r:?}");
+
+    let copy = HubStore::open(&to).unwrap();
+    assert_eq!(copy.total_entries().unwrap(), 2);
+    assert_eq!(copy.devices().unwrap().len(), 1);
+
+    // Taking it is on the record of the hub it was taken from.
+    assert!(
+        hub.hub_events(1000)
+            .unwrap()
+            .iter()
+            .any(|e| e.action == "hub.backup")
+    );
+}
+
+#[test]
+fn a_backup_never_writes_over_an_existing_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let hub = HubStore::open(&dir.path().join("hub.db")).unwrap();
+    let to = dir.path().join("last-night.db");
+    std::fs::write(&to, b"last night's backup").unwrap();
+    let err = report::backup(&hub, &to, NOW).unwrap_err().to_string();
+    assert!(err.contains("never written over"), "{err}");
+    assert_eq!(std::fs::read(&to).unwrap(), b"last night's backup");
+}
+
 #[test]
 fn a_period_comes_out_as_a_bundle_that_verifies_on_its_own() {
     let (mut hub, device, token) = hub_with_device();

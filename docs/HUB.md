@@ -580,6 +580,46 @@ administrator raises, and the append-only triggers do not answer it — they sto
 being *asked* to change, not being replaced. Exits non-zero on a broken chain, so a nightly
 job is one line.
 
+## Backing it up
+
+```console
+> cyberbrain hub backup D:\Sicherung\hub-2026-09-11.db --data C:\ProgramData\Cyberbrain\hub.db
+written to D:\Sicherung\hub-2026-09-11.db (2211840 bytes)
+28382 activity row(s) re-checked in the copy; the hub's own log holds over 41 row(s)
+the copy verifies on its own; to restore, stop the hub and put it in place of hub.db
+```
+
+**Do not copy `hub.db` instead.** The record runs in WAL mode, so the newest rows can still
+sit in `hub.db-wal` beside it. A copy of the one file, taken while the hub runs, can open
+cleanly, pass every chain check and hold nothing at all. That is not a hypothetical: it is how
+the first version of this command failed its own test. `hub backup` takes a snapshot through
+SQLite (`VACUUM INTO`), so deliveries keep arriving while it runs.
+
+Then it opens the file it wrote and checks the copy rather than the original: every device
+chain, the hub's own log, and that the copy holds at least the rows and devices the original
+held a moment before. Rows are only ever added, so fewer means something is missing. It exits
+non-zero when any of that fails, so a scheduled job that runs it turns a broken backup into a
+failed job instead of a file nobody opened. It never writes over an existing file; give each
+run a dated name, and leave pruning old copies to whatever keeps the backup share.
+
+A copy carries everything the hub holds: every activity row, every shared note text, the
+licence. Keep it under the same access rules as the hub itself. Taking one is recorded in the
+hub's own log as `hub.backup`, like every other way of reaching those rows.
+
+### Restoring one
+
+1. Stop the hub (`cyberbrain hub service stop` on Windows).
+2. Move the current `hub.db` aside, and remove `hub.db-wal` and `hub.db-shm` beside it if
+   they are there. They belong to the file being replaced, and SQLite would try to apply them
+   to the one you put back.
+3. Put the copy in its place as `hub.db`, start the hub, and run `cyberbrain hub verify`.
+
+What the hub's own log recorded after the copy was taken (roles, grants, approvals) is gone
+with the file it was in. Activity rows are a different matter: a machine delivers its whole
+log unless told otherwise, and the hub takes what it does not have (see *Overlap is fine, a
+gap is not*), so rows that arrived after the copy come back from the machines that still
+hold them.
+
 ## A report for a period
 
 ```console

@@ -1878,6 +1878,36 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(if ok { 0 } else { 1 })
         }
 
+        HubCommand::Backup { to, data } => {
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let report = hub::report::backup(&store, to, &now())?;
+            let ok = report.ok;
+            let as_json = serde_json::to_value(&report)
+                .map_err(|e| Error::Index(format!("backup report does not serialise: {e}")))?;
+            out.emit(&as_json, |v| {
+                let hub_log = match v["hub_chain"].get("Ok") {
+                    Some(n) => format!("the hub's own log holds over {n} row(s)"),
+                    None => format!(
+                        "the hub's own log is BROKEN: {}",
+                        v["hub_chain"]["Err"].as_str().unwrap_or("unknown")
+                    ),
+                };
+                format!(
+                    "written to {} ({} bytes)\n{} activity row(s) re-checked in the copy; {}\n{}\n",
+                    v["path"].as_str().unwrap_or_default(),
+                    v["bytes"],
+                    v["verify"]["rows"],
+                    hub_log,
+                    if v["ok"].as_bool().unwrap_or(false) {
+                        "the copy verifies on its own; to restore, stop the hub and put it in place of hub.db"
+                    } else {
+                        "THE COPY DOES NOT VERIFY: do not rely on it"
+                    }
+                )
+            })?;
+            Ok(if ok { 0 } else { 1 })
+        }
+
         HubCommand::Report {
             out_dir,
             from,

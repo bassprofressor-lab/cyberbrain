@@ -169,6 +169,41 @@ impl HubStore {
         Ok(s)
     }
 
+    /// Write a consistent copy of the whole record to `to`, for `hub backup`.
+    ///
+    /// `VACUUM INTO`, not a file copy. The record runs in WAL mode, so the newest rows may
+    /// still live in `hub.db-wal`, and a copy of `hub.db` alone opens, verifies and misses
+    /// them; the first version did exactly that. This reads one snapshot through SQLite, so
+    /// deliveries keep arriving while it runs, and the copy is a single file with no WAL of
+    /// its own to lose. Never over an existing file: replacing last night's backup with a
+    /// broken one is how a backup disappears.
+    pub fn backup_to(&self, to: &Path) -> Result<()> {
+        if to.exists() {
+            // A user error, not an I/O failure: the command was asked for something it will
+            // not do, and exit 1 says so where exit 2 would read as a crash.
+            return Err(Error::Config(format!(
+                "{}: a backup is never written over an existing file; pick a new name",
+                to.display()
+            )));
+        }
+        if let Some(parent) = to.parent()
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+                path: parent.to_path_buf(),
+                source: e,
+            })?;
+        }
+        let target = to.to_str().ok_or_else(|| {
+            Error::Index(format!(
+                "{} is not valid UTF-8, which SQLite needs for a file name",
+                to.display()
+            ))
+        })?;
+        ix(self.conn.execute("VACUUM INTO ?1", params![target]))?;
+        Ok(())
+    }
+
     #[cfg(test)]
     pub fn in_memory() -> Result<Self> {
         let conn = ix(Connection::open_in_memory())?;

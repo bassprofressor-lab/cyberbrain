@@ -166,6 +166,65 @@ pub fn verify(hub: &HubStore) -> Result<VerifyReport> {
     })
 }
 
+/// What `hub backup` wrote, and whether the copy holds.
+#[derive(Debug, Clone, Serialize)]
+pub struct BackupReport {
+    pub path: String,
+    pub bytes: u64,
+    /// Rows and devices the original held just before the copy was taken. Rows are only
+    /// ever added, so a copy with fewer is missing something.
+    pub expected_rows: i64,
+    pub expected_devices: usize,
+    /// The device chains, re-derived from the copy rather than from the original.
+    pub verify: VerifyReport,
+    /// Rows in the hub's own chain as the copy holds it, or where it breaks.
+    pub hub_chain: std::result::Result<usize, String>,
+    pub ok: bool,
+}
+
+/// Copy the record to `to`, then check the copy rather than the original.
+///
+/// A backup nobody has opened is a hope. This opens the file it just wrote, re-derives every
+/// device chain and the hub's own chain from it, and says whether they hold; the command exits
+/// non-zero when they do not. The copy carries every activity row and every shared note text,
+/// so taking one goes into the hub's own chain like any other way of reaching them.
+pub fn backup(hub: &HubStore, to: &std::path::Path, now: &str) -> Result<BackupReport> {
+    let expected_rows = hub.total_entries()?;
+    let expected_devices = hub.devices()?.len();
+    hub.backup_to(to)?;
+    let (verify, hub_chain, devices) = {
+        let copy = HubStore::open(to)?;
+        let v = verify(&copy)?;
+        let n = copy.devices()?.len();
+        (v, copy.verify_hub_chain().map_err(|e| e.to_string()), n)
+    };
+    // Verifying is not enough on its own. A copy of `hub.db` taken without its WAL opens,
+    // holds no devices and no rows, and every chain in it "holds" — an empty record is a
+    // perfectly consistent one. Found that way: the first version copied the file, and its
+    // report said ok over a backup that held nothing.
+    let ok = verify.ok
+        && hub_chain.is_ok()
+        && verify.rows >= expected_rows
+        && devices >= expected_devices;
+    let bytes = std::fs::metadata(to).map(|m| m.len()).unwrap_or(0);
+    let path = to.display().to_string();
+    hub.record(
+        "operator",
+        "hub.backup",
+        serde_json::json!({ "path": path, "rows": verify.rows, "ok": ok }),
+        now,
+    )?;
+    Ok(BackupReport {
+        path,
+        bytes,
+        expected_rows,
+        expected_devices,
+        verify,
+        hub_chain,
+        ok,
+    })
+}
+
 /// One device's rows for a period, as a bundle — the same format `verify-export` checks and
 /// `scripts/verify-audit-export.py` can re-check without this program.
 pub fn device_bundle(

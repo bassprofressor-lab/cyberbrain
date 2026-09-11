@@ -745,6 +745,17 @@ pub enum HubCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+    /// Write a copy of the record that can be restored, and check the copy.
+    ///
+    /// Safe while the hub runs. Never writes over an existing file, and exits non-zero when
+    /// the copy does not verify. The copy holds every activity row and every shared note, so
+    /// keep it where the hub itself is kept.
+    Backup {
+        /// The file to write, e.g. a dated name on a backup share.
+        to: PathBuf,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// What the fleet did in a period, as state: one line per device with its row count
     /// and whether its chain holds.
     ///

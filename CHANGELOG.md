@@ -28,6 +28,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   line. That is a choice of the page, not a refusal of the server: the API still accepts any
   ring.
 
+- **`cyberbrain hub backup`, a copy of the record that is checked before anyone relies on
+  it.** Copying `hub.db` while the hub runs can miss the rows still in its WAL, and such a
+  copy opens, passes every chain check and holds nothing; that is how the first version of
+  this command failed its own test. It takes a snapshot through SQLite, then opens the copy
+  and checks every chain and that the copy holds at least what the original held a moment
+  before. It exits non-zero otherwise, never writes over a file, and puts the backup in the
+  hub's own log. `docs/HUB.md` says how to restore one.
+
 ### Changed
 
 - **A note name may carry accented Latin letters.** `auslieferung-für-kunden`, `straße` and
