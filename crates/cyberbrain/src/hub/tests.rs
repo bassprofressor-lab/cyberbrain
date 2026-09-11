@@ -533,6 +533,45 @@ fn seats_count_devices_that_can_still_send() {
     assert_eq!(hub.devices().unwrap().len(), 2, "both are still on record");
 }
 
+/// Seats are machines, not the projects on them: every project is its own device with its
+/// own chain, and the licence promises a seat per machine.
+#[test]
+fn seats_count_machines_not_the_projects_on_them() {
+    let hub = HubStore::in_memory().unwrap();
+    let (a, _) = hub.add_device("ws-021/angebote", NOW).unwrap();
+    let (b, _) = hub.add_device("ws-021/dispo", NOW).unwrap();
+    let (c, _) = hub.add_device("ws-022/angebote", NOW).unwrap();
+    hub.add_device("not-reported-yet", NOW).unwrap();
+    hub.set_machine(&a.id, "ws-021").unwrap();
+    hub.set_machine(&b.id, "ws-021").unwrap();
+    hub.set_machine(&c.id, "ws-022").unwrap();
+
+    assert_eq!(hub.active_device_count().unwrap(), 4);
+    assert_eq!(
+        hub.seats_in_use().unwrap(),
+        3,
+        "two machines, and one device that has not said which it is on"
+    );
+    assert!(
+        !hub.needs_seat(Some("ws-021")).unwrap(),
+        "a further project on a machine that already has a seat"
+    );
+    assert!(hub.needs_seat(Some("ws-023")).unwrap());
+    assert!(hub.needs_seat(None).unwrap());
+
+    hub.revoke(&a.id, NOW).unwrap();
+    assert_eq!(hub.seats_in_use().unwrap(), 3, "ws-021 still has a project");
+    hub.revoke(&b.id, NOW).unwrap();
+    assert_eq!(hub.seats_in_use().unwrap(), 2);
+}
+
+#[test]
+fn a_machine_name_has_one_spelling() {
+    assert_eq!(super::normalise_machine(" WS-021\n"), Some("ws-021".into()));
+    assert_eq!(super::normalise_machine(""), None);
+    assert_eq!(super::normalise_machine("two words"), None);
+}
+
 #[test]
 fn a_warning_is_not_a_stop() {
     let warned = LicenceState::Valid {

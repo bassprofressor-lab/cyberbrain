@@ -574,6 +574,10 @@ pub enum HubCommand {
         /// Address the device should deliver to, for the invitation.
         #[arg(long, value_name = "URL")]
         hub_url: Option<String>,
+        /// The machine this device is on. A second project on a machine that already has a
+        /// device takes no new seat; without this, the seat is settled by the first delivery.
+        #[arg(long)]
+        machine: Option<String>,
         /// Address of the shared inference endpoint, if there is one. This is the setting
         /// from docs/SHARED-INFERENCE.md, carried along so it is not typed into every store
         /// by hand.

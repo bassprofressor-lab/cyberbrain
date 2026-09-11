@@ -235,6 +235,25 @@ fn restrict(path: &std::path::Path) {
     let _ = path;
 }
 
+/// This machine's name, for the hub to count seats by: `COMPUTERNAME` on Windows, the kernel's
+/// host name on Linux, `HOSTNAME` where that is exported. `None` where there is none, and the
+/// hub then counts the device as a machine of its own.
+pub fn machine_name() -> Option<String> {
+    let raw = std::env::var("COMPUTERNAME")
+        .ok()
+        .or_else(|| std::fs::read_to_string("/proc/sys/kernel/hostname").ok())
+        .or_else(|| std::env::var("HOSTNAME").ok())?;
+    super::normalise_machine(&raw)
+}
+
+fn machine_headers<'a>(version: &'a str, machine: Option<&'a str>) -> Vec<(&'static str, &'a str)> {
+    let mut headers = vec![("x-cyberbrain-version", version)];
+    if let Some(m) = machine {
+        headers.push(("x-cyberbrain-machine", m));
+    }
+    headers
+}
+
 /// What the hub answered.
 #[derive(Debug, Clone, Serialize)]
 pub struct Delivered {
@@ -476,13 +495,15 @@ pub async fn deliver(
         .map(cyberbrain_policy::egress::transport::CertificatePin::parse)
         .transpose()?;
     let ticket = egress.open(actor, cyberbrain_core::EgressPurpose::AuditSync, &url)?;
+    let machine = machine_name();
     let resp = cyberbrain_policy::egress::transport::post_bearer(
         &ticket,
         &url,
         token,
         // Operational chatter, kept out of the bundle: the bundle is evidence and its shape
-        // is fixed, while this is what lets the fleet view show an out-of-date client.
-        &[("x-cyberbrain-version", version)],
+        // is fixed, while this is what lets the fleet view show an out-of-date client, and the
+        // machine name is what seats are counted by.
+        &machine_headers(version, machine.as_deref()),
         bundle,
         pin,
     )

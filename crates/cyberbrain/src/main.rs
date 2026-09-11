@@ -530,20 +530,23 @@ fn run_licence(command: &cli::LicenceCommand, out: Out) -> Result<i32> {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let state = hub::LicenceState::read(&store, jiff::Timestamp::now());
             let devices = store.active_device_count()?;
+            let seats_used = store.seats_in_use()?;
             out.emit(
                 &serde_json::json!({
                     "state": state.line(),
                     "collecting": state.may_collect(),
                     "seats": state.seats(),
+                    "seats_in_use": seats_used,
                     "devices_in_use": devices,
                 }),
                 |v| {
                     let mut s = format!("{}\n", v["state"].as_str().unwrap_or_default());
                     if let Some(seats) = v["seats"].as_u64() {
                         s.push_str(&format!(
-                            "seats: {} of {} in use\n",
+                            "seats: {} of {} in use ({} device(s))\n",
+                            v["seats_in_use"].as_u64().unwrap_or_default(),
+                            seats,
                             v["devices_in_use"].as_u64().unwrap_or_default(),
-                            seats
                         ));
                     }
                     s
@@ -1129,9 +1132,18 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             data,
             invite,
             hub_url,
+            machine,
             inference_url,
         } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let machine = machine
+                .as_deref()
+                .map(|m| {
+                    hub::normalise_machine(m).ok_or_else(|| {
+                        Error::Config(format!("--machine {m:?} is not a machine name"))
+                    })
+                })
+                .transpose()?;
             // Seats are checked here rather than at delivery time. A device that was allowed
             // to enrol and is then refused every night is the worst of both: it looks
             // registered and collects nothing.
@@ -1144,8 +1156,8 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     )));
                 }
                 Some(seats) => {
-                    let active = store.active_device_count()?;
-                    if active >= seats {
+                    let active = store.seats_in_use()?;
+                    if store.needs_seat(machine.as_deref())? && active >= seats {
                         return Err(Error::Config(format!(
                             "the licence covers {seats} seat(s) and {active} are in use. \
                              Revoke a device that is gone, or extend the licence — its rows \
@@ -1155,6 +1167,9 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 }
             }
             let (device, token) = store.add_device(name, &now())?;
+            if let Some(m) = &machine {
+                store.set_machine(&device.id, m)?;
+            }
 
             if let Some(path) = invite {
                 // Taken from the record, which the running hub wrote when it started. A pin
@@ -1267,7 +1282,11 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         s.push_str(&format!(
                             "{:<3} {:<22} {:>8} rows  {}\n",
                             marker,
-                            d["name"].as_str().unwrap_or_default(),
+                            match d["machine"].as_str() {
+                                Some(m) =>
+                                    format!("{} @{m}", d["name"].as_str().unwrap_or_default()),
+                                None => d["name"].as_str().unwrap_or_default().to_string(),
+                            },
                             d["rows"].as_i64().unwrap_or_default(),
                             if d["revoked_at"].is_string() {
                                 "revoked".to_string()

@@ -31,11 +31,23 @@ seats: 2 of 3 in use
 `licence show` exits non-zero when the hub is not collecting, so a monitoring check is one
 line.
 
-### Seats are devices
+### Seats are machines
+
+Every project a person opens is its own store, with its own chain, so each one is its own
+device on the hub. A seat is a machine: devices that report the same machine share one. Each
+delivery carries the machine's name (`COMPUTERNAME` on Windows, the host name on Linux), and
+`hub fleet` shows it after the device's name. A device that has not delivered yet has not said
+which machine it is on, and counts as a machine of its own until it does.
 
 Counted at enrolment, not at delivery: a device that was allowed to enrol and is then refused
-every night looks registered and collects nothing, which is the worst of both. Revoking frees
-a seat — the rows stay, the person left.
+every night looks registered and collects nothing, which is the worst of both. When the
+licence is full, a further project on a machine that already has a seat can still be
+registered by naming the machine: `hub add ws-021-dispo --machine ws-021`. Revoking frees a
+seat once the last device on that machine is revoked; the rows stay, the person left.
+
+The machine name comes from the machine. A company that wanted to could make forty machines
+report one name, which is the same trust an offline licence already rests on, and the fleet
+view is where it would show.
 
 ### When it expires
 

@@ -266,8 +266,9 @@ impl EgressPurpose {
                 "downloads a model artefact from the configured source, once, after you agree"
             }
             EgressPurpose::AuditSync => concat!(
-                "sends this store's audit rows to the hub you enrolled with; rows describe ",
-                "what happened, never what a note said"
+                "sends this store's audit rows to the hub you enrolled with, with this ",
+                "machine's name and the program version; rows describe what happened, never ",
+                "what a note said"
             ),
             EgressPurpose::LocalInference => {
                 "sends note text to the configured inference endpoint on your own network"

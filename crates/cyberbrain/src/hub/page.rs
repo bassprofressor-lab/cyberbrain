@@ -65,7 +65,7 @@ impl View {
         let licence = LicenceState::read(hub, now);
         let seats = licence
             .seats()
-            .and_then(|total| hub.active_device_count().ok().map(|used| (used, total)));
+            .and_then(|total| hub.seats_in_use().ok().map(|used| (used, total)));
         let dir = record.parent().unwrap_or(std::path::Path::new("."));
         // A file that is already installed is not something to offer a button for; it is
         // the ordinary state of a hub that was licensed last year and never tidied up.

@@ -36,6 +36,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   before. It exits non-zero otherwise, never writes over a file, and puts the backup in the
   hub's own log. `docs/HUB.md` says how to restore one.
 
+- **A seat is a machine, not a project.** Every project is its own store and so its own
+  device, and counting devices charged a person with three projects three seats, which is not
+  what the licence says. Deliveries now carry the machine's name, the hub counts seats by
+  distinct machines, and `hub fleet` shows the machine beside each device. A device that has
+  not delivered yet counts as a machine of its own; `hub add … --machine <name>` registers a
+  further project on a seated machine without a new seat. The egress register says the name
+  and the program version leave with every delivery.
+
 - **A hub keeps activity rows for a set period, and removing older ones takes two people.**
   Until now it kept every row for ever: the record was append-only with no way out, which a
   works agreement cannot accept. `hub retention set P2Y` sets the period and removes nothing.

@@ -644,6 +644,16 @@ pub fn pin_to_offer(hub: &HubStore) -> Option<String> {
 }
 
 /// Path of the hub's record, from the flag or the default.
+/// A machine name as the hub keeps it: trimmed and lowercase, one word, host-name length.
+/// `WS-021` and `ws-021` are one machine to a person, so they are one seat.
+pub fn normalise_machine(raw: &str) -> Option<String> {
+    let m = raw.trim().to_lowercase();
+    (!m.is_empty()
+        && m.chars().count() <= 253
+        && !m.chars().any(|c| c.is_control() || c.is_whitespace()))
+    .then_some(m)
+}
+
 pub fn data_path(explicit: Option<PathBuf>) -> PathBuf {
     explicit.unwrap_or_else(|| PathBuf::from(DEFAULT_DATA))
 }

@@ -36,6 +36,9 @@ pub struct Device {
     /// the genesis marker as it always did.
     pub floor_hash: Option<String>,
     pub floor_seq: Option<i64>,
+    /// The machine this device is on, as its deliveries report it. Seats are counted by this:
+    /// every project is its own device, and the licence promises a seat per machine.
+    pub machine: Option<String>,
 }
 
 impl Device {
@@ -500,6 +503,11 @@ impl HubStore {
                 "floor_seq",
                 "ALTER TABLE devices ADD COLUMN floor_seq INTEGER",
             ),
+            (
+                "devices",
+                "machine",
+                "ALTER TABLE devices ADD COLUMN machine TEXT",
+            ),
         ] {
             if !self.has_column(table, column)? {
                 ix(self.conn.execute(ddl, []))?;
@@ -538,6 +546,7 @@ impl HubStore {
             last_refusal_at: None,
             floor_hash: None,
             floor_seq: None,
+            machine: None,
         };
         ix(self.conn.execute(
             "INSERT INTO devices (id, name, token_hash, created_at, anchor)
@@ -563,7 +572,7 @@ impl HubStore {
             .conn
             .query_row(
                 "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                        last_refusal, last_refusal_at, floor_hash, floor_seq
+                        last_refusal, last_refusal_at, floor_hash, floor_seq, machine
                  FROM devices WHERE token_hash = ?",
                 params![hash],
                 row_to_device,
@@ -574,7 +583,7 @@ impl HubStore {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let mut stmt = ix(self.conn.prepare(
             "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                    last_refusal, last_refusal_at, floor_hash, floor_seq
+                    last_refusal, last_refusal_at, floor_hash, floor_seq, machine
              FROM devices ORDER BY created_at, id",
         ))?;
         let rows = ix(stmt.query_map([], row_to_device))?;
@@ -745,6 +754,46 @@ impl HubStore {
         .map(|n| n as usize)
     }
 
+    /// Seats in use: machines, not devices.
+    ///
+    /// Every project a person opens is its own store, so its own device with its own chain,
+    /// and the licence promises a seat per machine. Devices that report the same machine share
+    /// a seat. A device that has not yet said which machine it is on counts as one of its own
+    /// until it does, because guessing would hand out seats nobody paid for.
+    pub fn seats_in_use(&self) -> Result<usize> {
+        ix(self.conn.query_row(
+            "SELECT count(DISTINCT coalesce(machine, id)) FROM devices WHERE revoked_at IS NULL",
+            [],
+            |r| r.get::<_, i64>(0),
+        ))
+        .map(|n| n as usize)
+    }
+
+    /// Whether registering a device on this machine takes a seat: not when a device that can
+    /// still send already reports the same machine.
+    pub fn needs_seat(&self, machine: Option<&str>) -> Result<bool> {
+        let Some(m) = machine else {
+            return Ok(true);
+        };
+        let n: i64 = ix(self.conn.query_row(
+            "SELECT count(*) FROM devices WHERE revoked_at IS NULL AND machine = ?",
+            params![m],
+            |r| r.get(0),
+        ))?;
+        Ok(n == 0)
+    }
+
+    /// Record which machine a device is on. It comes from the device itself, so it is exactly
+    /// as trustworthy as the machine that sends it, which is the trust an offline licence
+    /// already rests on.
+    pub fn set_machine(&self, device: &str, machine: &str) -> Result<()> {
+        ix(self.conn.execute(
+            "UPDATE devices SET machine = ? WHERE id = ?",
+            params![machine, device],
+        ))
+        .map(|_| ())
+    }
+
     /// One device's rows, rebuilt as audit events in the order they were accepted.
     ///
     /// The detail column holds the row's JSON exactly as it arrived, `_chain` included, so
@@ -802,6 +851,7 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         last_refusal_at: r.get(9)?,
         floor_hash: r.get(10)?,
         floor_seq: r.get(11)?,
+        machine: r.get(12)?,
     })
 }
 

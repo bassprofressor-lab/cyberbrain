@@ -462,7 +462,7 @@ fn register(
     match state.seats() {
         None => return Err(format!("{} No device can be registered.", state.line())),
         Some(seats) => {
-            let active = hub.active_device_count().map_err(|e| e.to_string())?;
+            let active = hub.seats_in_use().map_err(|e| e.to_string())?;
             if active >= seats {
                 return Err(format!(
                     "The licence covers {seats} seat(s) and {active} are in use. Revoke a \
@@ -538,6 +538,14 @@ fn bearer(headers: &HeaderMap) -> Option<String> {
 
 /// The client's version, for the fleet view. A header rather than part of the bundle: the
 /// bundle is evidence and its shape is fixed, while this is operational chatter.
+fn client_machine(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-cyberbrain-machine")?
+        .to_str()
+        .ok()
+        .and_then(super::normalise_machine)
+}
+
 fn client_version(headers: &HeaderMap) -> Option<String> {
     headers
         .get("x-cyberbrain-version")?
@@ -830,6 +838,7 @@ async fn post_ingest(
 ) -> Response {
     let token = bearer(&headers);
     let version = client_version(&headers);
+    let machine = client_machine(&headers);
     let now = jiff::Timestamp::now().to_string();
 
     let mut hub = match state.hub.lock() {
@@ -855,7 +864,14 @@ async fn post_ingest(
         version.as_deref(),
         &now,
     ) {
-        Ok(a) => (StatusCode::OK, Json(json!(a))).into_response(),
+        Ok(a) => {
+            // Which machine this device is on, for the seat count. Best effort: a delivery
+            // that was taken is not turned into a failure over a name.
+            if let Some(m) = &machine {
+                let _ = hub.set_machine(&a.device, m);
+            }
+            (StatusCode::OK, Json(json!(a))).into_response()
+        }
         Err(refusal) => {
             // The status code carries the difference the sender has to act on: fix your
             // credentials, fix your file, or send what is missing first.
