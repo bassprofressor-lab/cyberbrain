@@ -1746,10 +1746,16 @@ impl HubStore {
         .map(|h| h.unwrap_or_else(|| GENESIS.to_string()))
     }
 
-    /// The hub's own events, oldest first.
+    /// The hub's latest `limit` events, oldest of them first.
+    ///
+    /// The latest, not the first: this was `ORDER BY seq LIMIT`, so once a hub had more
+    /// entries than the limit, the countersigner's page and `hub access-log` showed its first
+    /// days forever and nothing that happened since.
     pub fn hub_events(&self, limit: usize) -> Result<Vec<HubEvent>> {
         let mut stmt = ix(self.conn.prepare(
-            "SELECT seq, ts, actor, action, detail, hash FROM hub_audit ORDER BY seq LIMIT ?",
+            "SELECT seq, ts, actor, action, detail, hash FROM
+                 (SELECT * FROM hub_audit ORDER BY seq DESC LIMIT ?)
+             ORDER BY seq",
         ))?;
         let rows = ix(stmt.query_map(params![limit as i64], |r| {
             Ok(HubEvent {

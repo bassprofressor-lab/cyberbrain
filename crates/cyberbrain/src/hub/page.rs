@@ -29,6 +29,9 @@ use super::report::{self, FleetRow};
 use super::store::HubStore;
 use super::{LicenceState, service};
 
+/// How many of the hub's own log entries the countersigner's page shows: the latest ones.
+pub const LOG_ON_PAGE: usize = 200;
+
 /// Everything the page shows, gathered before any of it is written out.
 pub struct View {
     pub version: String,
@@ -779,9 +782,17 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
         h.push_str(
             "<section class=card><h2>The hub's own log</h2>\
              <p class=muted>Every role granted, every request, every approval, every \
-             disclosure, in a chain that cannot be edited afterwards without it showing.</p>\
-             <table><thead><tr><th>When<th>Who<th>What</tr></thead><tbody>",
+             disclosure, in a chain that cannot be edited afterwards without it showing.</p>",
         );
+        // Said, not left to be noticed: a table that ends is read as a log that ends.
+        if v.log.len() >= LOG_ON_PAGE {
+            h.push_str(&format!(
+                "<p class=muted>The latest {LOG_ON_PAGE} entries, newest first. \
+                 <code>cyberbrain hub access-log --limit N</code> on the hub's machine shows \
+                 more.</p>"
+            ));
+        }
+        h.push_str("<table><thead><tr><th>When<th>Who<th>What</tr></thead><tbody>");
         for e in v.log.iter().rev() {
             h.push_str(&format!(
                 "<tr><td>{}<td>{}<td>{}</tr>",

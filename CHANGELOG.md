@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   proxy one guesser locks everybody out for the rest of the window. `docs/HUB.md` has the
   details. Closes a known gap named in the 0.6.0 release notes.
 
+### Fixed
+
+- **The countersigner's log stopped at the hub's first 200 entries.** The page asked for 200
+  entries and got the oldest, not the newest, so from entry 201 on nothing new appeared there,
+  and `hub access-log` did the same with its `--limit`. For a works council this is the page
+  that answers who looked at what. Both show the latest entries now, and the page says when
+  there are more than it shows.
+
 ## [0.6.0] — 2026-09-12
 
 ### Added

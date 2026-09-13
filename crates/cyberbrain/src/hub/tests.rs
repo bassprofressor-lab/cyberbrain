@@ -3372,6 +3372,52 @@ async fn get_as(state: Arc<super::api::HubState>, path: &str, cookie: &str) -> S
     String::from_utf8_lossy(&b).into_owned()
 }
 
+/// A hub with more log entries than the page shows still shows what happened last.
+///
+/// `hub_events` took the first entries, not the latest, so from entry 201 on the works
+/// council's page and `hub access-log` stopped at the hub's first days and never moved again
+/// — and refused enrolments, which are logged, get a hub there sooner.
+#[tokio::test]
+async fn the_countersigners_log_shows_the_latest_entries_not_the_first() {
+    let hub = hub_with_password("correct horse battery");
+    let (_, council) = hub
+        .add_principal("Works council", Role::Countersigner, NOW)
+        .unwrap();
+    for n in 0..super::page::LOG_ON_PAGE + 50 {
+        hub.record(
+            "test",
+            &format!("filler.{n:03}"),
+            serde_json::json!({}),
+            NOW,
+        )
+        .unwrap();
+    }
+    hub.record("test", "the.latest.thing", serde_json::json!({}), NOW)
+        .unwrap();
+
+    let events = hub.hub_events(50).unwrap();
+    assert_eq!(events.len(), 50);
+    assert_eq!(events.last().unwrap().action, "the.latest.thing");
+    assert!(
+        events.windows(2).all(|w| w[0].seq < w[1].seq),
+        "still oldest first within what is returned"
+    );
+
+    let state = state_for(hub, true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &council).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let body = get_as(state, "/requests", &cookie).await;
+    assert!(body.contains("the.latest.thing"), "{body}");
+    assert!(
+        !body.contains("role.granted"),
+        "the first entry is beyond the latest 200"
+    );
+    assert!(
+        body.contains("hub access-log --limit"),
+        "and the page says so"
+    );
+}
+
 // ---- fleet invitations ----
 
 fn licensed(seats: usize) -> LicenceState {

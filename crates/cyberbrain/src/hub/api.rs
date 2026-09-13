@@ -997,7 +997,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
         Vec::new()
     };
     let log = if role == Role::Countersigner {
-        hub.hub_events(200).unwrap_or_default()
+        hub.hub_events(super::page::LOG_ON_PAGE).unwrap_or_default()
     } else {
         Vec::new()
     };
