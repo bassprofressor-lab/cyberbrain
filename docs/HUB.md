@@ -121,6 +121,21 @@ one that never existed. A seat is still a machine: a second project on a machine
 has one takes none, and a machine that would need a new seat on a full licence is turned away.
 Every enrolment is in the hub's own log, with the invitation it used.
 
+Every refusal is there too, as `enrolment.refused`: why, the address it came from, and the
+machine and project names it claimed. An address that tries ten codes the hub does not know
+within ten minutes is turned away for the rest of those ten minutes with `429` and a
+`Retry-After`, before its code is even looked at, and the lock is one `enrolment.locked` line.
+Each unknown code also costs its sender a moment, like a wrong password on the page. Only
+unknown codes count: an invitation that expired or ran out, or a licence that is full, is
+refused with its reason as often as machines ask, because forty machines behind one address
+must each hear why. The log itself cannot be deleted from, so one address writes at most
+twenty refusals into it per ten minutes. `cyberbrain hub access-log` shows them.
+
+The count is by the address the connection comes from, IPv6 by its /64. Behind a reverse proxy
+every machine has the proxy's address, so one guesser there locks out everybody until the ten
+minutes are over; forwarded-for headers are not read, because the sender writes them. The
+count lives in memory and starts over when the hub restarts.
+
 The file is a credential for every enrolment it has left. Keep `--expires` short (at most 90
 days), hand the file out the way you would a password, and withdraw it once the rollout is
 done:

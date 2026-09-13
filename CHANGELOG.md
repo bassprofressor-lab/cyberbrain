@@ -10,6 +10,22 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- **A hub answered guessed enrolment codes at full speed and wrote none of them down.** The
+  code's randomness made guessing hopeless, but the person running the hub had no way to see
+  that somebody was trying. Every refused enrolment is now in the hub's own log as
+  `enrolment.refused`, with the reason and the address. An address that tries ten unknown
+  codes in ten minutes gets `429` with `Retry-After` until the ten minutes are over, before
+  its code is looked at, and each unknown code costs its sender 400 ms. Only unknown codes
+  count, so machines holding an invitation that ran out still hear why rather than a lock.
+  Because the hub's log cannot be deleted from, one address writes at most twenty refusals
+  per window into it. The count is by connecting address (IPv6 by /64): behind a reverse
+  proxy one guesser locks everybody out for the rest of the window. `docs/HUB.md` has the
+  details. Closes a known gap named in the 0.6.0 release notes.
+
 ## [0.6.0] — 2026-09-12
 
 ### Added

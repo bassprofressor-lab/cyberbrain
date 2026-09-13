@@ -34,6 +34,8 @@ pub struct HubState {
     pub encrypted: bool,
     /// The last thing the page did, shown once on the next render.
     pub flash: Mutex<Option<Result<String, String>>>,
+    /// Enrolment codes tried per address, so guessing is slowed, locked and on record.
+    pub enrol_attempts: Arc<super::attempts::EnrolAttempts>,
 }
 
 pub fn router(state: Arc<HubState>) -> Router {
@@ -1077,52 +1079,141 @@ struct EnrolBody {
 /// No token: the code is the credential, and only its hash is on record. Every refusal is a
 /// reason a person can act on, except an unknown code, which gets the same answer whether it
 /// never existed or was withdrawn.
-async fn post_enrol(State(state): State<Arc<HubState>>, Json(body): Json<EnrolBody>) -> Response {
+///
+/// Every refusal is in the hub's log, and an address that keeps trying unknown codes is
+/// slowed and then turned away before its code is looked at; `attempts.rs` says what is
+/// counted and why.
+async fn post_enrol(
+    State(state): State<Arc<HubState>>,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Json(body): Json<EnrolBody>,
+) -> Response {
+    use super::store::EnrolRefusal as R;
+    let ticket = match state
+        .enrol_attempts
+        .admit(from.ip(), std::time::Instant::now())
+    {
+        Ok(t) => t,
+        Err(wait) => {
+            // Answered in words the launcher shows as they are, and without touching the
+            // record: a locked address costs the hub nothing, which is the point of the lock.
+            let minutes = wait.as_secs().div_ceil(60);
+            return (
+                StatusCode::TOO_MANY_REQUESTS,
+                [(header::RETRY_AFTER, wait.as_secs().to_string())],
+                Json(json!({
+                    "error": format!(
+                        "too many enrolments with an unknown code came from this address; \
+                         try again in {minutes} minute(s), and check that the invitation file \
+                         is the one you were sent"
+                    ),
+                    "refused": { "refused": "too-many-attempts", "detail": wait.as_secs() },
+                })),
+            )
+                .into_response();
+        }
+    };
+    // Everything that holds the record happens in here, and the delay for a guess after it:
+    // a sleeping guesser must not keep the hub from everybody else.
+    let (refusal, guess) = match enrol_and_record(&state, ticket, from, &body) {
+        Ok(response) => return response,
+        Err(refused) => refused,
+    };
+    if guess {
+        stumble().await;
+    }
+    let status = match &refusal {
+        R::UnknownCode => StatusCode::UNAUTHORIZED,
+        R::Expired(_) | R::UsedUp(_) => StatusCode::FORBIDDEN,
+        R::NotLicensed(_) => StatusCode::SERVICE_UNAVAILABLE,
+        R::NoSeat(_) => StatusCode::CONFLICT,
+        R::BadRequest(_) => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(json!({ "error": refusal.to_string(), "refused": refusal })),
+    )
+        .into_response()
+}
+
+/// The part of an enrolment that holds the record: ask, settle the attempt, write the log.
+/// `Ok` is a finished answer; `Err` is a refusal, and whether it was a guess.
+fn enrol_and_record(
+    state: &HubState,
+    ticket: super::attempts::Ticket,
+    from: std::net::SocketAddr,
+    body: &EnrolBody,
+) -> Result<Response, (super::store::EnrolRefusal, bool)> {
     use super::store::EnrolRefusal as R;
     let now = jiff::Timestamp::now();
     let Ok(hub) = state.hub.lock() else {
-        return (
+        ticket.unasked(std::time::Instant::now());
+        return Ok((
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "error": "hub record unavailable" })),
         )
-            .into_response();
+            .into_response());
     };
     let licence = LicenceState::read(&hub, now);
-    match hub.enrol_with_code(
+    let outcome = hub.enrol_with_code(
         &body.code,
         &body.machine,
         &body.project,
         &licence,
         &now.to_string(),
-    ) {
-        Ok(Ok((device, token))) => (
-            StatusCode::OK,
-            Json(json!({
-                "device": device.id, "name": device.name, "machine": device.machine,
-                "token": token, "hub_cert_sha256": super::pin_to_offer(&hub),
-            })),
-        )
-            .into_response(),
-        Ok(Err(refusal)) => {
-            let status = match &refusal {
-                R::UnknownCode => StatusCode::UNAUTHORIZED,
-                R::Expired(_) | R::UsedUp(_) => StatusCode::FORBIDDEN,
-                R::NotLicensed(_) => StatusCode::SERVICE_UNAVAILABLE,
-                R::NoSeat(_) => StatusCode::CONFLICT,
-                R::BadRequest(_) => StatusCode::BAD_REQUEST,
-            };
-            (
-                status,
-                Json(json!({ "error": refusal.to_string(), "refused": refusal })),
+    );
+    let refusal = match outcome {
+        Ok(Ok((device, token))) => {
+            ticket.enrolled(std::time::Instant::now());
+            return Ok((
+                StatusCode::OK,
+                Json(json!({
+                    "device": device.id, "name": device.name, "machine": device.machine,
+                    "token": token, "hub_cert_sha256": super::pin_to_offer(&hub),
+                })),
             )
-                .into_response()
+                .into_response());
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => {
+            ticket.unasked(std::time::Instant::now());
+            return Ok((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({ "error": e.to_string() })),
+            )
+                .into_response());
+        }
+        Ok(Err(refusal)) => refusal,
+    };
+    let guess = refusal == R::UnknownCode;
+    if matches!(refusal, R::BadRequest(_)) {
+        // Refused before any code was looked at: nothing was tried, nothing to count.
+        ticket.unasked(std::time::Instant::now());
+    } else {
+        let settled = ticket.refused(guess, std::time::Instant::now());
+        let address = from.ip().to_canonical().to_string();
+        let stamp = now.to_string();
+        // A refusal that could not be written is still a refusal; the service log says the
+        // hub's own log is missing a line rather than the machine being let in or told 500.
+        if settled.record
+            && let Err(e) =
+                hub.record_enrol_refusal(&refusal, &body.machine, &body.project, &address, &stamp)
+        {
+            super::service::log(&format!(
+                "enrolment refusal from {address} not recorded: {e}"
+            ));
+        }
+        if let Some(lock) = settled.locked {
+            super::service::log(&format!(
+                "enrolment: {address} tried {} unknown codes and is turned away for {} s",
+                super::attempts::MAX_GUESSES,
+                lock.as_secs()
+            ));
+            if let Err(e) = hub.record_enrol_lock(&address, lock.as_secs(), &stamp) {
+                super::service::log(&format!("enrolment lock for {address} not recorded: {e}"));
+            }
+        }
     }
+    Err((refusal, guess))
 }
 
 #[derive(serde::Deserialize)]

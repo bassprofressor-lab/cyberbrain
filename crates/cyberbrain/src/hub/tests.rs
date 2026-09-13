@@ -1796,6 +1796,7 @@ fn state_for(hub: HubStore, encrypted: bool) -> Arc<super::api::HubState> {
         sessions: Default::default(),
         flash: std::sync::Mutex::new(None),
         encrypted,
+        enrol_attempts: Default::default(),
     })
 }
 
@@ -3509,27 +3510,127 @@ async fn the_enrolment_route_refuses_an_unknown_code_and_an_unlicensed_hub() {
         )
         .unwrap();
     let state = state_for(hub, true);
-    let post = |body: serde_json::Value| {
-        Request::builder()
-            .method("POST")
-            .uri("/api/v1/enrol")
-            .header("content-type", "application/json")
-            .body(Body::from(body.to_string()))
-            .unwrap()
-    };
-    let r = super::api::router(state.clone())
-        .oneshot(post(
-            serde_json::json!({ "code": "cbe_guessed", "machine": "ws-021", "project": "a" }),
-        ))
-        .await
-        .unwrap();
+    let r = enrol_from(&state, "192.168.1.21:50000", "cbe_guessed", "ws-021").await;
     assert_eq!(r.status(), StatusCode::UNAUTHORIZED);
-    let r = super::api::router(state.clone())
-        .oneshot(post(
-            serde_json::json!({ "code": code, "machine": "ws-021", "project": "a" }),
-        ))
-        .await
-        .unwrap();
+    let r = enrol_from(&state, "192.168.1.21:50000", &code, "ws-021").await;
     assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(state.hub.lock().unwrap().devices().unwrap().is_empty());
+}
+
+/// An enrolment request from `from`, the way the router will see it.
+async fn enrol_from(
+    state: &Arc<super::api::HubState>,
+    from: &str,
+    code: &str,
+    machine: &str,
+) -> axum::response::Response {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/api/v1/enrol")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::json!({ "code": code, "machine": machine, "project": "angebote" })
+                .to_string(),
+        ))
+        .unwrap();
+    req.extensions_mut()
+        .insert(ConnectInfo(from.parse::<std::net::SocketAddr>().unwrap()));
+    super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap()
+}
+
+fn hub_actions(state: &Arc<super::api::HubState>, action: &str) -> Vec<serde_json::Value> {
+    state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == action)
+        .map(|e| e.detail)
+        .collect()
+}
+
+/// Guessing codes is on record, and an address that keeps at it is turned away — even with a
+/// real code, because by then the hub no longer looks. Other addresses are heard as before.
+#[tokio::test]
+async fn an_address_guessing_enrolment_codes_is_recorded_and_then_turned_away() {
+    use super::attempts::MAX_GUESSES;
+    let hub = HubStore::in_memory().unwrap();
+    let (_, code) = hub
+        .create_enrolment_code(
+            "Rollout",
+            5,
+            "P14D",
+            "cli",
+            &jiff::Timestamp::now().to_string(),
+        )
+        .unwrap();
+    // No licence, and none can be made here: it needs the publisher's key. So "the code was
+    // looked at" is a 503 below, and "it was not" is a 429.
+    let state = state_for(hub, true);
+    let guesser = "203.0.113.9:40000";
+
+    for n in 0..MAX_GUESSES {
+        let r = enrol_from(&state, guesser, &format!("cbe_guess{n}"), "evil").await;
+        assert_eq!(r.status(), StatusCode::UNAUTHORIZED, "guess {n}");
+    }
+    let refused = hub_actions(&state, "enrolment.refused");
+    assert_eq!(refused.len(), MAX_GUESSES as usize, "{refused:?}");
+    assert_eq!(refused[0]["from"], "203.0.113.9");
+    assert_eq!(refused[0]["refusal"]["refused"], "unknown-code");
+    assert_eq!(refused[0]["machine"], "evil");
+    let locked = hub_actions(&state, "enrolment.locked");
+    assert_eq!(locked.len(), 1, "one line when the lock begins");
+
+    let r = enrol_from(&state, guesser, &code, "evil").await;
+    assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(r.headers().contains_key(axum::http::header::RETRY_AFTER));
+    assert!(
+        state.hub.lock().unwrap().devices().unwrap().is_empty(),
+        "a locked address gets no device, whatever code it sends"
+    );
+    assert_eq!(
+        hub_actions(&state, "enrolment.refused").len(),
+        MAX_GUESSES as usize,
+        "a locked address writes nothing more to a log that cannot be emptied"
+    );
+
+    let r = enrol_from(&state, "192.168.1.21:50000", &code, "ws-021").await;
+    assert_eq!(
+        r.status(),
+        StatusCode::SERVICE_UNAVAILABLE,
+        "another address is still heard"
+    );
+    assert!(state.hub.lock().unwrap().verify_hub_chain().is_ok());
+}
+
+/// A refusal for a real invitation is on record with its reason, and many of them do not
+/// lock the machines behind one address out of hearing why.
+#[tokio::test]
+async fn refusals_for_a_real_invitation_are_recorded_but_never_lock() {
+    use super::attempts::{MAX_GUESSES, MAX_RECORDED};
+    let hub = HubStore::in_memory().unwrap();
+    let (_, code) = hub
+        .create_enrolment_code(
+            "Rollout",
+            5,
+            "P14D",
+            "cli",
+            &jiff::Timestamp::now().to_string(),
+        )
+        .unwrap();
+    let state = state_for(hub, true);
+    for n in 0..(MAX_RECORDED + MAX_GUESSES) {
+        let r = enrol_from(&state, "10.1.0.1:40000", &code, &format!("ws-{n:03}")).await;
+        assert_eq!(r.status(), StatusCode::SERVICE_UNAVAILABLE, "attempt {n}");
+    }
+    let refused = hub_actions(&state, "enrolment.refused");
+    assert_eq!(refused.len(), MAX_RECORDED as usize);
+    assert_eq!(refused[0]["refusal"]["refused"], "not-licensed");
+    assert_eq!(refused[0]["machine"], "ws-000");
+    assert!(hub_actions(&state, "enrolment.locked").is_empty());
 }

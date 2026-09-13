@@ -2641,4 +2641,43 @@ impl HubStore {
             }
         }
     }
+
+    /// Put a refused enrolment in the hub's own log: why, from where, and what the machine
+    /// said it was called. The names are the caller's and unverified, so they are cut down to
+    /// what a device name may hold and never trusted as more than a claim.
+    pub fn record_enrol_refusal(
+        &self,
+        refusal: &EnrolRefusal,
+        machine: &str,
+        project: &str,
+        from: &str,
+        now: &str,
+    ) -> Result<String> {
+        self.record(
+            "enrolment",
+            "enrolment.refused",
+            serde_json::json!({
+                "from": from,
+                "machine": super::normalise_machine(machine)
+                    .map(|m| m.chars().take(64).collect::<String>()),
+                "project": project_label(project),
+                "refusal": refusal,
+            }),
+            now,
+        )
+    }
+
+    /// Say that an address was turned away for guessing, once per lock, with how long.
+    pub fn record_enrol_lock(&self, from: &str, seconds: u64, now: &str) -> Result<String> {
+        self.record(
+            "enrolment",
+            "enrolment.locked",
+            serde_json::json!({
+                "from": from,
+                "unknown_codes": super::attempts::MAX_GUESSES,
+                "for_seconds": seconds,
+            }),
+            now,
+        )
+    }
 }

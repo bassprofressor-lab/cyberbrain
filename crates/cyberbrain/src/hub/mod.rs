@@ -37,6 +37,7 @@ use std::path::PathBuf;
 pub mod access;
 pub mod admin;
 pub mod api;
+pub mod attempts;
 pub mod client;
 pub mod licence;
 pub mod page;

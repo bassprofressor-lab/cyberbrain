@@ -1181,6 +1181,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             sessions: Default::default(),
                             flash: std::sync::Mutex::new(None),
                             encrypted: tls.is_some(),
+                            enrol_attempts: Default::default(),
                         });
                         let scheme = if tls.is_some() { "https" } else { "http" };
                         let hello = format!(
