@@ -1230,6 +1230,7 @@ impl HubStore {
         granted_by: &str,
         now: &str,
     ) -> Result<()> {
+        self.grantable_device(device)?;
         ix(self.conn.execute(
             "INSERT INTO bereich_grants
                 (id, device, bereich, direction, reason, granted_by, created_at)
@@ -1245,6 +1246,60 @@ impl HubStore {
             ],
         ))?;
         Ok(())
+    }
+
+    /// Whether a grant may name this device, and if not, a sentence that gets the person to
+    /// the one they meant.
+    ///
+    /// The foreign key refused an unknown device already, as "index: hub store: FOREIGN KEY
+    /// constraint failed" — true, and useless to somebody who typed the name `hub add` was
+    /// given, which is the obvious thing to type. `hub fleet` prints names, not ids, so the
+    /// refusal carries the ids itself rather than sending them to look.
+    fn grantable_device(&self, device: &str) -> Result<()> {
+        const LISTED: usize = 20;
+        let devices = self.devices()?;
+        if let Some(d) = devices.iter().find(|d| d.id == device) {
+            return match &d.revoked_at {
+                None => Ok(()),
+                Some(at) => Err(Error::Config(format!(
+                    "device {} ({}) was revoked at {at}; a grant for it would never move a note",
+                    d.id, d.name
+                ))),
+            };
+        }
+        let active: Vec<&Device> = devices.iter().filter(|d| d.is_active()).collect();
+        let named: Vec<&&Device> = active.iter().filter(|d| d.name == device).collect();
+        let why = match named.as_slice() {
+            [d] => format!(
+                "`{device}` is a device's name; a grant takes its id: --device {}",
+                d.id
+            ),
+            [] if active.is_empty() => {
+                format!("this hub has no device `{device}`, and no active device at all")
+            }
+            [] if active.len() <= LISTED => format!(
+                "this hub has no device `{device}`. Its devices:\n{}",
+                active
+                    .iter()
+                    .map(|d| format!("  {}  {}", d.id, d.name))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+            [] => format!(
+                "this hub has no device `{device}`; `cyberbrain hub fleet --json` lists all {} \
+                 devices with their ids",
+                active.len()
+            ),
+            many => format!(
+                "`{device}` is the name of {} devices; give the id of the one you mean:\n{}",
+                many.len(),
+                many.iter()
+                    .map(|d| format!("  {}  created {}", d.id, d.created_at))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ),
+        };
+        Err(Error::Config(why))
     }
 
     pub fn revoke_grant(&self, id: &str, now: &str) -> Result<bool> {

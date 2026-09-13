@@ -56,6 +56,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   network, and do not colour the headline. The page's type and its mock know all seven
   purposes.
 
+- **`hub grant add` with a device the hub does not have said "FOREIGN KEY constraint
+  failed".** Most often the device's name had been typed, which is what `hub fleet` shows. The
+  refusal now says when a name was given and which id it belongs to, lists the hub's devices
+  with their ids when there are twenty or fewer, and refuses a revoked device in words rather
+  than writing a grant that could never move a note.
+
 - **The countersigner's log stopped at the hub's first 200 entries.** The page asked for 200
   entries and got the oldest, not the newest, so from entry 201 on nothing new appeared there,
   and `hub access-log` did the same with its `--limit`. For a works council this is the page

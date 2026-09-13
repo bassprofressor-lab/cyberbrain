@@ -3141,6 +3141,58 @@ fn a_device_arriving_and_leaving_is_in_the_hubs_own_log() {
     assert!(hub.verify_hub_chain().is_ok());
 }
 
+/// A grant for a device the hub does not have says which devices it does have.
+///
+/// It used to reach the foreign key and come back as "index: hub store: FOREIGN KEY
+/// constraint failed", most often because somebody typed the name `hub add` gave the device,
+/// which is the one thing `hub fleet` shows them.
+#[test]
+fn a_grant_for_an_unknown_device_names_the_devices_there_are() {
+    let hub = HubStore::in_memory().unwrap();
+    let grant = |device: &str| {
+        hub.grant_bereich("g-x", device, "hr", Direction::Send, "r", "cli", NOW)
+            .unwrap_err()
+            .to_string()
+    };
+
+    let err = grant("laptop-rita");
+    assert!(err.contains("no active device"), "{err}");
+
+    let (rita, _) = hub.add_device("laptop-rita", NOW).unwrap();
+    let (_other, _) = hub.add_device("ws-021/angebote", NOW).unwrap();
+
+    let err = grant("laptop-rita");
+    assert!(err.contains("is a device's name"), "{err}");
+    assert!(err.contains(&format!("--device {}", rita.id)), "{err}");
+
+    let err = grant("dev_typo");
+    assert!(err.contains("no device `dev_typo`"), "{err}");
+    assert!(
+        err.contains(&rita.id) && err.contains("ws-021/angebote"),
+        "the ids are in the refusal, since `hub fleet` prints only names: {err}"
+    );
+    assert!(!err.contains("FOREIGN KEY"), "{err}");
+
+    let (twin, _) = hub.add_device("laptop-rita", NOW).unwrap();
+    let err = grant("laptop-rita");
+    assert!(
+        err.contains("name of 2 devices") && err.contains(&rita.id) && err.contains(&twin.id),
+        "{err}"
+    );
+
+    assert!(hub.revoke(&twin.id, NOW).unwrap());
+    let err = grant(&twin.id);
+    assert!(err.contains("was revoked"), "{err}");
+
+    assert!(
+        hub.grants_for_device(&rita.id).unwrap().is_empty()
+            && hub.grants_for_device(&twin.id).unwrap().is_empty(),
+        "no refusal left a grant behind"
+    );
+    hub.grant_bereich("g-ok", &rita.id, "hr", Direction::Send, "r", "cli", NOW)
+        .expect("the id still works");
+}
+
 /// The operator cannot route note text to a machine of their own on their own.
 ///
 /// This is the whole reason for the countersignature. Whoever holds the hub password
