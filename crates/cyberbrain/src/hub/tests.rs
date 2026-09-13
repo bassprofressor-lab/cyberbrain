@@ -958,6 +958,108 @@ fn a_purge_takes_two_people_and_what_is_left_still_verifies() {
     ));
 }
 
+/// Wherever a person reads who signed or wrote something, they read a name.
+///
+/// The record keeps principal ids, and that is right: a name is neither unique nor fixed.
+/// But "was already countersigned by who_01M2…" was the whole answer to a person who wanted
+/// to know who, and the pages said "Written by" and "countersigned by" with the same ids.
+#[test]
+fn a_signature_reads_as_a_name_and_not_as_an_id() {
+    use super::store::{CountersignOutcome, PurgeOutcome};
+    let hub = hub_with_rows_at(&["2023-01-10T00:00:00Z", "2026-08-01T00:00:00Z"]);
+    let (device, _) = hub.add_device("laptop-rita", NOW).unwrap();
+    let (weber, _) = hub.add_principal("A. Weber", Role::Admin, NOW).unwrap();
+    let rat = countersigner(&hub, "Betriebsrat");
+    let bob = countersigner(&hub, "Bob");
+    let ids = [&weber.id, &rat.id, &bob.id];
+
+    hub.grant_bereich(
+        "g-1",
+        &device.id,
+        "hr",
+        Direction::Send,
+        "r",
+        &weber.id,
+        NOW,
+    )
+    .unwrap();
+    hub.grant_bereich(
+        "g-2",
+        &device.id,
+        "it",
+        Direction::Send,
+        "r",
+        &weber.id,
+        NOW,
+    )
+    .unwrap();
+    assert_eq!(
+        hub.countersign_grant("g-1", &rat, NOW).unwrap(),
+        CountersignOutcome::Signed
+    );
+    assert_eq!(
+        hub.countersign_grant("g-1", &bob, NOW).unwrap(),
+        CountersignOutcome::AlreadySigned {
+            by: "Betriebsrat".into()
+        }
+    );
+
+    hub.set_retention("P2Y", "cli", NOW).unwrap();
+    let (purge, _) = hub.propose_purge("§7", &weber.id, NOW).unwrap();
+    let (waiting, _) = hub.propose_purge("§8", &weber.id, NOW).unwrap();
+    hub.countersign_purge(&purge.id, &bob, NOW).unwrap();
+    assert_eq!(
+        hub.countersign_purge(&purge.id, &rat, NOW).unwrap(),
+        PurgeOutcome::AlreadyDone { by: "Bob".into() }
+    );
+
+    let operator = page::render(&View::gather(
+        &hub,
+        std::path::Path::new("hub.db"),
+        7788,
+        true,
+        NOW.parse().unwrap(),
+        None,
+    ));
+    assert!(
+        operator.contains("countersigned by Betriebsrat"),
+        "{operator}"
+    );
+
+    let signing = page::signing_page(&page::SigningView {
+        name: "Betriebsrat",
+        role: Role::Countersigner,
+        requests: Vec::new(),
+        grants: hub
+            .grants_for_device(&device.id)
+            .unwrap()
+            .into_iter()
+            .filter(|g| g.is_pending())
+            .collect(),
+        purges: vec![waiting],
+        names: hub.principal_names().unwrap(),
+        log: hub.hub_events(1000).unwrap(),
+        devices: Vec::new(),
+        flash: None,
+    });
+    assert!(
+        signing.matches("A. Weber").count() >= 2,
+        "the grant and the purge were written by a person: {signing}"
+    );
+    assert!(
+        signing.contains("Bob"),
+        "the log names who signed: {signing}"
+    );
+    for (page, body) in [("operator", &operator), ("signing", &signing)] {
+        for id in ids {
+            assert!(
+                !body.contains(id.as_str()),
+                "{page} page shows {id}: {body}"
+            );
+        }
+    }
+}
+
 /// A device whose clock once ran backwards loses only the unbroken start of its chain.
 #[test]
 fn a_purge_removes_a_prefix_and_never_cuts_a_hole() {
@@ -1549,6 +1651,7 @@ fn a_collecting_hub_shows_the_seats() {
     // with itself on every machine but one.
     let v = View {
         grants: Vec::new(),
+        names: Default::default(),
         version: "0.3.0".into(),
         record: "C:\\ProgramData\\Cyberbrain\\hub.db".into(),
         licence: LicenceState::Valid {
@@ -1579,6 +1682,7 @@ fn a_collecting_hub_shows_the_seats() {
 fn a_licence_about_to_run_out_says_it_on_the_page() {
     let v = View {
         grants: Vec::new(),
+        names: Default::default(),
         version: "0.3.0".into(),
         record: "hub.db".into(),
         licence: LicenceState::Valid {

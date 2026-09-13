@@ -1978,6 +1978,8 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         HubCommand::AccessLog { limit, data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let events = store.hub_events(*limit)?;
+            // Names in the text, ids in the JSON: a person reads this, a script matches on it.
+            let names = store.principal_names()?;
             let chain = store.verify_hub_chain().map_err(|e| e.to_string());
             out.emit(
                 &serde_json::json!({
@@ -1994,7 +1996,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             "{}  {:<18} {}  {}\n",
                             e["ts"].as_str().unwrap_or_default(),
                             e["action"].as_str().unwrap_or_default(),
-                            e["actor"].as_str().unwrap_or_default(),
+                            names.of(e["actor"].as_str().unwrap_or_default()),
                             e["detail"]
                         ));
                     }
@@ -2209,6 +2211,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 RetentionCommand::List { data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let all = store.purges()?;
+                    let names = store.principal_names()?;
                     out.emit(&serde_json::json!(all), |v| {
                         let rows = v.as_array().cloned().unwrap_or_default();
                         if rows.is_empty() {
@@ -2220,8 +2223,9 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         for p in rows {
                             let state = match p["approved_by"].as_str() {
                                 Some(by) => format!(
-                                    "carried out {} by {by}, {} row(s) removed",
+                                    "carried out {} by {}, {} row(s) removed",
                                     p["approved_at"].as_str().unwrap_or_default(),
+                                    names.of(by),
                                     p["rows_removed"]
                                 ),
                                 None => "waiting for a countersignature".to_string(),

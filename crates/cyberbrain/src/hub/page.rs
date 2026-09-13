@@ -42,6 +42,8 @@ pub struct View {
     /// Who may share which bereich. On the administrator's page because a grant is state,
     /// not content: it names a device, a bereich and a reason, never a word of a note.
     pub grants: Vec<super::sync_access::BereichGrant>,
+    /// Who the ids in `grants` are, so a signature reads as a person.
+    pub names: super::store::Names,
     /// A licence file lying in the data directory, for the one-click install.
     pub found_file: Option<std::path::PathBuf>,
     /// What to put in an invitation as the address clients deliver to. A guess from the
@@ -85,6 +87,7 @@ impl View {
             .collect();
         View {
             grants,
+            names: hub.principal_names().unwrap_or_default(),
             fleet: report::fleet(hub, now, &version).unwrap_or_default(),
             version,
             record: record.to_path_buf(),
@@ -320,7 +323,7 @@ fn grants_card(v: &View) -> String {
             dir = esc(g.direction.as_str()),
             reason = esc(&g.reason),
             state = match &g.approved_by {
-                Some(by) => format!("in force, countersigned by {}", esc(by)),
+                Some(by) => format!("in force, countersigned by {}", esc(v.names.of(by))),
                 None => state.to_string(),
             },
             action = if live {
@@ -618,6 +621,8 @@ pub struct SigningView<'a> {
     pub grants: Vec<super::sync_access::BereichGrant>,
     /// Purges of old activity rows waiting for a second signature. Countersigners only.
     pub purges: Vec<super::store::Purge>,
+    /// Who the ids in grants, purges and the log are.
+    pub names: super::store::Names,
     /// The hub's own log. Countersigners only — it is the record of who looked at what.
     pub log: Vec<super::store::HubEvent>,
     pub devices: Vec<(String, String)>,
@@ -667,7 +672,7 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
                     b = esc(&g.bereich),
                     dir = esc(g.direction.as_str()),
                     why = esc(&g.reason),
-                    by = esc(&g.granted_by),
+                    by = esc(v.names.of(&g.granted_by)),
                     id = esc(&g.id),
                 ));
             }
@@ -697,7 +702,7 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
                     cutoff = esc(&p.cutoff),
                     period = esc(&p.retention),
                     why = esc(&p.reason),
-                    by = esc(&p.proposed_by),
+                    by = esc(v.names.of(&p.proposed_by)),
                     id = esc(&p.id),
                 ));
             }
@@ -797,7 +802,7 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
             h.push_str(&format!(
                 "<tr><td>{}<td>{}<td>{}</tr>",
                 esc(&e.ts),
-                esc(&e.actor),
+                esc(v.names.of(&e.actor)),
                 esc(&e.action)
             ));
         }

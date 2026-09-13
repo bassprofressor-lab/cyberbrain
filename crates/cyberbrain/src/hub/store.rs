@@ -147,6 +147,19 @@ pub(super) fn explain(e: rusqlite::Error) -> String {
     format!("{text} — {hint}")
 }
 
+/// Principal ids to names, for anything a person reads. See `HubStore::principal_names`.
+#[derive(Debug, Clone, Default)]
+pub struct Names(std::collections::HashMap<String, String>);
+
+impl Names {
+    /// The name behind an id. What is not a principal is shown as it is stored: `cli` and
+    /// `hub-page` say how something was done, and an id nobody holds any more is still
+    /// better than a blank.
+    pub fn of<'a>(&'a self, who: &'a str) -> &'a str {
+        self.0.get(who).map(String::as_str).unwrap_or(who)
+    }
+}
+
 /// What came of a countersignature attempt. Each one is a different sentence to the person
 /// holding the credential, so they are not collapsed into a bool.
 #[derive(Debug, Clone, PartialEq)]
@@ -1174,7 +1187,9 @@ impl HubStore {
             return Ok(CountersignOutcome::Withdrawn);
         }
         if let Some(by) = &g.approved_by {
-            return Ok(CountersignOutcome::AlreadySigned { by: by.clone() });
+            return Ok(CountersignOutcome::AlreadySigned {
+                by: self.principal_names()?.of(by).to_string(),
+            });
         }
         if g.granted_by == who.id {
             return Ok(CountersignOutcome::SamePerson);
@@ -1857,6 +1872,21 @@ impl HubStore {
             .optional())
     }
 
+    /// Every principal's id with the name people know them by, withdrawn ones included:
+    /// somebody who countersigned last year and has since left still signed it.
+    ///
+    /// What a signature, a grant or a log row stores is the id, because a name is not
+    /// unique and may change. What a person reads has to be the name — "already
+    /// countersigned by who_01M2…" answers nothing for the person who wanted to know who.
+    pub fn principal_names(&self) -> Result<Names> {
+        Ok(Names(
+            self.principals()?
+                .into_iter()
+                .map(|p| (p.id, p.name))
+                .collect(),
+        ))
+    }
+
     pub fn principals(&self) -> Result<Vec<Principal>> {
         let mut stmt = ix(self.conn.prepare(
             "SELECT id, name, role, created_at, revoked_at FROM principals
@@ -2250,7 +2280,9 @@ impl HubStore {
             return Ok(PurgeOutcome::Unknown);
         };
         if let Some(by) = &p.approved_by {
-            return Ok(PurgeOutcome::AlreadyDone { by: by.clone() });
+            return Ok(PurgeOutcome::AlreadyDone {
+                by: self.principal_names()?.of(by).to_string(),
+            });
         }
         if p.proposed_by == who.id {
             return Ok(PurgeOutcome::SamePerson);

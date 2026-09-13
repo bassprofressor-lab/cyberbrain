@@ -40,6 +40,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   it unlocked note text to a public inference endpoint and left the hub refused. It now says
   "the hub" and names `allow_public_hub`.
 
+- **"Already countersigned by" named an id, not a person.** A second countersignature on a
+  grant or a purge was refused with "already countersigned by who_01M2…". The same ids stood
+  under "Written by" and "countersigned by" on both hub pages, in the log's "Who" column and in
+  `hub access-log` and `hub retention list`. All of them show the person's name now, including
+  people whose credential has since been withdrawn. The record still stores ids, and `--json`
+  output still carries them.
+
 - **The countersigner's log stopped at the hub's first 200 entries.** The page asked for 200
   entries and got the oldest, not the newest, so from entry 201 on nothing new appeared there,
   and `hub access-log` did the same with its `--limit`. For a works council this is the page

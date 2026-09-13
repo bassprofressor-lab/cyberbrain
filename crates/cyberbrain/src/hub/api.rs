@@ -1015,6 +1015,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
         requests,
         grants,
         purges,
+        names: hub.principal_names().unwrap_or_default(),
         log,
         devices,
         flash,
