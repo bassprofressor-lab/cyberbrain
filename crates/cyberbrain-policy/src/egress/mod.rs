@@ -962,17 +962,32 @@ impl Egress {
             ));
         }
 
-        // The same locality rule for both outbound paths, with the setting that relaxes it
-        // named per purpose: one says "note text may go to a public endpoint", the other
-        // "audit rows may leave this network". They are different decisions.
-        if matches!(
-            purpose,
-            EgressPurpose::LocalInference | EgressPurpose::AuditSync | EgressPurpose::HubEnrolment
-        ) {
-            let allow_public = match purpose {
-                EgressPurpose::AuditSync | EgressPurpose::HubEnrolment => self.cfg.allow_public_hub,
-                _ => self.cfg.allow_public_endpoint,
-            };
+        // The same locality rule for every path to an inference endpoint or a hub, with the
+        // setting that relaxes it named per destination: one says "note text may go to a
+        // public endpoint", the other "what this store sends its hub may leave this network".
+        // They are different decisions, and the refusal names the one that applies — it
+        // used to name the inference setting for a hub, so following its advice unlocked
+        // the wrong path and left the hub refused.
+        //
+        // Every hub purpose is listed, and the match has no catch-all, so a new one cannot
+        // be added without deciding. Note sync and erasure were missing here once: the
+        // register said a public hub needed allow_public_hub, and the gate let note content
+        // through to one without it.
+        let rule = match purpose {
+            EgressPurpose::LocalInference => Some((
+                "the inference endpoint",
+                "allow_public_endpoint",
+                self.cfg.allow_public_endpoint,
+            )),
+            EgressPurpose::AuditSync
+            | EgressPurpose::HubEnrolment
+            | EgressPurpose::NoteSync
+            | EgressPurpose::NoteErasure => {
+                Some(("the hub", "allow_public_hub", self.cfg.allow_public_hub))
+            }
+            EgressPurpose::ModelDownload | EgressPurpose::Terminal => None,
+        };
+        if let Some((what, setting, allow_public)) = rule {
             for a in &dest.addrs {
                 match locality(*a) {
                     Locality::Loopback | Locality::Private => {}
@@ -990,15 +1005,17 @@ impl Egress {
                     }
                     Locality::Public if allow_public => {
                         notes.push(format!(
-                            "{a} is PUBLIC, permitted by the setting for {}; this call is a transfer off this machine",
+                            "{a} is PUBLIC, permitted by {setting} for {}; this call is a transfer off this machine",
                             purpose_name(purpose)
                         ));
                     }
                     Locality::Public => {
                         return Err(format!(
-                            "{} resolves to {a}, a public address; the inference endpoint must be loopback or \
-                             private-range unless allow_public_endpoint is set",
-                            dest.host
+                            concat!(
+                                "{} resolves to {}, a public address; {} must be loopback or ",
+                                "private-range unless {} is set"
+                            ),
+                            dest.host, a, what, setting
                         ));
                     }
                     Locality::NotUnicast => {
@@ -1683,6 +1700,60 @@ mod tests {
             notes.contains("PUBLIC") && notes.contains("transfer"),
             "{notes}"
         );
+    }
+
+    /// Every path to a hub keeps the public-address rule, and its refusal names the hub's
+    /// setting. Two faults at once, before: the refusal told a hub operator to set
+    /// allow_public_endpoint, which unlocks note text to an inference endpoint and leaves the
+    /// hub refused; and note sync and erasure skipped the rule entirely, so note content went
+    /// to a public hub the audit rows were refused.
+    #[test]
+    fn every_hub_path_refuses_a_public_hub_and_names_the_hubs_setting() {
+        let hub = "http://evil.example.org:7788";
+        let on = |c: PolicyConfig| PolicyConfig {
+            hub_endpoint: Some(hub.into()),
+            allow_note_sync: true,
+            ..c
+        };
+        let purposes = [
+            EgressPurpose::AuditSync,
+            EgressPurpose::HubEnrolment,
+            EgressPurpose::NoteSync,
+            EgressPurpose::NoteErasure,
+        ];
+        let (g, _) = gate(on(cfg()));
+        for p in purposes {
+            let err = g
+                .permit(p, &format!("{hub}/api/v1/x"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("198.51.100.5"), "{p:?}: {err}");
+            assert!(err.contains("allow_public_hub"), "{p:?}: {err}");
+            assert!(err.contains("the hub"), "{p:?}: {err}");
+            assert!(
+                !err.contains("allow_public_endpoint") && !err.contains("inference"),
+                "{p:?} must not point at the inference setting: {err}"
+            );
+        }
+        let (g, _) = gate(on(PolicyConfig {
+            allow_public_endpoint: true,
+            ..cfg()
+        }));
+        for p in purposes {
+            assert!(
+                g.permit(p, &format!("{hub}/api/v1/x")).is_err(),
+                "{p:?}: the inference setting does not unlock a hub"
+            );
+        }
+        let (g, sink) = gate(on(PolicyConfig {
+            allow_public_hub: true,
+            ..cfg()
+        }));
+        for p in purposes {
+            g.permit(p, &format!("{hub}/api/v1/x")).unwrap();
+        }
+        let notes = sink.rows()[0].detail["notes"].to_string();
+        assert!(notes.contains("allow_public_hub"), "{notes}");
     }
 
     #[test]

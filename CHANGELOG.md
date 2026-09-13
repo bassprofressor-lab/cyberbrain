@@ -26,7 +26,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   proxy one guesser locks everybody out for the rest of the window. `docs/HUB.md` has the
   details. Closes a known gap named in the 0.6.0 release notes.
 
+- **Note sync and note erasure reached a hub on a public address without
+  `allow_public_hub`.** The gate applied the public-address rule to inference, audit
+  delivery and enrolment, and not to the two note paths, although the egress register said
+  it did. A store whose hub address resolved to a public address had its audit rows refused
+  and its notes sent. Every path to a hub now keeps the rule, and a new purpose cannot be
+  added without deciding which rule it falls under.
+
 ### Fixed
+
+- **Refusing a public hub address named the wrong setting.** The refusal said "the inference
+  endpoint must be loopback or private-range unless allow_public_endpoint is set". Following
+  it unlocked note text to a public inference endpoint and left the hub refused. It now says
+  "the hub" and names `allow_public_hub`.
 
 - **The countersigner's log stopped at the hub's first 200 entries.** The page asked for 200
   entries and got the oldest, not the newest, so from entry 201 on nothing new appeared there,
