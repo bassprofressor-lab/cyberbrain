@@ -1160,7 +1160,10 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
             .unwrap()
             .contains("no model_source")
     );
-    assert_eq!(paths[0]["destination_class"], "unresolved");
+    assert_eq!(
+        paths[0]["destination_class"], "none",
+        "\"none configured\" is not an address, and must not read as a hostname to warn about"
+    );
     assert_eq!(paths[0]["uses_total"], 0);
     assert_eq!(paths[1]["purpose"], "local-inference");
     assert_eq!(paths[1]["enabled"], true);

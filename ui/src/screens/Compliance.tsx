@@ -212,7 +212,9 @@ export function ComplianceScreen({ route }: { route: Route }) {
 function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof api.egress>>; auditRows: number | null }) {
   const t = useT();
   const pub = register.paths.filter((p) => p.destination_class === "public");
-  const local = register.paths.filter((p) => p.destination_class !== "public");
+  // Only paths with an address are "your own network". A path whose destination is a sentence
+  // ("not enrolled") has nowhere to send anything, and listing it here read as a warning.
+  const local = register.paths.filter((p) => p.destination_class !== "public" && p.destination_class !== "none");
   const pubUses = pub.reduce((a, p) => a + p.uses_total, 0);
   const pubBytes = pub.reduce((a, p) => a + p.bytes_out_total, 0);
   const localUses = local.reduce((a, p) => a + p.uses_total, 0);
@@ -359,7 +361,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
               <td className="py-2 pr-3">
                 <code className="break-all">{p.destination}</code>
                 <div className="mt-0.5">
-                  <Pill tone={p.destination_class === "public" ? "warn" : "ok"}>{p.destination_class}</Pill>
+                  <Pill tone={p.destination_class === "public" ? "warn" : p.destination_class === "none" ? "neutral" : "ok"}>{p.destination_class}</Pill>
                 </div>
               </td>
               <td className="py-2 pr-3 text-fg-muted max-w-[18rem]">

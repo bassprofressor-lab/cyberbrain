@@ -27,6 +27,8 @@ import {
   type CyberbrainApi,
   type DoctorFinding,
   type DoctorReport,
+  type EgressPath,
+  type EgressPurpose,
   type EgressRegister,
   type ForgetReport,
   type Frontmatter,
@@ -882,7 +884,30 @@ export const mockClient: CyberbrainApi = {
   },
 
   async egress(): Promise<EgressRegister> {
-    const path = (purpose: "model-download" | "local-inference") => {
+    const unused = (purpose: EgressPurpose, destination: string, data: string, carries: boolean, enabled: boolean, state: string, description: string): EgressPath => ({
+      purpose,
+      description,
+      destination,
+      destination_class: "none",
+      data,
+      permitted_by: ["eu", "ch", "off"],
+      enabled,
+      disabled_reason: enabled ? null : state,
+      last_used: null,
+      uses_total: 0,
+      bytes_out_total: 0,
+      state,
+      carries_note_content: carries,
+    });
+    // Texts as the server's register has them for a store that is not enrolled.
+    const hubPaths = (): EgressPath[] => [
+      unused("audit-sync", "not enrolled", "HTTP POST of audit rows: timestamp, actor, action, subject and the chain hashes. What a note said is not in them", false, false, "disabled: this store is not enrolled with a hub", "sends this store's audit rows to the hub you enrolled with, with this machine's name and the program version; rows describe what happened, never what a note said"),
+      unused("note-sync", "not enrolled", "HTTP POST of whole notes: frontmatter and body, for the bereiche this device was granted. Never rings 0 or 1, never a note without a bereich", true, false, "disabled: this store is not enrolled with a hub", "sends note content to the hub you enrolled with, for the bereiche this device was granted; never rings 0 or 1, and never a note without a bereich"),
+      unused("note-erasure", "not enrolled", "HTTP POST of a bereich and a note name, so the hub can remove its copy. The note itself is not in the request", false, false, "disabled: this store is not enrolled with a hub", "asks the hub to erase one note: a bereich and a name leave this machine, never the note itself"),
+      unused("hub-enrolment", "the address in a fleet invitation, when one is enrolled", "HTTP POST of the invitation's code, this machine's name and the project folder's name. No note and no audit row", false, true, "available on request: used once, when a fleet invitation is enrolled, never on a timer", "asks the hub named in a fleet invitation for a device of this store's own: the invitation's code, this machine's name and the project folder's name"),
+      unused("terminal", "wherever you point it", "whatever you type and whatever that program sends; it can read this store, because you can", true, false, "not mediated by this gate. A terminal exists only while `serve --terminal` is running; what runs in one is yours, in your name, and neither permitted nor recorded here.", "whatever you run in a terminal; this program neither mediates nor records it"),
+    ];
+    const path = (purpose: EgressPurpose) => {
       const prefix = `${purpose}:`;
       const permitted = events.filter((e) => e.action === "egress.permitted" && e.subject.startsWith(prefix));
       const bytesOut = events.filter((e) => e.action === "egress.completed" && e.subject.startsWith(prefix)).reduce((a, e) => a + Number(e.detail.bytes_out ?? 0), 0);
@@ -928,6 +953,10 @@ export const mockClient: CyberbrainApi = {
           state: infState,
           carries_note_content: true,
         },
+        // The rest of the register, as a store that is not enrolled with a hub has it. The
+        // mock sent only the first two for a long time, which is how the page came to be
+        // written for two purposes while the server sent seven.
+        ...hubPaths(),
       ],
     });
   },

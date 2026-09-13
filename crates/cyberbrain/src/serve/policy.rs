@@ -39,6 +39,21 @@ pub fn endpoint_class(url: &str) -> &'static str {
     }
 }
 
+/// types.ts `DestinationClass`: an endpoint class, or `none` for a register entry that has
+/// no address to classify.
+///
+/// Four of the seven purposes name their destination in words when there is nothing
+/// configured — "not enrolled", "wherever you point it". Classified as endpoints those came
+/// out `unresolved`, which is the class for a hostname checked on every call and which the
+/// compliance overview rightly warns about; so a fresh store read "Nothing has left this
+/// machine" under a warning colour, and listed the sentences as its own network.
+fn destination_class(destination: &str) -> &'static str {
+    match Destination::parse(destination) {
+        Ok(_) => endpoint_class(destination),
+        Err(_) => "none",
+    }
+}
+
 fn detail_u64(e: &AuditEvent, key: &str) -> u64 {
     e.detail.get(key).and_then(Value::as_u64).unwrap_or(0)
 }
@@ -98,7 +113,7 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
             paths.push(EgressPath {
                 purpose: entry.purpose,
                 description: entry.purpose.describe(),
-                destination_class: endpoint_class(&destination),
+                destination_class: destination_class(&destination),
                 destination,
                 data: entry.data,
                 permitted_by: entry.permitted_by.to_vec(),

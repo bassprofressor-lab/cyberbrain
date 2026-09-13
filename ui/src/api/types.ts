@@ -478,17 +478,24 @@ export interface Graph {
 
 // ───────────────────────────────────────────────────────────────────────────── /policy
 
-/** `cyberbrain_core::EgressPurpose`, kebab-case. The list is closed by construction. */
-export type EgressPurpose = "model-download" | "local-inference";
+/**
+ * `cyberbrain_core::EgressPurpose`, kebab-case. The list is closed by construction — on the
+ * server. Here it has to be kept in step by hand; it listed two purposes while the server
+ * sent seven, and nothing noticed because the mock sent two as well.
+ */
+export type EgressPurpose = "model-download" | "local-inference" | "audit-sync" | "note-sync" | "note-erasure" | "hub-enrolment" | "terminal";
+
+/** `serve::policy::destination_class`: an endpoint class, or `none` when the register entry has no address, only words ("not enrolled", "wherever you point it"). */
+export type DestinationClass = EndpointClass | "none";
 
 /** `wire::EgressPath`. */
 export interface EgressPath {
   purpose: EgressPurpose;
   /** `EgressPurpose::describe`. */
   description: string;
-  /** For inference the configured base URL; for downloads the configured model source, or "none configured". */
+  /** The configured address (inference base URL, model source, hub), or words saying there is none. */
   destination: string;
-  destination_class: EndpointClass;
+  destination_class: DestinationClass;
   /** What is sent. Plain language, from the register, not inferred. */
   data: string;
   /** Always all three: the gate is not a profile feature. */

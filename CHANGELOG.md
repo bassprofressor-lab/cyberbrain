@@ -47,6 +47,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   people whose credential has since been withdrawn. The record still stores ids, and `--json`
   output still carries them.
 
+- **A fresh store's compliance overview warned while saying nothing had left.** The page
+  knew two egress purposes while the server sends seven. Four of them name their destination
+  in words when nothing is configured, "not enrolled" or "wherever you point it", and the
+  server classified those words as an unresolved hostname, which the overview warns about. So
+  the headline "Nothing has left this machine." came in a warning colour, with the sentences
+  listed as "your own network". Such entries are now class `none`, are not listed as a
+  network, and do not colour the headline. The page's type and its mock know all seven
+  purposes.
+
 - **The countersigner's log stopped at the hub's first 200 entries.** The page asked for 200
   entries and got the oldest, not the newest, so from entry 201 on nothing new appeared there,
   and `hub access-log` did the same with its `--limit`. For a works council this is the page
