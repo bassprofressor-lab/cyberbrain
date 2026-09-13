@@ -1,4 +1,5 @@
-//! How many times one address may try an enrolment code that does not exist.
+//! How many times one address may try an enrolment code that does not exist, and how many
+//! refused sign-ins it writes into the hub's log (`SignInRefusals`).
 //!
 //! # Why a code needs this at all
 //!
@@ -105,6 +106,48 @@ impl Window {
 #[derive(Debug, Default)]
 pub struct EnrolAttempts {
     by_source: Mutex<HashMap<Source, Window>>,
+}
+
+/// Refused sign-ins on the hub's page, counted per address for one purpose only: deciding
+/// what goes into the hub's log.
+///
+/// Unlike enrolment there is no lock. A lock on the password would let anybody on the
+/// network keep the operator out of their own hub by typing wrong passwords at it
+/// (`admin.rs` says the same about the delay). What the operator gets instead is the record:
+/// every refusal from an address, up to `MAX_RECORDED` per window, and then one line saying
+/// that more came and were not written down, because the log cannot be emptied.
+#[derive(Debug, Default)]
+pub struct SignInRefusals {
+    by_source: Mutex<HashMap<Source, Window>>,
+}
+
+/// What to write for one refused sign-in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Entry {
+    /// The refusal itself.
+    Refusal,
+    /// The first refusal past the cap: say that further ones from this address are not
+    /// written until the window ends, in this long.
+    Quiet(Duration),
+    /// Past the cap and already said so.
+    Nothing,
+}
+
+impl SignInRefusals {
+    pub fn refused(&self, ip: IpAddr, now: Instant) -> Entry {
+        let mut map = self.by_source.lock().unwrap_or_else(|p| p.into_inner());
+        let source = EnrolAttempts::slot(&mut map, Source::of(ip), now);
+        let w = map.entry(source).or_insert_with(|| Window::new(now));
+        w.roll(now);
+        w.recorded = w.recorded.saturating_add(1);
+        match w.recorded {
+            n if n <= MAX_RECORDED => Entry::Refusal,
+            n if n == MAX_RECORDED + 1 => {
+                Entry::Quiet(WINDOW.saturating_sub(now.saturating_duration_since(w.opened)))
+            }
+            _ => Entry::Nothing,
+        }
+    }
 }
 
 /// What a settled refusal means for the log.
@@ -298,6 +341,36 @@ mod tests {
             a.admit(ip("192.0.2.7"), t0).unwrap().refused(true, t0);
         }
         assert!(a.admit(ip("::ffff:192.0.2.7"), t0).is_err());
+    }
+
+    #[test]
+    fn refused_sign_ins_are_recorded_up_to_the_cap_then_said_once_and_never_locked() {
+        let s = SignInRefusals::default();
+        let t0 = Instant::now();
+        let entries: Vec<Entry> = (0..MAX_RECORDED + 5)
+            .map(|_| s.refused(ip("192.168.1.60"), t0))
+            .collect();
+        assert!(
+            entries[..MAX_RECORDED as usize]
+                .iter()
+                .all(|e| *e == Entry::Refusal)
+        );
+        assert_eq!(entries[MAX_RECORDED as usize], Entry::Quiet(WINDOW));
+        assert!(
+            entries[MAX_RECORDED as usize + 1..]
+                .iter()
+                .all(|e| *e == Entry::Nothing)
+        );
+        assert_eq!(
+            s.refused(ip("192.168.1.61"), t0),
+            Entry::Refusal,
+            "another address has its own count"
+        );
+        assert_eq!(
+            s.refused(ip("192.168.1.60"), t0 + WINDOW),
+            Entry::Refusal,
+            "a new window records again"
+        );
     }
 
     #[test]

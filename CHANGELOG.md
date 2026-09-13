@@ -26,6 +26,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   proxy one guesser locks everybody out for the rest of the window. `docs/HUB.md` has the
   details. Closes a known gap named in the 0.6.0 release notes.
 
+- **A refused sign-in on the hub's page left no trace.** A wrong password cost 400 ms and
+  was otherwise forgotten, so an operator could not tell that somebody had been trying. Every
+  refused sign-in, and every wrong current password on the password form, is now a
+  `login.refused` line in the hub's own log with the address it came from. A credential that
+  was withdrawn and is still being tried is recorded as such, with whose it was, while the
+  caller hears the same sentence as for any wrong password. What was typed is not recorded.
+  There is still no lockout, on purpose. One address writes at most twenty lines per ten
+  minutes, then one `login.unrecorded` line.
+
 - **Note sync and note erasure reached a hub on a public address without
   `allow_public_hub`.** The gate applied the public-address rule to inference, audit
   delivery and enrolment, and not to the two note paths, although the egress register said

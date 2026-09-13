@@ -36,6 +36,8 @@ pub struct HubState {
     pub flash: Mutex<Option<Result<String, String>>>,
     /// Enrolment codes tried per address, so guessing is slowed, locked and on record.
     pub enrol_attempts: Arc<super::attempts::EnrolAttempts>,
+    /// Refused sign-ins per address, so they are on record without filling it.
+    pub sign_in_refusals: super::attempts::SignInRefusals,
 }
 
 pub fn router(state: Arc<HubState>) -> Router {
@@ -150,6 +152,39 @@ async fn stumble() {
         super::admin::FAILURE_DELAY_MS,
     ))
     .await;
+}
+
+/// Put a refused password or credential in the hub's log, as far as the address's share of
+/// the log allows. Never what was typed. A write that fails goes to the service log instead:
+/// a refusal must not become a 500, and must not go unmentioned either.
+fn refused_sign_in(
+    state: &HubState,
+    hub: &HubStore,
+    from: &std::net::SocketAddr,
+    what: serde_json::Value,
+) {
+    use super::attempts::Entry;
+    let address = from.ip().to_canonical().to_string();
+    let now = jiff::Timestamp::now().to_string();
+    let written = match state
+        .sign_in_refusals
+        .refused(from.ip(), std::time::Instant::now())
+    {
+        Entry::Refusal => hub.record_sign_in_refusal(&address, what, &now).map(|_| ()),
+        Entry::Quiet(left) => {
+            super::service::log(&format!(
+                "sign-in: more than {} refusals from {address}; the rest of this window is not \
+                 recorded",
+                super::attempts::MAX_RECORDED
+            ));
+            hub.record_sign_ins_unrecorded(&address, left.as_secs(), &now)
+                .map(|_| ())
+        }
+        Entry::Nothing => Ok(()),
+    };
+    if let Err(e) = written {
+        super::service::log(&format!("sign-in refusal from {address} not recorded: {e}"));
+    }
 }
 
 async fn page(
@@ -271,7 +306,28 @@ async fn login(
                         name: p.name.clone(),
                         role: p.role,
                     }),
-                    _ => None,
+                    // The caller hears the same sentence either way. The log does not: a
+                    // credential that was withdrawn and is still being tried is the one
+                    // refusal the operator most needs to see, and whose it was.
+                    Ok(Some(p)) => {
+                        refused_sign_in(
+                            &state,
+                            &hub,
+                            &from,
+                            json!({ "form": "sign-in", "credential": "withdrawn",
+                                    "principal": p.id, "name": p.name }),
+                        );
+                        None
+                    }
+                    _ => {
+                        refused_sign_in(
+                            &state,
+                            &hub,
+                            &from,
+                            json!({ "form": "sign-in", "credential": "unknown" }),
+                        );
+                        None
+                    }
                 }
             }
         }
@@ -350,6 +406,14 @@ async fn change_password(
         // The current one, even though the session already proves who this is: a cookie left
         // open on a shared machine should not be enough to change the password on it.
         if !super::admin::verify(&hub, &form.current) {
+            // A session and a wrong password: an open cookie on somebody else's desk, or a
+            // typo. Either way it goes on record like a refused sign-in.
+            refused_sign_in(
+                &state,
+                &hub,
+                &from,
+                json!({ "form": "password-change", "credential": "unknown" }),
+            );
             Err("The current password is not right.".to_string())
         } else if form.password != form.again {
             Err("The two new ones did not match.".to_string())

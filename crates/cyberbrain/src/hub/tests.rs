@@ -1901,6 +1901,7 @@ fn state_for(hub: HubStore, encrypted: bool) -> Arc<super::api::HubState> {
         flash: std::sync::Mutex::new(None),
         encrypted,
         enrol_attempts: Default::default(),
+        sign_in_refusals: Default::default(),
     })
 }
 
@@ -1926,6 +1927,141 @@ fn cookie_of(r: &axum::response::Response) -> String {
         .get(axum::http::header::SET_COOKIE)
         .map(|v| v.to_str().unwrap().to_string())
         .unwrap_or_default()
+}
+
+fn refused_sign_ins(state: &Arc<super::api::HubState>) -> Vec<serde_json::Value> {
+    state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == "login.refused")
+        .map(|e| e.detail)
+        .collect()
+}
+
+/// A refused sign-in is on record: from where, and — for a credential that was withdrawn —
+/// whose. The caller hears the same sentence in every case, and what was typed is nowhere.
+#[tokio::test]
+async fn a_refused_sign_in_is_recorded_with_where_it_came_from() {
+    let hub = hub_with_password("correct horse battery");
+    let (gone, gone_token) = hub
+        .add_principal("M. Kraus", super::access::Role::Auditor, NOW)
+        .unwrap();
+    assert!(hub.revoke_principal(&gone.id, NOW).unwrap());
+    let state = state_for(hub, true);
+
+    let body = |r: axum::response::Response| async move {
+        let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+        String::from_utf8_lossy(&b).into_owned()
+    };
+    let unknown =
+        body(sign_in_from(state.clone(), "192.168.1.77:50000", "guessed-password").await).await;
+    let withdrawn =
+        body(sign_in_from(state.clone(), "192.168.1.78:50000", &gone_token).await).await;
+    assert_eq!(
+        unknown, withdrawn,
+        "the caller learns nothing about which it was"
+    );
+
+    let rows = refused_sign_ins(&state);
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0]["from"], "192.168.1.77");
+    assert_eq!(rows[0]["credential"], "unknown");
+    assert_eq!(rows[1]["from"], "192.168.1.78");
+    assert_eq!(rows[1]["credential"], "withdrawn");
+    assert_eq!(rows[1]["name"], "M. Kraus");
+    let text = serde_json::json!(rows).to_string();
+    assert!(
+        !text.contains("guessed-password") && !text.contains(&gone_token),
+        "what was typed is not in the log: {text}"
+    );
+
+    let r = sign_in_from(state.clone(), "192.168.1.77:50000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        refused_sign_ins(&state).len(),
+        2,
+        "a good sign-in is not a refusal"
+    );
+    assert!(state.hub.lock().unwrap().verify_hub_chain().is_ok());
+}
+
+/// One address fills at most its share of a log that cannot be emptied, says once that it
+/// went past it, and is still never locked out: the operator can sign in afterwards.
+#[tokio::test]
+async fn refused_sign_ins_are_capped_per_address_and_never_lock() {
+    use super::attempts::MAX_RECORDED;
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let mut burst = tokio::task::JoinSet::new();
+    for n in 0..MAX_RECORDED + 5 {
+        let state = state.clone();
+        burst.spawn(
+            async move { sign_in_from(state, "10.9.9.9:40000", &format!("wrong-{n}")).await },
+        );
+    }
+    while let Some(r) = burst.join_next().await {
+        assert_eq!(
+            r.unwrap().status(),
+            StatusCode::OK,
+            "a refusal is the sign-in page again"
+        );
+    }
+    assert_eq!(refused_sign_ins(&state).len(), MAX_RECORDED as usize);
+    let quiet: Vec<_> = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(10_000)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == "login.unrecorded")
+        .collect();
+    assert_eq!(quiet.len(), 1, "said once, not once per refusal");
+    assert_eq!(quiet[0].detail["from"], "10.9.9.9");
+
+    let r = sign_in_from(state.clone(), "10.9.9.9:40000", "correct horse battery").await;
+    assert_eq!(
+        r.status(),
+        StatusCode::SEE_OTHER,
+        "no lock on the operator's own password"
+    );
+}
+
+/// A wrong current password on the password form is recorded like a refused sign-in.
+#[tokio::test]
+async fn a_wrong_current_password_on_the_change_form_is_recorded() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/password")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", &cookie)
+        .body(Body::from(
+            "current=not-it&password=another+long+one&again=another+long+one",
+        ))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let rows = refused_sign_ins(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["form"], "password-change");
+    assert_eq!(rows[0]["from"], "192.168.1.20");
+    assert!(super::admin::verify(
+        &state.hub.lock().unwrap(),
+        "correct horse battery"
+    ));
 }
 
 /// A signed-in principal is not the administrator.

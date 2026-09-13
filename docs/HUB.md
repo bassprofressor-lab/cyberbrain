@@ -358,6 +358,15 @@ signs everybody out, which is what you want after an upgrade), and a wrong passw
 fixed delay rather than a lockout: locking out an administrator is a way to take a hub away
 from the person who runs it.
 
+What a lockout would have been for is in the hub's own log instead. Every refused sign-in, and
+every wrong current password on the form that changes it, is a `login.refused` line with the
+address it came from. A credential that was withdrawn and is still being tried says so, with
+whose it was; the person trying it gets the same answer as for any wrong password. What was
+typed is never written down. One address writes at most twenty such lines per ten minutes,
+since the log cannot be deleted from; past that there is one `login.unrecorded` line, so a
+quiet stretch after a burst is not read as the burst having stopped. `cyberbrain hub
+access-log` shows them.
+
 **This is not the roles model.** It is one account for the machine's administration, which is
 what the fleet view is. Nothing reachable with it can read an activity row — that still needs
 an auditor, a reason and a countersignature, further down this page.

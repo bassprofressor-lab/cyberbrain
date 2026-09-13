@@ -2760,6 +2760,38 @@ impl HubStore {
         )
     }
 
+    /// Put a refused sign-in in the hub's own log. `what` says which form and, for a
+    /// credential that was withdrawn, whose it was; never what was typed.
+    pub fn record_sign_in_refusal(
+        &self,
+        from: &str,
+        mut what: serde_json::Value,
+        now: &str,
+    ) -> Result<String> {
+        what["from"] = serde_json::json!(from);
+        self.record("sign-in", "login.refused", what, now)
+    }
+
+    /// Say that more refused sign-ins came from an address than are written down, once per
+    /// window, so a quiet log after a burst is not read as the burst having stopped.
+    pub fn record_sign_ins_unrecorded(
+        &self,
+        from: &str,
+        seconds: u64,
+        now: &str,
+    ) -> Result<String> {
+        self.record(
+            "sign-in",
+            "login.unrecorded",
+            serde_json::json!({
+                "from": from,
+                "recorded": super::attempts::MAX_RECORDED,
+                "for_seconds": seconds,
+            }),
+            now,
+        )
+    }
+
     /// Say that an address was turned away for guessing, once per lock, with how long.
     pub fn record_enrol_lock(&self, from: &str, seconds: u64, now: &str) -> Result<String> {
         self.record(
