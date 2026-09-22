@@ -154,7 +154,9 @@ pub fn catalogue() -> Vec<Tool> {
                 "Result: `outcome` is `written`, `held` or `conflict`. A held write is a \
                  decision, not a failure: the PII findings are returned and nothing was \
                  written; answer with `choice` (redact, mark-reviewed, proceed-flagged), \
-                 `force` (same as proceed-flagged), or a changed body.",
+                 `force` (same as proceed-flagged), or a changed body. Rings 0 and 1 belong \
+                 to the operator and are refused here with `policy-refusal`; hand the text \
+                 to the operator to `cyberbrain propose` instead.",
             ),
             input_schema: json!({
                 "type": "object",

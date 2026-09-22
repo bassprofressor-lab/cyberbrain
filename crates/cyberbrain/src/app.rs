@@ -1779,6 +1779,54 @@ impl App {
         }
     }
 
+    /// Rings 0 and 1 belong to the operator (SPEC §3.2): session start injects them as
+    /// invariants, and they outrank everything below them.
+    ///
+    /// 2026-09-22: until now only the hub path (`apply_pulled`) kept that rule; `App::write`
+    /// did not look at the actor at all. Over MCP, `write {ring: 0}` therefore landed in
+    /// `notes/r0/`, and an agent could plant a standing instruction in every future session
+    /// start. The check sits here, where the actor is known, so that every path through
+    /// `write` meets it rather than each caller having to remember it. The operator is
+    /// `Operator` (CLI, web UI) and `Cli`; anybody else is pointed at `propose`. Nobody else
+    /// may overwrite an existing ring 0/1 note either, whatever ring they ask for.
+    fn refuse_resident_unless_operator(
+        &self,
+        name: &str,
+        ring: Ring,
+        existing: Option<&Note>,
+        dry_run: bool,
+    ) -> Result<()> {
+        if matches!(self.actor, Actor::Operator | Actor::Cli) {
+            return Ok(());
+        }
+        let held = existing.map(|n| n.front.ring).filter(|r| r.is_resident());
+        let Some(r) = held.or(Some(ring).filter(|r| r.is_resident())) else {
+            return Ok(());
+        };
+        let reason = format!(
+            "ring {} belongs to the operator; {} may not write it (note {name}). Propose the \
+             text instead — `cyberbrain propose --ring {} --kind … --name {name}` — and the \
+             operator accepts it with `cyberbrain review {name} --accept`",
+            r.as_u8(),
+            self.actor,
+            r.as_u8(),
+        );
+        // A refusal is the most interesting audit row there is (§12.1). A dry run writes
+        // nothing, this row included.
+        if !dry_run {
+            self.policy.audit().record(
+                &self.actor,
+                AuditAction::PolicyRefusal,
+                format!("name:{name}"),
+                serde_json::json!({ "ring": r, "requested_ring": ring, "reason": reason }),
+            )?;
+        }
+        Err(Error::PolicyRefusal {
+            profile: "ring-owner".to_string(),
+            reason,
+        })
+    }
+
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
         let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
@@ -1799,6 +1847,7 @@ impl App {
             Err(Error::NoSuchNote(_)) => None,
             Err(e) => return Err(e),
         };
+        self.refuse_resident_unless_operator(&name, req.ring, existing.as_ref(), req.dry_run)?;
         if let (Some(cur), Some(expected)) = (&existing, req.expected_updated)
             && cur.front.updated != expected
         {

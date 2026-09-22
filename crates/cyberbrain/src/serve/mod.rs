@@ -9,6 +9,9 @@
 //! - **Loopback only, not configurable** ([`serve`]). There is no authentication because
 //!   there is no remote access to authenticate; the two facts are tied together by the
 //!   absence of any bind-address parameter.
+//! - **Only under its own name** ([`origin::host_guard`]): a `Host` other than
+//!   `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` is refused with 421 on every
+//!   route. Loopback alone does not stop a browser that was pointed here by DNS rebinding.
 //! - **One failure taxonomy** ([`error`]): `exit_code` on the wire is
 //!   `cyberbrain_core::Error::exit_code()`.
 //! - **The two typed outcomes are not errors** ([`notes`]): a held write and a stale
@@ -106,6 +109,7 @@ pub fn router_with(
         terminal,
         origins: origins.clone(),
     });
+    let hosts = Arc::new(origin::hosts_of(&origins));
     let ours = Arc::new(origins);
     let api = Router::new()
         .route("/status", get(ops::status))
@@ -149,6 +153,15 @@ pub fn router_with(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let ours = ours.clone();
                 async move { origin::guard(ours, req, next).await }
+            },
+        ))
+        // Outside the origin rule, and around the page as well as the API (2026-09-22): a
+        // request under somebody else's name is DNS rebinding, and there the origin rule sees
+        // a same-origin request and a read sees its own answer. See `origin.rs`.
+        .layer(axum::middleware::from_fn(
+            move |req: axum::extract::Request, next: axum::middleware::Next| {
+                let hosts = hosts.clone();
+                async move { origin::host_guard(hosts, req, next).await }
             },
         ))
         .layer(SetResponseHeaderLayer::overriding(

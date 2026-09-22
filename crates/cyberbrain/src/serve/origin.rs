@@ -24,8 +24,22 @@
 //! - Neither present → allowed. That is a program on this machine, which needs no browser to
 //!   read this store and gains nothing from being refused here.
 //!
-//! Reads are untouched. A cross-site `GET` cannot see its own answer, and refusing them
-//! would break nothing an attacker relies on while breaking every link into the page.
+//! Reads are untouched by *this* rule: a cross-site `GET` cannot see its own answer, and
+//! refusing them would break every link into the page. That holds only while the page asking
+//! really is cross-site, and the browser decides that by the **name** in the address bar, not
+//! by the address it connected to.
+//!
+//! 2026-09-22: this paragraph used to end at "cannot see its own answer", and that was wrong
+//! the moment the name is the attacker's. DNS rebinding: `attacker.example` resolves to the
+//! attacker's server, serves a script, then resolves to `127.0.0.1`. The script's next
+//! `fetch("/api/v1/notes")` goes to this server and is *same-origin* in the browser's eyes,
+//! so it reads the answer — the whole store — and carries no `Origin` and
+//! `Sec-Fetch-Site: same-origin`, which the rule above lets through. Reproduced with
+//! `curl -H "Host: attacker.example:17777" http://127.0.0.1:17777/api/v1/notes`: 200 and the
+//! note list. The one thing the attacker cannot change is the `Host` header, which carries
+//! their name. So [`host_guard`] runs before everything, on every route including the page
+//! and its assets, and answers only the names this server was bound under: `127.0.0.1:<port>`,
+//! `localhost:<port>` and `[::1]:<port>`. Anything else is `421 Misdirected Request`.
 
 use axum::extract::Request;
 use axum::http::{Method, StatusCode, header};
@@ -89,6 +103,67 @@ pub async fn guard(ours: std::sync::Arc<Vec<String>>, req: Request, next: Next) 
         // The taxonomy's policy refusal (SPEC §8.1): understood and declined.
         Err(why) => (
             StatusCode::FORBIDDEN,
+            axum::Json(serde_json::json!({
+                "error": { "code": "policy-refusal", "message": why, "exit_code": 3 }
+            })),
+        )
+            .into_response(),
+    }
+}
+
+/// The `Host` values this server answers to, from its own origins (`http://127.0.0.1:P`,
+/// `http://localhost:P`), plus `[::1]:P` for each port. A literal loopback address cannot be
+/// rebound — nobody can make their name *be* `[::1]` — so it is safe to accept even though
+/// the bind itself is IPv4 only.
+pub fn hosts_of(origins: &[String]) -> Vec<String> {
+    let mut hosts: Vec<String> = origins
+        .iter()
+        .filter_map(|o| o.strip_prefix("http://"))
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let ports: Vec<String> = hosts
+        .iter()
+        .filter_map(|h| h.rsplit_once(':').map(|(_, p)| p.to_string()))
+        .collect();
+    for p in ports {
+        let v6 = format!("[::1]:{p}");
+        if !hosts.contains(&v6) {
+            hosts.push(v6);
+        }
+    }
+    hosts
+}
+
+/// Whether a request naming `host` is for this server. `None` — no `Host` header and no
+/// authority in the request line — is a program on this machine speaking HTTP/1.0 or
+/// building requests by hand: a browser always sends `Host`, and DNS rebinding needs a
+/// browser. Refusing it would protect nothing that reading the store's files directly does
+/// not already give away.
+pub fn host_allowed(host: Option<&str>, ours: &[String]) -> Result<(), String> {
+    let Some(host) = host else {
+        return Ok(());
+    };
+    if ours.iter().any(|o| o.eq_ignore_ascii_case(host)) {
+        return Ok(());
+    }
+    Err(format!(
+        "this server answers to {} only, not to `{host}`. A page that reached it under \
+         another name is not this store's page.",
+        ours.join(", ")
+    ))
+}
+
+pub async fn host_guard(ours: std::sync::Arc<Vec<String>>, req: Request, next: Next) -> Response {
+    let host = req
+        .headers()
+        .get(header::HOST)
+        .map(|v| v.to_str().unwrap_or("\u{fffd}").to_string())
+        // HTTP/2 carries it as the request's authority instead of a header.
+        .or_else(|| req.uri().authority().map(|a| a.as_str().to_string()));
+    match host_allowed(host.as_deref(), &ours) {
+        Ok(()) => next.run(req).await,
+        Err(why) => (
+            StatusCode::MISDIRECTED_REQUEST,
             axum::Json(serde_json::json!({
                 "error": { "code": "policy-refusal", "message": why, "exit_code": 3 }
             })),
@@ -171,5 +246,33 @@ mod tests {
                 "{method} was not checked"
             );
         }
+    }
+
+    #[test]
+    fn only_the_names_this_server_was_bound_under_are_answered() {
+        let hosts = hosts_of(&ours());
+        assert_eq!(hosts, ["127.0.0.1:7777", "localhost:7777", "[::1]:7777"]);
+        for ok in [
+            "127.0.0.1:7777",
+            "localhost:7777",
+            "LOCALHOST:7777",
+            "[::1]:7777",
+        ] {
+            assert!(host_allowed(Some(ok), &hosts).is_ok(), "{ok}");
+        }
+        // The rebinding case, and its near misses: another port, no port, a suffix trick.
+        for bad in [
+            "attacker.example:7777",
+            "127.0.0.1:7778",
+            "127.0.0.1",
+            "localhost",
+            "localhost.attacker.example:7777",
+            "127.0.0.1:7777.attacker.example",
+            "",
+        ] {
+            let why = host_allowed(Some(bad), &hosts).unwrap_err();
+            assert!(why.contains("127.0.0.1:7777"), "{why}");
+        }
+        assert!(host_allowed(None, &hosts).is_ok(), "a program without Host");
     }
 }

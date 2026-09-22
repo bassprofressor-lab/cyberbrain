@@ -486,6 +486,14 @@ Rules the shapes must obey:
   program on this machine and is allowed, the same reasoning as §8.3. Reads are untouched — a
   cross-site read cannot see its own answer.
 
+  That last sentence holds only while the page really is cross-site, and the browser judges
+  that by the name, not the address. With DNS rebinding a page's own name resolves to
+  `127.0.0.1`, its reads are same-origin and see every answer, and its writes pass the rule
+  above. So before any of this, on every route including the page and its assets, the `Host`
+  must be one of the names the server was bound under — `127.0.0.1:<port>`,
+  `localhost:<port>`, `[::1]:<port>` — or the answer is `421 Misdirected Request`. A request
+  with no `Host` at all is a program, not a browser, and is allowed (2026-09-22).
+
   This is one rule in one place rather than one per route. Before it, the writing routes were
   protected only by `axum::Json` insisting on `application/json` and thereby forcing a
   preflight, which is an accident of an extractor rather than a decision, and the accident

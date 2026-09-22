@@ -14,6 +14,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Security
 
+- **An agent could write rings 0 and 1 over MCP.** Those two rings are the operator's: every
+  session start injects them as invariants that outrank everything else. The hub path refused
+  them, but `write` itself never asked who was writing, so `write {ring: 0}` through
+  `cyberbrain mcp` put a note into `notes/r0/`, and from then on into every session an agent
+  started. A standing prompt injection, one tool call away. Now only the operator (the CLI
+  and the web UI) writes rings 0 and 1. MCP and every other actor get a policy refusal that
+  names `cyberbrain propose` as the way in, the refusal is a `policy.refusal` row in the audit
+  log, and overwriting an existing ring 0 or 1 note under another ring is refused the same
+  way. MCP offers no delete, rename or import, so `write` was the only door.
+
+- **`cyberbrain serve` answered under any name, so a web page could read the store.** The
+  server binds loopback only and has no sign-in, and a cross-site page could not read its
+  answers — unless the page's own name pointed here. With DNS rebinding a site resolves its
+  name to `127.0.0.1` after loading, and the browser then treats the API as that site's own:
+  `curl -H "Host: attacker.example:17777" http://127.0.0.1:17777/api/v1/notes` returned the
+  note list. Every route, the page and its files included, now answers only under
+  `127.0.0.1:<port>`, `localhost:<port>` and `[::1]:<port>`, and anything else gets
+  `421 Misdirected Request`. Opening the page under another name that points at this machine
+  (an `/etc/hosts` alias, a reverse proxy) no longer works, and neither does an SSH tunnel
+  whose local port differs from the server's (`ssh -L 8080:127.0.0.1:17777` sends
+  `Host: localhost:8080`); forward the same port number, or use one of the three names.
+
 - **A hub answered guessed enrolment codes at full speed and wrote none of them down.** The
   code's randomness made guessing hopeless, but the person running the hub had no way to see
   that somebody was trying. Every refused enrolment is now in the hub's own log as

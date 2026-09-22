@@ -44,8 +44,10 @@ impl Fixture {
         App::open(Some(&self.store), Actor::Hook("test".into())).unwrap()
     }
 
+    /// Seeds the store as the operator would. Rings 0 and 1 are the operator's to write
+    /// (2026-09-22); a hook-actor `App` is refused them, and seeding is not the hook's work.
     fn write(&self, ring: Ring, name: &str, body: &str) {
-        let app = self.open();
+        let app = App::open(Some(&self.store), Actor::Operator).unwrap();
         let out = app
             .write(WriteRequest {
                 ring,

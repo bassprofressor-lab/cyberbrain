@@ -1388,10 +1388,11 @@ async fn the_bind_is_loopback_and_the_port_is_the_only_knob() {
     let addr = listener.local_addr().unwrap();
     assert!(addr.ip().is_loopback());
     let app = fx.app.clone();
+    let origins = vec![format!("http://{addr}")];
     let server = tokio::spawn(async move {
         axum::serve(
             listener,
-            super::router_with(app, PathBuf::new(), None, Vec::new()),
+            super::router_with(app, PathBuf::new(), None, origins),
         )
         .await
         .unwrap();
@@ -1416,6 +1417,86 @@ async fn the_bind_is_loopback_and_the_port_is_the_only_knob() {
         "{body}"
     );
     assert!(body.contains("\"version\""), "{body}");
+    server.abort();
+}
+
+/// DNS rebinding (2026-09-22). A browser pointed at `attacker.example`, which then resolves
+/// to 127.0.0.1, sends its requests here with `Host: attacker.example:<port>` and treats the
+/// answers as same-origin — so it reads them. Over a real socket, because the `Host` header
+/// is what a real client sends: every route, the page included, answers only under the
+/// names the server was bound as.
+#[tokio::test]
+async fn a_request_under_another_name_is_refused_on_every_route() {
+    let fx = Fx::new();
+    let (st, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "the store", "front": { "name": "secret", "ring": 2, "kind": "knowledge" } })),
+        )
+        .await;
+    assert!(st.is_success(), "{st} {v}");
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    let port = addr.port();
+    // What `serve` computes from the address it bound.
+    let origins = vec![
+        format!("http://127.0.0.1:{port}"),
+        format!("http://localhost:{port}"),
+    ];
+    let app = fx.app.clone();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            super::router_with(app, PathBuf::new(), None, origins),
+        )
+        .await
+        .unwrap();
+    });
+    let get = move |path: &'static str, host: String| {
+        tokio::task::spawn_blocking(move || {
+            use std::io::{Read, Write};
+            let mut s = std::net::TcpStream::connect(addr).unwrap();
+            write!(
+                s,
+                "GET {path} HTTP/1.1\r\nHost: {host}\r\nSec-Fetch-Site: same-origin\r\n\
+                 Connection: close\r\n\r\n"
+            )
+            .unwrap();
+            let mut out = String::new();
+            s.read_to_string(&mut out).unwrap();
+            out
+        })
+    };
+    for path in [
+        "/api/v1/notes",
+        "/api/v1/status",
+        "/api/v1/notes/secret",
+        "/",
+        "/index.html",
+    ] {
+        for host in [
+            format!("attacker.example:{port}"),
+            format!("localhost.attacker.example:{port}"),
+            "127.0.0.1".to_string(),
+            format!("127.0.0.1:{}", port.wrapping_add(1)),
+        ] {
+            let out = get(path, host.clone()).await.unwrap();
+            assert!(out.starts_with("HTTP/1.1 421"), "{path} as {host}: {out}");
+            assert!(!out.contains("the store"), "{path} as {host} leaked: {out}");
+        }
+    }
+    for host in [
+        format!("127.0.0.1:{port}"),
+        format!("localhost:{port}"),
+        format!("[::1]:{port}"),
+    ] {
+        let out = get("/api/v1/notes", host.clone()).await.unwrap();
+        assert!(out.starts_with("HTTP/1.1 200"), "{host}: {out}");
+        assert!(out.contains("secret"), "{host}: {out}");
+    }
     server.abort();
 }
 
