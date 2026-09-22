@@ -10,7 +10,7 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.1] — 2026-09-22
 
 ### Security
 
@@ -63,6 +63,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   it did. A store whose hub address resolved to a public address had its audit rows refused
   and its notes sent. Every path to a hub now keeps the rule, and a new purpose cannot be
   added without deciding which rule it falls under.
+
+- **The TLS library in 0.6.0 carried a published advisory.** rustls 0.23.43 is covered by
+  RUSTSEC-2026-0285, and `cargo deny` had been failing on it since the day after 0.6.0 went
+  out; nobody saw it because CI only runs on a push. rustls is now 0.23.45, the only change to
+  the lock file. rustls carries every TLS connection cyberbrain makes: to the hub, and to a
+  model endpoint when one is configured.
 
 ### Fixed
 
@@ -1065,7 +1071,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.4.0...v0.5.0

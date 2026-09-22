@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "argon2",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-code"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "cyberbrain-core",
  "ignore",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "icu_normalizer",
@@ -678,7 +678,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-desktop"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "png",
  "rfd",
@@ -693,7 +693,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-embed"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",
@@ -706,7 +706,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-index"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",
@@ -719,7 +719,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-llm"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "cyberbrain-core",
  "jiff",
@@ -732,7 +732,7 @@ dependencies = [
 
 [[package]]
 name = "cyberbrain-policy"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "blake3",
  "cyberbrain-core",
@@ -2430,9 +2430,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.43"
+version = "0.23.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0283386ce02abc0151e1761d08802dfe86c173b0b494af5cbc086574e453da06"
+checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
 dependencies = [
  "log",
  "once_cell",
