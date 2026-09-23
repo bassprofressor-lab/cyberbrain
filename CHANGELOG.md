@@ -10,7 +10,7 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.6.1] — 2026-09-22
+## [0.6.1] — 2026-09-23
 
 ### Security
 
