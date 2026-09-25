@@ -544,7 +544,118 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
     Some((target, paths::display_inside(ctx.root(), &cwd, &file)))
 }
 
+/// What a shell command would do to the store that the file tools are already refused.
+///
+/// 2026-09-25: the matcher named only the file tools, so everything this hook denies for
+/// `Edit` went through untouched as `echo … > .cyberbrain/notes/r0/x.md` or `sqlite3
+/// audit.db`. And since the CLI now tells an agent from the operator by `CLAUDECODE`
+/// (`cli_actor` in main.rs), dropping that variable next to a `cyberbrain` call is the one
+/// way left to write ring 0/1 as the operator. Both are matched on the command text: a
+/// heuristic that catches the ordinary way of doing it, not a sandbox. Reading stays free.
+fn bash_verdict(cmd: &str) -> Option<String> {
+    let sheds = [
+        "unset CLAUDECODE",
+        "-u CLAUDECODE",
+        "-uCLAUDECODE",
+        "--unset=CLAUDECODE",
+        "--unset CLAUDECODE",
+        "CLAUDECODE=",
+        "env -i",
+    ]
+    .iter()
+    .any(|p| cmd.contains(p));
+    if sheds && cmd.contains("cyberbrain") {
+        return Some(
+            "this command drops CLAUDECODE around a cyberbrain call. The CLI reads that \
+             variable to tell an agent from the operator (rings 0 and 1 are the operator's, \
+             SPEC §3.2); without it the call would be recorded as the operator. Run it with the \
+             variable in place, or propose the text: `cyberbrain propose --ring <n> --kind … \
+             --name …`."
+                .to_string(),
+        );
+    }
+    // A path is guarded when it names ring 0/1 or the audit log, or a directory that holds
+    // them: the store itself, or its notes/ tree (`rm -rf .cyberbrain` takes all of it).
+    let guarded = |t: &str| {
+        let t = t.trim_matches(['\'', '"']).trim_end_matches('/');
+        ["notes/r0", "notes/r1", "audit.db"]
+            .iter()
+            .any(|g| t.contains(g))
+            || t.ends_with(".cyberbrain")
+            || t.ends_with(".cyberbrain/notes")
+    };
+    let tokens: Vec<&str> = cmd
+        .split(|c: char| c.is_whitespace() || ";|&()`".contains(c))
+        .filter(|t| !t.is_empty())
+        .collect();
+    let hit = tokens.iter().find(|t| guarded(t))?;
+    let writer = tokens.iter().enumerate().any(|(i, t)| {
+        let base = t.rsplit('/').next().unwrap_or(t);
+        matches!(
+            base,
+            "tee"
+                | "cp"
+                | "mv"
+                | "rm"
+                | "truncate"
+                | "dd"
+                | "ln"
+                | "install"
+                | "sqlite3"
+                | "shred"
+                | "rsync"
+        ) || (matches!(base, "sed" | "perl")
+            && tokens
+                .get(i + 1..)
+                .is_some_and(|r| r.iter().any(|a| a.starts_with("-i"))))
+    });
+    // A redirect only counts when it points into the guarded path, so that
+    // `cat notes/r0/x.md 2>/dev/null` stays a read.
+    let redirect = cmd.match_indices('>').any(|(i, _)| {
+        let rest = cmd[i + 1..].trim_start_matches(['>', '|']).trim_start();
+        rest.split(|c: char| c.is_whitespace() || ";|&".contains(c))
+            .next()
+            .is_some_and(guarded)
+    });
+    (writer || redirect).then(|| {
+        format!(
+            "this command writes to `{}` inside the cyberbrain store. The audit log is \
+             append-only evidence and rings 0 and 1 are the operator's (SPEC §3.2, §12.6); the \
+             file tools are refused the same edit. Reading is fine. For a note, use `cyberbrain \
+             write` (rings 2–4) or `cyberbrain propose` (rings 0/1).",
+            hit.trim_matches(['\'', '"'])
+        )
+    })
+}
+
+fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
+    let Some(reason) = bash_verdict(cmd) else {
+        out.note("pre-tool-use: Bash command does not touch guarded store files; allowing");
+        return Ok(());
+    };
+    // The command itself is not recorded: it may carry anything, a secret included.
+    ctx.app.policy().audit().record(
+        &ctx.actor(),
+        AuditAction::PolicyRefusal,
+        "bash".to_string(),
+        json!({ "tool": "Bash", "session": ctx.payload.session_id, "reason": reason }),
+    )?;
+    out.note("pre-tool-use: deny Bash on guarded store files");
+    out.stdout = json!({
+        "hookSpecificOutput": {
+            "hookEventName": harness_event_name(ctx.event),
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    })
+    .to_string();
+    Ok(())
+}
+
 fn pre_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+    if let Some(cmd) = ctx.payload.bash_command() {
+        return pre_bash(ctx, out, cmd);
+    }
     let Some((target, rel)) = edited_store_file(ctx, out) else {
         return Ok(());
     };
@@ -739,4 +850,58 @@ fn pre_compact(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     })
     .to_string();
     Ok(())
+}
+
+#[cfg(test)]
+mod bash_tests {
+    use super::bash_verdict;
+
+    #[test]
+    fn shell_writes_into_rings_0_1_and_the_audit_log_are_refused() {
+        for cmd in [
+            "echo x > .cyberbrain/notes/r0/identity.md",
+            "echo x >> /root/orderflow/.cyberbrain/notes/r1/engine.md",
+            "printf x | tee .cyberbrain/notes/r0/a.md",
+            "sed -i 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "cp /tmp/x.md .cyberbrain/notes/r0/x.md",
+            "rm -rf .cyberbrain/notes/r0",
+            "sqlite3 .cyberbrain/audit.db 'delete from audit'",
+            "cd .cyberbrain && mv /tmp/a audit.db",
+            "rm -rf .cyberbrain",
+            "rm -rf /root/orderflow/.cyberbrain/",
+            "mv .cyberbrain/notes /tmp/weg",
+            "echo x > '.cyberbrain/notes/r0/a.md'",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn dropping_the_agent_marker_around_cyberbrain_is_refused() {
+        for cmd in [
+            "env -u CLAUDECODE cyberbrain write --ring 0 --kind decision --name x --body y",
+            "unset CLAUDECODE; cyberbrain review x --accept --by me",
+            "CLAUDECODE= /usr/local/bin/cyberbrain write --ring 1 --name x --body y",
+            "env -i PATH=$PATH cyberbrain write --ring 0 --name x --body y",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn reads_and_unrelated_commands_pass() {
+        for cmd in [
+            "cat .cyberbrain/notes/r0/identity.md 2>/dev/null",
+            "grep -rn foo .cyberbrain/notes/r1 > /tmp/out.txt",
+            "ls -la .cyberbrain/notes/r0",
+            "cyberbrain write --ring 2 --kind lesson --name x --body y",
+            "cyberbrain recall 'notes/r0 audit.db'",
+            "env -u CLAUDECODE claude -p hello",
+            "echo hi > /tmp/x",
+            "cp -r .cyberbrain/notes/r2/x.md /tmp/",
+            "rm -rf /tmp/cbprobe/.cyberbrain2",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
+        }
+    }
 }

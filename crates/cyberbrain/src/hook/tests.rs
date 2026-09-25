@@ -591,8 +591,28 @@ fn pre_tool_use_is_silent_for_everything_outside_the_store() {
         );
         assert!(out.stderr.contains("outside the store"), "{}", out.stderr);
     }
-    // Bash and Read are not file edits.
-    for tool in ["Bash", "Read", "Grep", "Agent"] {
+    // Bash is read since 2026-09-25 (hook::events::bash_verdict): deleting the store is
+    // refused, a harmless command passes in silence. Read and the rest are not file edits.
+    let out = run(
+        Some(&app),
+        HookEvent::PreToolUse,
+        &f.payload(serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf .cyberbrain"}})),
+    );
+    assert_eq!(decision(&out).0, "deny");
+    let out = run(
+        Some(&app),
+        HookEvent::PreToolUse,
+        &f.payload(
+            serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "cargo test"}}),
+        ),
+    );
+    assert!(out.stdout.is_empty());
+    assert!(
+        out.stderr.contains("does not touch guarded store files"),
+        "{}",
+        out.stderr
+    );
+    for tool in ["Read", "Grep", "Agent"] {
         let out = run(
             Some(&app),
             HookEvent::PreToolUse,

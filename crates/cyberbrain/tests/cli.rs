@@ -47,6 +47,9 @@ impl Cb {
     fn bin() -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_cyberbrain"));
         c.env_remove("CYBERBRAIN_STORE");
+        // These tests are the operator at a terminal. Run from inside Claude Code they would
+        // otherwise be an agent (`cli_actor` in main.rs) and meet the ring-owner check.
+        c.env_remove("CLAUDECODE").env_remove("CYBERBRAIN_AGENT");
         c
     }
 

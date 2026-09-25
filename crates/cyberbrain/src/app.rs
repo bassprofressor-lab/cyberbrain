@@ -2241,6 +2241,10 @@ impl App {
                 ),
             });
         }
+        // 2026-09-25: `by` is a name anybody can type, so an agent that proposed a ring 0 note
+        // could accept it under a second name and the note moved into notes/r0 — propose was
+        // no gate at all. Deciding on a ring 0/1 proposal is the operator's, whichever way.
+        self.refuse_resident_unless_operator(&name, note.front.ring, None, req.dry_run)?;
 
         let w = self.writers(req.dry_run);
         let policy = w.policy.get();
@@ -4046,5 +4050,76 @@ mod pull_tests {
             pulled.retry,
             "the cursor must wait for the note that did not land"
         );
+    }
+}
+
+#[cfg(test)]
+mod ring_owner_tests {
+    use super::*;
+
+    fn req(ring: Ring, name: &str) -> WriteRequest {
+        WriteRequest {
+            ring,
+            kind: cyberbrain_core::NoteKind::Decision,
+            name: name.to_string(),
+            body: "*Für: probe*\n\nText.".to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            arriving: None,
+            dry_run: false,
+        }
+    }
+
+    fn review(name: &str, by: &str) -> ReviewRequest {
+        ReviewRequest {
+            name: name.to_string(),
+            accept: true,
+            reason: String::new(),
+            by: by.to_string(),
+            force: false,
+            dry_run: false,
+        }
+    }
+
+    /// Calibrated against the broken state first (2026-09-25): an agent proposed a ring 0
+    /// note, accepted it under a second name, and it landed in notes/r0.
+    #[test]
+    fn an_agent_cannot_accept_a_ring_0_proposal_under_another_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let agent = App::open(Some(&store), Actor::Agent("claude-code:test".into())).unwrap();
+        agent
+            .propose(req(Ring::Invariant, "vorschlag"), "agent-a")
+            .unwrap();
+        let err = agent.review(review("vorschlag", "agent-b")).unwrap_err();
+        assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
+        assert!(!store.join("notes").join("r0").join("vorschlag.md").exists());
+
+        // The operator still decides it, and a ring 2 proposal stays the agent's to take.
+        let op = App::open(Some(&store), Actor::Operator).unwrap();
+        op.review(review("vorschlag", "christoph")).unwrap();
+        assert!(store.join("notes").join("r0").join("vorschlag.md").exists());
+        agent
+            .propose(req(Ring::Knowledge, "r2-vorschlag"), "agent-a")
+            .unwrap();
+        agent.review(review("r2-vorschlag", "agent-b")).unwrap();
+    }
+
+    #[test]
+    fn an_agent_cannot_write_ring_0_or_1_directly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let agent = App::open(Some(&store), Actor::Agent("claude-code:test".into())).unwrap();
+        for ring in [Ring::Invariant, Ring::Protocol] {
+            let err = agent.write(req(ring, "direkt")).unwrap_err();
+            assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
+        }
+        agent.write(req(Ring::Knowledge, "direkt")).unwrap();
     }
 }

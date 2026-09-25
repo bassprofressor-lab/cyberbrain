@@ -77,6 +77,52 @@ fn report_error(e: &Error, json: bool) {
     }
 }
 
+/// Who is at this command line: the operator, or an agent running it through its shell?
+///
+/// 2026-09-25: every CLI command opened the store as `Actor::Operator`. An agent that ran
+/// `cyberbrain write --ring 0` through Bash therefore passed the ring-owner check that 0.6.1
+/// put into `App::write`, and the audit log recorded it as the operator — 3,437 of 4,062 rows
+/// in one store said "operator", most of them agents. Claude Code sets `CLAUDECODE=1` for the
+/// commands it runs; `CYBERBRAIN_AGENT=<name>` lets any other harness say the same.
+///
+/// This is attribution and a guard against the ordinary course of work, not a boundary
+/// against an agent that sets out to lie: it controls its own environment. Unsetting the
+/// variable next to a `cyberbrain` call is what the pre-tool-use hook refuses for Bash.
+fn cli_actor() -> Actor {
+    agent_from_env(|k| std::env::var(k).ok()).unwrap_or(Actor::Operator)
+}
+
+fn agent_from_env(var: impl Fn(&str) -> Option<String>) -> Option<Actor> {
+    let set = |k: &str| {
+        var(k)
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    };
+    if set("CLAUDECODE").is_some() {
+        // A prefix of the session id is enough to find the session again; the whole id
+        // would put a resumable handle into every audit row.
+        let session: String = set("CLAUDE_CODE_SESSION_ID")
+            .unwrap_or_default()
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(8)
+            .collect();
+        return Some(Actor::Agent(if session.is_empty() {
+            "claude-code".to_string()
+        } else {
+            format!("claude-code:{session}")
+        }));
+    }
+    set("CYBERBRAIN_AGENT").map(|n| {
+        Actor::Agent(
+            n.chars()
+                .filter(|c| c.is_ascii_alphanumeric() || "-_.:".contains(*c))
+                .take(64)
+                .collect(),
+        )
+    })
+}
+
 fn runtime() -> Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -154,7 +200,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     })?
                     .join(cyberbrain_core::config::DEFAULT_STORE_DIR),
             };
-            let r = App::init(&root, &Actor::Operator)?;
+            let r = App::init(&root, &cli_actor())?;
             out.emit(&r, render::init)?;
             return Ok(0);
         }
@@ -256,7 +302,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         _ => {}
     }
 
-    let app = App::open(cli.store.as_deref(), Actor::Operator)?;
+    let app = App::open(cli.store.as_deref(), cli_actor())?;
     match cli.command {
         Command::Scan { full, dry_run } => {
             let r = app.scan(ScanOptions { full, dry_run })?;
@@ -861,7 +907,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 path: invitation.clone(),
                 source: e,
             })?;
-            let app = App::open(store, Actor::Operator)?;
+            let app = App::open(store, cli_actor())?;
             // Two kinds. A personal invitation already carries a device and its token; a fleet
             // invitation carries a code, and the hub makes the device when it is asked.
             let (hub_url, device, token, pin, inference_url, fleet_name) =
@@ -1069,7 +1115,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             bereich,
             dry_run,
         } => {
-            let app = App::open(store, Actor::Operator)?;
+            let app = App::open(store, cli_actor())?;
             if *notes {
                 let (report, code) =
                     runtime()?.block_on(app.push_notes_to_hub(bereich.as_deref(), *dry_run))?;
@@ -1466,7 +1512,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             apply_erasures,
             dry_run,
         } => {
-            let app = App::open(store, Actor::Operator)?;
+            let app = App::open(store, cli_actor())?;
             let (report, code) =
                 runtime()?.block_on(app.pull_notes_from_hub(*apply_erasures, *dry_run))?;
             out.emit(&report, |v| {
@@ -1496,7 +1542,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(code)
         }
         HubCommand::Erase { name, bereich } => {
-            let app = App::open(store, Actor::Operator)?;
+            let app = App::open(store, cli_actor())?;
             let (report, code) = runtime()?.block_on(app.erase_at_hub(bereich, name))?;
             out.emit(&report, |v| {
                 format!("{}\n", v["message"].as_str().unwrap_or_default())
@@ -2403,6 +2449,34 @@ fn audit_exit_code(view: &AuditView) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn env<'a>(vars: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        move |k| {
+            vars.iter()
+                .find(|(n, _)| *n == k)
+                .map(|(_, v)| v.to_string())
+        }
+    }
+
+    /// Calibrated against the broken state first: before 2026-09-25 every one of these was
+    /// the operator.
+    #[test]
+    fn an_agent_at_the_cli_is_not_the_operator() {
+        let a = agent_from_env(env(&[
+            ("CLAUDECODE", "1"),
+            ("CLAUDE_CODE_SESSION_ID", "8c734a31-ccbc-489d"),
+        ]));
+        assert_eq!(
+            a.map(|a| a.to_string()),
+            Some("agent:claude-code:8c734a31".into())
+        );
+        let a = agent_from_env(env(&[("CLAUDECODE", "1")]));
+        assert_eq!(a.map(|a| a.to_string()), Some("agent:claude-code".into()));
+        let a = agent_from_env(env(&[("CYBERBRAIN_AGENT", "codex; rm -rf /")]));
+        assert_eq!(a.map(|a| a.to_string()), Some("agent:codexrm-rf".into()));
+        assert!(agent_from_env(env(&[])).is_none());
+        assert!(agent_from_env(env(&[("CLAUDECODE", " "), ("CYBERBRAIN_AGENT", "")])).is_none());
+    }
 
     fn view(verified: Option<std::result::Result<usize, String>>) -> AuditView {
         AuditView {

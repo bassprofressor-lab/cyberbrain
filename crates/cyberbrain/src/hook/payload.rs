@@ -71,6 +71,17 @@ impl Payload {
 
     /// `file_path` (Edit, Write, MultiEdit) or `notebook_path` (NotebookEdit) of a
     /// file-editing tool; `None` for any other tool or a malformed input.
+    /// The command line of a `Bash` call; `None` for any other tool or an empty command.
+    pub fn bash_command(&self) -> Option<&str> {
+        if self.tool_name.as_deref()? != "Bash" {
+            return None;
+        }
+        self.tool_input
+            .get("command")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+    }
+
     pub fn edited_file(&self) -> Option<PathBuf> {
         let tool = self.tool_name.as_deref()?;
         let key = match tool {

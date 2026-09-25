@@ -207,6 +207,21 @@ fn the_matcher_covers_every_tool_the_hook_reads() {
             "{tool} is not in the matcher; if the hook now reads it, the matcher is wrong"
         );
     }
+    // Pre-tool-use additionally reads the Bash command line, and nothing else.
+    let bash = |tool: &str| {
+        Payload::parse(&format!(
+            r#"{{"tool_name":"{tool}","tool_input":{{"command":"ls"}}}}"#
+        ))
+    };
+    for tool in PRE_TOOL_MATCHER.split('|') {
+        assert!(
+            payload(tool).edited_file().is_some() || bash(tool).bash_command().is_some(),
+            "{tool} is in the pre-tool-use matcher, so the hook has to have something to do with it"
+        );
+    }
+    for tool in ["Read", "Grep", "WebFetch", "Task"] {
+        assert!(bash(tool).bash_command().is_none(), "{tool}");
+    }
 }
 
 // -----------------------------------------------------------------------------------

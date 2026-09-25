@@ -125,12 +125,16 @@ impl ClientReport {
 const EVENTS: [(&str, &str, &str); 6] = [
     ("SessionStart", "session-start", ""),
     ("UserPromptSubmit", "user-prompt-submit", ""),
-    ("PreToolUse", "pre-tool-use", TOOL_MATCHER),
+    ("PreToolUse", "pre-tool-use", PRE_TOOL_MATCHER),
     ("PostToolUse", "post-tool-use", TOOL_MATCHER),
     ("Stop", "stop", ""),
     ("PreCompact", "pre-compact", ""),
 ];
 const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
+/// Pre-tool-use also reads `Bash` (2026-09-25): a shell command can do what the file tools
+/// are refused, and it is where an agent would drop `CLAUDECODE` (`hook::events::bash_verdict`).
+/// Post-tool-use has nothing to do for a shell command and keeps the narrow matcher.
+const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash";
 
 pub fn run(opts: &Options) -> Result<Report> {
     let binary = current_binary();
