@@ -12,6 +12,19 @@ import { join, resolve } from "node:path";
 
 const BIN = resolve(import.meta.dirname, "../../target/debug/cyberbrain");
 
+/**
+ * The seeding CLI and the server are the operator at a terminal. Run from inside an agent
+ * harness they would otherwise be an agent (`cli_actor` in main.rs) and meet the ring-owner
+ * check on a ring 0 seed; and a resident daemon has no place in a throwaway store. The same
+ * as the Rust CLI tests' harness.
+ */
+const ENV = (() => {
+  const e = { ...process.env, CYBERBRAIN_NO_DAEMON: "1" };
+  delete e.CLAUDECODE;
+  delete e.CYBERBRAIN_AGENT;
+  return e;
+})();
+
 export interface Serving {
   url: string;
   store: string;
@@ -37,12 +50,12 @@ export async function serve(seed: Seed[] = []): Promise<Serving> {
   }
   const dir = mkdtempSync(join(tmpdir(), "cyberbrain-e2e-"));
   const store = join(dir, ".cyberbrain");
-  await once(spawn(BIN, ["init", "--path", store]));
+  await once(spawn(BIN, ["init", "--path", store], { env: ENV }));
   for (const n of seed) {
-    await once(spawn(BIN, ["--store", store, "write", "--ring", String(n.ring), "--kind", n.kind, "--name", n.name, "--body", n.body]));
+    await once(spawn(BIN, ["--store", store, "write", "--ring", String(n.ring), "--kind", n.kind, "--name", n.name, "--body", n.body], { env: ENV }));
   }
 
-  const child = spawn(BIN, ["--store", store, "serve", "--port", "0", "--no-open", "--terminal"]);
+  const child = spawn(BIN, ["--store", store, "serve", "--port", "0", "--no-open", "--terminal"], { env: ENV });
   const url = await new Promise<string>((ok, fail) => {
     let seen = "";
     const timer = setTimeout(() => fail(new Error(`no address in:\n${seen}`)), 20_000);
