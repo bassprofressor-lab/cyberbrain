@@ -71,15 +71,48 @@ fn error_code(e: &Error) -> &'static str {
 }
 
 fn report_error(e: &Error, json: bool) {
+    eprintln!("{}", error_text(e, json));
+}
+
+/// The line `report_error` prints, so the daemon can hand back the same one.
+fn error_text(e: &Error, json: bool) -> String {
     let code = e.exit_code();
     if json {
-        let v = serde_json::json!({
+        serde_json::json!({
             "error": { "code": error_code(e), "message": e.to_string(), "exit_code": code }
-        });
-        eprintln!("{v}");
+        })
+        .to_string()
     } else {
         let prefix = if code == 3 { "refused" } else { "error" };
-        eprintln!("cyberbrain: {prefix}: {e}");
+        format!("cyberbrain: {prefix}: {e}")
+    }
+}
+
+/// How the CLI shows a write's outcome; shared with the daemon.
+fn render_write(o: &WriteOutcome) -> String {
+    match o {
+        WriteOutcome::Written(w) => render::written(w),
+        WriteOutcome::Held { rendered, .. } => format!(
+            "{rendered}Nothing was written. Re-run with --force to write it flagged, \
+             or edit the body.\n"
+        ),
+        WriteOutcome::Conflict {
+            name,
+            current_updated,
+        } => {
+            format!("{name} changed at {current_updated} since it was read; nothing was written\n")
+        }
+    }
+}
+
+/// The exit a write's outcome means: 0, 3 for a hold, an error for a conflict.
+fn write_exit(o: &WriteOutcome) -> Result<i32> {
+    match o {
+        WriteOutcome::Written(_) => Ok(0),
+        WriteOutcome::Held { .. } => Ok(3),
+        WriteOutcome::Conflict { .. } => Err(Error::StoreIntegrity(
+            "the note changed since it was read".into(),
+        )),
     }
 }
 
@@ -384,25 +417,30 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 arriving: None,
                 dry_run,
             };
+            // A write embeds its note, which costs the same model load a recall does; the
+            // daemon has it loaded (`daemon.rs`). Unlike a recall, a write that reached the
+            // daemon is never repeated here: `daemon::write` says whether it did.
+            match daemon::write(app.root(), &cli_actor(), &req, out.json)? {
+                daemon::Answer::Done {
+                    stdout,
+                    stderr,
+                    code,
+                } => {
+                    if let Some(text) = stdout.filter(|_| !out.quiet) {
+                        out.print(&text);
+                    }
+                    if let Some(line) = stderr {
+                        eprintln!("{line}");
+                    }
+                    return Ok(code);
+                }
+                daemon::Answer::Local => {}
+            }
             let outcome = app.write(req)?;
-            out.emit(&outcome, |o| match o {
-                WriteOutcome::Written(w) => render::written(w),
-                WriteOutcome::Held { rendered, .. } => format!(
-                    "{rendered}Nothing was written. Re-run with --force to write it flagged, \
-                     or edit the body.\n"
-                ),
-                WriteOutcome::Conflict { name, current_updated } => {
-                    format!("{name} changed at {current_updated} since it was read; nothing was written\n")
-                }
-            })?;
-            match outcome {
-                WriteOutcome::Written(_) => {}
-                WriteOutcome::Held { .. } => return Ok(3),
-                WriteOutcome::Conflict { .. } => {
-                    return Err(Error::StoreIntegrity(
-                        "the note changed since it was read".into(),
-                    ));
-                }
+            out.emit(&outcome, render_write)?;
+            let code = write_exit(&outcome)?;
+            if code != 0 {
+                return Ok(code);
             }
         }
         Command::Propose {

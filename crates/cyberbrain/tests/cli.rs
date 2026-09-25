@@ -2240,3 +2240,114 @@ fn no_daemon_means_no_socket() {
     cb.ok(&["recall", "anything"]);
     assert!(!cb.store.join("daemon.sock").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn a_write_through_the_daemon_is_the_write_the_cli_would_have_done() {
+    let cb = Cb::new();
+    let sock = cb.store.join("daemon.sock");
+    let _daemon = with_daemon(&cb)
+        .args(["daemon", "--idle-secs", "30"])
+        .spawn()
+        .unwrap();
+    wait_for("the socket", || sock.exists());
+    let run = |args: &[&str], agent: bool| {
+        let mut c = with_daemon(&cb);
+        if agent {
+            c.env("CLAUDECODE", "1")
+                .env("CLAUDE_CODE_SESSION_ID", "testsess");
+        }
+        c.arg("--json").args(args).output().unwrap()
+    };
+    let json = |o: &Output| -> Value { serde_json::from_slice(&o.stdout).unwrap_or(Value::Null) };
+
+    // Written: the note is there, the index has it, the log names the agent.
+    let w = run(
+        &[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "via-daemon",
+            "--body",
+            "*Für: probe*\n\nDurch den Dienst geschrieben.",
+        ],
+        true,
+    );
+    assert_eq!(
+        w.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&w.stderr)
+    );
+    assert_eq!(json(&w)["outcome"], "written");
+    assert!(cb.note_path("2", "via-daemon").exists());
+    let hits = cb.ok(&["recall", "Dienst geschrieben"]);
+    assert_eq!(hits["hits"][0]["note_name"], "via-daemon");
+    let rows = cb.audit_rows();
+    let row = rows.iter().find(|r| r["action"] == "note.write").unwrap();
+    assert_eq!(row["actor"], "agent:claude-code:testsess");
+
+    // Held: exit 3 and the same outcome the local path gives, nothing written.
+    let h = run(
+        &[
+            "write",
+            "--ring",
+            "3",
+            "--kind",
+            "session",
+            "--name",
+            "contact",
+            "--body",
+            "reach bob@corp.example.org",
+        ],
+        true,
+    );
+    assert_eq!(h.status.code(), Some(3));
+    assert_eq!(json(&h)["outcome"], "held");
+    assert!(!cb.note_path("3", "contact").exists());
+
+    // Refused: an agent's ring 0 write fails once — one refusal row, not a second one from
+    // a local retry — with the error line the CLI prints.
+    let before = cb
+        .audit_rows()
+        .iter()
+        .filter(|r| r["action"] == "policy.refusal")
+        .count();
+    let r = run(
+        &[
+            "write",
+            "--ring",
+            "0",
+            "--kind",
+            "decision",
+            "--name",
+            "r0",
+            "--body",
+            "*Für: x*\n\ny",
+        ],
+        true,
+    );
+    assert_eq!(r.status.code(), Some(3));
+    let err: Value = serde_json::from_slice(r.stderr.trim_ascii()).unwrap();
+    assert_eq!(err["error"]["exit_code"], 3);
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("belongs to the operator")
+    );
+    let after = cb
+        .audit_rows()
+        .iter()
+        .filter(|r| r["action"] == "policy.refusal")
+        .count();
+    assert_eq!(
+        after,
+        before + 1,
+        "one refusal, written by the daemon alone"
+    );
+    assert!(!cb.note_path("0", "r0").exists());
+}

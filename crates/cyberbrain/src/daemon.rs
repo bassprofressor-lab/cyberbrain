@@ -22,36 +22,79 @@
 //!
 //! Unix only. Elsewhere the client always answers locally and `daemon` refuses to start.
 
-use crate::app::{App, RecallRequest};
-use crate::render;
-use cyberbrain_core::{Error, Result};
+use crate::app::{App, RecallRequest, WriteRequest};
+use cyberbrain_core::{Error, NoteKind, Result};
 use cyberbrain_policy::Actor;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const SOCKET: &str = "daemon.sock";
-const PROTOCOL: u32 = 1;
+/// 2: `op` and `write` (2026-09-25). A daemon of another version refuses the request
+/// before doing anything, and the client does it itself.
+const PROTOCOL: u32 = 2;
 /// A path longer than this does not fit `sockaddr_un` on every platform.
 const MAX_SOCKET_PATH: usize = 100;
+/// The server reads at most this much of a request line; a longer body is written locally.
+const MAX_REQUEST: usize = 1 << 20;
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Request {
     v: u32,
+    op: Op,
     actor: String,
-    query: String,
-    n: Option<usize>,
-    ring: Option<u8>,
-    bereich: Option<String>,
+    /// `--json`: the answer is rendered as the CLI renders it under that flag.
     json: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "kebab-case")]
+enum Op {
+    Recall {
+        query: String,
+        n: Option<usize>,
+        ring: Option<u8>,
+        bereich: Option<String>,
+    },
+    Write(WriteArgs),
+}
+
+/// A `write` as the CLI builds it: no operator choice, no expected timestamp, nothing
+/// arriving from a hub. Those belong to the UI and the hub, which do not go through here.
+#[derive(Debug, Serialize, Deserialize)]
+struct WriteArgs {
+    ring: u8,
+    kind: NoteKind,
+    name: String,
+    body: String,
+    tags: Vec<String>,
+    bereich: Option<String>,
+    retention: Option<String>,
+    force: bool,
+    dry_run: bool,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[cfg_attr(not(unix), allow(dead_code))] // only a Unix daemon answers
 struct Response {
-    /// What the CLI would print. `None`: do it yourself.
-    output: Option<String>,
-    /// Why there is no output, for the daemon's log and for tests.
+    /// Set when the daemon carried the request out: the process's exit code. Then `stdout`
+    /// and `stderr` are exactly what the CLI would have printed. Unset: it did nothing, and
+    /// `reason` says why.
+    code: Option<i32>,
+    stdout: Option<String>,
+    stderr: Option<String>,
     reason: Option<String>,
+}
+
+/// What became of a request sent to the daemon.
+pub enum Answer {
+    /// Carried out; print this and exit with `code`.
+    Done {
+        stdout: Option<String>,
+        stderr: Option<String>,
+        code: i32,
+    },
+    /// Not carried out (no daemon, a stale one, a version mismatch): do it locally.
+    Local,
 }
 
 fn socket_path(root: &Path) -> Option<PathBuf> {
@@ -72,22 +115,27 @@ fn actor_from(s: &str) -> Actor {
     }
 }
 
-/// What the CLI prints for a recall result, byte for byte (`Out::emit`).
+/// What the CLI prints for a value, byte for byte (`Out::emit`).
 #[cfg_attr(not(unix), allow(dead_code))]
-fn rendered(r: &cyberbrain_core::RecallResult, json: bool) -> Result<String> {
+fn rendered<T: Serialize>(
+    value: &T,
+    json: bool,
+    human: impl FnOnce(&T) -> String,
+) -> Result<String> {
     if json {
-        serde_json::to_string_pretty(r)
+        serde_json::to_string_pretty(value)
             .map_err(|e| Error::Index(format!("report does not serialise: {e}")))
     } else {
-        Ok(render::recall(r))
+        Ok(human(value))
     }
 }
 
 // ---------------------------------------------------------------------------------------
 // Client
 
-/// Asks the store's daemon. `Some(text)` is the finished output; `None` means answer
-/// locally (and, if no daemon was there, one has been started for next time).
+/// Asks the store's daemon for a recall. `Some(text)` is the finished output; `None` means
+/// answer locally (and, if no daemon was there, one has been started for next time). A
+/// recall only reads, so anything short of a clean answer is simply done again here.
 pub fn recall(
     root: &Path,
     actor: &Actor,
@@ -95,6 +143,77 @@ pub fn recall(
     req: &RecallRequest,
     json: bool,
 ) -> Option<String> {
+    let op = Op::Recall {
+        query: query.to_string(),
+        n: req.n,
+        ring: req.ring.map(|r| r.as_u8()),
+        bereich: req.bereich.clone(),
+    };
+    match send(root, actor, op, json)? {
+        Sent::Answered(Response {
+            code: Some(0),
+            stdout,
+            ..
+        }) => stdout,
+        _ => None,
+    }
+}
+
+/// Asks the store's daemon to carry out a write.
+///
+/// A write is not repeated locally once the daemon may have done it: that would write the
+/// note twice and put a second row in the audit log (a second refusal, for a ring 0
+/// write). So the only way back to the local path is a daemon that said it did nothing, or
+/// none at all. A request that went out and got no readable answer is an error.
+pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Result<Answer> {
+    if req.body.len() > MAX_REQUEST / 2
+        || req.choice.is_some()
+        || req.expected_updated.is_some()
+        || req.arriving.is_some()
+    {
+        return Ok(Answer::Local);
+    }
+    let op = Op::Write(WriteArgs {
+        ring: req.ring.as_u8(),
+        kind: req.kind,
+        name: req.name.clone(),
+        body: req.body.clone(),
+        tags: req.tags.clone(),
+        bereich: req.bereich.clone().flatten(),
+        retention: req.retention.clone().flatten(),
+        force: req.force,
+        dry_run: req.dry_run,
+    });
+    match send(root, actor, op, json) {
+        None => Ok(Answer::Local),
+        Some(Sent::Answered(Response {
+            code: Some(code),
+            stdout,
+            stderr,
+            ..
+        })) => Ok(Answer::Done {
+            stdout,
+            stderr,
+            code,
+        }),
+        Some(Sent::Answered(_)) => Ok(Answer::Local),
+        Some(Sent::Lost) => Err(Error::Index(format!(
+            "the write of {} went to the background daemon, which did not answer; it may or \
+             may not have been written. Check with `cyberbrain recall` before writing it again",
+            req.name
+        ))),
+    }
+}
+
+#[cfg_attr(not(unix), allow(dead_code))] // only a Unix daemon answers
+enum Sent {
+    Answered(Response),
+    /// Sent, and no readable answer came back.
+    Lost,
+}
+
+/// `None`: nothing was sent (disabled, no socket path, no daemon — one is started).
+fn send(root: &Path, actor: &Actor, op: Op, json: bool) -> Option<Sent> {
     if disabled() {
         return None;
     }
@@ -104,11 +223,8 @@ pub fn recall(
         &path,
         &Request {
             v: PROTOCOL,
+            op,
             actor: actor.to_string(),
-            query: query.to_string(),
-            n: req.n,
-            ring: req.ring.map(|r| r.as_u8()),
-            bereich: req.bereich.clone(),
             json,
         },
     )
@@ -122,7 +238,7 @@ mod client {
     use std::os::unix::process::CommandExt;
     use std::time::Duration;
 
-    pub(super) fn ask(root: &Path, path: &Path, req: &Request) -> Option<String> {
+    pub(super) fn ask(root: &Path, path: &Path, req: &Request) -> Option<Sent> {
         let Ok(mut stream) = UnixStream::connect(path) else {
             start(root);
             return None;
@@ -132,10 +248,18 @@ mod client {
         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
         let mut line = serde_json::to_string(req).ok()?;
         line.push('\n');
+        // A request that could not be sent in full was not carried out: the daemon acts
+        // only on a complete line.
         stream.write_all(line.as_bytes()).ok()?;
         let mut answer = String::new();
-        BufReader::new(stream).read_line(&mut answer).ok()?;
-        serde_json::from_str::<Response>(&answer).ok()?.output
+        if BufReader::new(stream).read_line(&mut answer).is_err() {
+            return Some(Sent::Lost);
+        }
+        Some(
+            serde_json::from_str::<Response>(&answer)
+                .map(Sent::Answered)
+                .unwrap_or(Sent::Lost),
+        )
     }
 
     /// Starts a daemon for this store and does not wait for it. Its own process group, so
@@ -160,7 +284,7 @@ mod client {
 #[cfg(not(unix))]
 mod client {
     use super::*;
-    pub(super) fn ask(_: &Path, _: &Path, _: &Request) -> Option<String> {
+    pub(super) fn ask(_: &Path, _: &Path, _: &Request) -> Option<Sent> {
         None
     }
 }
@@ -328,7 +452,7 @@ mod server {
         let Ok(reader) = stream.try_clone() else {
             return;
         };
-        if BufReader::new(reader.take(1 << 20))
+        if BufReader::new(reader.take(MAX_REQUEST as u64))
             .read_line(&mut line)
             .is_err()
         {
@@ -336,21 +460,13 @@ mod server {
         }
         let stale = s.stale();
         let response = if stale {
-            Response {
-                output: None,
-                reason: Some("stale".into()),
-            }
+            not_done("stale: the binary, the configuration or the model changed")
+        } else if !line.ends_with('\n') {
+            // Cut off at MAX_REQUEST or by a client that went away: never act on half a
+            // request, least of all half a write.
+            not_done("incomplete request")
         } else {
-            match answer(s, &line) {
-                Ok(text) => Response {
-                    output: Some(text),
-                    reason: None,
-                },
-                Err(e) => Response {
-                    output: None,
-                    reason: Some(e.to_string()),
-                },
-            }
+            answer(s, &line)
         };
         let mut out = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
         out.push('\n');
@@ -363,28 +479,98 @@ mod server {
         }
     }
 
-    fn answer(s: &Shared, line: &str) -> Result<String> {
-        let req: Request = serde_json::from_str(line)
-            .map_err(|e| Error::Config(format!("not a daemon request: {e}")))?;
-        if req.v != PROTOCOL {
-            return Err(Error::Config(format!(
-                "protocol {} is not {PROTOCOL}",
-                req.v
-            )));
+    fn not_done(reason: &str) -> Response {
+        Response {
+            reason: Some(reason.to_string()),
+            ..Response::default()
         }
-        let app = s.app_for(&req.actor)?;
-        let ring = req.ring.map(cyberbrain_core::Ring::try_from).transpose()?;
-        let rr = RecallRequest {
-            n: req.n,
-            ring,
-            bereich: req.bereich,
+    }
+
+    /// Carries a request out and answers the way the CLI would have: stdout, the stderr
+    /// line of an error, the exit code. Only a request that cannot be read is "not done".
+    fn answer(s: &Shared, line: &str) -> Response {
+        let req: Request = match serde_json::from_str(line) {
+            Ok(r) => r,
+            Err(e) => return not_done(&format!("not a daemon request: {e}")),
         };
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| Error::Index(format!("cannot start the async runtime: {e}")))?;
-        let result = rt.block_on(app.recall(&req.query, &rr))?;
-        rendered(&result, req.json)
+        if req.v != PROTOCOL {
+            return not_done(&format!("protocol {} is not {PROTOCOL}", req.v));
+        }
+        let json = req.json;
+        match carry_out(s, req) {
+            Ok((stdout, code)) => Response {
+                code: Some(code),
+                stdout: Some(stdout),
+                ..Response::default()
+            },
+            Err(Failed { stdout, error }) => Response {
+                code: Some(error.exit_code()),
+                stdout,
+                stderr: Some(crate::error_text(&error, json)),
+                ..Response::default()
+            },
+        }
+    }
+
+    /// An error, with whatever the CLI had already printed before it (a write conflict).
+    struct Failed {
+        stdout: Option<String>,
+        error: Error,
+    }
+
+    impl From<Error> for Failed {
+        fn from(error: Error) -> Self {
+            Failed {
+                stdout: None,
+                error,
+            }
+        }
+    }
+
+    fn carry_out(s: &Shared, req: Request) -> std::result::Result<(String, i32), Failed> {
+        let app = s.app_for(&req.actor)?;
+        match req.op {
+            Op::Recall {
+                query,
+                n,
+                ring,
+                bereich,
+            } => {
+                let ring = ring.map(cyberbrain_core::Ring::try_from).transpose()?;
+                let rr = RecallRequest { n, ring, bereich };
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| Error::Index(format!("cannot start the async runtime: {e}")))?;
+                let result = rt.block_on(app.recall(&query, &rr))?;
+                Ok((rendered(&result, req.json, crate::render::recall)?, 0))
+            }
+            Op::Write(w) => {
+                let wr = WriteRequest {
+                    ring: cyberbrain_core::Ring::try_from(w.ring)?,
+                    kind: w.kind,
+                    name: w.name,
+                    body: w.body,
+                    tags: w.tags,
+                    bereich: w.bereich.map(Some),
+                    retention: w.retention.map(Some),
+                    force: w.force,
+                    choice: None,
+                    expected_updated: None,
+                    arriving: None,
+                    dry_run: w.dry_run,
+                };
+                let outcome = app.write(wr)?;
+                let stdout = rendered(&outcome, req.json, crate::render_write)?;
+                match crate::write_exit(&outcome) {
+                    Ok(code) => Ok((stdout, code)),
+                    Err(error) => Err(Failed {
+                        stdout: Some(stdout),
+                        error,
+                    }),
+                }
+            }
+        }
     }
 }
 
