@@ -166,7 +166,10 @@ pub fn recall(
 /// write). So the only way back to the local path is a daemon that said it did nothing, or
 /// none at all. A request that went out and got no readable answer is an error.
 pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Result<Answer> {
+    // `supersedes` is not part of the protocol's write, so such a write stays local rather
+    // than arriving at the daemon without it.
     if req.body.len() > MAX_REQUEST / 2
+        || req.supersedes.is_some()
         || req.choice.is_some()
         || req.expected_updated.is_some()
         || req.arriving.is_some()
@@ -557,6 +560,7 @@ mod server {
                     force: w.force,
                     choice: None,
                     expected_updated: None,
+                    supersedes: None,
                     arriving: None,
                     dry_run: w.dry_run,
                 };

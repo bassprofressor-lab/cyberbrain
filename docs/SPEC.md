@@ -78,6 +78,8 @@ tags: [postgres, deployment]
 links: [docker-bind-mount-inode-drift]   # derived from [[...]], written back on scan
 retention: P2Y           # ISO-8601 duration, optional; absent means indefinite
 bereich: disposition     # department, team or domain; optional, absent means private
+supersedes: [pg17-pgdata]  # notes this one replaces; optional (`write --supersedes`)
+superseded_by: pg19-note  # the note replacing this one; optional, set by hand
 pii: none | reviewed | flagged
 ---
 
@@ -308,6 +310,9 @@ tool whose best mode is opt-in will be used in its worst mode.
 7. Leave rings 0 and 1 out unless `--ring` names one of them, and a copy of their text with
    them: both are injected whole into every session (§6), so a hit from them is a second
    copy of the reader's context. A caveat counts what was left out.
+8. A note named in another's `supersedes`, or carrying `superseded_by` itself, is scored
+   ×0.5 before sorting and its hits carry `superseded_by`. It is not hidden. Every hit
+   carries the note's `updated`.
 
 **Vector search is a linear SIMD scan.** At the expected corpus size (tens of thousands of
 blocks, a few tens of MB of f32) a flat scan is single-digit milliseconds and cannot go stale.

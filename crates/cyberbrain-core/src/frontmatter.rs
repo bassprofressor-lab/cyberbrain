@@ -19,7 +19,7 @@ use std::path::Path;
 const FENCE: &str = "---";
 
 /// Keys the head may contain. Anything else is a typo or a field from another tool.
-const KNOWN_KEYS: [&str; 11] = [
+const KNOWN_KEYS: [&str; 13] = [
     "id",
     "name",
     "ring",
@@ -30,6 +30,8 @@ const KNOWN_KEYS: [&str; 11] = [
     "links",
     "bereich",
     "retention",
+    "supersedes",
+    "superseded_by",
     "pii",
 ];
 
@@ -99,6 +101,9 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
     }
     if let Some(r) = &front.retention {
         validate_retention(r).map_err(|why| fail(format!("retention `{r}`: {why}")))?;
+    }
+    for n in front.supersedes.iter().chain(&front.superseded_by) {
+        validate_name(n).map_err(|r| fail(format!("supersession names `{n}`, which {r}")))?;
     }
 
     Ok(Parsed { front, body })
@@ -305,7 +310,8 @@ fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(
         "ring" => as_::<Ring>(value),
         "kind" => as_::<NoteKind>(value),
         "created" | "updated" => as_::<jiff::Timestamp>(value),
-        "tags" | "links" => as_::<Vec<String>>(value),
+        "tags" | "links" | "supersedes" => as_::<Vec<String>>(value),
+        "superseded_by" => as_::<Option<String>>(value),
         "bereich" => as_::<Option<String>>(value),
         "retention" => as_::<Option<String>>(value),
         "pii" => as_::<PiiState>(value),

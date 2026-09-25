@@ -592,6 +592,7 @@ fn write_one(
         force: false,
         choice: plan.accept_pii.then_some(OperatorChoice::MarkReviewed),
         expected_updated: None,
+        supersedes: None,
         arriving: None,
         dry_run,
     };

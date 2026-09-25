@@ -396,6 +396,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             tags,
             bereich,
             retention,
+            supersedes,
             force,
             dry_run,
         } => {
@@ -414,6 +415,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 force,
                 choice: None,
                 expected_updated: None,
+                supersedes: (!supersedes.is_empty()).then_some(supersedes),
                 arriving: None,
                 dry_run,
             };
@@ -470,6 +472,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 force,
                 choice: None,
                 expected_updated: None,
+                supersedes: None,
                 arriving: None,
                 dry_run,
             };

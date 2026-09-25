@@ -256,6 +256,8 @@ mod tests {
             links: vec![],
             bereich: None,
             retention: retention.map(str::to_owned),
+            supersedes: Vec::new(),
+            superseded_by: None,
             pii: PiiState::None,
         }
     }

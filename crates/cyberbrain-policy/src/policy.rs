@@ -251,6 +251,8 @@ mod tests {
             links: vec![],
             bereich: None,
             retention: None,
+            supersedes: Vec::new(),
+            superseded_by: None,
             pii: PiiState::Unscanned,
         };
         p.record_write(&f, 120).unwrap();

@@ -2564,3 +2564,115 @@ fn the_stores_own_guard_decides_first_and_the_service_is_not_asked() {
     assert!(pre_tool_use(&cb, "Read", serde_json::json!({"file_path": "/etc/hosts"})).is_empty());
     assert!(seen.lock().unwrap().is_empty());
 }
+
+// ---------------------------------------------------------------------------------------
+// Dates and supersession in recall hits (2026-09-25)
+
+/// A hit said nothing about its age: an agent could not tell a July note from last night's
+/// without expanding it. Calibrated against the state before: `updated` was absent.
+#[test]
+fn a_hit_says_when_its_note_was_last_updated() {
+    let cb = Cb::new();
+    cb.write("2", "stand", "wolfpack wurde abgeschaltet.");
+    let v = cb.ok(&["recall", "wolfpack"]);
+    let updated = v["hits"][0]["updated"].as_str().unwrap_or_default();
+    let today = jiff::Timestamp::now().to_string()[..10].to_string();
+    assert!(updated.starts_with(&today), "{v:#}");
+    let out = cb.run(&["recall", "wolfpack"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    let first = text.lines().next().unwrap_or_default();
+    assert!(
+        first.contains(&today),
+        "the date is on the hit line: {text}"
+    );
+    assert!(
+        !first.contains('T'),
+        "a date, not a timestamp, on the line: {first}"
+    );
+}
+
+/// `superseded_by` in a hand-edited head: the old note is still found, marked, and ranked
+/// below the one that replaces it. Calibrated against the state before: the head was an
+/// unknown field, scan skipped the note and recall never saw it.
+#[test]
+fn a_superseded_note_is_marked_and_ranked_below_its_successor() {
+    let cb = Cb::new();
+    cb.write(
+        "2",
+        "wolfpack-neu",
+        "wolfpack ist seit dem 10.09. abgeschaltet.",
+    );
+    cb.write(
+        "2",
+        "wolfpack-alt",
+        "wolfpack wolfpack läuft live, wolfpack ist online.",
+    );
+    let path = cb.note_path("2", "wolfpack-alt");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let text = text.replacen("\n---\n", "\nsuperseded_by: wolfpack-neu\n---\n", 1);
+    std::fs::write(&path, text).unwrap();
+    let scan = cb.ok(&["scan"]);
+    assert!(
+        scan["skipped"].as_array().is_none_or(|s| s.is_empty()),
+        "{scan:#}"
+    );
+    let v = cb.ok(&["recall", "wolfpack online"]);
+    let names: Vec<&str> = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["note_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["wolfpack-neu", "wolfpack-alt"], "{v:#}");
+    assert_eq!(v["hits"][1]["superseded_by"], "wolfpack-neu", "{v:#}");
+    assert!(v["hits"][0].get("superseded_by").is_none(), "{v:#}");
+    let out = cb.run(&["recall", "wolfpack online"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("superseded by wolfpack-neu"),
+        "{}",
+        text_of(&out)
+    );
+}
+
+/// The other side: `write --supersedes <name>` on the new note is enough, the old one
+/// need not be touched.
+#[test]
+fn write_supersedes_marks_the_old_note_without_touching_it() {
+    let cb = Cb::new();
+    cb.write(
+        "2",
+        "regel-alt",
+        "config.py wird nach S2 kopiert, regel regel regel.",
+    );
+    let before = std::fs::read_to_string(cb.note_path("2", "regel-alt")).unwrap();
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "decision",
+        "--name",
+        "regel-neu",
+        "--supersedes",
+        "regel-alt",
+        "--body",
+        "config.py wird nie nach S2 kopiert.",
+    ]);
+    assert_eq!(
+        std::fs::read_to_string(cb.note_path("2", "regel-alt")).unwrap(),
+        before
+    );
+    let v = cb.ok(&["recall", "regel config.py"]);
+    let old = v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["note_name"] == "regel-alt")
+        .unwrap_or_else(|| panic!("{v:#}"));
+    assert_eq!(old["superseded_by"], "regel-neu");
+    assert_eq!(v["hits"][0]["note_name"], "regel-neu", "{v:#}");
+}
+
+fn text_of(out: &std::process::Output) -> String {
+    text(out)
+}

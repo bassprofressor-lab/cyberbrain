@@ -477,14 +477,15 @@ impl Index {
             .map_err(|e| Error::Index(format!("tags: {e}")))?;
         tx.execute(
             "INSERT INTO notes (id, name, ring, kind, path, created, updated, mtime_ns, size,
-                                hash, tags, bereich, retention, pii)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                                hash, tags, bereich, retention, pii, supersedes, superseded_by)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
              ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name, ring = excluded.ring, kind = excluded.kind,
                 path = excluded.path, created = excluded.created, updated = excluded.updated,
                 mtime_ns = excluded.mtime_ns, size = excluded.size, hash = excluded.hash,
                 tags = excluded.tags, bereich = excluded.bereich,
-                retention = excluded.retention, pii = excluded.pii",
+                retention = excluded.retention, pii = excluded.pii,
+                supersedes = excluded.supersedes, superseded_by = excluded.superseded_by",
             params![
                 id_s,
                 note.front.name,
@@ -500,6 +501,9 @@ impl Index {
                 note.front.bereich,
                 note.front.retention,
                 enum_str(&note.front.pii)?,
+                serde_json::to_string(&note.front.supersedes)
+                    .map_err(|e| Error::Index(format!("supersedes of {id_s}: {e}")))?,
+                note.front.superseded_by,
             ],
         )
         .ix()?;
@@ -716,7 +720,8 @@ impl Index {
          n.hash, n.tags, n.bereich, n.retention, n.pii, \
          (SELECT count(*) FROM blocks b WHERE b.note_id = n.id), \
          (SELECT count(*) FROM vectors v JOIN blocks b ON b.citation = v.citation WHERE b.note_id = n.id), \
-         (SELECT json_group_array(to_name) FROM (SELECT to_name FROM links l WHERE l.from_note = n.id ORDER BY pos))";
+         (SELECT json_group_array(to_name) FROM (SELECT to_name FROM links l WHERE l.from_note = n.id ORDER BY pos)), \
+         n.supersedes, n.superseded_by";
 
     fn notes_where(&self, clause: &str, args: &[&dyn rusqlite::ToSql]) -> Result<Vec<NoteRecord>> {
         let sql = format!(
@@ -744,6 +749,8 @@ impl Index {
                     r.get::<_, i64>(14)?,
                     r.get::<_, i64>(15)?,
                     r.get::<_, String>(16)?,
+                    r.get::<_, String>(17)?,
+                    r.get::<_, Option<String>>(18)?,
                 ))
             })
             .ix()?;
@@ -767,6 +774,8 @@ impl Index {
                 block_count,
                 vector_count,
                 links,
+                supersedes,
+                superseded_by,
             ) = row.ix()?;
             let ts = |what: &str, s: &str| -> Result<jiff::Timestamp> {
                 s.parse()
@@ -786,6 +795,10 @@ impl Index {
                         .map_err(|e| Error::Index(format!("stored links of note {id}: {e}")))?,
                     bereich,
                     retention,
+                    supersedes: serde_json::from_str(&supersedes).map_err(|e| {
+                        Error::Index(format!("stored supersedes of note {id}: {e}"))
+                    })?,
+                    superseded_by,
                     pii: enum_parse::<PiiState>("pii", &pii)?,
                 },
                 path: PathBuf::from(path),

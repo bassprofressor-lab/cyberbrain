@@ -539,6 +539,8 @@ fn run_write(
                         links: link_targets(&body),
                         bereich: req.bereich.clone().flatten(),
                         retention: req.retention.clone().flatten(),
+                        supersedes: Vec::new(),
+                        superseded_by: None,
                         pii: w.pii,
                     },
                     body,
@@ -634,6 +636,7 @@ pub async fn put_note(
             force: false,
             choice: None,
             expected_updated: parsed.expected_updated,
+            supersedes: None,
             arriving: None,
             dry_run: dry.is_on(),
         };
@@ -690,6 +693,7 @@ pub async fn post_note(
             force: false,
             choice: None,
             expected_updated: None,
+            supersedes: None,
             arriving: None,
             dry_run: dry.is_on(),
         };

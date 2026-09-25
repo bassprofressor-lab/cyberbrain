@@ -129,6 +129,10 @@ pub struct Hit {
     pub note_id: NoteId,
     pub note_name: String,
     pub ring: Ring,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<jiff::Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     pub score: f32,
     pub text: String,
     pub block_idx: u32,

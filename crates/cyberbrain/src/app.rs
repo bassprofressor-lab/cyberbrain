@@ -238,6 +238,8 @@ pub struct WriteRequest {
     /// it. As a plain `Option` an ordinary edit that did not mention a period dropped the
     /// one the note had — an agreed deletion date, gone because somebody fixed a typo.
     pub retention: Option<Option<String>>,
+    /// Names of notes this one replaces. `None` keeps what the note has; `Some` sets it.
+    pub supersedes: Option<Vec<String>>,
     /// Write despite findings, stamping `flagged`. The CLI's `--force`.
     pub force: bool,
     /// The operator's answer to a hold, when the caller already asked (the UI, §8.1).
@@ -1965,6 +1967,19 @@ impl App {
                 reason: format!("retention `{r}`: {why}"),
             })?;
         }
+        for s in req.supersedes.iter().flatten() {
+            let why = if *s == name {
+                Some("is the note itself")
+            } else {
+                frontmatter::validate_name(s).err()
+            };
+            if let Some(why) = why {
+                return Err(Error::Frontmatter {
+                    path: PathBuf::from(format!("{name}.md")),
+                    reason: format!("supersedes `{s}`: {why}"),
+                });
+            }
+        }
         let w = self.writers(req.dry_run);
         let policy = w.policy.get();
 
@@ -2059,6 +2074,18 @@ impl App {
                     .or_else(|| arriving.as_ref().and_then(|a| a.retention.clone())),
                 Some(v) => v,
             },
+            // Absent keeps what the note has (a hand-set `supersedes` survives an edit).
+            supersedes: match req.supersedes.clone() {
+                None => existing
+                    .as_ref()
+                    .map(|n| n.front.supersedes.clone())
+                    .unwrap_or_default(),
+                Some(v) => v,
+            },
+            // Only ever set by hand in the head; a write keeps it.
+            superseded_by: existing
+                .as_ref()
+                .and_then(|n| n.front.superseded_by.clone()),
             pii,
         };
         let note = Note {
@@ -2174,6 +2201,19 @@ impl App {
                 reason: format!("retention `{r}`: {why}"),
             })?;
         }
+        for s in req.supersedes.iter().flatten() {
+            let why = if *s == name {
+                Some("is the note itself")
+            } else {
+                frontmatter::validate_name(s).err()
+            };
+            if let Some(why) = why {
+                return Err(Error::Frontmatter {
+                    path: PathBuf::from(format!("{name}.md")),
+                    reason: format!("supersedes `{s}`: {why}"),
+                });
+            }
+        }
         if self.store.read_proposal(&name).is_ok() {
             return Err(Error::Config(format!(
                 "a proposal named {name} is already waiting; `cyberbrain review {name} --reject` \
@@ -2236,6 +2276,8 @@ impl App {
                 links: link_targets(&body),
                 bereich: req.bereich.flatten(),
                 retention: req.retention.flatten(),
+                supersedes: req.supersedes.clone().unwrap_or_default(),
+                superseded_by: None,
                 pii,
             },
             body,
@@ -3155,6 +3197,7 @@ impl App {
                     force: true,
                     choice: None,
                     expected_updated: None,
+                    supersedes: None,
                     arriving: Some(Arriving {
                         id: incoming_id,
                         created: incoming_created,
@@ -4212,6 +4255,7 @@ mod ring_owner_tests {
             force: false,
             choice: None,
             expected_updated: None,
+            supersedes: None,
             arriving: None,
             dry_run: false,
         }
@@ -4296,6 +4340,7 @@ mod recall_check_tests {
             force: false,
             choice: None,
             expected_updated: None,
+            supersedes: None,
             arriving: None,
             dry_run: false,
         })
@@ -4435,6 +4480,7 @@ mod duplicate_tests {
             force: false,
             choice: None,
             expected_updated: None,
+            supersedes: None,
             arriving: None,
             dry_run: false,
         })

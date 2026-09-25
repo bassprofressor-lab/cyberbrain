@@ -89,6 +89,8 @@ fn note(name: &str, ring: Ring, body: &str, links: &[&str]) -> Note {
             links: links.iter().map(|s| s.to_string()).collect(),
             bereich: None,
             retention: None,
+            supersedes: Vec::new(),
+            superseded_by: None,
             pii: PiiState::None,
         },
         body: body.into(),

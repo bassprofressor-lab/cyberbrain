@@ -168,9 +168,11 @@ impl Index {
             }
         }
 
-        // 4. Ring weight, then recency. The ring is the citation's first component, so no
-        // lookup; `updated` needs one, and only for the candidates that survived fusion.
+        // 4. Ring weight, then recency, then supersession. The ring is the citation's first
+        // component, so no lookup; `updated` and the note name need one, and only for the
+        // candidates that survived fusion.
         let stand = self.updated_by_citation(fused.keys().copied())?;
+        let replaced = self.superseded()?;
         let now = jiff::Timestamp::now();
         let mut ranked: Vec<(String, f32)> = fused
             .into_iter()
@@ -179,11 +181,18 @@ impl Index {
                     .parse::<cyberbrain_core::Citation>()
                     .map(|c| c.ring)
                     .unwrap_or(Ring::External);
-                let recency = stand
-                    .get(cit)
-                    .map(|u| recency_weight(*u, now))
-                    .unwrap_or(1.0);
-                (cit.to_string(), s * ring.weight() * recency)
+                let (recency, succession) = match stand.get(cit) {
+                    Some((u, name)) => (
+                        u.map(|u| recency_weight(u, now)).unwrap_or(1.0),
+                        if replaced.contains_key(name) {
+                            SUPERSEDED_WEIGHT
+                        } else {
+                            1.0
+                        },
+                    ),
+                    None => (1.0, 1.0),
+                };
+                (cit.to_string(), s * ring.weight() * recency * succession)
             })
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -211,8 +220,10 @@ impl Index {
                     citation: cit,
                     note_id: cyberbrain_core::NoteId::from_string(&id)
                         .map_err(|e| Error::Index(format!("stored note id {id:?}: {e}")))?,
-                    note_name: name,
                     ring: Ring::try_from(ring as u8)?,
+                    updated: updated.parse().ok(),
+                    superseded_by: replaced.get(&name).cloned(),
+                    note_name: name,
                     score,
                     text,
                 },
@@ -248,30 +259,57 @@ impl Index {
         })
     }
 
-    /// `updated` of the note behind each citation, for the recency weight. One statement
-    /// for the whole candidate set: a per-hit query would be a hundred round trips.
+    /// `updated` and name of the note behind each citation, for the recency weight and
+    /// supersession. One prepared statement for the whole candidate set.
     fn updated_by_citation<'a>(
         &self,
         citations: impl Iterator<Item = &'a str>,
-    ) -> Result<HashMap<String, jiff::Timestamp>> {
+    ) -> Result<HashMap<String, (Option<jiff::Timestamp>, String)>> {
         let mut out = HashMap::new();
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT n.updated FROM blocks b JOIN notes n ON n.id = b.note_id \
+                "SELECT n.updated, n.name FROM blocks b JOIN notes n ON n.id = b.note_id \
                  WHERE b.citation = ?1",
             )
             .ix()?;
         for cit in citations {
-            let stamp: Option<String> = match stmt.query_row([cit], |r| r.get::<_, String>(0)) {
-                Ok(v) => Some(v),
-                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+            match stmt.query_row([cit], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            }) {
+                Ok((stamp, name)) => {
+                    out.insert(cit.to_string(), (stamp.parse().ok(), name));
+                }
+                Err(rusqlite::Error::QueryReturnedNoRows) => {}
                 Err(e) => return Err(Error::Index(format!("updated of {cit}: {e}"))),
-            };
-            if let Some(s) = stamp
-                && let Ok(t) = s.parse::<jiff::Timestamp>()
-            {
-                out.insert(cit.to_string(), t);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Replaced note name -> the name of the note that replaces it, from both sides:
+    /// `superseded_by` on the old note and `supersedes` on the new one. Where two notes
+    /// claim the same one, the first by name wins, so the answer does not depend on order.
+    pub fn superseded(&self) -> Result<HashMap<String, String>> {
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT name AS old, superseded_by AS new FROM notes \
+                 WHERE superseded_by IS NOT NULL \
+                 UNION ALL \
+                 SELECT j.value, n.name FROM notes n, json_each(n.supersedes) j \
+                 WHERE n.supersedes <> '[]' \
+                 ORDER BY 1, 2",
+            )
+            .ix()?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .ix()?;
+        let mut out = HashMap::new();
+        for r in rows {
+            let (old, new) = r.ix()?;
+            if old != new {
+                out.entry(old).or_insert(new);
             }
         }
         Ok(out)
@@ -436,6 +474,12 @@ pub(crate) fn recency_weight(updated: jiff::Timestamp, now: jiff::Timestamp) -> 
     };
     1.0 - RECENCY_AMPLITUDE + 2.0 * RECENCY_AMPLITUDE * decay
 }
+
+/// What a replaced note's score is multiplied by. Large on purpose: fused scores sit in a
+/// band a few per cent wide, so anything gentler would leave the old note where it was.
+/// It is not removed — the history can be what was asked for — only ranked below and
+/// marked `superseded_by`.
+pub const SUPERSEDED_WEIGHT: f32 = 0.5;
 
 /// Below this many characters (after normalising) two equal blocks are not merged: a
 /// short line such as "Status: erledigt." says different things in different notes, and

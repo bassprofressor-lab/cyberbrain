@@ -536,6 +536,8 @@ mod tests {
             note_id: cyberbrain_core::NoteId::from_string("01ARZ3NDEKTSV4RRFFQ69G5FAV").unwrap(),
             note_name: "n".into(),
             ring,
+            updated: None,
+            superseded_by: None,
             score: 1.0,
             text: text.into(),
         }
