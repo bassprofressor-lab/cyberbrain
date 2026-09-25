@@ -470,3 +470,83 @@ fn batch_timing() {
     }
     println!("single 8-token query: {:?} each", t.elapsed() / 1000);
 }
+
+// --- staleness-checked verification (SPEC §6.5, 2026-09-25) --------------------------
+
+fn age(path: &Path, secs: u64) {
+    let f = std::fs::File::options().write(true).open(path).unwrap();
+    f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(secs))
+        .unwrap();
+}
+
+#[test]
+fn a_fresh_file_is_never_recorded_so_every_load_hashes_it() {
+    let (d, _e, _paths, _manifest) = model(1);
+    assert!(!d.path().join(crate::VERIFIED_FILE).exists());
+}
+
+#[test]
+fn an_old_file_is_recorded_and_any_change_to_it_is_still_caught() {
+    let (_d, _e, paths, manifest) = model(1);
+    age(&paths.weights, 60);
+    StaticEmbedder::load(&paths, &manifest).unwrap();
+    let record = paths.weights.with_file_name(crate::VERIFIED_FILE);
+    let text = std::fs::read_to_string(&record).unwrap();
+    assert!(text.starts_with("model.safetensors\t"), "{text}");
+    assert!(text.contains(&manifest.weights_blake3), "{text}");
+    // Loads again from the record.
+    StaticEmbedder::load(&paths, &manifest).unwrap();
+    // A rewrite gets a new mtime, so the record no longer stands and the digest is checked.
+    corrupt_byte(&paths.weights, 3);
+    let err = StaticEmbedder::load(&paths, &manifest).unwrap_err();
+    assert!(
+        err.to_string().contains("does not match its manifest"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_record_for_another_digest_does_not_vouch_for_the_file() {
+    let (_d, _e, paths, manifest) = model(1);
+    age(&paths.weights, 60);
+    StaticEmbedder::load(&paths, &manifest).unwrap();
+    // A manifest that now expects a different file: the record's digest does not match
+    // it, so the file is hashed and refused.
+    let other = ArtefactManifest {
+        weights_blake3: "0".repeat(64),
+        ..manifest.clone()
+    };
+    let err = StaticEmbedder::load(&paths, &other).unwrap_err();
+    assert!(
+        err.to_string().contains("does not match its manifest"),
+        "{err}"
+    );
+}
+
+#[test]
+fn describe_names_the_profile_a_load_would_have_without_loading() {
+    let (_d, e, paths, manifest) = model(4);
+    let d = StaticEmbedder::describe(&paths, &manifest).unwrap();
+    assert_eq!(d.profile_id, e.profile_id());
+    assert_eq!(d.dim, e.dim());
+    corrupt_byte(&paths.tokenizer, 3);
+    assert!(StaticEmbedder::describe(&paths, &manifest).is_err());
+}
+
+#[test]
+fn f32_weights_are_read_from_the_mapping_and_embed_identically() {
+    let (_d, a, paths, manifest) = model(7);
+    age(&paths.weights, 60);
+    let b = StaticEmbedder::load(&paths, &manifest).unwrap(); // records
+    let c = StaticEmbedder::load(&paths, &manifest).unwrap(); // from the record
+    for t in ["alpha beta", "gamma", "theta zeta eta"] {
+        assert_eq!(
+            a.embed_one(t).unwrap().vector,
+            b.embed_one(t).unwrap().vector
+        );
+        assert_eq!(
+            a.embed_one(t).unwrap().vector,
+            c.embed_one(t).unwrap().vector
+        );
+    }
+}

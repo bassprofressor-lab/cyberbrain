@@ -16,7 +16,10 @@ synthetic = []
 
 [dependencies]
 cyberbrain-core.workspace = true
-blake3 = "1.8.7"
+# rayon: a cold start hashes the 512 MB weights on every core (142 ms -> 17 ms measured).
+blake3 = { version = "1.8.7", features = ["rayon"] }
+# The weights are read from a mapping rather than copied (SPEC §6.5); MIT OR Apache-2.0.
+memmap2 = "0.9.11"
 rayon = "1.12.0"
 safetensors = "0.8.0"
 serde = { version = "1.0.229", features = ["derive"] }

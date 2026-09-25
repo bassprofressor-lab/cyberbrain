@@ -25,7 +25,8 @@ pub struct EmbeddingProfile {
 }
 
 impl EmbeddingProfile {
-    fn describe(&self) -> String {
+    /// `id (dim N, model <12 hex>)`, as a profile mismatch names it.
+    pub fn describe(&self) -> String {
         let hash = if self.model_hash.len() > 12 {
             &self.model_hash[..12]
         } else {

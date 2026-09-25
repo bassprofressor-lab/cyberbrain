@@ -1,9 +1,9 @@
 //! The static embedder: tokenizer + embedding matrix, mean pooling, L2 normalisation.
 
 use crate::POOLING;
-use crate::artefact::{ArtefactManifest, ModelPaths, read_verified};
+use crate::artefact::{ArtefactManifest, ModelPaths, map_verified, read_verified, record_verified};
 use crate::pool;
-use crate::weights::{Matrix, load_matrix};
+use crate::weights::{Matrix, load_matrix_mapped, tensor_shape};
 use cyberbrain_core::{Embedder, Error, Result, Slash};
 use rayon::prelude::*;
 use serde::Serialize;
@@ -100,7 +100,7 @@ impl StaticEmbedder {
         manifest.validate()?;
 
         let tok_bytes = read_verified(&paths.tokenizer, &manifest.tokenizer_blake3, "tokenizer")?;
-        let w_bytes = read_verified(&paths.weights, &manifest.weights_blake3, "weights")?;
+        let (w_map, w_known) = map_verified(&paths.weights, &manifest.weights_blake3, "weights")?;
 
         let mut tokenizer = Tokenizer::from_bytes(&tok_bytes).map_err(|e| {
             Error::Embed(format!(
@@ -116,7 +116,7 @@ impl StaticEmbedder {
             .with_truncation(None)
             .map_err(|e| Error::Embed(format!("cannot disable tokenizer truncation: {e}")))?;
 
-        let matrix = load_matrix(&w_bytes)?;
+        let matrix = load_matrix_mapped(w_map, !w_known)?;
 
         let vocab = tokenizer.get_vocab_size(true);
         if vocab > matrix.rows {
@@ -129,15 +129,12 @@ impl StaticEmbedder {
 
         let unk_id = resolve_unk(&tokenizer, opts.unk_token.as_deref());
 
-        // Everything that changes the meaning of a stored vector goes in here: both file
-        // digests (weights and tokenizer), the dimension and the pooling name.
-        let profile_id = {
-            let mut h = blake3::Hasher::new();
-            h.update(manifest.weights_blake3.as_bytes());
-            h.update(manifest.tokenizer_blake3.as_bytes());
-            let short = &h.finalize().to_hex()[..16];
-            format!("m2v-{POOLING}-d{}-{short}", matrix.dim)
-        };
+        let profile_id = profile_id(manifest, matrix.dim);
+        if !w_known {
+            // Only a load that got this far — digest, shape, vocabulary, every value finite —
+            // may let the next one skip those checks.
+            record_verified(&paths.weights, &manifest.weights_blake3);
+        }
 
         Ok(Self {
             tokenizer,
@@ -146,6 +143,25 @@ impl StaticEmbedder {
             max_tokens: opts.max_tokens,
             manifest: manifest.clone(),
             profile_id,
+        })
+    }
+
+    /// What a loaded model would report as its profile and dimension, without loading it.
+    ///
+    /// For `status`, `doctor` and a `scan` with nothing to embed (2026-09-25: each of them
+    /// parsed the tokenizer and read the matrix for these two values, 2.6 s). Both files are
+    /// verified against the manifest exactly as `load` does, the weights through the same
+    /// staleness record; only the tokenizer is not parsed and the matrix not read beyond its
+    /// header. A tokenizer that does not parse is therefore found by the first `recall`, not
+    /// here.
+    pub fn describe(paths: &ModelPaths, manifest: &ArtefactManifest) -> Result<Description> {
+        manifest.validate()?;
+        read_verified(&paths.tokenizer, &manifest.tokenizer_blake3, "tokenizer")?;
+        let (w_map, _) = map_verified(&paths.weights, &manifest.weights_blake3, "weights")?;
+        let (_, dim) = tensor_shape(&w_map)?;
+        Ok(Description {
+            profile_id: profile_id(manifest, dim),
+            dim,
         })
     }
 
@@ -262,4 +278,21 @@ impl Embedder for StaticEmbedder {
             .map(|e| e.vector)
             .collect())
     }
+}
+
+/// A model's identity without the model: see [`StaticEmbedder::describe`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Description {
+    pub profile_id: String,
+    pub dim: usize,
+}
+
+/// Everything that changes the meaning of a stored vector goes in here: both file digests
+/// (weights and tokenizer), the dimension and the pooling name.
+fn profile_id(manifest: &ArtefactManifest, dim: usize) -> String {
+    let mut h = blake3::Hasher::new();
+    h.update(manifest.weights_blake3.as_bytes());
+    h.update(manifest.tokenizer_blake3.as_bytes());
+    let short = &h.finalize().to_hex()[..16];
+    format!("m2v-{POOLING}-d{dim}-{short}")
 }

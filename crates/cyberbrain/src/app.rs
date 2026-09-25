@@ -660,6 +660,12 @@ enum EmbedderState {
     },
 }
 
+/// The model's identity without the model (`App::model_identity`).
+enum ModelIdentity {
+    Ready(EmbeddingProfile),
+    Absent(String),
+}
+
 #[derive(Clone)]
 enum LlmState {
     Ready(Box<LlmClient>),
@@ -749,7 +755,24 @@ pub struct App {
     index: Arc<Mutex<Index>>,
     actor: Actor,
     embedder: OnceLock<EmbedderState>,
+    identity: OnceLock<ModelIdentity>,
     llm: Mutex<Option<LlmState>>,
+}
+
+/// The loaded model is not freed, it is left to the operating system.
+///
+/// Measured 2026-09-25: freeing the tokenizer (500,353 vocabulary entries, ~570 MB of small
+/// allocations) and the 512 MB matrix took 0.41–0.50 s, a fifth of every `recall` from the
+/// CLI, between the last line of output and exit. An `App` is dropped when its process is
+/// about to end (CLI) or never (serve, mcp), so the memory goes back either way; the kernel
+/// takes it in one step. Everything else in `App` — index, audit sink — still drops
+/// normally, so nothing that has to be flushed is skipped.
+impl Drop for App {
+    fn drop(&mut self) {
+        if let Some(state) = self.embedder.take() {
+            std::mem::forget(state);
+        }
+    }
 }
 
 /// Ledger task names for the contradiction check. The abandoned one is separate on purpose:
@@ -862,6 +885,7 @@ impl App {
             index: Arc::new(Mutex::new(index)),
             actor,
             embedder: OnceLock::new(),
+            identity: OnceLock::new(),
             llm: Mutex::new(None),
         })
     }
@@ -976,37 +1000,34 @@ impl App {
         self.embedder.get_or_init(|| self.load_embedder())
     }
 
-    fn load_embedder(&self) -> EmbedderState {
+    /// The model's files and manifest, or why there is no model to speak of.
+    fn model_artefact(&self) -> std::result::Result<(ModelPaths, ArtefactManifest), String> {
         let dir = self.config.model_dir();
         let paths = ModelPaths::in_dir(&dir);
         let manifest_path = dir.join(MANIFEST_FILE);
         if !paths.weights.is_file() || !paths.tokenizer.is_file() {
-            return EmbedderState::Absent {
-                reason: format!(
-                    "no model artefact at {} (expected model.safetensors and tokenizer.json); \
-                     search is lexical only",
-                    Slash(&dir)
-                ),
-            };
+            return Err(format!(
+                "no model artefact at {} (expected model.safetensors and tokenizer.json); \
+                 search is lexical only",
+                Slash(&dir)
+            ));
         }
-        let manifest: ArtefactManifest = match std::fs::read_to_string(&manifest_path) {
-            Ok(text) => match serde_json::from_str(&text) {
-                Ok(m) => m,
-                Err(e) => {
-                    return EmbedderState::Absent {
-                        reason: format!("{} is not a manifest: {e}", Slash(&manifest_path)),
-                    };
-                }
-            },
-            Err(_) => {
-                return EmbedderState::Absent {
-                    reason: format!(
-                        "model files are present but {} is missing; refusing to load \
-                         unverified weights (SPEC §6.1)",
-                        Slash(&manifest_path)
-                    ),
-                };
-            }
+        match std::fs::read_to_string(&manifest_path) {
+            Ok(text) => serde_json::from_str(&text)
+                .map(|m| (paths, m))
+                .map_err(|e| format!("{} is not a manifest: {e}", Slash(&manifest_path))),
+            Err(_) => Err(format!(
+                "model files are present but {} is missing; refusing to load unverified \
+                 weights (SPEC §6.1)",
+                Slash(&manifest_path)
+            )),
+        }
+    }
+
+    fn load_embedder(&self) -> EmbedderState {
+        let (paths, manifest) = match self.model_artefact() {
+            Ok(a) => a,
+            Err(reason) => return EmbedderState::Absent { reason },
         };
         match StaticEmbedder::load(&paths, &manifest) {
             Ok(e) => EmbedderState::Loaded {
@@ -1020,15 +1041,66 @@ impl App {
         }
     }
 
+    /// Which model this store would embed with — profile, dimension, weights digest — without
+    /// loading it, unless something already did.
+    ///
+    /// 2026-09-25: `status`, `doctor`, `write` and a `scan` with nothing to embed all asked
+    /// `embedder()` for these three values and paid the full load for them: tokenizer parse,
+    /// matrix read, 2.6 s and 1.6 GB, 26 times the SPEC budget for an unchanged `scan`.
+    /// `StaticEmbedder::describe` verifies both files the same way a load does and reads only
+    /// the safetensors header. The model itself is still loaded by whoever embeds.
+    fn model_identity(&self) -> &ModelIdentity {
+        self.identity.get_or_init(|| {
+            if let Some(EmbedderState::Loaded {
+                embedder, manifest, ..
+            }) = self.embedder.get()
+            {
+                return ModelIdentity::Ready(EmbeddingProfile {
+                    id: embedder.profile_id().to_string(),
+                    dim: embedder.dim(),
+                    model_hash: manifest.weights_blake3.clone(),
+                });
+            }
+            if let Some(EmbedderState::Absent { reason }) = self.embedder.get() {
+                return ModelIdentity::Absent(reason.clone());
+            }
+            match self.model_artefact() {
+                Err(reason) => ModelIdentity::Absent(reason),
+                Ok((paths, manifest)) => match StaticEmbedder::describe(&paths, &manifest) {
+                    Ok(d) => ModelIdentity::Ready(EmbeddingProfile {
+                        id: d.profile_id,
+                        dim: d.dim,
+                        model_hash: manifest.weights_blake3.clone(),
+                    }),
+                    Err(e) => ModelIdentity::Absent(e.to_string()),
+                },
+            }
+        })
+    }
+
+    /// Does the index's recorded profile belong to this model? `None` when either side is
+    /// missing. The same comparison `Index::check_embedder` makes, on the identity alone.
+    fn profile_mismatch(&self, stored: &EmbeddingProfile) -> Option<Error> {
+        match self.model_identity() {
+            ModelIdentity::Ready(p) if p.id != stored.id || p.dim != stored.dim => {
+                Some(Error::EmbeddingProfileMismatch {
+                    stored: stored.describe(),
+                    configured: format!("{} (dim {})", p.id, p.dim),
+                })
+            }
+            _ => None,
+        }
+    }
+
     fn embedder_summary(&self) -> EmbedderSummary {
-        match self.embedder() {
-            EmbedderState::Loaded { embedder, .. } => EmbedderSummary {
+        match self.model_identity() {
+            ModelIdentity::Ready(p) => EmbedderSummary {
                 loaded: true,
-                profile_id: Some(embedder.profile_id().to_string()),
-                dim: Some(embedder.dim()),
+                profile_id: Some(p.id.clone()),
+                dim: Some(p.dim),
                 reason: None,
             },
-            EmbedderState::Absent { reason } => EmbedderSummary {
+            ModelIdentity::Absent(reason) => EmbedderSummary {
                 loaded: false,
                 profile_id: None,
                 dim: None,
@@ -1038,15 +1110,9 @@ impl App {
     }
 
     fn embedding_profile(&self) -> Option<EmbeddingProfile> {
-        match self.embedder() {
-            EmbedderState::Loaded {
-                embedder, manifest, ..
-            } => Some(EmbeddingProfile {
-                id: embedder.profile_id().to_string(),
-                dim: embedder.dim(),
-                model_hash: manifest.weights_blake3.clone(),
-            }),
-            EmbedderState::Absent { .. } => None,
+        match self.model_identity() {
+            ModelIdentity::Ready(p) => Some(p.clone()),
+            ModelIdentity::Absent(_) => None,
         }
     }
 
@@ -2554,14 +2620,13 @@ impl App {
 
         checks.push("embedding profile");
         let stored = lock_index(&self.index)?.embedding_profile()?;
-        match (stored, self.embedder()) {
-            (Some(p), EmbedderState::Loaded { embedder, .. }) => {
-                if let Err(e) = lock_index(&self.index)?.check_embedder(embedder.as_ref()) {
-                    let _ = p;
+        match (stored, self.model_identity()) {
+            (Some(p), ModelIdentity::Ready(_)) => {
+                if let Some(e) = self.profile_mismatch(&p) {
                     push("error", "embedding profile", e.to_string());
                 }
             }
-            (Some(p), EmbedderState::Absent { reason }) => push(
+            (Some(p), ModelIdentity::Absent(reason)) => push(
                 "warning",
                 "embedding profile",
                 format!(
@@ -2569,7 +2634,7 @@ impl App {
                     p.id
                 ),
             ),
-            (None, EmbedderState::Loaded { .. }) => {
+            (None, ModelIdentity::Ready(_)) => {
                 if lock_index(&self.index)?.stats()?.blocks > 0 {
                     push(
                         "warning",
@@ -2579,7 +2644,7 @@ impl App {
                     );
                 }
             }
-            (None, EmbedderState::Absent { .. }) => {}
+            (None, ModelIdentity::Absent(_)) => {}
         }
 
         checks.push("audit chain");
@@ -2623,12 +2688,10 @@ impl App {
         let index = lock_index(&self.index)?.stats()?;
         let (not_indexed, changed, gone, _) = self.staleness()?;
         let embedder = self.embedder_summary();
-        let matches_index = match (&index.embedding, self.embedder()) {
-            (Some(_), EmbedderState::Loaded { embedder, .. }) => Some(
-                lock_index(&self.index)?
-                    .check_embedder(embedder.as_ref())
-                    .is_ok(),
-            ),
+        let matches_index = match (&index.embedding, self.model_identity()) {
+            (Some(stored), ModelIdentity::Ready(_)) => {
+                Some(self.profile_mismatch(stored).is_none())
+            }
             _ => None,
         };
         let model_dir = self.config.model_dir();

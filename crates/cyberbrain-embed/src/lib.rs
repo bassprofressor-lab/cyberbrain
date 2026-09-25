@@ -46,8 +46,8 @@ pub mod synthetic;
 #[cfg(test)]
 mod tests;
 
-pub use artefact::{ArtefactManifest, ModelPaths, hash_bytes, hash_file};
-pub use model::{Embedding, LoadOptions, ModelInfo, StaticEmbedder};
+pub use artefact::{ArtefactManifest, ModelPaths, VERIFIED_FILE, hash_bytes, hash_file};
+pub use model::{Description, Embedding, LoadOptions, ModelInfo, StaticEmbedder};
 pub use pool::is_zero;
 
 /// The only pooling this crate implements. Part of every profile id, so a future pooling
