@@ -29,6 +29,11 @@ pub struct RecallOptions {
     /// default `0.0` only drops blocks with no similarity evidence at all; RRF would
     /// otherwise hand a rank, and thus a score, to the top `k_sem` of an unrelated corpus.
     pub min_cosine: f32,
+    /// Leave rings 0 and 1 out (unless `ring` asks for one of them). They are injected
+    /// whole into every session, so a hit from them is a second copy of what the reader
+    /// already holds. A block of another ring whose text is the same as a resident block's
+    /// is left out with it.
+    pub skip_resident: bool,
 }
 
 impl Default for RecallOptions {
@@ -40,6 +45,7 @@ impl Default for RecallOptions {
             ring: None,
             bereich: None,
             min_cosine: 0.0,
+            skip_resident: false,
         }
     }
 }
@@ -181,30 +187,58 @@ impl Index {
             })
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        ranked.truncate(opts.n);
 
-        // 5. Materialise.
-        let mut hits = Vec::with_capacity(ranked.len());
+        // 5. Materialise every candidate: collapsing duplicates needs the text of each, and
+        // the members of one group can sit anywhere in the order. Candidates are at most
+        // k_lex + k_sem, each a lookup by a unique key.
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT n.id, n.name, n.ring, b.text FROM blocks b JOIN notes n ON n.id = b.note_id \
-                 WHERE b.citation = ?1",
+                "SELECT n.id, n.name, n.ring, b.text, n.updated FROM blocks b \
+                 JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
             )
             .ix()?;
+        let mut cands: Vec<Candidate> = Vec::with_capacity(ranked.len());
         for (cit, score) in ranked {
-            let (id, name, ring, text): (String, String, i64, String) = stmt
-                .query_row([&cit], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            let (id, name, ring, text, updated): (String, String, i64, String, String) = stmt
+                .query_row([&cit], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                })
                 .map_err(|e| Error::Index(format!("hit {cit} vanished during recall: {e}")))?;
-            hits.push(Hit {
-                citation: cit,
-                note_id: cyberbrain_core::NoteId::from_string(&id)
-                    .map_err(|e| Error::Index(format!("stored note id {id:?}: {e}")))?,
-                note_name: name,
-                ring: Ring::try_from(ring as u8)?,
-                score,
-                text,
+            cands.push(Candidate {
+                key: dedup_key(&text),
+                hit: Hit {
+                    citation: cit,
+                    note_id: cyberbrain_core::NoteId::from_string(&id)
+                        .map_err(|e| Error::Index(format!("stored note id {id:?}: {e}")))?,
+                    note_name: name,
+                    ring: Ring::try_from(ring as u8)?,
+                    score,
+                    text,
+                },
+                updated: updated.parse().ok(),
             });
+        }
+
+        // 6. One hit per text, then the resident rings out, then the top `n`.
+        let skip_resident = opts.skip_resident && opts.ring.is_none();
+        let mut hits = Vec::with_capacity(opts.n);
+        let mut resident_left_out = 0usize;
+        for group in collapse_duplicates(cands) {
+            if hits.len() == opts.n {
+                break;
+            }
+            if skip_resident && group.ring.as_u8() <= 1 {
+                resident_left_out += 1;
+                continue;
+            }
+            hits.push(group);
+        }
+        if resident_left_out > 0 {
+            caveats.push(format!(
+                "{resident_left_out} hit(s) from rings 0/1 left out: those rings are in the \
+                 session context already; ask with --ring 0 or --ring 1 to search them"
+            ));
         }
 
         Ok(RecallResult {
@@ -401,6 +435,69 @@ pub(crate) fn recency_weight(updated: jiff::Timestamp, now: jiff::Timestamp) -> 
         0.5f32.powf(age_days / RECENCY_HALF_LIFE_DAYS)
     };
     1.0 - RECENCY_AMPLITUDE + 2.0 * RECENCY_AMPLITUDE * decay
+}
+
+/// Below this many characters (after normalising) two equal blocks are not merged: a
+/// short line such as "Status: erledigt." says different things in different notes, and
+/// the note name next to it is the information. The measurement that motivated merging
+/// (19 % of the orderflow store's blocks have a twin) counted from the same length.
+pub const DEDUP_MIN_CHARS: usize = 80;
+
+/// The identity of a block's text for duplicate detection: blake3 over the text with
+/// runs of whitespace collapsed and letters lower-cased, so a re-wrapped or re-cased copy
+/// is still a copy. `None` for text too short to merge (see [`DEDUP_MIN_CHARS`]).
+pub fn dedup_key(text: &str) -> Option<[u8; 32]> {
+    let norm = text
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    (norm.chars().count() >= DEDUP_MIN_CHARS).then(|| *blake3::hash(norm.as_bytes()).as_bytes())
+}
+
+struct Candidate {
+    key: Option<[u8; 32]>,
+    hit: Hit,
+    updated: Option<jiff::Timestamp>,
+}
+
+/// Candidates in rank order in, one hit per distinct text out, still in rank order.
+///
+/// A group takes the place of its best-ranked member and that member's score, so the
+/// order of everything that has no twin is exactly what it was. The block shown is the
+/// most trusted copy: the lowest ring, then the most recently updated note, then the best
+/// rank. Which copy was shown does not move a group, only which note it is attributed to.
+fn collapse_duplicates(cands: Vec<Candidate>) -> Vec<Hit> {
+    // (position of the best-ranked member, representative candidate index)
+    let mut groups: Vec<(f32, usize)> = Vec::with_capacity(cands.len());
+    let mut group_of_key: HashMap<[u8; 32], usize> = HashMap::new();
+    for (i, c) in cands.iter().enumerate() {
+        match c.key {
+            Some(k) if group_of_key.contains_key(&k) => {
+                let g = group_of_key[&k];
+                let rep = &cands[groups[g].1];
+                let better = (c.hit.ring.as_u8(), std::cmp::Reverse(c.updated))
+                    < (rep.hit.ring.as_u8(), std::cmp::Reverse(rep.updated));
+                if better {
+                    groups[g].1 = i;
+                }
+            }
+            Some(k) => {
+                group_of_key.insert(k, groups.len());
+                groups.push((c.hit.score, i));
+            }
+            None => groups.push((c.hit.score, i)),
+        }
+    }
+    let mut slots: Vec<Option<Candidate>> = cands.into_iter().map(Some).collect();
+    groups
+        .into_iter()
+        .filter_map(|(score, rep)| {
+            let mut h = slots[rep].take()?.hit;
+            h.score = score;
+            Some(h)
+        })
+        .collect()
 }
 
 /// Why the semantic half did not run. Always becomes a caveat, never an error.

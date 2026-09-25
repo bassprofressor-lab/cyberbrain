@@ -57,6 +57,18 @@ pub struct NoteRecord {
     pub vector_count: u32,
 }
 
+/// Two notes that hold the same text in several blocks (`Index::shared_blocks`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SharedBlocks {
+    /// The note whose blocks are largely found in `other`.
+    pub note: String,
+    pub other: String,
+    /// Distinct comparable blocks of `note` whose text `other` holds too.
+    pub shared: usize,
+    /// Distinct comparable blocks `note` has.
+    pub of: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Link {
     pub from_note: NoteId,
@@ -966,6 +978,62 @@ impl Index {
     /// Inbound links: rows that resolve to this note.
     pub fn links_to(&self, id: &NoteId) -> Result<Vec<Link>> {
         self.links_where("resolved_note_id = ?1", &[&id.to_string()])
+    }
+
+    /// Pairs of notes where one holds at least `min_percent` of its blocks, by text, in the
+    /// other too (`recall::dedup_key`: whitespace and case do not count, short blocks are
+    /// not compared). One entry per pair, from the side that shares the larger part; the
+    /// largest overlaps first. `doctor` reports them as candidates for merging.
+    pub fn shared_blocks(&self, min_percent: usize) -> Result<Vec<SharedBlocks>> {
+        use std::collections::{BTreeMap, BTreeSet, HashMap};
+        let mut stmt = self
+            .conn
+            .prepare("SELECT n.name, b.text FROM blocks b JOIN notes n ON n.id = b.note_id")
+            .ix()?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .ix()?;
+        // name -> distinct keys of its comparable blocks; key -> names holding it
+        let mut keys_of: BTreeMap<String, BTreeSet<[u8; 32]>> = BTreeMap::new();
+        let mut holders: HashMap<[u8; 32], BTreeSet<String>> = HashMap::new();
+        for r in rows {
+            let (name, text) = r.ix()?;
+            if let Some(k) = crate::recall::dedup_key(&text) {
+                keys_of.entry(name.clone()).or_default().insert(k);
+                holders.entry(k).or_default().insert(name);
+            }
+        }
+        // (a, b) with a < b -> shared keys
+        let mut shared: BTreeMap<(String, String), usize> = BTreeMap::new();
+        for names in holders.values().filter(|n| n.len() > 1) {
+            let names: Vec<&String> = names.iter().collect();
+            for (i, a) in names.iter().enumerate() {
+                for b in &names[i + 1..] {
+                    *shared.entry(((*a).clone(), (*b).clone())).or_default() += 1;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for ((a, b), k) in shared {
+            let (na, nb) = (keys_of[&a].len(), keys_of[&b].len());
+            // The smaller note: the overlap is the larger part of it.
+            let (note, of, other) = if na <= nb { (a, na, b) } else { (b, nb, a) };
+            if k * 100 >= min_percent * of {
+                out.push(SharedBlocks {
+                    note,
+                    other,
+                    shared: k,
+                    of,
+                });
+            }
+        }
+        out.sort_by(|x, y| {
+            y.shared
+                .cmp(&x.shared)
+                .then_with(|| x.note.cmp(&y.note))
+                .then_with(|| x.other.cmp(&y.other))
+        });
+        Ok(out)
     }
 
     /// Links to names that do not exist. Valid (SPEC §3.1); `doctor` reports them.

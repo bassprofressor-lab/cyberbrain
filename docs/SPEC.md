@@ -301,6 +301,13 @@ tool whose best mode is opt-in will be used in its worst mode.
    because they are injected into every session anyway and weighting them here counts them
    twice.
 5. Return top `n` (default 8) with citation, ring, note name, and the block text.
+6. Collapse textual duplicates (whitespace and case normalised, blocks of 80 characters or
+   more): a group keeps the place and score of its best-ranked copy and shows the copy from
+   the lowest ring, then the most recently updated note. Anything without a twin keeps its
+   place and score exactly.
+7. Leave rings 0 and 1 out unless `--ring` names one of them, and a copy of their text with
+   them: both are injected whole into every session (§6), so a hit from them is a second
+   copy of the reader's context. A caveat counts what was left out.
 
 **Vector search is a linear SIMD scan.** At the expected corpus size (tens of thousands of
 blocks, a few tens of MB of f32) a flat scan is single-digit milliseconds and cannot go stale.

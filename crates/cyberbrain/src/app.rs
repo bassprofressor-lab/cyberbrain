@@ -776,6 +776,10 @@ impl Drop for App {
     }
 }
 
+/// From this share of its comparable blocks on, `doctor` names a note as a copy of
+/// another. Half: below that the notes are two notes that quote each other.
+const SHARED_BLOCKS_PERCENT: usize = 50;
+
 /// Ledger task names for the contradiction check. The abandoned one is separate on purpose:
 /// a call that was cut off is not a call that cost that much, and the usage page should not
 /// average the two together.
@@ -1458,6 +1462,10 @@ impl App {
             ring: req.ring,
             bereich: req.bereich.clone(),
             min_cosine: 0.0,
+            // Rings 0 and 1 are injected whole at session start (hook/events.rs); a hit
+            // from them is a second copy of the reader's own context. `--ring 0|1` still
+            // searches them.
+            skip_resident: true,
         };
         let embedder_state = self.embedder();
         let mut result = {
@@ -2641,6 +2649,26 @@ impl App {
                     }
                 }
             }
+        }
+
+        // Notes that are mostly copies of each other. Recall already shows each text once;
+        // this says where the copies are, so somebody can merge them. Measured on the
+        // orderflow store: 19 % of all blocks had a textual twin in another note.
+        checks.push("shared blocks");
+        for sb in lock_index(&self.index)?.shared_blocks(SHARED_BLOCKS_PERCENT)? {
+            push(
+                "warning",
+                "shared blocks",
+                format!(
+                    "{} shares {} of {} block(s) ({}%) with {}; consider merging them or linking \
+                     one from the other",
+                    sb.note,
+                    sb.shared,
+                    sb.of,
+                    sb.shared * 100 / sb.of.max(1),
+                    sb.other
+                ),
+            );
         }
 
         checks.push("ring cap");
@@ -4388,5 +4416,143 @@ mod recall_check_tests {
         let _ = recall(&app, "wolfpack");
         let rows = inference_rows(&store);
         assert!(rows.len() > before, "{rows:?}");
+    }
+}
+
+#[cfg(test)]
+mod duplicate_tests {
+    use super::*;
+
+    fn write(app: &App, ring: Ring, name: &str, body: &str) {
+        app.write(WriteRequest {
+            ring,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: body.to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            arriving: None,
+            dry_run: false,
+        })
+        .unwrap();
+    }
+
+    fn recall(app: &App, q: &str, ring: Option<Ring>) -> RecallResult {
+        let req = RecallRequest {
+            ring,
+            ..RecallRequest::default()
+        };
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(app.recall(q, &req))
+            .unwrap()
+    }
+
+    const RULE: &str = "Never copy config.py from server one to server two: server two keeps \
+                        its own copy, and overwriting it once broke live trading there.";
+
+    fn store() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        (dir, app)
+    }
+
+    /// Rings 0 and 1 are injected whole at every session start (hook/events.rs), and the
+    /// usage text there promises that recall searches rings 2 to 4. Calibrated against the
+    /// state before: the ring 0 note came back as the first hit, a second copy of what the
+    /// agent already had in its context.
+    #[test]
+    fn resident_rings_are_not_recalled_unless_asked_for() {
+        let (_d, app) = store();
+        write(
+            &app,
+            Ring::Invariant,
+            "wolfpack-regel",
+            "wolfpack bleibt abgeschaltet.",
+        );
+        write(
+            &app,
+            Ring::Knowledge,
+            "wolfpack-stand",
+            "wolfpack wurde am 10.09. abgeschaltet.",
+        );
+        let r = recall(&app, "wolfpack abgeschaltet", None);
+        let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
+        assert_eq!(names, ["wolfpack-stand"], "{r:?}");
+        assert!(
+            r.caveats.iter().any(|c| c.contains("rings 0/1")),
+            "{:?}",
+            r.caveats
+        );
+        // Asked for by ring, they are there.
+        let r0 = recall(&app, "wolfpack abgeschaltet", Some(Ring::Invariant));
+        assert_eq!(r0.hits.len(), 1);
+        assert_eq!(r0.hits[0].note_name, "wolfpack-regel");
+    }
+
+    /// A ring 2 copy of a ring 1 paragraph is the ring 1 paragraph: already in context.
+    #[test]
+    fn a_copy_of_resident_text_is_not_recalled_either() {
+        let (_d, app) = store();
+        write(&app, Ring::Protocol, "protokoll", RULE);
+        write(&app, Ring::Knowledge, "abschrift", RULE);
+        write(
+            &app,
+            Ring::Knowledge,
+            "anderes",
+            "config.py on server two is its own.",
+        );
+        let r = recall(&app, "config.py server two", None);
+        let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
+        assert_eq!(names, ["anderes"], "{r:?}");
+    }
+
+    /// Calibrated against the state before: doctor had no such check and said nothing.
+    #[test]
+    fn doctor_names_notes_that_share_most_of_their_blocks() {
+        let (_d, app) = store();
+        let other = "A second paragraph long enough to count as a block of its own, about \
+                     something else entirely, written once and copied along with the rule.";
+        write(
+            &app,
+            Ring::Knowledge,
+            "original",
+            &format!("{RULE}\n\n{other}"),
+        );
+        write(
+            &app,
+            Ring::Knowledge,
+            "kopie",
+            &format!("{RULE}\n\n{other}"),
+        );
+        write(
+            &app,
+            Ring::Knowledge,
+            "eigen",
+            "Nothing here is shared with anybody.",
+        );
+        let r = app.doctor().unwrap();
+        let shared: Vec<&DoctorFinding> = r
+            .findings
+            .iter()
+            .filter(|f| f.check == "shared blocks")
+            .collect();
+        assert_eq!(shared.len(), 1, "{:?}", r.findings);
+        assert!(shared[0].detail.contains("kopie"), "{}", shared[0].detail);
+        assert!(
+            shared[0].detail.contains("original"),
+            "{}",
+            shared[0].detail
+        );
+        assert!(shared[0].detail.contains("(100%)"), "{}", shared[0].detail);
+        assert!(r.checks_run.contains(&"shared blocks"));
     }
 }
