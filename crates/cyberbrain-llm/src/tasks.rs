@@ -158,6 +158,22 @@ struct PairWire {
     reason: String,
 }
 
+/// Whether the hits come from at least two rings. Conflicts are defined across rings, so
+/// without that there is nothing [`find_conflicts`] could report, and a caller can know it
+/// before opening a client.
+pub fn spans_rings(hits: &[Hit]) -> bool {
+    let rings: std::collections::BTreeSet<Ring> = hits.iter().map(|h| h.ring).collect();
+    rings.len() >= 2
+}
+
+/// The caveat for hits that are all in one ring.
+pub fn one_ring_caveat(hits: usize) -> String {
+    format!(
+        "{F_CONTRADICTION} skipped: all {hits} hits are in one ring, and conflicts are defined \
+         across rings"
+    )
+}
+
 /// What the recall path calls: one model call over the whole hit list. Returns the
 /// conflicts to attach and the caveats to attach, never an error. Same-ring pairs the
 /// model reports are dropped and named in a caveat rather than silently ignored.
@@ -166,13 +182,8 @@ pub async fn find_conflicts(client: &LlmClient, hits: &[Hit]) -> (Vec<Conflict>,
     if let Some(c) = client.waiver_caveat() {
         caveats.push(c);
     }
-    let rings: std::collections::BTreeSet<Ring> = hits.iter().map(|h| h.ring).collect();
-    if rings.len() < 2 {
-        caveats.push(format!(
-            "{F_CONTRADICTION} skipped: all {} hits are in one ring, and conflicts are defined \
-             across rings",
-            hits.len()
-        ));
+    if !spans_rings(hits) {
+        caveats.push(one_ring_caveat(hits.len()));
         return (Vec::new(), caveats);
     }
 

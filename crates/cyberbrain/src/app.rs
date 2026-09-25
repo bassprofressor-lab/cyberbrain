@@ -1187,20 +1187,28 @@ impl App {
         state
     }
 
-    async fn connect_llm(&self) -> LlmState {
-        let inf = &self.config.inference;
-        let Some(model) = inf
+    /// Why no client can be opened, when the configuration alone says so. Cheap and
+    /// silent: no endpoint is validated and nothing is audited.
+    fn llm_unconfigured(&self) -> Option<String> {
+        let configured = self
+            .config
+            .inference
             .model
             .as_deref()
-            .map(str::trim)
-            .filter(|m| !m.is_empty())
-        else {
-            return LlmState::Absent(
-                "no inference model is configured (inference.model in cyberbrain.toml); the \
-                 endpoint is never contacted without one"
-                    .into(),
-            );
-        };
+            .is_some_and(|m| !m.trim().is_empty());
+        (!configured).then(|| {
+            "no inference model is configured (inference.model in cyberbrain.toml); the \
+             endpoint is never contacted without one"
+                .into()
+        })
+    }
+
+    async fn connect_llm(&self) -> LlmState {
+        if let Some(reason) = self.llm_unconfigured() {
+            return LlmState::Absent(reason);
+        }
+        let inf = &self.config.inference;
+        let model = inf.model.as_deref().map(str::trim).unwrap_or_default();
         let cfg = LlmConfig {
             base_url: inf.base_url.clone(),
             model: model.to_string(),
@@ -1468,92 +1476,109 @@ impl App {
         // Contradiction check (SPEC §7): only with a configured local model, and its
         // absence is said out loud. It runs under a budget, because the hits are ready in
         // milliseconds and this call is the only reason a recall ever feels slow.
-        if result.hits.len() >= 2 {
-            match self.llm().await {
-                LlmState::Ready(client) => {
-                    let budget_ms = self.config.inference.contradiction_budget_ms;
-                    let last = match hostload::LoadLog::new(&self.root)
-                        .last_of(&[TASK_CONTRADICTION, TASK_CONTRADICTION_ABANDONED])
-                    {
-                        None => LastCheck::Unknown,
-                        // A measurement from another day says nothing about this one: a
-                        // faster model, a GPU, a machine that was busy last time. Without
-                        // this, one slow afternoon would switch the check off for good and
-                        // nothing would ever try again.
-                        Some(r) if stale(&r.at) => LastCheck::Unknown,
-                        Some(r) if r.task == TASK_CONTRADICTION_ABANDONED => LastCheck::Abandoned,
-                        Some(r) => LastCheck::Completed { ms: r.wall_ms },
-                    };
-                    match plan_contradiction_check(budget_ms, last) {
-                        CheckPlan::SkipMeasuredSlow { last_ms, budget_ms } => {
-                            result.caveats.push(format!(
-                                "contradiction check skipped: the last one took {}, over the {} \
-                                 budget (inference.contradiction_budget_ms); the hits are not \
-                                 checked against each other",
-                                secs(last_ms),
-                                secs(budget_ms)
-                            ));
-                        }
-                        CheckPlan::SkipAbandoned { budget_ms } => {
-                            result.caveats.push(format!(
-                                "contradiction check skipped: the last one was still running when \
-                                 its {} budget ran out (inference.contradiction_budget_ms); the \
-                                 hits are not checked against each other",
-                                secs(budget_ms)
-                            ));
-                        }
-                        plan => {
-                            let probe = self.load_probe();
-                            let started = std::time::Instant::now();
-                            let checked = match plan {
-                                CheckPlan::Run(budget) => tokio::time::timeout(
-                                    budget,
-                                    cyberbrain_llm::tasks::find_conflicts(&client, &result.hits),
-                                )
-                                .await
-                                .ok(),
-                                _ => Some(
-                                    cyberbrain_llm::tasks::find_conflicts(&client, &result.hits)
-                                        .await,
-                                ),
-                            };
-                            match checked {
-                                Some((conflicts, caveats)) => {
-                                    self.record_load(TASK_CONTRADICTION, probe, started.elapsed());
-                                    result.conflicts = conflicts;
-                                    result.caveats.extend(caveats);
-                                }
-                                None => {
-                                    // Abandoned, not completed: recorded under its own task so
-                                    // the ledger keeps saying what happened, and so the next
-                                    // call in another process knows without paying again.
-                                    self.record_load(
-                                        TASK_CONTRADICTION_ABANDONED,
-                                        probe,
-                                        started.elapsed(),
-                                    );
-                                    result.caveats.push(format!(
-                                        "contradiction check gave up after {} \
-                                         (inference.contradiction_budget_ms); the hits are not \
-                                         checked against each other",
-                                        secs(budget_ms)
-                                    ));
-                                }
-                            }
-                        }
-                    }
-                }
+        //
+        // Everything that can decide "not this time" is decided before the client is
+        // opened. Opening it validates the endpoint and asks the egress register, and both
+        // leave a row in the audit log; measured 2026-09-25 on the orderflow store, that
+        // was two rows for every read and 27 % of the whole log, for checks that were then
+        // skipped anyway.
+        match self.plan_check(&result.hits) {
+            Err(caveat) => result.caveats.push(caveat),
+            Ok(plan) => match self.llm().await {
                 LlmState::Absent(reason) => result
                     .caveats
                     .push(format!("contradiction check skipped: {reason}")),
-            }
-        } else {
-            result.caveats.push(
-                "contradiction check skipped: fewer than two hits, nothing to compare".into(),
-            );
+                LlmState::Ready(client) => {
+                    let budget_ms = self.config.inference.contradiction_budget_ms;
+                    let probe = self.load_probe();
+                    let started = std::time::Instant::now();
+                    let checked = match plan {
+                        CheckPlan::Run(budget) => tokio::time::timeout(
+                            budget,
+                            cyberbrain_llm::tasks::find_conflicts(&client, &result.hits),
+                        )
+                        .await
+                        .ok(),
+                        _ => {
+                            Some(cyberbrain_llm::tasks::find_conflicts(&client, &result.hits).await)
+                        }
+                    };
+                    match checked {
+                        Some((conflicts, caveats)) => {
+                            self.record_load(TASK_CONTRADICTION, probe, started.elapsed());
+                            result.conflicts = conflicts;
+                            result.caveats.extend(caveats);
+                        }
+                        None => {
+                            // Abandoned, not completed: recorded under its own task so the
+                            // ledger keeps saying what happened, and so the next call in
+                            // another process knows without paying again.
+                            self.record_load(
+                                TASK_CONTRADICTION_ABANDONED,
+                                probe,
+                                started.elapsed(),
+                            );
+                            result.caveats.push(format!(
+                                "contradiction check gave up after {} \
+                                 (inference.contradiction_budget_ms); the hits are not \
+                                 checked against each other",
+                                secs(budget_ms)
+                            ));
+                        }
+                    }
+                }
+            },
         }
         self.record_recall_usage(&result);
         Ok(result)
+    }
+
+    /// Whether the contradiction check runs for these hits, decided from what is on disk
+    /// alone: the hits, the configuration and the load ledger. `Err` is the caveat saying
+    /// why not. Nothing here opens the inference client, so nothing here is audited.
+    fn plan_check(&self, hits: &[cyberbrain_core::Hit]) -> std::result::Result<CheckPlan, String> {
+        if hits.len() < 2 {
+            return Err(
+                "contradiction check skipped: fewer than two hits, nothing to compare".into(),
+            );
+        }
+        // Conflicts are defined across rings (SPEC §7). Before, this was found out inside
+        // the check, after the client was opened, and the instant return was booked in the
+        // ledger as a completed check of 0 ms.
+        if !cyberbrain_llm::tasks::spans_rings(hits) {
+            return Err(cyberbrain_llm::tasks::one_ring_caveat(hits.len()));
+        }
+        if let Some(reason) = self.llm_unconfigured() {
+            return Err(format!("contradiction check skipped: {reason}"));
+        }
+        let budget_ms = self.config.inference.contradiction_budget_ms;
+        let last = match hostload::LoadLog::new(&self.root)
+            .last_of(&[TASK_CONTRADICTION, TASK_CONTRADICTION_ABANDONED])
+        {
+            None => LastCheck::Unknown,
+            // A measurement from another day says nothing about this one: a faster model,
+            // a GPU, a machine that was busy last time. Without this, one slow afternoon
+            // would switch the check off for good and nothing would ever try again.
+            Some(r) if stale(&r.at) => LastCheck::Unknown,
+            Some(r) if r.task == TASK_CONTRADICTION_ABANDONED => LastCheck::Abandoned,
+            Some(r) => LastCheck::Completed { ms: r.wall_ms },
+        };
+        match plan_contradiction_check(budget_ms, last) {
+            CheckPlan::SkipMeasuredSlow { last_ms, budget_ms } => Err(format!(
+                "contradiction check skipped: the last one took {}, over the {} budget \
+                 (inference.contradiction_budget_ms); the hits are not checked against each \
+                 other",
+                secs(last_ms),
+                secs(budget_ms)
+            )),
+            CheckPlan::SkipAbandoned { budget_ms } => Err(format!(
+                "contradiction check skipped: the last one was still running when its {} \
+                 budget ran out (inference.contradiction_budget_ms); the hits are not checked \
+                 against each other",
+                secs(budget_ms)
+            )),
+            plan => Ok(plan),
+        }
     }
 
     /// Ledger row for one recall: the tokens handed over against the tokens the notes those
@@ -4211,5 +4236,157 @@ mod ring_owner_tests {
             assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
         }
         agent.write(req(Ring::Knowledge, "direkt")).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod recall_check_tests {
+    use super::*;
+
+    fn store_with_model(dir: &Path) -> PathBuf {
+        let store = dir.join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let toml = store.join("cyberbrain.toml");
+        let text = std::fs::read_to_string(&toml)
+            .unwrap()
+            .replace("# model = \"qwen3:8b\"", "model = \"probe\"")
+            // A loopback port nobody listens on: validation passes, a call fails at once.
+            .replace("http://127.0.0.1:11434/v1", "http://127.0.0.1:9/v1");
+        std::fs::write(&toml, text).unwrap();
+        store
+    }
+
+    fn note(app: &App, ring: Ring, name: &str, body: &str) {
+        app.write(WriteRequest {
+            ring,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: body.to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            arriving: None,
+            dry_run: false,
+        })
+        .unwrap();
+    }
+
+    /// Audit rows the inference layer wrote: opening the client, asking the register.
+    fn inference_rows(store: &Path) -> Vec<String> {
+        let app = App::open(Some(store), Actor::Operator).unwrap();
+        app.policy
+            .audit()
+            .read(&AuditFilter::default())
+            .unwrap()
+            .into_iter()
+            .map(|r| r.action.to_string())
+            .filter(|a| a.starts_with("inference.") || a.starts_with("egress."))
+            .collect()
+    }
+
+    fn recall(app: &App, q: &str) -> RecallResult {
+        runtime_for_tests()
+            .block_on(app.recall(q, &RecallRequest::default()))
+            .unwrap()
+    }
+
+    fn runtime_for_tests() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+
+    /// Calibrated against the state it fixes (2026-09-25): the orderflow store skipped the
+    /// check on every recall because the last one was abandoned, and still opened the
+    /// client first, which put `egress.permitted` and `inference.call` into the audit log
+    /// for each read — 27 % of all rows.
+    #[test]
+    fn a_skipped_check_opens_no_client_and_writes_no_audit_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_model(dir.path());
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        note(&app, Ring::Knowledge, "wolf-an", "wolfpack läuft im Juli");
+        note(
+            &app,
+            Ring::Session,
+            "wolf-aus",
+            "wolfpack abgeschaltet im September",
+        );
+        hostload::LoadLog::new(&store).append(&hostload::row(
+            TASK_CONTRADICTION_ABANDONED,
+            std::time::Duration::from_millis(3_001),
+            (None, None),
+            (None, None),
+        ));
+        let before = inference_rows(&store).len();
+        let r = recall(&app, "wolfpack");
+        assert_eq!(r.hits.len(), 2);
+        assert!(
+            r.caveats.iter().any(|c| c.contains("still running")),
+            "{:?}",
+            r.caveats
+        );
+        assert_eq!(
+            inference_rows(&store).len(),
+            before,
+            "a check that does not run must not open the client"
+        );
+    }
+
+    /// All hits in one ring: there is nothing the check could report (conflicts are
+    /// defined across rings), so no client, no audit row and no ledger row — before, the
+    /// early return was booked as a completed 0 ms check.
+    #[test]
+    fn hits_from_one_ring_are_not_a_check_and_not_a_measurement() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_model(dir.path());
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        note(&app, Ring::Knowledge, "wolf-an", "wolfpack läuft im Juli");
+        note(
+            &app,
+            Ring::Knowledge,
+            "wolf-aus",
+            "wolfpack abgeschaltet im September",
+        );
+        let before = inference_rows(&store).len();
+        let r = recall(&app, "wolfpack");
+        assert_eq!(r.hits.len(), 2);
+        assert!(
+            r.caveats
+                .iter()
+                .any(|c| c.contains("all 2 hits are in one ring")),
+            "{:?}",
+            r.caveats
+        );
+        assert_eq!(inference_rows(&store).len(), before);
+        assert!(
+            hostload::LoadLog::new(&store)
+                .last_of(&[TASK_CONTRADICTION, TASK_CONTRADICTION_ABANDONED])
+                .is_none(),
+            "nothing was measured, so nothing is in the ledger"
+        );
+    }
+
+    /// The other side: a check that is due still opens the client and says so in the log.
+    #[test]
+    fn a_due_check_still_opens_the_client() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = store_with_model(dir.path());
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        note(&app, Ring::Knowledge, "wolf-an", "wolfpack läuft im Juli");
+        note(
+            &app,
+            Ring::Session,
+            "wolf-aus",
+            "wolfpack abgeschaltet im September",
+        );
+        let before = inference_rows(&store).len();
+        let _ = recall(&app, "wolfpack");
+        let rows = inference_rows(&store);
+        assert!(rows.len() > before, "{rows:?}");
     }
 }
