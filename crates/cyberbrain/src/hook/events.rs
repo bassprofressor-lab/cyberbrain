@@ -553,18 +553,28 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
 /// way left to write ring 0/1 as the operator. Both are matched on the command text: a
 /// heuristic that catches the ordinary way of doing it, not a sandbox. Reading stays free.
 fn bash_verdict(cmd: &str) -> Option<String> {
-    let sheds = [
-        "unset CLAUDECODE",
-        "-u CLAUDECODE",
-        "-uCLAUDECODE",
-        "--unset=CLAUDECODE",
-        "--unset CLAUDECODE",
-        "CLAUDECODE=",
-        "env -i",
-    ]
-    .iter()
-    .any(|p| cmd.contains(p));
-    if sheds && cmd.contains("cyberbrain") {
+    let words: Vec<&str> = cmd
+        .split(|c: char| c.is_whitespace() || ";|&()`'\"".contains(c))
+        .filter(|t| !t.is_empty())
+        .collect();
+    // An assignment only as a word of its own (`CLAUDECODE= cyberbrain …`, `export
+    // CLAUDECODE=`), and a call only where a word IS the binary: as substrings they also
+    // matched `grep '^CLAUDECODE='` and a path through /root/cyberbrain/ — both only look.
+    let sheds = words.iter().any(|t| t.starts_with("CLAUDECODE="))
+        || [
+            "unset CLAUDECODE",
+            "-u CLAUDECODE",
+            "-uCLAUDECODE",
+            "--unset=CLAUDECODE",
+            "--unset CLAUDECODE",
+            "env -i",
+        ]
+        .iter()
+        .any(|p| cmd.contains(p));
+    let calls = words
+        .iter()
+        .any(|t| t.rsplit('/').next() == Some("cyberbrain"));
+    if sheds && calls {
         return Some(
             "this command drops CLAUDECODE around a cyberbrain call. The CLI reads that \
              variable to tell an agent from the operator (rings 0 and 1 are the operator's, \
@@ -883,6 +893,8 @@ mod bash_tests {
             "unset CLAUDECODE; cyberbrain review x --accept --by me",
             "CLAUDECODE= /usr/local/bin/cyberbrain write --ring 1 --name x --body y",
             "env -i PATH=$PATH cyberbrain write --ring 0 --name x --body y",
+            "export CLAUDECODE=; cyberbrain write --ring 0 --name x --body y",
+            "sh -c 'unset CLAUDECODE; cyberbrain write --ring 0 --name x --body y'",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
         }
@@ -900,6 +912,10 @@ mod bash_tests {
             "echo hi > /tmp/x",
             "cp -r .cyberbrain/notes/r2/x.md /tmp/",
             "rm -rf /tmp/cbprobe/.cyberbrain2",
+            // The two false alarms of the first day (2026-09-25): looking for the variable,
+            // and a path through the source tree that only mentions the patterns.
+            "printenv | grep -c '^CLAUDECODE='; cyberbrain status",
+            "grep -n 'env -i PATH' /root/cyberbrain/crates/cyberbrain/src/hook/events.rs",
         ] {
             assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
