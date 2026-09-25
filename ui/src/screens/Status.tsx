@@ -82,9 +82,9 @@ export function StatusScreen() {
   return (
     <div className="p-6 space-y-6 overflow-auto scroll-thin h-full">
       <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-lg font-semibold">{t.status.title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{t.status.title}</h1>
         <span className="font-mono text-xs text-fg-muted">cyberbrain {d.version}</span>
-        <div className="ml-auto flex gap-1.5">
+        <div className="ml-auto flex flex-wrap gap-1.5">
           <button className="btn btn-sm" onClick={() => s.reload()} disabled={s.loading}>
             {t.common.refresh}
           </button>
@@ -114,7 +114,7 @@ export function StatusScreen() {
       </div>
 
       {d.caveats.length ? (
-        <div className="panel px-4 py-2.5 text-xs" role="note">
+        <div className="panel-inset px-4 py-3 text-xs" role="note">
           <div className="label">{t.status.caveats}</div>
           <ul className="mt-1 space-y-0.5 text-fg-muted">
             {d.caveats.map((c, i) => (
@@ -125,7 +125,7 @@ export function StatusScreen() {
       ) : null}
 
       {d.embedding.matches_index === false ? (
-        <div className="panel border-danger/60 bg-danger-bg px-4 py-3 text-sm" role="alert">
+        <div className="alert alert-danger" role="alert">
           <span className="font-medium text-danger">{t.status.mismatch.lead}</span> {t.status.mismatch.body(d.embedding.profile_id)}
         </div>
       ) : null}
@@ -183,7 +183,7 @@ export function StatusScreen() {
             ]}
           />
           {scan ? (
-            <div className="mt-3 panel px-3 py-2 text-xs">
+            <div className="mt-3 panel-inset px-3 py-2.5 text-xs">
               <Pill>{scan.full ? t.status.btn.full : t.status.btn.scan}</Pill>{scan.dry_run ? <Pill className="ml-1">{t.status.index.dryRun}</Pill> : null}{" "}
               <span className="tnum">{t.status.index.scanLine({ scanned: scan.scanned, changed: scan.changed, added: scan.added, removed: scan.removed, ms: scan.elapsed_ms, blocks: num(scan.blocks_written), vectors: num(scan.vectors_written) })}</span>
               <div className="mt-1 text-fg-faint tnum">
@@ -273,11 +273,11 @@ export function StatusScreen() {
                   [t.status.inference.lastCall, d.inference.last_call ? <span title={absTime(d.inference.last_call)}>{relTime(d.inference.last_call)}</span> : <span className="text-fg-muted">{t.status.inference.noAuditRow}</span>],
                 ]}
               />
-              <div className="mt-4 panel px-3 py-2.5">
+              <div className="mt-4 panel-inset px-3 py-2.5">
                 <div className="label">{t.status.inference.whichBackend}</div>
                 <div className="mt-1 flex items-center gap-2">
                   {(["ollama", "lm-studio", "nvidia-pair", "unknown"] as InferenceBackend[]).map((b) => (
-                    <span key={b} className={`inline-flex items-center h-6 px-2 rounded border text-xs ${d.inference.last_backend === b ? "btn-primary font-medium" : "text-fg-faint border-line"}`}>
+                    <span key={b} className={`inline-flex items-center h-6 px-2 rounded border text-xs ${d.inference.last_backend === b ? "bg-accent-soft text-accent border-accent/40 font-medium" : "text-fg-faint border-line"}`}>
                       {backendLabel(b)}
                     </span>
                   ))}

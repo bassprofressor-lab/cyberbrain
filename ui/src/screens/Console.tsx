@@ -133,7 +133,7 @@ export function ConsoleScreen() {
         }
         aside={
           entries.length > 0 ? (
-            <button type="button" className="text-2xs text-fg-faint hover:text-fg" onClick={clear}>
+            <button type="button" className="btn btn-ghost btn-sm" onClick={clear}>
               {t.console.clear}
             </button>
           ) : undefined
@@ -193,11 +193,11 @@ export function ConsoleScreen() {
             // command then reach the global shortcuts — a typed `g t` navigates away
             // mid-command.
             readOnly={busy}
-            className="flex-1 bg-transparent font-mono text-xs rounded-sm placeholder:text-fg-faint"
+            className="flex-1 h-8 min-w-0 bg-transparent font-mono text-xs rounded-sm placeholder:text-fg-faint"
           />
           <button
             type="button"
-            className="text-2xs text-fg-muted hover:text-fg disabled:opacity-50"
+            className="btn btn-sm"
             onClick={() => void run(line)}
             disabled={busy || line.trim() === ""}
           >

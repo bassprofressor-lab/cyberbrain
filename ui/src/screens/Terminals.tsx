@@ -147,21 +147,21 @@ export function TerminalsScreen({ route }: Props) {
             placeholder={t.terminals.placeholder}
             spellCheck={false}
             autoComplete="off"
-            className="flex-1 bg-transparent font-mono text-xs rounded-sm border-b py-1 placeholder:text-fg-faint"
+            className="input flex-1 min-w-0 font-mono text-xs"
           />
-          <button type="submit" className="text-2xs text-fg-muted hover:text-fg">
+          <button type="submit" className="btn btn-sm btn-primary">
             {t.terminals.open}
           </button>
           <button
             type="button"
-            className="text-2xs text-fg-muted hover:text-fg"
+            className="btn btn-sm"
             onClick={() => start("")}
           >
             {t.terminals.openShell}
           </button>
           <button
             type="button"
-            className="text-2xs text-fg-muted hover:text-fg disabled:opacity-40"
+            className="btn btn-ghost btn-sm"
             disabled={command.trim() === ""}
             onClick={() => {
               const name = window.prompt(t.terminals.namePrompt, defaultName(command));
@@ -178,10 +178,10 @@ export function TerminalsScreen({ route }: Props) {
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-2xs text-fg-faint">{t.terminals.saved}</span>
               {saved.map((x) => (
-                <span key={x.name} className="inline-flex items-center gap-1 border rounded px-1.5 py-0.5">
+                <span key={x.name} className="badge h-7 gap-1.5 pl-2.5 pr-1">
                   <button
                     type="button"
-                    className="text-2xs font-mono hover:text-fg"
+                    className="text-2xs font-mono text-fg hover:text-accent"
                     title={x.command}
                     onClick={() => start(x.command)}
                   >
@@ -190,7 +190,7 @@ export function TerminalsScreen({ route }: Props) {
                   <button
                     type="button"
                     aria-label={t.terminals.forget(x.name)}
-                    className="text-2xs text-fg-faint hover:text-danger"
+                    className="btn btn-ghost btn-sm btn-icon h-5 w-5 hover:text-danger"
                     onClick={() => void write(saved.filter((y) => y.name !== x.name))}
                   >
                     ×
@@ -321,13 +321,13 @@ function Pane({ token, command, onClose }: { token: string; command: string; onC
   }, [token, command]);
 
   return (
-    <div className="border rounded">
-      <div className="flex items-center gap-2 px-2 py-1 border-b text-2xs">
+    <div className="panel overflow-hidden">
+      <div className="flex items-center gap-2 pl-3 pr-1.5 h-8 border-b bg-surface-2 text-2xs">
         <span className="font-mono text-fg-muted flex-1 truncate">
           {command || t.terminals.shell}
         </span>
         <span className="text-fg-faint">{t.terminals.state[state]}</span>
-        <button type="button" className="text-fg-faint hover:text-fg" onClick={onClose}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={onClose}>
           {t.terminals.close}
         </button>
       </div>

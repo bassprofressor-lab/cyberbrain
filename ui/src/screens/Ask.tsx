@@ -117,7 +117,7 @@ export function AskScreen({ route }: { route: Route }) {
             </article>
 
             {result?.conflicts.length ? (
-              <div className="rounded-lg border border-warn/40 bg-warn-bg px-4 py-3 text-sm" role="note">
+              <div className="alert alert-warn" role="note">
                 <span className="font-medium">{t.ask.conflict}</span>{" "}
                 <span className="text-fg-muted">{t.ask.conflictWhy}</span>
               </div>

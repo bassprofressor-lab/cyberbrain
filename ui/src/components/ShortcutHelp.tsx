@@ -21,9 +21,9 @@ export function ShortcutHelp() {
     groups.set(b.scope, g);
   }
   return (
-    <div className="fixed inset-0 z-40 bg-bg/70 flex items-start justify-center pt-[12vh]" onClick={() => setOpen(false)} role="dialog" aria-label={t.keys.dialogLabel}>
-      <div className="panel shadow-panel w-[min(40rem,92vw)] max-h-[76vh] overflow-auto scroll-thin" onClick={(e) => e.stopPropagation()}>
-        <header className="flex items-center justify-between px-4 h-10 border-b">
+    <div className="scrim items-start justify-center pt-[12vh]" onClick={() => setOpen(false)} role="dialog" aria-label={t.keys.dialogLabel}>
+      <div className="dialog w-[min(40rem,92vw)] max-h-[76vh] overflow-auto scroll-thin" onClick={(e) => e.stopPropagation()}>
+        <header className="section-head">
           <h2 className="text-sm font-semibold">{t.keys.title}</h2>
           <span className="text-xs text-fg-faint">
             <Kbd keys="?" /> {t.keys.hint.toggles} · <Kbd keys="Escape" /> {t.keys.hint.closes}

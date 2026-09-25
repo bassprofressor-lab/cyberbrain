@@ -423,11 +423,11 @@ export function GraphScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 py-2 border-b flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+      <div className="px-4 py-2 border-b bg-surface flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
         <input ref={searchRef} className="input w-52" placeholder={t.graph.findPlaceholder} value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t.graph.findAria} />
-        <div className="flex items-center gap-1">
+        <div className="seg">
           {([0, 1, 2, 3, 4] as Ring[]).map((r) => (
-            <button key={r} className={`btn btn-sm ${rings.has(r) ? "" : "opacity-40"}`} onClick={() => toggleRing(r)} aria-pressed={rings.has(r)} title={t.rings.label[r]}>
+            <button key={r} className={`seg-item ${rings.has(r) ? "is-on" : "opacity-50"}`} onClick={() => toggleRing(r)} aria-pressed={rings.has(r)} title={t.rings.label[r]}>
               <RingGlyph ring={r} size={9} />
               <span style={{ color: `var(--ring-${r})` }}>r{r}</span>
             </button>
@@ -439,7 +439,7 @@ export function GraphScreen() {
         <label className="inline-flex items-center gap-1.5 text-fg-muted cursor-pointer">
           <input type="checkbox" checked={hideIsolated} onChange={(e) => setHideIsolated(e.target.checked)} /> {t.graph.hideIsolated}
         </label>
-        <select className="input h-6 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label={t.graph.labelsAria}>
+        <select className="input h-7 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label={t.graph.labelsAria}>
           <option value="auto">{t.graph.labelsAuto}</option>
           <option value="all">{t.graph.labelsAll}</option>
           <option value="none">{t.graph.labelsNone}</option>
@@ -472,7 +472,7 @@ export function GraphScreen() {
           aria-label={t.graph.canvasAria}
         />
         {hover && !dragRef.current ? (
-          <div className="absolute pointer-events-none panel px-2 py-1 text-xs shadow-panel" style={{ left: hover.px + 12, top: hover.py + 12 }}>
+          <div className="absolute pointer-events-none dialog px-2 py-1 text-xs" style={{ left: hover.px + 12, top: hover.py + 12 }}>
             <div className="flex items-center gap-1.5">
               {hover.node.dangling ? <Pill>{t.common.intent}</Pill> : <RingBadge ring={hover.node.ring} />}
               <span className="font-mono">{hover.node.name}</span>
@@ -481,10 +481,10 @@ export function GraphScreen() {
           </div>
         ) : null}
         {selNode ? (
-          <div className="absolute right-3 top-3 panel shadow-panel w-64 p-3 text-sm">
+          <div className="absolute right-3 top-3 dialog w-64 p-3 text-sm">
             <div className="flex items-center gap-2">
               {selNode.dangling ? <Pill>{t.common.intent}</Pill> : <RingBadge ring={selNode.ring} showName />}
-              <button className="ml-auto text-fg-faint hover:text-fg" onClick={() => setSelected(null)} aria-label={t.graph.clearSelection}>
+              <button className="ml-auto btn btn-ghost btn-sm btn-icon" onClick={() => setSelected(null)} aria-label={t.graph.clearSelection}>
                 ×
               </button>
             </div>

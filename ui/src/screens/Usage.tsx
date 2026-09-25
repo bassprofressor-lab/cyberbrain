@@ -218,14 +218,16 @@ export function UsageScreen({ route }: { route: Route }) {
   return (
     <div className="p-6 space-y-6 overflow-auto scroll-thin h-full">
       <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-lg font-semibold">{t.usage.title}</h1>
+        <h1 className="text-xl font-semibold tracking-tight">{t.usage.title}</h1>
         <span className="text-xs text-fg-muted">{t.usage.subtitle}</span>
-        <div className="ml-auto flex items-center gap-1.5">
-          {RANGES.map((r) => (
-            <a key={r} href={href("usage", null, { days: r })} className={`btn btn-sm ${r === days ? "btn-primary" : ""}`}>
-              {t.common.dayShort(r)}
-            </a>
-          ))}
+        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+          <div className="seg">
+            {RANGES.map((r) => (
+              <a key={r} href={href("usage", null, { days: r })} className={`seg-item ${r === days ? "is-on" : ""}`} aria-current={r === days ? "true" : undefined}>
+                {t.common.dayShort(r)}
+              </a>
+            ))}
+          </div>
           <button className="btn btn-sm" onClick={() => setTable((v) => !v)} aria-pressed={table}>
             {table ? t.usage.charts : t.usage.table}
           </button>
@@ -249,28 +251,28 @@ export function UsageScreen({ route }: { route: Route }) {
 
       {table ? (
         <Section title={t.usage.dayByDay(days)}>
-          <div className="overflow-x-auto scroll-thin">
-            <table className="w-full text-xs tnum">
-              <thead className="text-fg-muted text-left">
+          <div className="table-wrap scroll-thin">
+            <table className="table table-dense tnum">
+              <thead>
                 <tr>
                   {t.usage.columns.map((h) => (
-                    <th key={h} className="font-medium py-1 pr-4 whitespace-nowrap">{h}</th>
+                    <th key={h} className="whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {d.days.filter((x) => x.recall.ops || x.find.ops || x.calls).map((x) => (
-                  <tr key={x.date} className="border-t">
-                    <td className="py-1 pr-4 whitespace-nowrap">{x.date}</td>
-                    <td className="py-1 pr-4">{num(x.recall.ops)}</td>
-                    <td className="py-1 pr-4">{num(x.recall.returned)}</td>
-                    <td className="py-1 pr-4">{num(x.recall.full)}</td>
-                    <td className="py-1 pr-4">{num(x.find.ops)}</td>
-                    <td className="py-1 pr-4">{num(x.calls)}</td>
-                    <td className="py-1 pr-4">{num(x.prompt_tokens)}</td>
-                    <td className="py-1 pr-4">{num(x.cached_prompt_tokens)}</td>
-                    <td className="py-1 pr-4">{num(x.completion_tokens)}</td>
-                    <td className="py-1 pr-4">{x.endpoint_cores === null ? "—" : dec(x.endpoint_cores)}</td>
+                  <tr key={x.date}>
+                    <td className="whitespace-nowrap">{x.date}</td>
+                    <td>{num(x.recall.ops)}</td>
+                    <td>{num(x.recall.returned)}</td>
+                    <td>{num(x.recall.full)}</td>
+                    <td>{num(x.find.ops)}</td>
+                    <td>{num(x.calls)}</td>
+                    <td>{num(x.prompt_tokens)}</td>
+                    <td>{num(x.cached_prompt_tokens)}</td>
+                    <td>{num(x.completion_tokens)}</td>
+                    <td>{x.endpoint_cores === null ? "—" : dec(x.endpoint_cores)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -316,7 +318,7 @@ export function UsageScreen({ route }: { route: Route }) {
           ) : (
             <ul className="space-y-2.5">
               {Object.entries(d.inference.tasks).map(([task, tu]: [string, TaskUsage]) => (
-                <li key={task} className="panel px-4 py-3">
+                <li key={task} className="panel-inset px-4 py-3">
                   <div className="flex items-baseline justify-between gap-3 flex-wrap">
                     <code className="text-sm">{task}</code>
                     <span className="text-xs text-fg-faint tnum">
@@ -357,7 +359,7 @@ export function UsageScreen({ route }: { route: Route }) {
           ) : (
             <ul className="space-y-2">
               {d.loaded_models.map((m: LoadedModel) => (
-                <li key={m.name} className="panel px-3 py-2.5">
+                <li key={m.name} className="panel-inset px-3 py-2.5">
                   <div className="flex items-baseline justify-between gap-3 flex-wrap">
                     <code className="text-sm">{m.name}</code>
                     <span className="text-xs text-fg-faint tnum">

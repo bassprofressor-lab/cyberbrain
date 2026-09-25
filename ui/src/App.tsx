@@ -80,58 +80,55 @@ export function App() {
   const simpleScreen = simple && (route.screen === "search" || route.screen === "notes" || route.screen === "note" || route.screen === "team");
 
   return (
-    <div className="h-screen grid grid-cols-[13rem_1fr] grid-rows-[1fr] overflow-hidden">
-      <aside className="border-r bg-surface flex flex-col min-h-0">
-        <div className={`px-4 flex items-center gap-2 ${simple ? "h-14" : "h-12 border-b"}`}>
+    // Below 768px the sidebar is a header: brand, a nav strip that scrolls sideways, and
+    // the same footer folded into one row. Nothing is dropped, it only changes direction —
+    // a 13rem column next to a 390px screen left the content 180px wide.
+    <div className="h-dvh grid grid-cols-1 grid-rows-[auto_1fr] md:grid-rows-1 md:grid-cols-[14rem_minmax(0,1fr)] overflow-hidden">
+      <aside className="app-side min-w-0">
+        <div className="app-brand">
           <Logo />
-          <span className="font-semibold tracking-tight">Cyberbrain</span>
+          <span>Cyberbrain</span>
         </div>
-        <nav className={simple ? "p-2 flex-1 flex flex-col gap-0.5" : "py-2 flex-1"}>
-          {simple ? (
-            nav.map((s) => (
-              <a key={s.screen} href={href(s.screen)} className={`flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-sm ${current === s.screen ? "bg-surface-2 text-fg font-medium" : "text-fg-muted hover:text-fg"}`} aria-current={current === s.screen ? "page" : undefined}>
-                <NavIcon screen={s.screen} />
-                {s.screen === "search" ? t.ask.navLabel : t.nav[s.screen]}
-              </a>
-            ))
-          ) : (
-            <ul>
-              {nav.map((s) => (
-                <li key={s.screen}>
-                  <a href={href(s.screen)} className={`flex items-center gap-2 px-4 py-1.5 text-sm ${current === s.screen ? "row-selected font-medium" : "text-fg-muted hover:text-fg"}`} aria-current={current === s.screen ? "page" : undefined}>
-                    <span className="flex-1">{t.nav[s.screen]}</span>
-                    <span className="text-2xs text-fg-faint font-mono">g {s.key}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
+        <nav className="app-nav">
+          <ul className="nav-list">
+            {nav.map((s) => (
+              <li key={s.screen}>
+                <a href={href(s.screen)} className={`nav-item ${current === s.screen ? "is-active" : ""}`} aria-current={current === s.screen ? "page" : undefined}>
+                  {simple ? <NavIcon screen={s.screen} /> : null}
+                  <span>{simple && s.screen === "search" ? t.ask.navLabel : t.nav[s.screen]}</span>
+                  {simple ? null : <span className="nav-key">g {s.key}</span>}
+                </a>
+              </li>
+            ))}
+          </ul>
         </nav>
-        <div className="px-4 py-3 border-t space-y-2 text-2xs text-fg-faint">
+        <div className="app-foot">
           {api.transport === "mock" ? (
-            <div className="rounded border border-warn/50 bg-warn-bg text-warn px-2 py-1.5 leading-snug" role="status">
-              <div className="font-medium">{t.app.mockTitle}</div>
+            <div className="mock-notice basis-full md:basis-auto" role="status">
+              <div className="font-semibold">{t.app.mockTitle}</div>
               <div>{t.app.mockBody}</div>
             </div>
           ) : simple ? null : (
             <div>{t.app.connected("/api/v1")}</div>
           )}
           <HubLine />
-          <div className="flex items-center gap-1.5">
-            <button className="btn btn-sm min-w-0 flex-1 justify-start truncate" onClick={theme.cycle} title={t.app.themeTitle}>
-              {theme.choice === "system" ? t.app.themeSystem(theme.effective === "dark" ? t.app.themeDark : t.app.themeLight) : theme.choice === "dark" ? t.app.themeDark : t.app.themeLight}
+          <div className="app-foot-controls md:flex-col md:items-stretch">
+            <div className="flex items-center gap-1.5">
+              <button className="btn btn-sm min-w-0 md:flex-1 justify-start truncate" onClick={theme.cycle} title={t.app.themeTitle}>
+                {theme.choice === "system" ? t.app.themeSystem(theme.effective === "dark" ? t.app.themeDark : t.app.themeLight) : theme.choice === "dark" ? t.app.themeDark : t.app.themeLight}
+              </button>
+              <button className="btn btn-sm shrink-0 font-medium tracking-wide" onClick={() => setLang(other)} title={`${t.app.languageTitle} · ${LANG_NAME[other]}`} aria-label={t.keys.toggleLanguage} lang={other}>
+                {other.toUpperCase()}
+              </button>
+              {simple ? null : <Kbd keys="?" className="shrink-0" />}
+            </div>
+            {/* `truncate`, because this label is translated: a longer word in some language
+                has to clip rather than run out of a 14rem sidebar, which is what the first
+                wording of it did. */}
+            <button className="btn btn-sm justify-center truncate" onClick={() => setMode(simple ? "expert" : "simple")} title={t.mode.title}>
+              {simple ? t.mode.toExpert : t.mode.toSimple}
             </button>
-            <button className="btn btn-sm shrink-0 font-medium tracking-wide" onClick={() => setLang(other)} title={`${t.app.languageTitle} · ${LANG_NAME[other]}`} aria-label={t.keys.toggleLanguage} lang={other}>
-              {other.toUpperCase()}
-            </button>
-            {simple ? null : <Kbd keys="?" className="shrink-0" />}
           </div>
-          {/* `truncate`, because this label is translated: a longer word in some language
-              has to clip rather than run out of a 13rem sidebar, which is what the first
-              wording of it did. */}
-          <button className="btn btn-sm w-full justify-center truncate" onClick={() => setMode(simple ? "expert" : "simple")} title={t.mode.title}>
-            {simple ? t.mode.toExpert : t.mode.toSimple}
-          </button>
         </div>
       </aside>
       <main className="min-h-0 min-w-0 overflow-hidden">
