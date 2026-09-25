@@ -594,48 +594,76 @@ fn bash_verdict(cmd: &str) -> Option<String> {
             || t.ends_with(".cyberbrain")
             || t.ends_with(".cyberbrain/notes")
     };
-    let tokens: Vec<&str> = cmd
-        .split(|c: char| c.is_whitespace() || ";|&()`".contains(c))
-        .filter(|t| !t.is_empty())
-        .collect();
-    let hit = tokens.iter().find(|t| guarded(t))?;
-    let writer = tokens.iter().enumerate().any(|(i, t)| {
-        let base = t.rsplit('/').next().unwrap_or(t);
-        matches!(
-            base,
-            "tee"
-                | "cp"
-                | "mv"
-                | "rm"
-                | "truncate"
-                | "dd"
-                | "ln"
-                | "install"
-                | "sqlite3"
-                | "shred"
-                | "rsync"
-        ) || (matches!(base, "sed" | "perl")
-            && tokens
-                .get(i + 1..)
-                .is_some_and(|r| r.iter().any(|a| a.starts_with("-i"))))
-    });
+    // Command by command, and within a command only the arguments that program writes to.
+    // The first version looked for a writing program and a guarded path anywhere in the
+    // line, and refused `rm -rf /tmp/x; tar -cf - .cyberbrain` and `cp -a .cyberbrain /tmp`
+    // on its first day — both only read the store.
+    let written = cmd
+        .split(|c: char| ";|&()\n".contains(c))
+        .filter_map(|simple| {
+            let words: Vec<&str> = simple
+                .split_whitespace()
+                .map(|w| w.trim_matches(['\'', '"']))
+                .collect();
+            write_targets(&words).into_iter().find(|t| guarded(t))
+        })
+        .next();
     // A redirect only counts when it points into the guarded path, so that
     // `cat notes/r0/x.md 2>/dev/null` stays a read.
-    let redirect = cmd.match_indices('>').any(|(i, _)| {
+    let redirected = cmd.match_indices('>').find_map(|(i, _)| {
         let rest = cmd[i + 1..].trim_start_matches(['>', '|']).trim_start();
         rest.split(|c: char| c.is_whitespace() || ";|&".contains(c))
             .next()
-            .is_some_and(guarded)
+            .filter(|t| guarded(t))
     });
-    (writer || redirect).then(|| {
-        format!(
-            "this command writes to `{}` inside the cyberbrain store. The audit log is \
-             append-only evidence and rings 0 and 1 are the operator's (SPEC §3.2, §12.6); the \
-             file tools are refused the same edit. Reading is fine. For a note, use `cyberbrain \
-             write` (rings 2–4) or `cyberbrain propose` (rings 0/1).",
-            hit.trim_matches(['\'', '"'])
-        )
-    })
+    let hit = written.or(redirected)?;
+    Some(format!(
+        "this command writes to `{}` inside the cyberbrain store. The audit log is \
+         append-only evidence and rings 0 and 1 are the operator's (SPEC §3.2, §12.6); the \
+         file tools are refused the same edit. Reading is fine. For a note, use `cyberbrain \
+         write` (rings 2–4) or `cyberbrain propose` (rings 0/1).",
+        hit.trim_matches(['\'', '"'])
+    ))
+}
+
+/// The arguments of one simple command that it writes to, deletes or replaces.
+///
+/// Leading assignments and wrappers (`sudo`, `env`, `nohup`, …) are skipped to reach the
+/// program. Removers and movers write every path they name; copiers only their last one,
+/// the destination; `sed -i`/`perl -i` their files; `dd` its `of=`; an extracting `tar`
+/// every path, since `-C` names where it writes. Anything else writes nothing we can see.
+fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        let wrapper = matches!(*w, "sudo" | "env" | "command" | "exec" | "nohup" | "time");
+        let assignment = w.contains('=') && !w.starts_with('-');
+        let wrapper_flag = i > 0 && w.starts_with('-') && words[i - 1] == "env";
+        if !(wrapper || assignment || wrapper_flag) {
+            break;
+        }
+        i += 1;
+    }
+    let Some(prog) = words.get(i).map(|p| p.rsplit('/').next().unwrap_or(p)) else {
+        return Vec::new();
+    };
+    let args = &words[i + 1..];
+    let paths = || args.iter().copied().filter(|a| !a.starts_with('-'));
+    match prog {
+        "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "mv" | "tee" | "sqlite3" => {
+            paths().collect()
+        }
+        "cp" | "rsync" | "install" | "ln" => paths().next_back().into_iter().collect(),
+        "sed" | "perl" if args.iter().any(|a| a.starts_with("-i")) => paths().collect(),
+        "dd" => args.iter().filter_map(|a| a.strip_prefix("of=")).collect(),
+        "tar"
+            if args.iter().any(|a| {
+                *a == "--extract" || (a.starts_with('-') && !a.starts_with("--") && a.contains('x'))
+            }) =>
+        {
+            args.to_vec()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
@@ -881,6 +909,10 @@ mod bash_tests {
             "rm -rf /root/orderflow/.cyberbrain/",
             "mv .cyberbrain/notes /tmp/weg",
             "echo x > '.cyberbrain/notes/r0/a.md'",
+            "sudo rm -f .cyberbrain/audit.db",
+            "cp /tmp/sicherung.db .cyberbrain/audit.db",
+            "tar -C .cyberbrain/notes -xf /tmp/n.tar",
+            "dd if=/dev/zero of=.cyberbrain/audit.db bs=1 count=1",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
         }
@@ -916,6 +948,10 @@ mod bash_tests {
             // and a path through the source tree that only mentions the patterns.
             "printenv | grep -c '^CLAUDECODE='; cyberbrain status",
             "grep -n 'env -i PATH' /root/cyberbrain/crates/cyberbrain/src/hook/events.rs",
+            // Reading the store out of itself (a copy for a benchmark, a backup).
+            "cp -a /root/orderflow/.cyberbrain /tmp/kopie",
+            "rm -rf /tmp/p && tar -C /root/orderflow -cf - .cyberbrain | tar -C /tmp/p -xf -",
+            "rsync -a .cyberbrain/ /backup/cb/",
         ] {
             assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
