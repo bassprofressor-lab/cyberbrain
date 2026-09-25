@@ -1520,8 +1520,8 @@ fn a_proposal_is_not_in_the_index_and_recall_cannot_return_it() {
 
     // A full scan is the strongest form of the question: even a rebuild from the tree does
     // not see it, because it walks notes/.
-    // Asked by ring, because a plain recall no longer searches ring 0 at all and would
-    // pass this for the wrong reason.
+    // Asked by ring, so the answer does not depend on who asks: an agent's plain recall
+    // leaves ring 0 out, and this would then pass for the wrong reason.
     cb.run(&["scan", "--full"]);
     let hits = cb.ok(&["recall", "unique-marker-xyzzy", "--ring", "0"]);
     assert_eq!(
@@ -1531,8 +1531,7 @@ fn a_proposal_is_not_in_the_index_and_recall_cannot_return_it() {
     );
 
     // And once accepted, it is retrievable — otherwise the test above would pass on a
-    // store where recall is simply broken. By ring: a plain recall leaves rings 0 and 1
-    // out, because the session-start hook has already put them in the context.
+    // store where recall is simply broken. By ring, for the same reason as above.
     let out = cb.as_person("bernd", &["review", "friday-freeze", "--accept"]);
     assert!(out.status.success(), "{}", text(&out));
     let hits = cb.ok(&["recall", "unique-marker-xyzzy", "--ring", "0"]);

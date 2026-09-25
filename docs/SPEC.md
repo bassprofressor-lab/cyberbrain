@@ -307,9 +307,10 @@ tool whose best mode is opt-in will be used in its worst mode.
    more): a group keeps the place and score of its best-ranked copy and shows the copy from
    the lowest ring, then the most recently updated note. Anything without a twin keeps its
    place and score exactly.
-7. Leave rings 0 and 1 out unless `--ring` names one of them, and a copy of their text with
-   them: both are injected whole into every session (§6), so a hit from them is a second
-   copy of the reader's context. A caveat counts what was left out.
+7. For an agent, leave rings 0 and 1 out unless `--ring` names one of them, and a copy of
+   their text with them: both are injected whole when an agent's session starts (§6), so a
+   hit from them is a second copy of its context. A caveat counts what was left out. A
+   person (terminal, UI, MCP) has no such context and gets them as before.
 8. A note named in another's `supersedes`, or carrying `superseded_by` itself, is scored
    ×0.5 before sorting and its hits carry `superseded_by`. It is not hidden. Every hit
    carries the note's `updated`.

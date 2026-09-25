@@ -1483,10 +1483,12 @@ impl App {
             ring: req.ring,
             bereich: req.bereich.clone(),
             min_cosine: 0.0,
-            // Rings 0 and 1 are injected whole at session start (hook/events.rs); a hit
-            // from them is a second copy of the reader's own context. `--ring 0|1` still
+            // Rings 0 and 1 are injected whole when an agent's session starts
+            // (hook/events.rs); for an agent a hit from them is a second copy of its own
+            // context. A person — at the terminal, in the UI, whose simple view answers with
+            // the ring 0 note — has no such context, and gets them. `--ring 0|1` always
             // searches them.
-            skip_resident: true,
+            skip_resident: matches!(self.actor, Actor::Agent(_)),
         };
         let embedder_state = self.embedder();
         let mut result = {
@@ -4530,6 +4532,11 @@ mod duplicate_tests {
         (dir, app)
     }
 
+    /// The same store, as an agent whose session start injected rings 0 and 1.
+    fn agent(op: &App) -> App {
+        App::open(Some(op.root()), Actor::Agent("claude-code:test".into())).unwrap()
+    }
+
     /// Rings 0 and 1 are injected whole at every session start (hook/events.rs), and the
     /// usage text there promises that recall searches rings 2 to 4. Calibrated against the
     /// state before: the ring 0 note came back as the first hit, a second copy of what the
@@ -4549,7 +4556,7 @@ mod duplicate_tests {
             "wolfpack-stand",
             "wolfpack wurde am 10.09. abgeschaltet.",
         );
-        let r = recall(&app, "wolfpack abgeschaltet", None);
+        let r = recall(&agent(&app), "wolfpack abgeschaltet", None);
         let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
         assert_eq!(names, ["wolfpack-stand"], "{r:?}");
         assert!(
@@ -4558,9 +4565,33 @@ mod duplicate_tests {
             r.caveats
         );
         // Asked for by ring, they are there.
-        let r0 = recall(&app, "wolfpack abgeschaltet", Some(Ring::Invariant));
+        let r0 = recall(&agent(&app), "wolfpack abgeschaltet", Some(Ring::Invariant));
         assert_eq!(r0.hits.len(), 1);
         assert_eq!(r0.hits[0].note_name, "wolfpack-regel");
+    }
+
+    /// A person has no session context: for them the ring 0 note is the answer (the UI's
+    /// simple view is built on that). Found by the browser tests: with rings 0/1 left out
+    /// for everybody, the simple view had no answer to "can we release on a friday".
+    #[test]
+    fn a_person_still_gets_the_resident_rings() {
+        let (_d, app) = store();
+        write(
+            &app,
+            Ring::Invariant,
+            "wolfpack-regel",
+            "wolfpack bleibt abgeschaltet.",
+        );
+        write(
+            &app,
+            Ring::Knowledge,
+            "wolfpack-stand",
+            "wolfpack wurde am 10.09. abgeschaltet.",
+        );
+        let r = recall(&app, "wolfpack abgeschaltet", None);
+        let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
+        assert_eq!(names, ["wolfpack-regel", "wolfpack-stand"], "{r:?}");
+        assert!(!r.caveats.iter().any(|c| c.contains("rings 0/1")));
     }
 
     /// A ring 2 copy of a ring 1 paragraph is the ring 1 paragraph: already in context.
@@ -4575,7 +4606,7 @@ mod duplicate_tests {
             "anderes",
             "config.py on server two is its own.",
         );
-        let r = recall(&app, "config.py server two", None);
+        let r = recall(&agent(&app), "config.py server two", None);
         let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
         assert_eq!(names, ["anderes"], "{r:?}");
     }
