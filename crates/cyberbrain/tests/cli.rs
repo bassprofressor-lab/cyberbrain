@@ -50,6 +50,8 @@ impl Cb {
         // These tests are the operator at a terminal. Run from inside Claude Code they would
         // otherwise be an agent (`cli_actor` in main.rs) and meet the ring-owner check.
         c.env_remove("CLAUDECODE").env_remove("CYBERBRAIN_AGENT");
+        // Each test is one process against a throwaway store: no resident daemon (daemon.rs).
+        c.env("CYBERBRAIN_NO_DAEMON", "1");
         c
     }
 
@@ -2137,4 +2139,104 @@ fn a_fleet_invitation_is_written_and_a_failed_enrolment_leaves_no_trace() {
         !config.path().join("cyberbrain").join("hub-tokens").exists(),
         "a failed enrolment must not leave a token"
     );
+}
+
+// ---------------------------------------------------------------------------------------
+// The resident daemon (daemon.rs, 2026-09-25)
+
+#[cfg(unix)]
+fn with_daemon(cb: &Cb) -> Command {
+    let mut c = Cb::bin();
+    c.env_remove("CYBERBRAIN_NO_DAEMON")
+        .arg("--store")
+        .arg(&cb.store);
+    c
+}
+
+#[cfg(unix)]
+fn wait_for(what: &str, mut ok: impl FnMut() -> bool) {
+    for _ in 0..100 {
+        if ok() {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    panic!("gave up waiting for {what}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_recall_through_the_daemon_prints_what_the_local_one_prints() {
+    let cb = Cb::new();
+    cb.write(
+        "2",
+        "wolfpack-aus",
+        "*Für: ist wolfpack noch online*\n\nAbgeschaltet am 10.09.",
+    );
+    cb.write(
+        "2",
+        "wolfpack-juli",
+        "*Für: wolfpack live*\n\nIm Juli lief wolfpack.",
+    );
+    let sock = cb.store.join("daemon.sock");
+    let mut daemon = with_daemon(&cb)
+        .args(["daemon", "--idle-secs", "30"])
+        .spawn()
+        .unwrap();
+    wait_for("the socket", || sock.exists());
+    for extra in [&[][..], &["--json"][..], &["--json", "-n", "1"][..]] {
+        let mut args = vec!["recall", "wolfpack"];
+        args.extend_from_slice(extra);
+        let local = cb.run(&args);
+        let via = with_daemon(&cb).args(&args).output().unwrap();
+        assert!(
+            via.status.success(),
+            "{}",
+            String::from_utf8_lossy(&via.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&via.stdout),
+            String::from_utf8_lossy(&local.stdout),
+            "{args:?}"
+        );
+    }
+    // A changed configuration makes it stale: it answers "do it yourself" and leaves.
+    let toml = cb.store.join("cyberbrain.toml");
+    let text = std::fs::read_to_string(&toml).unwrap_or_default();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    std::fs::write(&toml, text).unwrap();
+    let after = with_daemon(&cb)
+        .args(["recall", "wolfpack"])
+        .output()
+        .unwrap();
+    assert!(after.status.success());
+    wait_for("the stale daemon to leave", || {
+        daemon.try_wait().unwrap().is_some()
+    });
+    assert!(!sock.exists(), "a leaving daemon takes its socket with it");
+}
+
+#[cfg(unix)]
+#[test]
+fn an_idle_daemon_leaves_and_a_dead_ones_socket_is_taken_over() {
+    let cb = Cb::new();
+    let sock = cb.store.join("daemon.sock");
+    // What a daemon killed without cleaning up leaves behind.
+    let _ = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+    assert!(sock.exists());
+    let mut daemon = with_daemon(&cb)
+        .args(["daemon", "--idle-secs", "1"])
+        .spawn()
+        .unwrap();
+    wait_for("the idle daemon to leave", || {
+        daemon.try_wait().unwrap().is_some()
+    });
+    assert!(!sock.exists());
+}
+
+#[test]
+fn no_daemon_means_no_socket() {
+    let cb = Cb::new();
+    cb.ok(&["recall", "anything"]);
+    assert!(!cb.store.join("daemon.sock").exists());
 }

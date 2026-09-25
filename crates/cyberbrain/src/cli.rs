@@ -261,6 +261,18 @@ pub enum Command {
     /// Serve the same operations over MCP on stdio.
     Mcp,
 
+    /// Keep the model loaded and answer `recall` for this store over a local socket.
+    ///
+    /// Started by `recall` itself when none is running; not meant to be run by hand, though
+    /// nothing stops it. Leaves on its own after `--idle-secs` without a request, or as
+    /// soon as the binary, `cyberbrain.toml` or the model manifest changes. Set
+    /// `CYBERBRAIN_NO_DAEMON=1` to keep every command in its own process.
+    #[command(hide = true)]
+    Daemon {
+        #[arg(long, default_value_t = 1800)]
+        idle_secs: u64,
+    },
+
     /// Put this binary into an agent's own configuration: the hooks for Claude Code, the
     /// MCP server for a desktop client.
     ///

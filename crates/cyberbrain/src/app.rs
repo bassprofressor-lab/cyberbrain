@@ -649,6 +649,7 @@ impl From<cyberbrain_code::FindResult> for FindReport {
 // ---------------------------------------------------------------------------------------
 // Lazy pieces
 
+#[derive(Clone)]
 enum EmbedderState {
     Loaded {
         embedder: Arc<StaticEmbedder>,
@@ -937,6 +938,32 @@ impl App {
     #[allow(dead_code)]
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Loads the model now rather than on the first embed (`daemon`: the first request
+    /// should not be the one that waits).
+    #[cfg_attr(not(unix), allow(dead_code))] // the daemon is Unix only
+    pub fn preload_model(&self) {
+        let _ = self.embedder();
+    }
+
+    /// Takes over another `App`'s loaded model instead of loading its own. The daemon keeps
+    /// one `App` per actor, so the audit log names who asked, and one model for all of them.
+    #[cfg_attr(not(unix), allow(dead_code))] // the daemon is Unix only
+    pub fn share_model_with(&self, other: &App) {
+        if let Some(state) = other.embedder.get() {
+            let _ = self.embedder.set(state.clone());
+        }
+    }
+
+    /// Files whose change makes a long-running process's view of this store stale: the
+    /// configuration and the model manifest (the binary is the daemon's own business).
+    #[cfg_attr(not(unix), allow(dead_code))] // the daemon is Unix only
+    pub fn watched_files(&self) -> Vec<PathBuf> {
+        vec![
+            cyberbrain_core::config::Config::path_in(&self.root),
+            self.config.model_dir().join(MANIFEST_FILE),
+        ]
     }
 
     #[allow(dead_code)]

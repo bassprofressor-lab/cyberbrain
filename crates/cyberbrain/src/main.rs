@@ -9,6 +9,7 @@
 mod app;
 mod audit_bridge;
 mod cli;
+mod daemon;
 mod hook;
 mod hostload;
 mod hub;
@@ -48,12 +49,17 @@ impl Out {
         } else {
             human(value)
         };
+        self.print(&text);
+        Ok(())
+    }
+
+    /// Text that is already what `emit` would have made of a value (the daemon's answer).
+    fn print(self, text: &str) {
         let mut stdout = std::io::stdout().lock();
         let _ = stdout.write_all(text.as_bytes());
         if !text.ends_with('\n') {
             let _ = stdout.write_all(b"\n");
         }
-        Ok(())
     }
 }
 
@@ -241,6 +247,10 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             runtime()?.block_on(serve::serve(app, port, !no_open, terminal))?;
             return Ok(0);
         }
+        Command::Daemon { idle_secs } => {
+            let app = App::open(cli.store.as_deref(), Actor::System("daemon".into()))?;
+            return daemon::serve(app, idle_secs);
+        }
         Command::Mcp => {
             let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Mcp)?);
             runtime()?.block_on(mcp::serve_stdio(app))?;
@@ -328,6 +338,15 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     ring,
                     bereich,
                 };
+                // The resident daemon answers in milliseconds what takes this process over a
+                // second to load for (`daemon.rs`); anything short of a clean answer lands here.
+                if !out.quiet
+                    && let Some(text) =
+                        daemon::recall(app.root(), &cli_actor(), &query, &req, out.json)
+                {
+                    out.print(&text);
+                    return Ok(0);
+                }
                 let r = runtime()?.block_on(app.recall(&query, &req))?;
                 out.emit(&r, render::recall)?;
             }
@@ -528,6 +547,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         | Command::Hook { .. }
         | Command::Serve { .. }
         | Command::Mcp
+        | Command::Daemon { .. }
         | Command::Install { .. }
         | Command::Hub { .. }
         | Command::VerifyExport { .. } => {

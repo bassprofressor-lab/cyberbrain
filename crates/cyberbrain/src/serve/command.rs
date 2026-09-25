@@ -232,6 +232,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Mcp => {
             Some("`mcp` speaks a protocol over stdin and stdout, and there is no terminal here.")
         }
+        Command::Daemon { .. } => Some(
+            "`daemon` is started by `recall` itself and runs until it has been idle; there is \
+             nothing to run by hand here.",
+        ),
         Command::Hook { .. } => {
             Some("`hook` is called by an agent harness, with the session's payload on stdin.")
         }
