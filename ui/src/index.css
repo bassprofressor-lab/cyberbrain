@@ -646,6 +646,38 @@
   .table-dense tbody td {
     padding: 0.4375rem 0.75rem;
   }
+  /* A row that is two lines: `.row-main` and, under it, `.row-detail` across all columns.
+     One `tbody` per row, so hover and the bottom rule treat the pair as one. */
+  .table tbody.row-pair tr.row-main:not(:last-child) td {
+    border-bottom: 0;
+    padding-bottom: 0.25rem;
+  }
+  .table tbody.row-pair tr.row-detail td {
+    padding-top: 0;
+  }
+  .table tbody.row-pair tr:last-child td {
+    border-bottom: 1px solid var(--line);
+  }
+  .table tbody.row-pair:last-child tr:last-child td {
+    border-bottom: 0;
+  }
+  .table tbody.row-pair:hover td {
+    background: color-mix(in oklch, var(--surface-2) 60%, transparent);
+  }
+  /* key=value pairs: each pair is one unit that moves to the next line whole; only a pair
+     wider than the row breaks inside, at its `<wbr>`s first, anywhere as the last resort. */
+  .kv-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.125rem 0.75rem;
+  }
+  .kv {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+  .wrap-soft {
+    overflow-wrap: anywhere;
+  }
 
   /* ----- shell ---------------------------------------------------------------------- */
   .app-side {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api, AUDIT_ACTION_FAMILIES, type Confidence, type AuditAction, type AuditActionFilter, type AuditRow, type EgressPath, type PiiState, type RetentionApplyReport, type SubjectAccessReport } from "@/api/client";
 import { CitationChip } from "@/components/Citation";
 import { RingBadge } from "@/components/RingBadge";
@@ -9,6 +9,25 @@ import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, type Route } from "@/lib/router";
 import { toApiError, useAsync } from "@/lib/useAsync";
+
+/**
+ * A long token with break opportunities after its punctuation, so a URL, a ticket or a
+ * JSON text wraps at `/`, `:` or `,` instead of being cut off or split mid-word. `<wbr>`
+ * only offers the break; the surrounding `.wrap-soft` decides whether it is needed, and
+ * breaks anywhere as the last resort (a ULID has no punctuation at all).
+ */
+const SOFT_BREAK = /([/:,;?&=_\-}])/;
+function Breakable({ text }: { text: string }) {
+  if (text.length <= 18) return <>{text}</>;
+  const parts = text.split(SOFT_BREAK);
+  const out: ReactNode[] = [];
+  parts.forEach((p, i) => {
+    if (!p) return;
+    out.push(p);
+    if (i % 2 === 1) out.push(<wbr key={i} />);
+  });
+  return <>{out}</>;
+}
 
 /** Anchors, so they never change with the language; the label comes from the dictionary. */
 const SECTIONS = ["overview", "obligations", "egress", "audit", "pii", "retention", "models", "subject"] as const;
@@ -333,42 +352,41 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
   const t = useT();
   return (
     <div className="table-wrap">
-      <table className="table min-w-[48rem]">
+      {/* Eight columns did not fit 1440 px: the last one hid behind the scrollbar. "What is sent"
+          is the sentence a reader is here for, so it gets the row's full width underneath. */}
+      <table className="table min-w-[40rem]">
         <thead>
           <tr>
             <th>{t.compliance.egress.colPurpose}</th>
             <th>{t.compliance.egress.colState}</th>
             <th>{t.compliance.egress.colDestination}</th>
-            <th>{t.compliance.egress.colData}</th>
             <th>{t.compliance.egress.colPermitted}</th>
             <th className="tnum">{t.compliance.egress.colUses}</th>
             <th className="tnum">{t.compliance.egress.colBytes}</th>
             <th>{t.compliance.egress.colLast}</th>
           </tr>
         </thead>
-        <tbody>
-          {paths.map((p) => (
-            <tr key={p.purpose}>
-              <td>
+        {paths.map((p) => (
+          <tbody key={p.purpose} className="row-pair">
+            <tr className="row-main">
+              <td className="min-w-[10rem]">
                 <div className="font-mono font-medium text-fg">{p.purpose}</div>
                 <div className="text-fg-muted mt-0.5 max-w-[16rem]">{p.description}</div>
               </td>
-              <td className="whitespace-nowrap">
-                <span className="inline-flex items-center gap-1.5">
+              <td className="min-w-[9rem]">
+                <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
                   <Dot tone={p.enabled ? "ok" : "off"} />
                   {p.enabled ? t.compliance.egress.enabled : t.compliance.egress.disabled}
                 </span>
-                <div className="text-fg-faint mt-0.5 max-w-[14rem] whitespace-normal">{p.enabled ? p.state : p.disabled_reason}</div>
+                <div className="text-fg-faint mt-0.5 max-w-[14rem] wrap-soft">{p.enabled ? p.state : p.disabled_reason}</div>
               </td>
-              <td>
-                <code className="break-all">{p.destination}</code>
+              <td className="min-w-[9rem]">
+                <code className="wrap-soft">
+                  <Breakable text={p.destination} />
+                </code>
                 <div className="mt-0.5">
                   <Pill tone={p.destination_class === "public" ? "warn" : p.destination_class === "none" ? "neutral" : "ok"}>{p.destination_class}</Pill>
                 </div>
-              </td>
-              <td className="text-fg-muted max-w-[18rem]">
-                {p.data}
-                <div className="mt-0.5">{p.carries_note_content ? <Pill tone="warn">{t.compliance.egress.carries}</Pill> : <Pill tone="ok">{t.compliance.egress.carriesNot}</Pill>}</div>
               </td>
               <td className="font-mono">{p.permitted_by.join(" ")}</td>
               <td className="tnum">{num(p.uses_total)}</td>
@@ -377,8 +395,15 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
                 {p.last_used ? relTime(p.last_used) : t.common.never}
               </td>
             </tr>
-          ))}
-        </tbody>
+            <tr className="row-detail">
+              <td colSpan={7} className="text-fg-muted">
+                <span className="text-fg-faint">{t.compliance.egress.colData}: </span>
+                {p.data}{" "}
+                {p.carries_note_content ? <Pill tone="warn">{t.compliance.egress.carries}</Pill> : <Pill tone="ok">{t.compliance.egress.carriesNot}</Pill>}
+              </td>
+            </tr>
+          </tbody>
+        ))}
       </table>
     </div>
   );
@@ -489,20 +514,25 @@ function AuditSection() {
       </div>
       {error ? <ErrorBanner error={error} onRetry={() => load()} /> : null}
       <div className="table-wrap">
-        <table className="table min-w-[44rem]">
+        {/*
+         * One `tbody` per row: the main line (seq, time, actor, action, subject) and, under it,
+         * the detail across the full width. Thirteen key=value pairs never fit beside a
+         * subject at 1440 px; as a sixth column they were cut off behind a scrollbar that sat
+         * at the bottom of a fifty-row table, so the page looked complete and was not.
+         */}
+        <table className="table min-w-[46rem]">
           <thead>
             <tr>
               <th className="tnum">{t.compliance.audit.colSeq}</th>
               <th>{t.compliance.audit.colTime}</th>
               <th>{t.compliance.audit.colActor}</th>
               <th>{t.compliance.audit.colAction}</th>
-              <th>{t.compliance.audit.colSubject}</th>
-              <th>{t.compliance.audit.colDetail}</th>
+              <th className="w-full">{t.compliance.audit.colSubject}</th>
             </tr>
           </thead>
-          <tbody>
-            {rows.map((r) => (
-              <tr key={r.seq}>
+          {rows.map((r) => (
+            <tbody key={r.seq} className="row-pair">
+              <tr className="row-main">
                 <td className="font-mono tnum text-fg-faint">{r.seq}</td>
                 <td className="font-mono tnum whitespace-nowrap text-fg-muted" title={relTime(r.ts)}>
                   {absTime(r.ts)}
@@ -511,21 +541,33 @@ function AuditSection() {
                 <td>
                   <Pill tone={toneOf(r.action)}>{r.action}</Pill>
                 </td>
-                <td className="font-mono break-words min-w-[12rem] max-w-[22rem]">{r.subject}</td>
-                <td className="text-fg-muted">
+                <td className="font-mono wrap-soft">
+                  <Breakable text={r.subject} />
+                </td>
+              </tr>
+              <tr className="row-detail">
+                {/* `relative`: the screen-reader label is absolutely positioned and would
+                    otherwise hang off the viewport and make the document scrollable. */}
+                <td colSpan={5} className="relative text-fg-muted">
+                  <span className="sr-only">{t.compliance.audit.colDetail}: </span>
                   {Object.keys(r.detail).length ? (
-                    Object.entries(r.detail).map(([k, v]) => (
-                      <span key={k} className="inline-block mr-2 whitespace-nowrap" title={typeof v === "string" && /^[[{]/.test(v) ? t.compliance.audit.nestedTitle : undefined}>
-                        <span className="text-fg-faint">{k}</span>=<span className="font-mono">{v === null ? "null" : String(v)}</span>
-                      </span>
-                    ))
+                    <span className="kv-list">
+                      {Object.entries(r.detail).map(([k, v]) => (
+                        <span key={k} className="kv" title={typeof v === "string" && /^[[{]/.test(v) ? t.compliance.audit.nestedTitle : undefined}>
+                          <span className="text-fg-faint">{k}</span>=
+                          <span className="font-mono">
+                            <Breakable text={v === null ? "null" : String(v)} />
+                          </span>
+                        </span>
+                      ))}
+                    </span>
                   ) : (
                     <span className="text-fg-faint">{t.compliance.audit.noDetail}</span>
                   )}
                 </td>
               </tr>
-            ))}
-          </tbody>
+            </tbody>
+          ))}
         </table>
       </div>
       {!loading && !rows.length ? <Empty title={t.compliance.audit.empty} /> : null}
