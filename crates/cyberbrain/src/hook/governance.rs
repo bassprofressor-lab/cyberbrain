@@ -24,6 +24,7 @@ use crate::app::App;
 use cyberbrain_core::config::{GovernanceConfig, GovernanceMode};
 use cyberbrain_core::{EgressPurpose, Error, Result};
 use cyberbrain_policy::Actor;
+use cyberbrain_policy::egress::Outcome;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -142,7 +143,8 @@ fn ask(
         .enable_all()
         .build()
         .map_err(|e| Error::Index(format!("cannot start the async runtime: {e}")))?;
-    let resp = rt
+    let bytes_out = body.len() as u64;
+    let sent = rt
         .block_on(async {
             tokio::time::timeout(
                 Duration::from_millis(cfg.timeout_ms.max(1)),
@@ -156,7 +158,25 @@ fn ask(
             )
             .await
         })
-        .map_err(|_| Error::Index(format!("no answer within {} ms", cfg.timeout_ms)))??;
+        .map_err(|_| Error::Index(format!("no answer within {} ms", cfg.timeout_ms)))
+        .and_then(|r| r);
+    // The ticket is closed with what happened, or the gate records the call as abandoned
+    // (the first day in use left one `egress.abandoned` row beside every call).
+    let resp = match sent {
+        Ok(resp) => {
+            let outcome = if resp.status == 200 {
+                Outcome::ok(Some(resp.status))
+            } else {
+                Outcome::failed(&format!("HTTP {}", resp.status))
+            };
+            ticket.close(outcome.bytes(bytes_out, resp.body.len() as u64))?;
+            resp
+        }
+        Err(e) => {
+            ticket.close(Outcome::failed(&e.to_string()))?;
+            return Err(e);
+        }
+    };
     let v: Value = serde_json::from_slice(&resp.body).unwrap_or(Value::Null);
     if resp.status != 200 {
         let detail = v["detail"].as_str().unwrap_or("no detail");

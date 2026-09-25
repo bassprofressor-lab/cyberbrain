@@ -2483,6 +2483,20 @@ fn enforce_carries_out_the_services_deny_and_sends_the_key_in_a_header() {
         !req.contains("agk_testkey\""),
         "the key is a header, not part of the body"
     );
+    // Calibrated against the first build, which left one abandoned row beside every call.
+    let actions: Vec<String> = cb
+        .audit_rows()
+        .iter()
+        .map(|r| r["action"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        actions.iter().any(|a| a == "egress.completed"),
+        "{actions:?}"
+    );
+    assert!(
+        !actions.iter().any(|a| a == "egress.abandoned"),
+        "{actions:?}"
+    );
 }
 
 #[test]
@@ -2518,6 +2532,16 @@ fn an_unreachable_service_lets_reads_through_and_asks_about_the_rest() {
     );
     assert_eq!(decision(&write).as_deref(), Some("ask"), "{write}");
     assert!(write.contains("not reachable"), "{write}");
+    let actions: Vec<String> = cb
+        .audit_rows()
+        .iter()
+        .map(|r| r["action"].as_str().unwrap_or("").to_string())
+        .collect();
+    assert!(actions.iter().any(|a| a == "egress.failed"), "{actions:?}");
+    assert!(
+        !actions.iter().any(|a| a == "egress.abandoned"),
+        "{actions:?}"
+    );
 }
 
 #[test]
