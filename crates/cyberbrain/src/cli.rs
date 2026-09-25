@@ -109,6 +109,10 @@ pub enum Command {
         /// ISO-8601 duration, e.g. P2Y. Absent means keep indefinitely.
         #[arg(long)]
         retention: Option<String>,
+        /// The name of a note this one replaces. Repeat for several. Recall then marks the
+        /// old note and ranks it lower; the old note itself is not changed.
+        #[arg(long)]
+        supersedes: Vec<String>,
         /// Write despite PII findings, recording them as flagged rather than reviewed.
         #[arg(long)]
         force: bool,

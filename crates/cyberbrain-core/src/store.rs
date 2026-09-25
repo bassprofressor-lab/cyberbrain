@@ -664,6 +664,8 @@ mod tests {
                 links: vec![],
                 bereich: None,
                 retention: None,
+                supersedes: Vec::new(),
+                superseded_by: None,
                 pii: PiiState::None,
             },
             body: body.into(),

@@ -89,6 +89,8 @@ fn note(name: &str, ring: Ring, body: &str, links: &[&str]) -> Note {
             links: links.iter().map(|s| s.to_string()).collect(),
             bereich: None,
             retention: None,
+            supersedes: Vec::new(),
+            superseded_by: None,
             pii: PiiState::None,
         },
         body: body.into(),
@@ -1607,4 +1609,87 @@ fn a_second_writer_waits_for_the_lock_rather_than_being_refused() {
         started.elapsed() >= std::time::Duration::from_millis(250),
         "it did not actually wait, so it never contended and this test proves nothing"
     );
+}
+
+// ----- duplicates in recall (2026-09-25) --------------------------------------------------
+
+fn note_at(name: &str, ring: Ring, body: &str, updated: &str) -> Note {
+    let mut n = note(name, ring, body, &[]);
+    n.front.updated = updated.parse().unwrap();
+    n
+}
+
+const COPIED: &str = "Never copy config.py from server one to server two: server two keeps \
+                      its own copy, and overwriting it once broke live trading there.";
+
+fn with_copies(e: &HashEmbedder) -> Index {
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(e)).unwrap();
+    for n in [
+        note_at("copy-old", Ring::Knowledge, COPIED, "2026-07-01T00:00:00Z"),
+        note_at("copy-new", Ring::Knowledge, COPIED, "2026-09-10T00:00:00Z"),
+        // The same paragraph, differently wrapped and capitalised: still the same text.
+        note_at(
+            "copy-session",
+            Ring::Session,
+            &COPIED.to_uppercase().replace(": ", ":\n   "),
+            "2026-09-20T00:00:00Z",
+        ),
+        note_at(
+            "other",
+            Ring::Knowledge,
+            "config for server two is its own; the copy step was removed.",
+            "2026-09-01T00:00:00Z",
+        ),
+    ] {
+        put(&mut ix, e, &n);
+    }
+    ix
+}
+
+/// Measured on the orderflow store: 19 % of all blocks have a textual twin in another
+/// note, and in the top 8 of 34 questions such twins took 9 places. Calibrated against the
+/// state before: this returned all three copies.
+#[test]
+fn a_block_copied_into_several_notes_comes_back_once() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let ix = with_copies(&e);
+    let r = ix
+        .recall(
+            "copy config.py server two",
+            Some(&e),
+            &RecallOptions::default(),
+        )
+        .unwrap();
+    let copies: Vec<&str> = r
+        .hits
+        .iter()
+        .filter(|h| h.text.to_lowercase().contains("overwriting it once"))
+        .map(|h| h.note_name.as_str())
+        .collect();
+    // Lowest ring first, then the newest: ring 2 beats the fresher ring 3 copy.
+    assert_eq!(copies, ["copy-new"], "{r:?}");
+    assert!(r.hits.iter().any(|h| h.note_name == "other"));
+}
+
+/// Short blocks are not merged: "Erledigt." in two notes says two different things.
+#[test]
+fn short_identical_blocks_stay_separate() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    put(
+        &mut ix,
+        &e,
+        &note("task-a", Ring::Knowledge, "Status erledigt.", &[]),
+    );
+    put(
+        &mut ix,
+        &e,
+        &note("task-b", Ring::Knowledge, "Status erledigt.", &[]),
+    );
+    let r = ix
+        .recall("status erledigt", Some(&e), &RecallOptions::default())
+        .unwrap();
+    assert_eq!(r.hits.len(), 2, "{r:?}");
 }

@@ -167,6 +167,13 @@ pub struct Frontmatter {
     /// ISO-8601 duration. Absent means keep indefinitely (SPEC §12.5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retention: Option<String>,
+    /// Names of the notes this one replaces. Recall marks and demotes them; the notes
+    /// themselves are not touched, so one side is enough.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supersedes: Vec<String>,
+    /// The note that replaces this one, when it is said here rather than there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     #[serde(default)]
     pub pii: PiiState,
 }
@@ -196,6 +203,13 @@ pub struct Hit {
     pub note_id: NoteId,
     pub note_name: String,
     pub ring: Ring,
+    /// When the note was last updated, so a reader sees a hit's age without expanding it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<jiff::Timestamp>,
+    /// Set when another note replaces this one (`supersedes` / `superseded_by`). Such a
+    /// hit is still returned, demoted and marked, never hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub superseded_by: Option<String>,
     pub score: f32,
     pub text: String,
 }

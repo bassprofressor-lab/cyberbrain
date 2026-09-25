@@ -694,6 +694,8 @@ mod tests {
                 links: vec![],
                 bereich: None,
                 retention: None,
+                supersedes: Vec::new(),
+                superseded_by: None,
                 pii: PiiState::None,
             },
             body: "# A\n\none\n\n# B\n\ntwo\n".into(),

@@ -78,6 +78,8 @@ pub async fn recall(
                 note_id: h.note_id,
                 note_name: h.note_name,
                 ring: h.ring,
+                updated: h.updated,
+                superseded_by: h.superseded_by,
                 score: h.score,
                 text: h.text,
                 block_idx,

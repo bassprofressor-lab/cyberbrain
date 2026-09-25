@@ -528,6 +528,7 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         force: a.boolean("force")?.unwrap_or(false),
         choice,
         expected_updated,
+        supersedes: None,
         arriving: None,
         dry_run: a.boolean("dry_run")?.unwrap_or(false),
     };

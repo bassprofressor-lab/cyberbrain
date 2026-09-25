@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -114,6 +114,13 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE notes ADD COLUMN bereich TEXT;
     CREATE INDEX notes_bereich ON notes(bereich) WHERE bereich IS NOT NULL;
+    "#,
+    // v4: supersession — which notes a note replaces, and which note replaces it. Every
+    // note written before has neither, so the defaults are the truth for them and no
+    // rescan is needed.
+    r#"
+    ALTER TABLE notes ADD COLUMN supersedes TEXT NOT NULL DEFAULT '[]';
+    ALTER TABLE notes ADD COLUMN superseded_by TEXT;
     "#,
 ];
 

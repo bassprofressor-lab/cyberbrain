@@ -159,9 +159,19 @@ pub fn recall(r: &RecallResult) -> String {
         .unwrap_or(1.0)
         .max(f32::EPSILON);
     for (i, h) in r.hits.iter().enumerate() {
+        // The date only: enough to tell July from last night, short enough for a hit line.
+        let date = h
+            .updated
+            .map(|u| format!("  {}", &u.to_string()[..10]))
+            .unwrap_or_default();
+        let replaced = h
+            .superseded_by
+            .as_deref()
+            .map(|n| format!("  [superseded by {n}]"))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "{}. {}  {}  {}  ({:.0}% of top)",
+            "{}. {}  {}  {}{date}  ({:.0}% of top){replaced}",
             i + 1,
             h.citation,
             h.ring,

@@ -31,9 +31,9 @@ mod tests;
 pub use audit::{AUDIT_SCHEMA_VERSION, AuditEntry, AuditFilter, AuditStore, NewAuditEntry};
 pub use index::{
     EmbeddingProfile, Erased, Erasure, Index, IndexStats, Link, NoteRecord, NoteStamp,
-    ProfileChange, UpsertOutcome, content_hash,
+    ProfileChange, SharedBlocks, UpsertOutcome, content_hash,
 };
-pub use recall::{RRF_K, RecallOptions};
+pub use recall::{DEDUP_MIN_CHARS, RRF_K, RecallOptions, dedup_key};
 pub use schema::SCHEMA_VERSION;
 
 /// Maps a `rusqlite` failure onto the tree-wide error type. `rusqlite::Error` is foreign to
