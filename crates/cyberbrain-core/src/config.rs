@@ -61,6 +61,48 @@ pub struct Config {
     pub inference: InferenceConfig,
     pub policy: PolicyConfig,
     pub hub: HubConfig,
+    pub governance: GovernanceConfig,
+}
+
+/// Where the pre-tool-use hook asks before a tool call runs (AgentGuard, 2026-09-25).
+///
+/// The key is deliberately **not** here, for the reason the hub token is not: this file sits
+/// in the store and a store lives in a repository. It is read from `CYBERBRAIN_AGENTGUARD_KEY`
+/// or `~/.config/cyberbrain/agentguard.key`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct GovernanceConfig {
+    /// Base URL of the service. `None`: no tool call is sent anywhere.
+    pub url: Option<String>,
+    /// The tenant and agent the calls are reported as; the key must be bound to the agent.
+    pub tenant: String,
+    pub agent_id: String,
+    /// `shadow`: the answer is recorded and never stops anything, and an unreachable service
+    /// stops nothing either. `enforce`: deny and ask are carried out, and an unreachable
+    /// service lets reads through and asks about everything else.
+    pub mode: GovernanceMode,
+    /// How long a tool call waits for the answer before it counts as unreachable.
+    pub timeout_ms: u64,
+}
+
+impl Default for GovernanceConfig {
+    fn default() -> Self {
+        Self {
+            url: None,
+            tenant: String::new(),
+            agent_id: "claude-code".to_string(),
+            mode: GovernanceMode::Shadow,
+            timeout_ms: 1000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GovernanceMode {
+    #[default]
+    Shadow,
+    Enforce,
 }
 
 /// Where this store delivers its audit rows, if anywhere.
@@ -191,6 +233,7 @@ impl Default for Config {
             inference: InferenceConfig::default(),
             policy: PolicyConfig::default(),
             hub: HubConfig::default(),
+            governance: GovernanceConfig::default(),
         }
     }
 }

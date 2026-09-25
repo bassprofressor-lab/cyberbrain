@@ -483,7 +483,7 @@ export interface Graph {
  * server. Here it has to be kept in step by hand; it listed two purposes while the server
  * sent seven, and nothing noticed because the mock sent two as well.
  */
-export type EgressPurpose = "model-download" | "local-inference" | "audit-sync" | "note-sync" | "note-erasure" | "hub-enrolment" | "terminal";
+export type EgressPurpose = "model-download" | "local-inference" | "audit-sync" | "note-sync" | "note-erasure" | "hub-enrolment" | "terminal" | "governance";
 
 /** `serve::policy::destination_class`: an endpoint class, or `none` when the register entry has no address, only words ("not enrolled", "wherever you point it"). */
 export type DestinationClass = EndpointClass | "none";

@@ -108,6 +108,11 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
                 // No configured destination, and that is the fact about it: where a
                 // terminal connects is decided by whoever is typing in it.
                 EgressPurpose::Terminal => "wherever you point it".to_string(),
+                EgressPurpose::Governance => cfg
+                    .governance
+                    .url
+                    .clone()
+                    .unwrap_or_else(|| "none configured".into()),
             };
             register_text.push_str(&format!("{name}|{}|{}\n", entry.data, entry.requires));
             paths.push(EgressPath {

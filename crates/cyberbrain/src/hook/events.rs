@@ -37,6 +37,7 @@
 //! per-turn audit row is a log of nothing. The turn count lands in the session state, which
 //! `session-start` reads back on `resume` and `compact`.
 
+use super::governance;
 use super::paths::{self, StoreTarget};
 use super::payload::Payload;
 use super::resident::{self, Resident};
@@ -690,7 +691,31 @@ fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// The store's own guard first; when it has nothing to say, the governance service
+/// (`governance.rs`) is asked about the call.
 fn pre_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+    store_guard(ctx, out)?;
+    if !out.stdout.is_empty() {
+        return Ok(()); // already denied or asked by the store's guard
+    }
+    match governance::check(ctx.app, ctx.payload, &ctx.actor()) {
+        governance::Verdict::Proceed(note) => out.note(format!("pre-tool-use: {note}")),
+        governance::Verdict::Decide(decision, reason) => {
+            out.note(format!("pre-tool-use: governance {decision}"));
+            out.stdout = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": harness_event_name(ctx.event),
+                    "permissionDecision": decision,
+                    "permissionDecisionReason": reason,
+                }
+            })
+            .to_string();
+        }
+    }
+    Ok(())
+}
+
+fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     if let Some(cmd) = ctx.payload.bash_command() {
         return pre_bash(ctx, out, cmd);
     }

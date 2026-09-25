@@ -34,6 +34,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Instant;
 
 pub mod events;
+pub mod governance;
 pub mod paths;
 pub mod payload;
 pub mod resident;

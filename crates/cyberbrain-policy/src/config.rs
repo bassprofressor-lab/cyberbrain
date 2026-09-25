@@ -51,6 +51,10 @@ pub struct PolicyConfig {
     /// notes is a decision about content, and one must not silently become the other.
     pub allow_note_sync: bool,
 
+    /// Where the pre-tool-use hook asks before a tool call runs (`[governance] url`). `None`
+    /// means `Governance` is disabled. Loopback or private range only, with no switch.
+    pub governance_endpoint: Option<String>,
+
     /// Where model artefacts come from. `None` means `ModelDownload` is disabled: there is
     /// nowhere registered to fetch from.
     pub model_source: Option<String>,
@@ -70,6 +74,7 @@ impl Default for PolicyConfig {
             hub_endpoint: None,
             allow_public_hub: false,
             allow_note_sync: false,
+            governance_endpoint: None,
             model_source: None,
             model_download_consent: false,
         }
@@ -88,6 +93,7 @@ impl PolicyConfig {
             hub_endpoint: cfg.hub.url.clone(),
             allow_public_hub: cfg.hub.allow_public_hub,
             allow_note_sync: cfg.hub.allow_note_sync,
+            governance_endpoint: cfg.governance.url.clone(),
             ..Self::default()
         }
     }

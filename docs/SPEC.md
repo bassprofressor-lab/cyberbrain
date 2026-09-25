@@ -862,6 +862,15 @@ resolves differently between validation and connection cannot be used to slip pa
 Registered purposes for v0.1: `ModelDownload` (once, on consent), `LocalInference` (loopback
 or private range only). That is the entire list. Telemetry does not exist.
 
+`Governance` (2026-09-25): before a coding agent's tool call runs, the pre-tool-use hook sends
+the tool and its input to the service in `[governance] url` and carries out its answer
+(allow, deny, ask). Only that endpoint, no redirects, loopback or private range with **no**
+setting that widens it: the request is made on every tool call, so a public destination
+would ship everything the agent does. The key lives outside the store
+(`CYBERBRAIN_AGENTGUARD_KEY` or `~/.config/cyberbrain/agentguard.key`). `mode = "shadow"`
+records the answer and stops nothing; `mode = "enforce"` carries it out and, when the
+service does not answer, lets reads through and asks about everything else.
+
 `ModelDownload` is permitted only towards the exact host in `embedding.model_source`, and
 only when `embedding.model_download_consent` is set. Both live in the configuration file
 rather than in memory: consent that is forgotten on restart is asked for until somebody

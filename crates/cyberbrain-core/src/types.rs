@@ -261,11 +261,23 @@ pub enum EgressPurpose {
     /// register is not misled about what can leave the machine — a register that quietly
     /// omitted it would be false, and its whole value is that it can be believed.
     Terminal,
+    /// A coding agent's tool call, before it runs, to the governance service named in
+    /// `[governance]` (AgentGuard, 2026-09-25), which answers allow, deny or ask.
+    ///
+    /// Carries the tool's name and its input — a shell command, a file's new text, a URL — so
+    /// it can carry note content when the agent is writing a note. Loopback or private range
+    /// only; there is no switch for a public address, because the request is made on every
+    /// tool call and a public destination would be a transfer of everything the agent does.
+    Governance,
 }
 
 impl EgressPurpose {
     pub fn describe(self) -> &'static str {
         match self {
+            EgressPurpose::Governance => concat!(
+                "sends each tool call a coding agent is about to make (tool and input) to the ",
+                "governance service on your own network, which decides whether it may run"
+            ),
             EgressPurpose::Terminal => {
                 "whatever you run in a terminal; this program neither mediates nor records it"
             }

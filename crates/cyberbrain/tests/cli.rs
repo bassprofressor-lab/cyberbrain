@@ -767,7 +767,13 @@ fn policy_subcommands_work_over_a_real_store() {
     // a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 7);
+    assert_eq!(entries.len(), 8);
+    // The governance check is a path like the others, and closed until a url is set.
+    let gov = entries
+        .iter()
+        .find(|x| x["purpose"] == "governance")
+        .unwrap();
+    assert_eq!(gov["enabled"], false, "{gov}");
     // Enrolling with a fleet invitation is its own path, and carries no note.
     let enrolment = entries
         .iter()
@@ -2246,7 +2252,7 @@ fn no_daemon_means_no_socket() {
 fn a_write_through_the_daemon_is_the_write_the_cli_would_have_done() {
     let cb = Cb::new();
     let sock = cb.store.join("daemon.sock");
-    let _daemon = with_daemon(&cb)
+    let mut daemon = with_daemon(&cb)
         .args(["daemon", "--idle-secs", "30"])
         .spawn()
         .unwrap();
@@ -2350,4 +2356,184 @@ fn a_write_through_the_daemon_is_the_write_the_cli_would_have_done() {
         "one refusal, written by the daemon alone"
     );
     assert!(!cb.note_path("0", "r0").exists());
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+}
+
+// ---------------------------------------------------------------------------------------
+// The governance check in pre-tool-use (hook/governance.rs, 2026-09-25)
+
+/// A stand-in for AgentGuard: answers every request with `answer` and keeps what it got.
+fn fake_governance(answer: &'static str) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            // Headers, then as much body as Content-Length says.
+            loop {
+                let n = s.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            log.lock()
+                .unwrap()
+                .push(String::from_utf8_lossy(&buf).to_string());
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                answer.len(),
+                answer
+            );
+        }
+    });
+    (port, seen)
+}
+
+fn governed(cb: &Cb, port: u16, mode: &str) {
+    let path = cb.store.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&path).unwrap_or_default();
+    toml.push_str(&format!(
+        "\n[governance]\nurl = \"http://127.0.0.1:{port}\"\ntenant = \"t1\"\nmode = \"{mode}\"\ntimeout_ms = 2000\n"
+    ));
+    std::fs::write(&path, toml).unwrap();
+}
+
+fn pre_tool_use(cb: &Cb, tool: &str, input: Value) -> String {
+    use std::io::Write;
+    let payload = serde_json::json!({
+        "session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cb.store.parent().unwrap(),
+        "tool_name": tool, "tool_input": input,
+    })
+    .to_string();
+    let mut child = Cb::bin()
+        .env("CYBERBRAIN_AGENTGUARD_KEY", "agk_testkey")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["hook", "pre-tool-use"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(0), "a hook never fails the harness");
+    String::from_utf8_lossy(&out.stdout).to_string()
+}
+
+fn decision(stdout: &str) -> Option<String> {
+    let v: Value = serde_json::from_str(stdout).ok()?;
+    v["hookSpecificOutput"]["permissionDecision"]
+        .as_str()
+        .map(str::to_string)
+}
+
+const DENY: &str = r#"{"permission":"deny","outcome":"block","action_type":"file_delete","deciding_gate":"scope","reason":"scope_nicht_mandatiert"}"#;
+
+#[test]
+fn enforce_carries_out_the_services_deny_and_sends_the_key_in_a_header() {
+    let cb = Cb::new();
+    let (port, seen) = fake_governance(DENY);
+    governed(&cb, port, "enforce");
+    let out = pre_tool_use(&cb, "Bash", serde_json::json!({"command": "rm -rf build"}));
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    assert!(
+        out.contains("AgentGuard refused this") && out.contains("scope_nicht_mandatiert"),
+        "{out}"
+    );
+    let req = seen.lock().unwrap().join("\n");
+    assert!(req.starts_with("POST /v1/tool-calls"), "{req}");
+    assert!(
+        req.to_ascii_lowercase()
+            .contains("authorization: bearer agk_testkey"),
+        "{req}"
+    );
+    assert!(
+        req.contains(r#""tool":"Bash""#) && req.contains("rm -rf build"),
+        "{req}"
+    );
+    assert!(
+        !req.contains("agk_testkey\""),
+        "the key is a header, not part of the body"
+    );
+}
+
+#[test]
+fn shadow_records_and_never_stops_anything() {
+    let cb = Cb::new();
+    let (port, seen) = fake_governance(DENY);
+    governed(&cb, port, "shadow");
+    let out = pre_tool_use(&cb, "Bash", serde_json::json!({"command": "rm -rf build"}));
+    assert!(out.is_empty(), "{out}");
+    assert_eq!(seen.lock().unwrap().len(), 1, "asked all the same");
+}
+
+#[test]
+fn an_unreachable_service_lets_reads_through_and_asks_about_the_rest() {
+    let cb = Cb::new();
+    // A port nobody listens on: bind, take the number, let it go.
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    governed(&cb, port, "enforce");
+    let read = pre_tool_use(
+        &cb,
+        "Bash",
+        serde_json::json!({"command": "ls -la && git status"}),
+    );
+    assert!(read.is_empty(), "{read}");
+    let write = pre_tool_use(
+        &cb,
+        "Write",
+        serde_json::json!({"file_path": "/tmp/x", "content": "y"}),
+    );
+    assert_eq!(decision(&write).as_deref(), Some("ask"), "{write}");
+    assert!(write.contains("not reachable"), "{write}");
+}
+
+#[test]
+fn the_stores_own_guard_decides_first_and_the_service_is_not_asked() {
+    let cb = Cb::new();
+    let (port, seen) = fake_governance(r#"{"permission":"allow","action_type":"shell"}"#);
+    governed(&cb, port, "enforce");
+    let r0 = cb.store.join("notes").join("r0").join("x.md");
+    let out = pre_tool_use(
+        &cb,
+        "Bash",
+        serde_json::json!({"command": format!("echo x > {}", r0.display())}),
+    );
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    assert!(seen.lock().unwrap().is_empty(), "no need to ask anyone");
+    // A tool the check does not send is not sent.
+    assert!(pre_tool_use(&cb, "Read", serde_json::json!({"file_path": "/etc/hosts"})).is_empty());
+    assert!(seen.lock().unwrap().is_empty());
 }

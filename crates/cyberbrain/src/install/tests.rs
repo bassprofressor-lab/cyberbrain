@@ -215,12 +215,18 @@ fn the_matcher_covers_every_tool_the_hook_reads() {
     };
     for tool in PRE_TOOL_MATCHER.split('|') {
         assert!(
-            payload(tool).edited_file().is_some() || bash(tool).bash_command().is_some(),
+            payload(tool).edited_file().is_some()
+                || bash(tool).bash_command().is_some()
+                || crate::hook::governance::TOOLS.contains(&tool),
             "{tool} is in the pre-tool-use matcher, so the hook has to have something to do with it"
         );
     }
     for tool in ["Read", "Grep", "WebFetch", "Task"] {
         assert!(bash(tool).bash_command().is_none(), "{tool}");
+    }
+    // Every tool the governance check sends has to reach the hook.
+    for tool in crate::hook::governance::TOOLS {
+        assert!(PRE_TOOL_MATCHER.split('|').any(|t| t == tool), "{tool}");
     }
 }
 

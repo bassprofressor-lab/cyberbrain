@@ -43,7 +43,7 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 7] = [
+pub const PURPOSES: [EgressPurpose; 8] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
@@ -51,6 +51,7 @@ pub const PURPOSES: [EgressPurpose; 7] = [
     EgressPurpose::NoteErasure,
     EgressPurpose::HubEnrolment,
     EgressPurpose::Terminal,
+    EgressPurpose::Governance,
 ];
 
 /// One line of `cyberbrain policy egress`. Plain data so the CLI and the UI print the same
@@ -83,6 +84,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::NoteSync => "note-sync",
         EgressPurpose::NoteErasure => "note-erasure",
         EgressPurpose::HubEnrolment => "hub-enrolment",
+        EgressPurpose::Governance => "governance",
     }
 }
 
@@ -297,6 +299,54 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 requires: concat!(
                     "the store was enrolled with a hub, and the hub is loopback or ",
                     "private-range unless allow_public_hub is set"
+                ),
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
+            }
+        }
+        EgressPurpose::Governance => {
+            let (enabled, state) = match &cfg.governance_endpoint {
+                None => (
+                    false,
+                    "disabled: no [governance] url is configured".to_string(),
+                ),
+                Some(url) => match Destination::parse(url) {
+                    Err(e) => (
+                        false,
+                        format!("disabled: governance url is not usable: {e}"),
+                    ),
+                    Ok(d) => match d.literal_locality() {
+                        Some(Locality::Loopback) | Some(Locality::Private) => {
+                            (true, format!("enabled: {url}"))
+                        }
+                        Some(_) => (
+                            false,
+                            format!(
+                                "disabled: {} is not loopback or private-range, and governance has no switch for that",
+                                d.host
+                            ),
+                        ),
+                        None => (true, format!("enabled: {url} (checked when resolved)")),
+                    },
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: cfg
+                    .governance_endpoint
+                    .clone()
+                    .unwrap_or_else(|| "none configured ([governance] url)".to_string()),
+                data: concat!(
+                    "HTTP POST, before every tool call of a coding agent, of the tool's name and ",
+                    "input — a shell command, a file's new text, a URL — with the session id. ",
+                    "The service answers allow, deny or ask"
+                ),
+                carries_note_content: true,
+                requires: concat!(
+                    "[governance] url in cyberbrain.toml, a key in CYBERBRAIN_AGENTGUARD_KEY or ",
+                    "~/.config/cyberbrain/agentguard.key, and the hooks installed; loopback or ",
+                    "private-range only"
                 ),
                 permitted_by: ALL_PROFILES,
                 enabled,
@@ -887,6 +937,23 @@ impl Egress {
                     ));
                 }
             }
+            EgressPurpose::Governance => {
+                if via.is_some() {
+                    return Err("governance requests do not follow redirects".into());
+                }
+                let Some(url) = &self.cfg.governance_endpoint else {
+                    return Err("no [governance] url is configured".into());
+                };
+                let configured = Destination::parse(url)
+                    .map_err(|e| format!("configured governance url is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the configured governance service ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
             EgressPurpose::NoteErasure => {
                 if via.is_some() {
                     return Err("erasure requests do not follow redirects".into());
@@ -985,6 +1052,13 @@ impl Egress {
             | EgressPurpose::NoteErasure => {
                 Some(("the hub", "allow_public_hub", self.cfg.allow_public_hub))
             }
+            // Every tool call goes here; a public destination would ship everything the agent
+            // does off the machine, so there is no setting that allows it.
+            EgressPurpose::Governance => Some((
+                "the governance service",
+                "(no setting: governance is loopback or private only)",
+                false,
+            )),
             EgressPurpose::ModelDownload | EgressPurpose::Terminal => None,
         };
         if let Some((what, setting, allow_public)) = rule {
@@ -1328,6 +1402,77 @@ mod tests {
         assert!(err.contains("no hub address"), "{err}");
     }
 
+    /// 2026-09-25. Every tool call of an agent goes this way, so the rule is the strictest
+    /// of the network paths: only the configured service, no redirects, and loopback or
+    /// private range with no setting that widens it.
+    #[test]
+    fn governance_reaches_only_the_configured_local_service() {
+        let (g, _) = gate(cfg());
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::Governance,
+                "http://127.0.0.1:18095/v1/tool-calls",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no [governance] url"), "{err}");
+
+        let local = PolicyConfig {
+            governance_endpoint: Some("http://127.0.0.1:18095".into()),
+            ..cfg()
+        };
+        let (g, _) = gate(local.clone());
+        assert!(
+            g.open(
+                &Actor::Cli,
+                EgressPurpose::Governance,
+                "http://127.0.0.1:18095/v1/tool-calls"
+            )
+            .is_ok()
+        );
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::Governance,
+                "http://127.0.0.1:9999/v1/tool-calls",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("not the configured governance service"),
+            "{err}"
+        );
+
+        // Public, even when every other public switch is on.
+        let public = PolicyConfig {
+            governance_endpoint: Some("http://93.184.216.34:18095".into()),
+            allow_public_endpoint: true,
+            allow_public_hub: true,
+            ..cfg()
+        };
+        let (g, _) = gate(public.clone());
+        let err = g
+            .open(
+                &Actor::Cli,
+                EgressPurpose::Governance,
+                "http://93.184.216.34:18095/v1/tool-calls",
+            )
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("public address"), "{err}");
+        let entry = register(&public)
+            .into_iter()
+            .find(|e| e.purpose == EgressPurpose::Governance)
+            .unwrap();
+        assert!(!entry.enabled && entry.carries_note_content, "{entry:?}");
+        let entry = register(&local)
+            .into_iter()
+            .find(|e| e.purpose == EgressPurpose::Governance)
+            .unwrap();
+        assert!(entry.enabled, "{entry:?}");
+    }
+
     // ---- the register ----
 
     #[test]
@@ -1343,7 +1488,8 @@ mod tests {
                 "note-sync",
                 "note-erasure",
                 "hub-enrolment",
-                "terminal"
+                "terminal",
+                "governance"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
         );
@@ -1356,7 +1502,8 @@ mod tests {
                 | EgressPurpose::NoteSync
                 | EgressPurpose::NoteErasure
                 | EgressPurpose::HubEnrolment
-                | EgressPurpose::Terminal => {}
+                | EgressPurpose::Terminal
+                | EgressPurpose::Governance => {}
             }
         }
         // Audit sync is off until a store is enrolled — a path that exists is not a path

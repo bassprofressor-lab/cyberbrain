@@ -65,6 +65,8 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
         EgressPurpose::ModelDownload => Error::Embed(msg),
         EgressPurpose::LocalInference => Error::Llm(msg),
         EgressPurpose::AuditSync => Error::Index(msg),
+        // The hook reads any failure here as "unreachable" and decides by its mode.
+        EgressPurpose::Governance => Error::Index(msg),
         EgressPurpose::NoteSync | EgressPurpose::NoteErasure => Error::Index(msg),
         // Something a person asked for and can act on: a code that expired, a hub that is
         // not reachable. A user error, not an internal one.
