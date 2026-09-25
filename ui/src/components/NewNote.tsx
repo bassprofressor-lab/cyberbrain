@@ -154,7 +154,7 @@ export function NewNoteForm({ full, onCreated, onCancel }: { full: boolean; onCr
         )}
 
         {exists ? (
-          <div className="panel border-danger/50 bg-danger-bg px-4 py-3 text-sm" role="alert">
+          <div className="alert alert-danger" role="alert">
             {t.newNote.exists(exists)}{" "}
             <a className="link" href={href("note", exists)}>
               {t.newNote.openExisting}
@@ -164,10 +164,10 @@ export function NewNoteForm({ full, onCreated, onCancel }: { full: boolean; onCr
         {error ? <ErrorBanner error={error} /> : null}
 
         <div className="flex gap-1.5 justify-end">
-          <button type="button" className="btn btn-sm" onClick={onCancel} disabled={saving}>
+          <button type="button" className="btn" onClick={onCancel} disabled={saving}>
             {t.common.cancel}
           </button>
-          <button type="submit" className="btn btn-sm btn-primary" disabled={!canSave}>
+          <button type="submit" className="btn btn-primary" disabled={!canSave}>
             {full ? (saving ? t.note.writing : t.note.write) : saving ? t.newNote.saving : t.newNote.save}
           </button>
         </div>

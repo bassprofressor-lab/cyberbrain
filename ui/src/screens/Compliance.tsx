@@ -60,11 +60,11 @@ export function ComplianceScreen({ route }: { route: Route }) {
 
   return (
     <div className="grid h-full grid-cols-1 md:grid-cols-[12rem_1fr]">
-      <nav className="border-r hidden md:block py-3">
-        <ul className="text-sm">
+      <nav className="border-r hidden md:block py-3 px-2 bg-surface">
+        <ul className="flex flex-col gap-0.5">
           {SECTIONS.map((id, i) => (
             <li key={id}>
-              <a href={href("compliance", null, undefined, id)} className={`flex items-center gap-2 px-4 py-1.5 ${active === id ? "row-selected font-medium" : "text-fg-muted hover:text-fg"}`}>
+              <a href={href("compliance", null, undefined, id)} className={`nav-item ${active === id ? "is-active" : ""}`}>
                 <span className="font-mono text-2xs text-fg-faint w-3">{i + 1}</span>
                 {t.compliance.sections[id]}
               </a>
@@ -72,7 +72,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           ))}
         </ul>
         {profile ? (
-          <div className="px-4 mt-4 text-2xs text-fg-faint">
+          <div className="px-2.5 mt-4 text-2xs text-fg-faint">
             {t.compliance.profile} <code className={profile === "off" ? "text-warn" : "text-fg"}>{profile}</code>
             <div className="mt-1 leading-relaxed">{profile === "eu" ? t.compliance.profileEu : profile === "ch" ? t.compliance.profileCh : t.compliance.profileOff}</div>
           </div>
@@ -101,7 +101,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           {pii.data ? (
             <>
               {pii.data.holds.length ? (
-                <div className="mb-3 panel border-warn/50 px-3 py-2 text-sm">
+                <div className="alert alert-warn mb-3">
                   <span className="text-warn font-medium">{t.compliance.pii.held(pii.data.holds.length)}</span> {t.compliance.pii.awaiting}{" "}
                   {pii.data.holds.map((h) => (
                     <a key={h.hold_id} href={href("note", h.note)} className="link mr-2">
@@ -111,19 +111,20 @@ export function ComplianceScreen({ route }: { route: Route }) {
                 </div>
               ) : null}
               {pii.data.entries.length ? (
-                <table className="w-full text-xs">
+                <div className="table-wrap">
+                <table className="table">
                   <thead>
-                    <tr className="label text-left">
-                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colNote}</th>
-                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colState}</th>
-                      <th className="py-1 pr-3 font-medium">{t.compliance.pii.colFindings}</th>
-                      <th className="py-1 font-medium">{t.compliance.pii.colReviewed}</th>
+                    <tr>
+                      <th>{t.compliance.pii.colNote}</th>
+                      <th>{t.compliance.pii.colState}</th>
+                      <th>{t.compliance.pii.colFindings}</th>
+                      <th>{t.compliance.pii.colReviewed}</th>
                     </tr>
                   </thead>
                   <tbody>
                     {pii.data.entries.map((e) => (
-                      <tr key={e.note.id} className="border-t align-top">
-                        <td className="py-1.5 pr-3">
+                      <tr key={e.note.id}>
+                        <td>
                           <span className="inline-flex items-center gap-1.5">
                             <RingBadge ring={e.note.ring} />
                             <a href={href("note", e.note.name)} className="link font-mono">
@@ -131,12 +132,12 @@ export function ComplianceScreen({ route }: { route: Route }) {
                             </a>
                           </span>
                         </td>
-                        <td className="py-1.5 pr-3">
+                        <td>
                           <Pill tone={piiTone(e.state)} title={e.state === "unscanned" ? t.compliance.pii.unscannedTitle : undefined}>
                             {t.pii.state[e.state]}
                           </Pill>
                         </td>
-                        <td className="py-1.5 pr-3 font-mono">
+                        <td className="font-mono">
                           {e.findings.length ? (
                             e.findings.map((f, i) => (
                               <div key={i}>
@@ -147,13 +148,14 @@ export function ComplianceScreen({ route }: { route: Route }) {
                             <span className="text-fg-faint font-sans">{e.state === "unscanned" ? t.compliance.pii.unscannedNothing : t.compliance.pii.nothingNow}</span>
                           )}
                         </td>
-                        <td className="py-1.5 text-fg-muted" title={absTime(e.reviewed_at)}>
+                        <td className="text-fg-muted" title={absTime(e.reviewed_at)}>
                           {e.reviewed_at ? relTime(e.reviewed_at) : <span className="text-fg-faint">{t.compliance.pii.neverScanned}</span>}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
               ) : (
                 <Empty title={t.compliance.pii.emptyTitle}>{t.compliance.pii.emptyBody}</Empty>
               )}
@@ -170,7 +172,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           {models.data ? (
             <div className="grid gap-3 lg:grid-cols-2">
               {models.data.map((m) => (
-                <div key={m.role + m.name} className="panel p-3 text-sm">
+                <div key={m.role + m.name} className="panel-inset p-4 text-sm">
                   <div className="flex items-center gap-2">
                     <Pill tone={m.active ? "ok" : "neutral"}>{m.role}</Pill>
                     <span className="font-mono font-medium">{m.name}</span>
@@ -293,26 +295,26 @@ function ObligationsSection() {
       {o.data ? (
         <>
           <p className="mb-3 max-w-4xl text-xs text-fg-muted leading-relaxed">{t.compliance.obligations.intro}</p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs min-w-[44rem]">
+          <div className="table-wrap">
+            <table className="table min-w-[44rem]">
               <thead>
-                <tr className="label text-left">
-                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colTopic}</th>
-                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colSummary}</th>
-                  <th className="py-1 pr-3 font-medium">{t.compliance.obligations.colBasis}</th>
-                  <th className="py-1 font-medium">{t.compliance.obligations.colConfidence}</th>
+                <tr>
+                  <th>{t.compliance.obligations.colTopic}</th>
+                  <th>{t.compliance.obligations.colSummary}</th>
+                  <th>{t.compliance.obligations.colBasis}</th>
+                  <th>{t.compliance.obligations.colConfidence}</th>
                 </tr>
               </thead>
               <tbody>
                 {o.data.obligations.map((ob) => (
-                  <tr key={ob.topic} className="border-t align-top">
-                    <td className="py-2 pr-3 whitespace-nowrap font-medium text-fg">{t.compliance.obligations.topics[ob.topic] ?? ob.topic}</td>
-                    <td className="py-2 pr-3 text-fg-muted max-w-[34rem]">
+                  <tr key={ob.topic}>
+                    <td className="whitespace-nowrap font-medium text-fg">{t.compliance.obligations.topics[ob.topic] ?? ob.topic}</td>
+                    <td className="text-fg-muted max-w-[34rem]">
                       {ob.summary}
                       {ob.note ? <div className="mt-1 text-fg-faint">{ob.note}</div> : null}
                     </td>
-                    <td className="py-2 pr-3 font-mono whitespace-nowrap text-fg-muted">{ob.basis}</td>
-                    <td className="py-2">
+                    <td className="font-mono whitespace-nowrap text-fg-muted">{ob.basis}</td>
+                    <td>
                       <Pill tone={tone(ob.confidence)}>{t.compliance.obligations.confidence[ob.confidence]}</Pill>
                     </td>
                   </tr>
@@ -330,48 +332,48 @@ function ObligationsSection() {
 function EgressTable({ paths }: { paths: EgressPath[] }) {
   const t = useT();
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-xs min-w-[48rem]">
+    <div className="table-wrap">
+      <table className="table min-w-[48rem]">
         <thead>
-          <tr className="label text-left">
-            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colPurpose}</th>
-            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colState}</th>
-            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colDestination}</th>
-            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colData}</th>
-            <th className="py-1 pr-3 font-medium">{t.compliance.egress.colPermitted}</th>
-            <th className="py-1 pr-3 font-medium tnum">{t.compliance.egress.colUses}</th>
-            <th className="py-1 pr-3 font-medium tnum">{t.compliance.egress.colBytes}</th>
-            <th className="py-1 font-medium">{t.compliance.egress.colLast}</th>
+          <tr>
+            <th>{t.compliance.egress.colPurpose}</th>
+            <th>{t.compliance.egress.colState}</th>
+            <th>{t.compliance.egress.colDestination}</th>
+            <th>{t.compliance.egress.colData}</th>
+            <th>{t.compliance.egress.colPermitted}</th>
+            <th className="tnum">{t.compliance.egress.colUses}</th>
+            <th className="tnum">{t.compliance.egress.colBytes}</th>
+            <th>{t.compliance.egress.colLast}</th>
           </tr>
         </thead>
         <tbody>
           {paths.map((p) => (
-            <tr key={p.purpose} className="border-t align-top">
-              <td className="py-2 pr-3">
+            <tr key={p.purpose}>
+              <td>
                 <div className="font-mono font-medium text-fg">{p.purpose}</div>
                 <div className="text-fg-muted mt-0.5 max-w-[16rem]">{p.description}</div>
               </td>
-              <td className="py-2 pr-3 whitespace-nowrap">
+              <td className="whitespace-nowrap">
                 <span className="inline-flex items-center gap-1.5">
                   <Dot tone={p.enabled ? "ok" : "off"} />
                   {p.enabled ? t.compliance.egress.enabled : t.compliance.egress.disabled}
                 </span>
                 <div className="text-fg-faint mt-0.5 max-w-[14rem] whitespace-normal">{p.enabled ? p.state : p.disabled_reason}</div>
               </td>
-              <td className="py-2 pr-3">
+              <td>
                 <code className="break-all">{p.destination}</code>
                 <div className="mt-0.5">
                   <Pill tone={p.destination_class === "public" ? "warn" : p.destination_class === "none" ? "neutral" : "ok"}>{p.destination_class}</Pill>
                 </div>
               </td>
-              <td className="py-2 pr-3 text-fg-muted max-w-[18rem]">
+              <td className="text-fg-muted max-w-[18rem]">
                 {p.data}
                 <div className="mt-0.5">{p.carries_note_content ? <Pill tone="warn">{t.compliance.egress.carries}</Pill> : <Pill tone="ok">{t.compliance.egress.carriesNot}</Pill>}</div>
               </td>
-              <td className="py-2 pr-3 font-mono">{p.permitted_by.join(" ")}</td>
-              <td className="py-2 pr-3 tnum">{num(p.uses_total)}</td>
-              <td className="py-2 pr-3 tnum">{bytes(p.bytes_out_total)}</td>
-              <td className="py-2 text-fg-muted whitespace-nowrap" title={absTime(p.last_used)}>
+              <td className="font-mono">{p.permitted_by.join(" ")}</td>
+              <td className="tnum">{num(p.uses_total)}</td>
+              <td className="tnum">{bytes(p.bytes_out_total)}</td>
+              <td className="text-fg-muted whitespace-nowrap" title={absTime(p.last_used)}>
                 {p.last_used ? relTime(p.last_used) : t.common.never}
               </td>
             </tr>
@@ -486,31 +488,31 @@ function AuditSection() {
         <input className="input flex-1 min-w-40" placeholder={t.compliance.audit.searchPlaceholder} value={q} onChange={(e) => setQ(e.target.value)} aria-label={t.compliance.audit.searchAria} />
       </div>
       {error ? <ErrorBanner error={error} onRetry={() => load()} /> : null}
-      <div className="overflow-x-auto">
-        <table className="w-full text-xs min-w-[44rem]">
+      <div className="table-wrap">
+        <table className="table min-w-[44rem]">
           <thead>
-            <tr className="label text-left">
-              <th className="py-1 pr-3 font-medium tnum">{t.compliance.audit.colSeq}</th>
-              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colTime}</th>
-              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colActor}</th>
-              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colAction}</th>
-              <th className="py-1 pr-3 font-medium">{t.compliance.audit.colSubject}</th>
-              <th className="py-1 font-medium">{t.compliance.audit.colDetail}</th>
+            <tr>
+              <th className="tnum">{t.compliance.audit.colSeq}</th>
+              <th>{t.compliance.audit.colTime}</th>
+              <th>{t.compliance.audit.colActor}</th>
+              <th>{t.compliance.audit.colAction}</th>
+              <th>{t.compliance.audit.colSubject}</th>
+              <th>{t.compliance.audit.colDetail}</th>
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.seq} className="border-t align-top">
-                <td className="py-1 pr-3 font-mono tnum text-fg-faint">{r.seq}</td>
-                <td className="py-1 pr-3 font-mono tnum whitespace-nowrap text-fg-muted" title={relTime(r.ts)}>
+              <tr key={r.seq}>
+                <td className="font-mono tnum text-fg-faint">{r.seq}</td>
+                <td className="font-mono tnum whitespace-nowrap text-fg-muted" title={relTime(r.ts)}>
                   {absTime(r.ts)}
                 </td>
-                <td className="py-1 pr-3 font-mono whitespace-nowrap">{r.actor}</td>
-                <td className="py-1 pr-3">
+                <td className="font-mono whitespace-nowrap">{r.actor}</td>
+                <td>
                   <Pill tone={toneOf(r.action)}>{r.action}</Pill>
                 </td>
-                <td className="py-1 pr-3 font-mono break-all max-w-[16rem]">{r.subject}</td>
-                <td className="py-1 text-fg-muted">
+                <td className="font-mono break-words min-w-[12rem] max-w-[22rem]">{r.subject}</td>
+                <td className="text-fg-muted">
                   {Object.keys(r.detail).length ? (
                     Object.entries(r.detail).map(([k, v]) => (
                       <span key={k} className="inline-block mr-2 whitespace-nowrap" title={typeof v === "string" && /^[[{]/.test(v) ? t.compliance.audit.nestedTitle : undefined}>
@@ -582,19 +584,20 @@ function RetentionSection() {
       {queue.error ? <ErrorBanner error={queue.error} onRetry={queue.reload} /> : null}
       {queue.data ? (
         entries.length ? (
-          <table className="w-full text-xs">
+          <div className="table-wrap">
+          <table className="table">
             <thead>
-              <tr className="label text-left">
-                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colNote}</th>
-                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colRetention}</th>
-                <th className="py-1 pr-3 font-medium">{t.compliance.retention.colExpires}</th>
-                <th className="py-1 font-medium">{t.compliance.retention.colState}</th>
+              <tr>
+                <th>{t.compliance.retention.colNote}</th>
+                <th>{t.compliance.retention.colRetention}</th>
+                <th>{t.compliance.retention.colExpires}</th>
+                <th>{t.compliance.retention.colState}</th>
               </tr>
             </thead>
             <tbody>
               {entries.slice(0, 40).map((e) => (
-                <tr key={e.note.id} className="border-t">
-                  <td className="py-1.5 pr-3">
+                <tr key={e.note.id}>
+                  <td>
                     <span className="inline-flex items-center gap-1.5">
                       <RingBadge ring={e.note.ring} />
                       <a href={href("note", e.note.name)} className="link font-mono">
@@ -602,13 +605,13 @@ function RetentionSection() {
                       </a>
                     </span>
                   </td>
-                  <td className="py-1.5 pr-3">
+                  <td>
                     {e.invalid !== undefined ? <code className="text-warn" title={e.invalid}>{e.retention}</code> : <span title={e.retention}>{duration(e.retention)}</span>}
                   </td>
-                  <td className="py-1.5 pr-3 tnum text-fg-muted" title={e.invalid !== undefined ? t.compliance.retention.invalidTitle : absTime(e.expires_at)}>
+                  <td className="tnum text-fg-muted" title={e.invalid !== undefined ? t.compliance.retention.invalidTitle : absTime(e.expires_at)}>
                     {e.invalid !== undefined ? <span className="text-fg-faint">{t.common.never}</span> : relTime(e.expires_at)}
                   </td>
-                  <td className="py-1.5">
+                  <td>
                     {e.invalid !== undefined ? (
                       <Pill tone="warn" title={e.invalid}>
                         {t.compliance.retention.invalidPill(e.invalid)}
@@ -623,6 +626,7 @@ function RetentionSection() {
               ))}
             </tbody>
           </table>
+          </div>
         ) : (
           <Empty title={t.compliance.retention.emptyTitle(queue.data ? num(queue.data.indefinite) : null)} />
         )
@@ -630,7 +634,7 @@ function RetentionSection() {
       {entries.length > 40 ? <div className="mt-2 text-2xs text-fg-faint">{t.compliance.retention.more(entries.length - 40)}</div> : null}
       <p className="mt-3 text-xs text-fg-muted">{t.compliance.retention.note}</p>
       {report ? (
-        <div className="mt-3 panel px-3 py-2 text-xs">
+        <div className="mt-3 panel-inset px-3 py-2.5 text-xs">
           <div className="flex items-center gap-2">
             <Pill tone={report.dry_run ? "neutral" : "warn"}>{report.dry_run ? t.note.forgetDialog.dryRun : t.compliance.retention.applied}</Pill>
             <span>{report.dry_run ? t.compliance.retention.wouldErase(report.removed.length) : t.compliance.retention.erased(report.removed.length)}</span>
@@ -726,11 +730,11 @@ function SubjectSection() {
             </ul>
           ) : null}
           {report.hits.length === 0 ? (
-            <div className="mt-2 panel px-3 py-2 text-ok">{t.compliance.subject.nothing}</div>
+            <div className="mt-2 alert alert-ok text-ok text-xs">{t.compliance.subject.nothing}</div>
           ) : (
             <ul className="mt-2 space-y-1">
               {report.hits.map((h, i) => (
-                <li key={i} className="panel px-3 py-1.5 flex items-start gap-2">
+                <li key={i} className="panel-inset px-3 py-2 flex items-start gap-2">
                   <Pill>{h.where}</Pill>
                   {h.citation ? <CitationChip citation={h.citation} size="sm" /> : <code className="text-fg-muted">{h.ref}</code>}
                   <span className="text-fg-muted min-w-0 break-words">{h.excerpt}</span>

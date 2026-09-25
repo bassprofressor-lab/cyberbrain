@@ -40,7 +40,7 @@ export function SimpleNotesScreen({ route }: { route: Route }) {
           <h1 className="text-xl font-semibold tracking-tight">{t.simpleNotes.title}</h1>
           {all.length ? <span className="text-2xs text-fg-faint tnum">{t.simpleNotes.count(all.length)}</span> : null}
           {all.length ? <input className="input h-8 ml-auto w-44" placeholder={t.simpleNotes.filterPlaceholder} aria-label={t.simpleNotes.filterAria} value={filter} onChange={(e) => setFilter(e.target.value)} /> : null}
-          <button className={`btn btn-sm ${all.length ? "" : "ml-auto"}`} onClick={() => navigate(href("notes", null, { new: 1 }))}>
+          <button className={`btn ${all.length ? "" : "ml-auto"}`} onClick={() => navigate(href("notes", null, { new: 1 }))}>
             {t.newNote.button}
           </button>
         </div>
@@ -94,7 +94,7 @@ function FirstDay() {
       {how ? (
         <div className="mt-4 mx-auto max-w-[52ch] text-left">
           <p className="text-sm text-fg-muted">{t.simpleNotes.emptyHowBody}</p>
-          <pre className="mt-2 panel px-3 py-2 text-2xs overflow-x-auto">cyberbrain write --ring 2 --kind knowledge --name my-first-note --body "…"</pre>
+          <pre className="mt-2 panel-inset px-3 py-2 text-2xs overflow-x-auto">cyberbrain write --ring 2 --kind knowledge --name my-first-note --body "…"</pre>
         </div>
       ) : null}
     </div>
@@ -107,7 +107,7 @@ function SimpleNewNote({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="h-full overflow-auto scroll-thin">
       <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
-        <button className="btn btn-sm self-start" onClick={() => navigate(href("notes"))}>
+        <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => navigate(href("notes"))}>
           ← {t.simpleNotes.title}
         </button>
         <h1 className="text-2xl font-semibold tracking-tight">{t.newNote.heading}</h1>
@@ -137,7 +137,7 @@ function SimpleNoteView({ name }: { name: string }) {
   return (
     <div className="h-full overflow-auto scroll-thin">
       <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
-        <button className="btn btn-sm self-start" onClick={() => navigate(href("notes"))}>
+        <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => navigate(href("notes"))}>
           ← {t.simpleNotes.title}
         </button>
         {note.error ? <ErrorBanner error={note.error} /> : null}

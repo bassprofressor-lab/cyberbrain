@@ -123,7 +123,7 @@ export function SearchScreen({ route }: { route: Route }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-5 pt-4 pb-3 border-b bg-bg sticky top-0 z-10">
+      <div className="px-5 pt-4 pb-3 border-b bg-surface">
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <input
@@ -155,19 +155,21 @@ export function SearchScreen({ route }: { route: Route }) {
             ))}
           </select>
         </div>
-        <div className="mt-2 flex items-center gap-1 flex-wrap">
-          <span className="label mr-1">{t.common.ring}</span>
-          {ringOptions.map((r) => (
-            <button
-              key={String(r)}
-              className={`btn btn-sm ${ring === r ? "btn-primary" : ""}`}
-              onClick={() => setRing(r)}
-              aria-pressed={ring === r}
-              style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}
-            >
-              {r === null ? t.common.all : `r${r}`}
-            </button>
-          ))}
+        <div className="mt-2.5 flex items-center gap-2 flex-wrap">
+          <span className="label">{t.common.ring}</span>
+          <div className="seg" role="group" aria-label={t.common.ring}>
+            {ringOptions.map((r) => (
+              <button
+                key={String(r)}
+                className={`seg-item ${ring === r ? "is-on" : ""}`}
+                onClick={() => setRing(r)}
+                aria-pressed={ring === r}
+                style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}
+              >
+                {r === null ? t.common.all : `r${r}`}
+              </button>
+            ))}
+          </div>
           <span className="ml-auto text-2xs text-fg-faint tnum">
             {loading ? t.common.searching : result ? t.search.stats(result.mode, Math.round(result.elapsed_ms), result.params.k_lex, result.params.k_sem) : ""}
           </span>
@@ -226,7 +228,7 @@ export function SearchScreen({ route }: { route: Route }) {
         {result && q.trim() ? (
           <>
             {result.conflicts.length ? (
-              <div className="panel border-warn/50 mb-3 px-4 py-3" role="note">
+              <div className="alert alert-warn mb-3" role="note">
                 <div className="flex items-center gap-2 text-sm font-medium text-warn">
                   {t.search.conflicts(result.conflicts.length)}
                 </div>
@@ -259,7 +261,7 @@ export function SearchScreen({ route }: { route: Route }) {
                 return (
                   <li
                     key={h.citation}
-                    className={`panel px-3 py-2 cursor-default ${isSel ? "row-selected" : ""}`}
+                    className={`panel px-3 py-2.5 cursor-default ${isSel ? "row-selected" : ""}`}
                     onClick={() => setSel(i)}
                     onDoubleClick={() => navigate(href("note", h.note_name, { block: h.block_idx }))}
                     aria-selected={isSel}
@@ -313,7 +315,7 @@ function ScoreBar({ score, top }: { score: number; top: number }) {
   return (
     <span className="inline-flex items-center gap-1.5 w-24" title={t.search.scoreTitle(score)}>
       <span className="h-1.5 flex-1 rounded-sm bg-surface-3 overflow-hidden">
-        <span className="block h-full bg-fg-muted" style={{ width: `${pct}%` }} />
+        <span className="block h-full bg-accent" style={{ width: `${pct}%` }} />
       </span>
       <span className="font-mono text-2xs text-fg-muted tnum w-10 text-right">{dec(score, 4)}</span>
     </span>

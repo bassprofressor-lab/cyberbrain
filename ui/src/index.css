@@ -41,30 +41,40 @@
    Theme tokens. Dark is the default; `data-theme` on <html> is set before first paint by
    the inline script in index.html and follows prefers-color-scheme unless the user chose.
 
+   The scale is one cool grey (hue 255) in six steps plus a single interactive accent. The
+   accent is the only saturated colour that is not a ring or a state: it marks what can be
+   clicked (primary button, current nav entry, selected row, focus, links) and nothing else.
+   Every text token clears WCAG AA against the surface it is meant for, `--fg-faint`
+   included, which the first cut of this file did not.
+
    Rings are encoded three ways everywhere (SPEC §3.2 must survive both themes and colour
    vision): hue, fill (r0 solid → r4 dashed hollow) and the literal label "r0".."r4".
    --------------------------------------------------------------------------------------- */
 :root,
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: oklch(0.165 0.008 260);
-  --surface: oklch(0.205 0.009 260);
-  --surface-2: oklch(0.245 0.01 260);
-  --surface-3: oklch(0.29 0.011 260);
-  --line: oklch(0.30 0.01 260);
-  --line-strong: oklch(0.40 0.012 260);
-  --fg: oklch(0.93 0.006 260);
-  --fg-muted: oklch(0.72 0.012 260);
-  --fg-faint: oklch(0.56 0.012 260);
-  --accent: oklch(0.93 0.006 260);
-  --accent-fg: oklch(0.17 0.008 260);
-  --focus: oklch(0.80 0.10 230);
+  --bg: oklch(0.15 0.008 255);
+  --surface: oklch(0.19 0.009 255);
+  --surface-2: oklch(0.23 0.01 255);
+  --surface-3: oklch(0.28 0.011 255);
+  --line: oklch(0.27 0.01 255);
+  --line-strong: oklch(0.37 0.012 255);
+  --fg: oklch(0.95 0.005 255);
+  --fg-muted: oklch(0.75 0.012 255);
+  --fg-faint: oklch(0.63 0.012 255);
+
+  --accent: oklch(0.74 0.13 250);
+  --accent-solid: oklch(0.58 0.17 255);
+  --accent-fg: oklch(0.99 0 0);
+  --accent-soft: oklch(0.74 0.13 250 / 0.14);
+  --focus: oklch(0.74 0.13 250);
+
   --ok: oklch(0.78 0.15 150);
   --warn: oklch(0.82 0.15 75);
-  --danger: oklch(0.72 0.19 22);
+  --danger: oklch(0.74 0.18 22);
   --ok-bg: oklch(0.78 0.15 150 / 0.12);
   --warn-bg: oklch(0.82 0.15 75 / 0.12);
-  --danger-bg: oklch(0.72 0.19 22 / 0.12);
+  --danger-bg: oklch(0.74 0.18 22 / 0.12);
 
   --ring-0: oklch(0.78 0.16 320);
   --ring-1: oklch(0.76 0.14 275);
@@ -77,42 +87,52 @@
   --ring-3-bg: oklch(0.82 0.14 70 / 0.14);
   --ring-4-bg: oklch(0.70 0.02 260 / 0.14);
 
-  --shadow: 0 1px 0 oklch(0 0 0 / 0.2), 0 8px 24px -12px oklch(0 0 0 / 0.5);
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.35);
+  --shadow-md: 0 1px 2px oklch(0 0 0 / 0.3), 0 12px 32px -12px oklch(0 0 0 / 0.6);
+  --shadow: var(--shadow-md);
+  --scrim: oklch(0 0 0 / 0.6);
 }
 
 :root[data-theme="light"] {
   color-scheme: light;
-  --bg: oklch(0.975 0.004 260);
+  --bg: oklch(0.975 0.004 255);
   --surface: oklch(1 0 0);
-  --surface-2: oklch(0.955 0.005 260);
-  --surface-3: oklch(0.925 0.006 260);
-  --line: oklch(0.88 0.008 260);
-  --line-strong: oklch(0.78 0.01 260);
-  --fg: oklch(0.21 0.012 260);
-  --fg-muted: oklch(0.46 0.014 260);
-  --fg-faint: oklch(0.62 0.012 260);
-  --accent: oklch(0.21 0.012 260);
-  --accent-fg: oklch(0.985 0.004 260);
-  --focus: oklch(0.55 0.14 230);
-  --ok: oklch(0.55 0.15 150);
-  --warn: oklch(0.62 0.15 70);
-  --danger: oklch(0.55 0.20 22);
-  --ok-bg: oklch(0.55 0.15 150 / 0.10);
-  --warn-bg: oklch(0.62 0.15 70 / 0.12);
-  --danger-bg: oklch(0.55 0.20 22 / 0.10);
+  --surface-2: oklch(0.965 0.005 255);
+  --surface-3: oklch(0.93 0.006 255);
+  --line: oklch(0.90 0.008 255);
+  --line-strong: oklch(0.80 0.01 255);
+  --fg: oklch(0.20 0.012 255);
+  --fg-muted: oklch(0.45 0.014 255);
+  --fg-faint: oklch(0.55 0.013 255);
 
-  --ring-0: oklch(0.52 0.20 320);
-  --ring-1: oklch(0.50 0.18 275);
-  --ring-2: oklch(0.52 0.13 175);
-  --ring-3: oklch(0.60 0.15 70);
-  --ring-4: oklch(0.52 0.02 260);
-  --ring-0-bg: oklch(0.52 0.20 320 / 0.10);
-  --ring-1-bg: oklch(0.50 0.18 275 / 0.10);
-  --ring-2-bg: oklch(0.52 0.13 175 / 0.10);
-  --ring-3-bg: oklch(0.60 0.15 70 / 0.12);
-  --ring-4-bg: oklch(0.52 0.02 260 / 0.10);
+  --accent: oklch(0.50 0.17 258);
+  --accent-solid: oklch(0.52 0.18 258);
+  --accent-fg: oklch(0.99 0 0);
+  --accent-soft: oklch(0.50 0.17 258 / 0.10);
+  --focus: oklch(0.55 0.16 258);
 
-  --shadow: 0 1px 0 oklch(0 0 0 / 0.04), 0 8px 24px -12px oklch(0 0 0 / 0.15);
+  --ok: oklch(0.50 0.15 150);
+  --warn: oklch(0.55 0.14 70);
+  --danger: oklch(0.52 0.20 22);
+  --ok-bg: oklch(0.50 0.15 150 / 0.10);
+  --warn-bg: oklch(0.55 0.14 70 / 0.12);
+  --danger-bg: oklch(0.52 0.20 22 / 0.10);
+
+  --ring-0: oklch(0.50 0.20 320);
+  --ring-1: oklch(0.48 0.18 275);
+  --ring-2: oklch(0.50 0.13 175);
+  --ring-3: oklch(0.56 0.15 70);
+  --ring-4: oklch(0.50 0.02 260);
+  --ring-0-bg: oklch(0.50 0.20 320 / 0.10);
+  --ring-1-bg: oklch(0.48 0.18 275 / 0.10);
+  --ring-2-bg: oklch(0.50 0.13 175 / 0.10);
+  --ring-3-bg: oklch(0.56 0.15 70 / 0.12);
+  --ring-4-bg: oklch(0.50 0.02 260 / 0.10);
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.06);
+  --shadow-md: 0 1px 2px oklch(0 0 0 / 0.05), 0 12px 32px -12px oklch(0 0 0 / 0.18);
+  --shadow: var(--shadow-md);
+  --scrim: oklch(0.2 0.01 255 / 0.45);
 }
 
 @theme inline {
@@ -129,6 +149,8 @@
   --color-fg-muted: var(--fg-muted);
   --color-fg-faint: var(--fg-faint);
   --color-accent: var(--accent);
+  --color-accent-solid: var(--accent-solid);
+  --color-accent-soft: var(--accent-soft);
   --color-accent-fg: var(--accent-fg);
   --color-focus: var(--focus);
   --color-ok: var(--ok);
@@ -148,7 +170,7 @@
   --color-ring-3-bg: var(--ring-3-bg);
   --color-ring-4-bg: var(--ring-4-bg);
 
-  --shadow-panel: var(--shadow);
+  --shadow-panel: var(--shadow-md);
   --text-2xs: 0.75rem;
   --text-2xs--line-height: 1.05rem;
 }
@@ -175,11 +197,11 @@
     border-color: var(--line);
   }
   ::selection {
-    background: color-mix(in oklch, var(--focus) 35%, transparent);
+    background: color-mix(in oklch, var(--accent) 30%, transparent);
   }
   :focus-visible {
     outline: 2px solid var(--focus);
-    outline-offset: 1px;
+    outline-offset: 2px;
   }
   button,
   input,
@@ -188,6 +210,18 @@
     font: inherit;
     color: inherit;
   }
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  a[href],
+  label:has(> input[type="checkbox"]),
+  select {
+    cursor: pointer;
+  }
+  input[type="checkbox"] {
+    accent-color: var(--accent-solid);
+    width: 0.9375rem;
+    height: 0.9375rem;
+  }
   code,
   kbd,
   pre,
@@ -195,7 +229,13 @@
     font-family: var(--font-mono);
     font-feature-settings: "liga" 0;
   }
-  /* The operator reads this many times a day: nothing moves unless it must. */
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.01em;
+  }
+  /* The operator reads this many times a day: nothing moves unless it must. The only
+     transitions in this file are colour and border on hover and focus, 150 ms. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -207,67 +247,229 @@
 }
 
 @layer components {
+  /* ----- surfaces ------------------------------------------------------------------ */
   .panel {
     background: var(--surface);
     border: 1px solid var(--line);
+    border-radius: 0.625rem;
+  }
+  /* A box inside a panel: one step deeper, no second card border fighting the first. */
+  .panel-inset {
+    background: var(--surface-2);
+    border: 1px solid var(--line);
     border-radius: 0.5rem;
+  }
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 2.75rem;
+    padding: 0.5rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .section-head h2 {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .stat {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 0.625rem;
+    padding: 0.875rem 1rem;
+    min-width: 0;
+  }
+  .stat-value {
+    margin-top: 0.25rem;
+    font-size: 1.375rem;
+    line-height: 1.2;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    font-variant-numeric: tabular-nums;
+  }
+  .stat-value.is-mono {
+    font-family: var(--font-mono);
+    font-size: 1rem;
+    font-weight: 500;
+    letter-spacing: 0;
   }
   .tnum {
     font-variant-numeric: tabular-nums;
   }
+
+  /* ----- controls ------------------------------------------------------------------ */
   .btn {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 0.375rem;
+    height: 2rem;
+    padding: 0 0.75rem;
+    border: 1px solid var(--line-strong);
+    border-radius: 0.375rem;
+    background: var(--surface);
+    color: var(--fg);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease,
+      color 150ms ease;
+  }
+  .btn:hover {
+    background: var(--surface-2);
+    border-color: color-mix(in oklch, var(--line-strong) 70%, var(--fg));
+  }
+  .btn:active {
+    background: var(--surface-3);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+    box-shadow: none;
+  }
+  .btn:disabled:hover {
+    background: var(--surface);
+    border-color: var(--line-strong);
+  }
+  .btn-primary {
+    background: var(--accent-solid);
+    color: var(--accent-fg);
+    border-color: transparent;
+  }
+  .btn-primary:hover {
+    background: color-mix(in oklch, var(--accent-solid) 88%, black);
+    border-color: transparent;
+  }
+  .btn-primary:active {
+    background: color-mix(in oklch, var(--accent-solid) 80%, black);
+  }
+  .btn-primary:disabled:hover {
+    background: var(--accent-solid);
+  }
+  .btn-danger {
+    color: var(--danger);
+    border-color: color-mix(in oklch, var(--danger) 45%, var(--line));
+  }
+  .btn-danger:hover {
+    background: var(--danger-bg);
+    border-color: color-mix(in oklch, var(--danger) 70%, var(--line));
+  }
+  /* Text-only action, for a row of small verbs next to an input. Same hit area as a
+     button, no box until the pointer is on it. */
+  .btn-ghost {
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+    color: var(--fg-muted);
+  }
+  .btn-ghost:hover {
+    background: var(--surface-2);
+    border-color: transparent;
+    color: var(--fg);
+  }
+  .btn-ghost:disabled:hover {
+    background: transparent;
+    border-color: transparent;
+  }
+  .btn-sm {
     height: 1.75rem;
+    padding: 0 0.625rem;
+    font-size: 0.75rem;
+  }
+  .btn-icon {
+    padding: 0;
+    width: 2rem;
+  }
+  .btn-icon.btn-sm {
+    width: 1.75rem;
+  }
+  /* A row of exclusive choices (ring filter, day range): one outline, the chosen one lit. */
+  .seg {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid var(--line-strong);
+    border-radius: 0.375rem;
+    background: var(--surface);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+  .seg-item {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    height: 1.75rem;
+    min-width: 2.25rem;
+    padding: 0 0.625rem;
+    border: 0;
+    border-right: 1px solid var(--line);
+    background: transparent;
+    color: var(--fg-muted);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+  .seg-item:last-child {
+    border-right: 0;
+  }
+  .seg-item:hover {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+  .seg-item.is-on {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  .seg-item:focus-visible {
+    outline-offset: -2px;
+  }
+  .input {
+    height: 2rem;
     padding: 0 0.625rem;
     border: 1px solid var(--line-strong);
     border-radius: 0.375rem;
     background: var(--surface);
     color: var(--fg);
     font-size: 0.8125rem;
-    line-height: 1;
-    white-space: nowrap;
-    cursor: pointer;
-  }
-  .btn:hover {
-    background: var(--surface-2);
-  }
-  .btn:disabled {
-    opacity: 0.5;
-    cursor: default;
-  }
-  .btn-primary {
-    background: var(--accent);
-    color: var(--accent-fg);
-    border-color: var(--accent);
-  }
-  .btn-primary:hover {
-    background: color-mix(in oklch, var(--accent) 88%, var(--bg));
-  }
-  .btn-danger {
-    color: var(--danger);
-    border-color: color-mix(in oklch, var(--danger) 50%, var(--line));
-  }
-  .btn-danger:hover {
-    background: var(--danger-bg);
-  }
-  .btn-sm {
-    height: 1.5rem;
-    padding: 0 0.5rem;
-    font-size: 0.75rem;
-  }
-  .input {
-    height: 1.75rem;
-    padding: 0 0.5rem;
-    border: 1px solid var(--line-strong);
-    border-radius: 0.375rem;
-    background: var(--surface);
-    color: var(--fg);
-    font-size: 0.8125rem;
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease;
   }
   .input::placeholder {
     color: var(--fg-faint);
+  }
+  .input:hover {
+    border-color: color-mix(in oklch, var(--line-strong) 70%, var(--fg));
+  }
+  .input:focus,
+  .input:focus-visible {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .input[aria-invalid="true"] {
+    border-color: var(--danger);
+  }
+  textarea.input {
+    height: auto;
+    padding: 0.625rem 0.75rem;
+    line-height: 1.55;
+  }
+  select.input {
+    appearance: none;
+    padding-right: 1.75rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 16 16' fill='none'%3E%3Cpath d='m4 6 4 4 4-4' stroke='%238a8f9c' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.5rem center;
   }
   .kbd {
     display: inline-block;
@@ -276,7 +478,7 @@
     border: 1px solid var(--line-strong);
     border-bottom-width: 2px;
     border-radius: 0.25rem;
-    background: var(--surface-2);
+    background: var(--surface);
     color: var(--fg-muted);
     font-family: var(--font-mono);
     font-size: 0.6875rem;
@@ -284,20 +486,22 @@
     text-align: center;
   }
   .label {
-    font-size: 0.75rem;
-    font-weight: 500;
+    font-size: 0.6875rem;
+    font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
-    color: var(--fg-faint);
+    color: var(--fg-muted);
   }
   .link {
     color: var(--fg);
     text-decoration: underline;
     text-decoration-color: var(--line-strong);
     text-underline-offset: 3px;
+    transition: text-decoration-color 150ms ease;
   }
   .link:hover {
-    text-decoration-color: var(--fg);
+    color: var(--accent);
+    text-decoration-color: currentColor;
   }
   /* A [[link]] whose target does not exist: intent, not an error (SPEC §3.1). */
   .link-intent {
@@ -313,6 +517,275 @@
     border-radius: 2px;
     padding: 0 1px;
   }
+
+  /* ----- status --------------------------------------------------------------------- */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    height: 1.25rem;
+    padding: 0 0.4375rem;
+    border: 1px solid var(--line);
+    border-radius: 0.3125rem;
+    background: var(--surface-2);
+    color: var(--fg-muted);
+    font-size: 0.6875rem;
+    font-weight: 500;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .badge-ok {
+    color: var(--ok);
+    background: var(--ok-bg);
+    border-color: color-mix(in oklch, var(--ok) 35%, transparent);
+  }
+  .badge-warn {
+    color: var(--warn);
+    background: var(--warn-bg);
+    border-color: color-mix(in oklch, var(--warn) 35%, transparent);
+  }
+  .badge-danger {
+    color: var(--danger);
+    background: var(--danger-bg);
+    border-color: color-mix(in oklch, var(--danger) 35%, transparent);
+  }
+  .alert {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-radius: 0.5rem;
+    background: var(--surface);
+    font-size: 0.875rem;
+  }
+  .alert-danger {
+    border-color: color-mix(in oklch, var(--danger) 35%, var(--line));
+    border-left-color: var(--danger);
+    background: var(--danger-bg);
+  }
+  .alert-warn {
+    border-color: color-mix(in oklch, var(--warn) 35%, var(--line));
+    border-left-color: var(--warn);
+    background: var(--warn-bg);
+  }
+  .alert-ok {
+    border-color: color-mix(in oklch, var(--ok) 35%, var(--line));
+    border-left-color: var(--ok);
+    background: var(--ok-bg);
+  }
+  .empty {
+    padding: 2.5rem 1rem;
+    text-align: center;
+    border: 1px dashed var(--line-strong);
+    border-radius: 0.625rem;
+  }
+  .empty-title {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--fg);
+  }
+  .empty-hint {
+    margin-top: 0.375rem;
+    font-size: 0.75rem;
+    color: var(--fg-muted);
+  }
+  .toast {
+    padding: 0.5rem 0.875rem;
+    border: 1px solid var(--line);
+    border-left-width: 3px;
+    border-left-color: var(--ok);
+    border-radius: 0.5rem;
+    background: var(--surface);
+    box-shadow: var(--shadow-md);
+    font-size: 0.8125rem;
+  }
+  .toast-err {
+    border-left-color: var(--danger);
+    color: var(--danger);
+  }
+  .toast-info {
+    border-left-color: var(--line-strong);
+    color: var(--fg-muted);
+  }
+
+  /* ----- tables --------------------------------------------------------------------- */
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 0.5rem;
+  }
+  .table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.75rem;
+  }
+  .table thead th {
+    padding: 0.5rem 0.75rem;
+    background: var(--surface-2);
+    border-bottom: 1px solid var(--line);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    text-align: left;
+    color: var(--fg-muted);
+    white-space: nowrap;
+  }
+  .table tbody td {
+    padding: 0.625rem 0.75rem;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+    line-height: 1.45;
+  }
+  .table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+  .table tbody tr:hover td {
+    background: color-mix(in oklch, var(--surface-2) 60%, transparent);
+  }
+  .table-dense tbody td {
+    padding: 0.4375rem 0.75rem;
+  }
+
+  /* ----- shell ---------------------------------------------------------------------- */
+  .app-side {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+  }
+  .app-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    height: 3.25rem;
+    padding: 0 1rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
+  .app-nav {
+    padding: 0 0.5rem 0.5rem;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .app-nav ul,
+  .app-nav .nav-list {
+    display: flex;
+    gap: 0.125rem;
+  }
+  .app-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+    padding: 0.5rem 0.75rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.75rem;
+    color: var(--fg-faint);
+  }
+  .app-foot-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    margin-left: auto;
+  }
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    height: 2rem;
+    padding: 0 0.625rem;
+    border-radius: 0.375rem;
+    font-size: 0.8125rem;
+    color: var(--fg-muted);
+    white-space: nowrap;
+    transition:
+      background-color 150ms ease,
+      color 150ms ease;
+  }
+  .nav-item:hover {
+    background: var(--surface-2);
+    color: var(--fg);
+  }
+  .nav-item.is-active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .nav-key {
+    display: none;
+    margin-left: auto;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    color: var(--fg-faint);
+  }
+  .nav-item.is-active .nav-key {
+    color: color-mix(in oklch, var(--accent) 70%, var(--fg-faint));
+  }
+  .mock-notice {
+    padding: 0.5rem 0.625rem;
+    border: 1px solid color-mix(in oklch, var(--warn) 45%, var(--line));
+    border-radius: 0.5rem;
+    background: var(--warn-bg);
+    color: var(--warn);
+    line-height: 1.35;
+  }
+  @media (min-width: 768px) {
+    .app-side {
+      height: 100%;
+      border-bottom: 0;
+      border-right: 1px solid var(--line);
+    }
+    .app-brand {
+      border-bottom: 1px solid var(--line);
+    }
+    .app-nav {
+      flex: 1;
+      padding: 0.5rem;
+      overflow-x: visible;
+    }
+    .app-nav ul,
+    .app-nav .nav-list {
+      flex-direction: column;
+    }
+    .app-foot {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+      padding: 0.75rem;
+    }
+    .app-foot-controls {
+      margin-left: 0;
+    }
+    .nav-key {
+      display: inline;
+    }
+  }
+
+  .row-selected {
+    background: var(--accent-soft);
+    box-shadow: inset 2px 0 0 var(--accent);
+  }
+  .scrim {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    background: var(--scrim);
+    display: flex;
+    padding: 1rem;
+  }
+  .dialog {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 0.75rem;
+    box-shadow: var(--shadow-md);
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+
   /* ---------------------------------------------------------------------------------------
      Simple mode. Same tokens, less chrome: one soft surface per object instead of a border
      around everything, so what is left carries the hierarchy on its own.
@@ -322,26 +795,35 @@
     align-items: center;
     gap: 0.75rem;
     padding: 0.85rem 1rem;
-    border: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
+    border: 1px solid var(--line);
     border-radius: 0.75rem;
     background: var(--surface);
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow-sm);
+    transition:
+      border-color 150ms ease,
+      box-shadow 150ms ease;
   }
   .ask-field:focus-within {
-    border-color: var(--line-strong);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
   .chip-quiet {
-    padding: 0.3rem 0.75rem;
-    border: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
+    height: 2rem;
+    padding: 0 0.875rem;
+    border: 1px solid var(--line);
     border-radius: 999px;
-    background: transparent;
+    background: var(--surface);
     color: var(--fg-muted);
     font-size: 0.8125rem;
-    cursor: pointer;
+    transition:
+      border-color 150ms ease,
+      color 150ms ease,
+      background-color 150ms ease;
   }
   .chip-quiet:hover {
     color: var(--fg);
     border-color: var(--line-strong);
+    background: var(--surface-2);
   }
   /* The wash is the ring's own hue, passed in as --wash: the colour on the answer means
      which tier answered, and is not decoration. */
@@ -350,12 +832,12 @@
     flex-direction: column;
     gap: 0.85rem;
     padding: 1.4rem 1.5rem 1.1rem;
-    border: 1px solid color-mix(in oklch, var(--line) 60%, transparent);
+    border: 1px solid var(--line);
     border-radius: 0.875rem;
     background:
       radial-gradient(120% 140% at 100% 0%, var(--wash, transparent) 0%, transparent 62%),
       var(--surface);
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow-sm);
   }
   .source-row,
   .note-card {
@@ -363,8 +845,10 @@
     text-align: left;
     background: transparent;
     border: 1px solid transparent;
-    cursor: pointer;
     color: inherit;
+    transition:
+      background-color 150ms ease,
+      border-color 150ms ease;
   }
   .source-row {
     gap: 0.75rem;
@@ -373,7 +857,7 @@
   }
   .source-row:hover {
     background: var(--surface);
-    border-color: color-mix(in oklch, var(--line) 60%, transparent);
+    border-color: var(--line);
   }
   .note-card {
     flex-direction: column;
@@ -382,18 +866,11 @@
     padding: 0.9rem 1rem;
     border-radius: 0.75rem;
     background: var(--surface);
-    border-color: color-mix(in oklch, var(--line) 60%, transparent);
+    border-color: var(--line);
+    box-shadow: var(--shadow-sm);
   }
   .note-card:hover {
     border-color: var(--line-strong);
-  }
-  .row-selected {
-    background: var(--surface-2);
-    box-shadow: inset 3px 0 0 var(--accent);
-  }
-  .scroll-thin {
-    scrollbar-width: thin;
-    scrollbar-color: var(--line-strong) transparent;
   }
   .prose-note {
     line-height: 1.6;

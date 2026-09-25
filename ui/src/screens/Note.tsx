@@ -61,22 +61,24 @@ export function NoteScreen({ route }: { route: Route }) {
   );
 
   return (
-    <div className="grid h-full grid-cols-1 md:grid-cols-[19rem_1fr]">
+    <div className="grid h-full grid-cols-1 md:grid-cols-[20rem_minmax(0,1fr)]">
       <aside className="border-r flex flex-col min-h-0 max-h-[40vh] md:max-h-none">
         <div className="p-3 border-b space-y-2">
           <div className="flex gap-1.5">
             <input ref={filterRef} className="input w-full min-w-0" placeholder={t.notes.filterPlaceholder} value={filter} onChange={(e) => setFilter(e.target.value)} aria-label={t.notes.filterAria} />
-            <button className="btn btn-sm shrink-0" onClick={() => navigate(href("notes", null, { new: 1 }))}>
+            <button className="btn shrink-0" onClick={() => navigate(href("notes", null, { new: 1 }))}>
               + {t.newNote.button}
             </button>
           </div>
-          <div className="flex gap-1 flex-wrap">
-            {([null, 0, 1, 2, 3, 4] as Array<Ring | null>).map((r) => (
-              <button key={String(r)} className={`btn btn-sm ${ring === r ? "btn-primary" : ""}`} onClick={() => setRing(r)} style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}>
-                {r === null ? t.common.all : `r${r}`}
-              </button>
-            ))}
-            <select className="input h-6 text-xs ml-auto" value={kind} onChange={(e) => setKind(e.target.value as NoteKind | "")} aria-label={t.notes.kindAria}>
+          <div className="flex gap-2 flex-wrap items-center">
+            <div className="seg" role="group" aria-label={t.common.ring}>
+              {([null, 0, 1, 2, 3, 4] as Array<Ring | null>).map((r) => (
+                <button key={String(r)} className={`seg-item ${ring === r ? "is-on" : ""}`} onClick={() => setRing(r)} aria-pressed={ring === r} style={r !== null && ring !== r ? { color: `var(--ring-${r})` } : undefined}>
+                  {r === null ? t.common.all : `r${r}`}
+                </button>
+              ))}
+            </div>
+            <select className="input h-7 text-xs ml-auto" value={kind} onChange={(e) => setKind(e.target.value as NoteKind | "")} aria-label={t.notes.kindAria}>
               <option value="">{t.notes.anyKind}</option>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
@@ -282,7 +284,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
           </div>
         </header>
 
-        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-3 panel p-3">
+        <div className="mt-4 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-x-4 gap-y-3 panel-inset p-4">
           <Field label={t.note.field.id}>
             <code className="text-xs">{f.id}</code>
           </Field>
@@ -309,7 +311,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
             {f.tags?.length ? (
               <span className="flex flex-wrap gap-1">
                 {f.tags.map((tag) => (
-                  <a key={tag} href={href("notes", null, { q: tag })} className="inline-flex h-5 px-1.5 rounded bg-surface-2 text-xs text-fg-muted hover:text-fg">
+                  <a key={tag} href={href("notes", null, { q: tag })} className="badge hover:text-fg">
                     {tag}
                   </a>
                 ))}
@@ -425,9 +427,9 @@ function ForgetDialog({ report, onCancel, onConfirm }: { report: ForgetReport; o
   const t = useT();
   const r = report.removed;
   return (
-    <div className="fixed inset-0 z-40 bg-bg/70 flex items-center justify-center p-4" role="dialog" aria-modal aria-label={t.note.forgetDialog.aria}>
-      <div className="panel shadow-panel w-[min(30rem,100%)]">
-        <header className="px-4 h-10 border-b flex items-center gap-2">
+    <div className="scrim items-center justify-center" role="dialog" aria-modal aria-label={t.note.forgetDialog.aria}>
+      <div className="dialog w-[min(30rem,100%)]">
+        <header className="section-head justify-start">
           <Pill>{t.note.forgetDialog.dryRun}</Pill>
           <h2 className="text-sm font-semibold">{t.note.forgetDialog.title(report.note.name)}</h2>
         </header>
