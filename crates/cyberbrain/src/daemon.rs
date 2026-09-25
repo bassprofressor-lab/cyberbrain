@@ -1,4 +1,5 @@
-//! A resident process that keeps the model loaded and answers `recall` over a local socket.
+//! A resident process that keeps the model loaded and answers `recall`, `write` and a
+//! `scan` with work to do over a local socket.
 //!
 //! Why it exists (measured 2026-09-25): after mapping the weights and caching their digest
 //! (SPEC §6.5), a CLI `recall` still took 1.4 s, and 1.08 s of that was the tokenizers
@@ -29,9 +30,9 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const SOCKET: &str = "daemon.sock";
-/// 2: `op` and `write` (2026-09-25). A daemon of another version refuses the request
-/// before doing anything, and the client does it itself.
-const PROTOCOL: u32 = 2;
+/// 2: `op` and `write` (2026-09-25). 3: `scan` (2026-09-25). A daemon of another version
+/// refuses the request before doing anything, and the client does it itself.
+const PROTOCOL: u32 = 3;
 /// A path longer than this does not fit `sockaddr_un` on every platform.
 const MAX_SOCKET_PATH: usize = 100;
 /// The server reads at most this much of a request line; a longer body is written locally.
@@ -56,6 +57,10 @@ enum Op {
         bereich: Option<String>,
     },
     Write(WriteArgs),
+    Scan {
+        full: bool,
+        dry_run: bool,
+    },
 }
 
 /// A `write` as the CLI builds it: no operator choice, no expected timestamp, nothing
@@ -166,6 +171,7 @@ pub fn recall(
 /// write). So the only way back to the local path is a daemon that said it did nothing, or
 /// none at all. A request that went out and got no readable answer is an error.
 pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Result<Answer> {
+    let what = format!("the write of {}", req.name);
     // `supersedes` is not part of the protocol's write, so such a write stays local rather
     // than arriving at the daemon without it.
     if req.body.len() > MAX_REQUEST / 2
@@ -187,7 +193,27 @@ pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Resu
         force: req.force,
         dry_run: req.dry_run,
     });
-    match send(root, actor, op, json) {
+    once(
+        send(root, actor, op, json),
+        &what,
+        "Check with `cyberbrain recall` before writing it again",
+    )
+}
+
+/// Asks the store's daemon to carry out a scan. The same rule as [`write`]: a scan that
+/// may have run there is not run again here, so it is never done twice and never
+/// reported twice in the audit log.
+pub fn scan(root: &Path, actor: &Actor, full: bool, dry_run: bool, json: bool) -> Result<Answer> {
+    once(
+        send(root, actor, Op::Scan { full, dry_run }, json),
+        "the scan",
+        "`cyberbrain doctor` says whether the index still differs from the files",
+    )
+}
+
+/// The answer to a request that must not be carried out twice.
+fn once(sent: Option<Sent>, what: &str, check: &str) -> Result<Answer> {
+    match sent {
         None => Ok(Answer::Local),
         Some(Sent::Answered(Response {
             code: Some(code),
@@ -201,9 +227,8 @@ pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Resu
         }),
         Some(Sent::Answered(_)) => Ok(Answer::Local),
         Some(Sent::Lost) => Err(Error::Index(format!(
-            "the write of {} went to the background daemon, which did not answer; it may or \
-             may not have been written. Check with `cyberbrain recall` before writing it again",
-            req.name
+            "{what} went to the background daemon, which did not answer; it may or may not \
+             have happened. {check}"
         ))),
     }
 }
@@ -246,8 +271,14 @@ mod client {
             start(root);
             return None;
         };
-        // Longer than a recall with its contradiction budget, shorter than patience.
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(60)));
+        // Longer than a recall with its contradiction budget, shorter than patience. A scan
+        // embeds every changed note, a `--full` one the whole store (5.5 s for 1,495 notes,
+        // measured); it gets ten minutes before "it may or may not have happened".
+        let wait = match req.op {
+            Op::Scan { .. } => 600,
+            _ => 60,
+        };
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(wait)));
         let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
         let mut line = serde_json::to_string(req).ok()?;
         line.push('\n');
@@ -573,6 +604,10 @@ mod server {
                         error,
                     }),
                 }
+            }
+            Op::Scan { full, dry_run } => {
+                let report = app.scan(crate::app::ScanOptions { full, dry_run })?;
+                Ok((rendered(&report, req.json, crate::render::scan)?, 0))
             }
         }
     }

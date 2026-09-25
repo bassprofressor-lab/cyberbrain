@@ -348,6 +348,27 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
     let app = App::open(cli.store.as_deref(), cli_actor())?;
     match cli.command {
         Command::Scan { full, dry_run } => {
+            // A scan with something to embed loads the model, which the daemon already has
+            // (`daemon.rs`); one with nothing to do is answered here in milliseconds. Like a
+            // write, a scan that reached the daemon is never repeated here.
+            if app.scan_has_work(full)? {
+                match daemon::scan(app.root(), &cli_actor(), full, dry_run, out.json)? {
+                    daemon::Answer::Done {
+                        stdout,
+                        stderr,
+                        code,
+                    } => {
+                        if let Some(text) = stdout.filter(|_| !out.quiet) {
+                            out.print(&text);
+                        }
+                        if let Some(line) = stderr {
+                            eprintln!("{line}");
+                        }
+                        return Ok(code);
+                    }
+                    daemon::Answer::Local => {}
+                }
+            }
             let r = app.scan(ScanOptions { full, dry_run })?;
             out.emit(&r, render::scan)?;
         }

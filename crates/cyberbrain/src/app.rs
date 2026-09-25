@@ -1418,6 +1418,25 @@ impl App {
         Ok(report)
     }
 
+    /// Whether `scan` would change the index, decided without loading the model: a full
+    /// rebuild, a file that differs from the index or is gone, or vectors that are missing
+    /// or from another model. The CLI sends such a scan to the daemon, which has the
+    /// model loaded, and runs a scan with nothing to do itself.
+    pub fn scan_has_work(&self, full: bool) -> Result<bool> {
+        if full {
+            return Ok(true);
+        }
+        let (not_indexed, changed, gone, _) = self.staleness()?;
+        if not_indexed + changed + gone > 0 {
+            return Ok(true);
+        }
+        let Some(current) = self.embedding_profile() else {
+            return Ok(false);
+        };
+        let stats = lock_index(&self.index)?.stats()?;
+        Ok(stats.vectors < stats.blocks || stats.embedding.as_ref() != Some(&current))
+    }
+
     /// The comparison half of `scan`, for `doctor` and `status`: how many files differ
     /// from the index. Reads everything, writes nothing.
     fn staleness(&self) -> Result<(usize, usize, usize, Vec<SkippedFile>)> {

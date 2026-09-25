@@ -2676,3 +2676,130 @@ fn write_supersedes_marks_the_old_note_without_touching_it() {
 fn text_of(out: &std::process::Output) -> String {
     text(out)
 }
+
+// ---------------------------------------------------------------------------------------
+// scan through the daemon (daemon.rs protocol 3, 2026-09-25)
+
+/// A stand-in daemon on the store's socket: answers each request with `answer` (or with
+/// nothing, closing the connection, when `answer` is `None`) and keeps the request lines.
+#[cfg(unix)]
+fn fake_daemon(
+    cb: &Cb,
+    answer: Option<&'static str>,
+) -> std::sync::Arc<std::sync::Mutex<Vec<String>>> {
+    use std::io::{BufRead, BufReader, Write};
+    let listener = std::os::unix::net::UnixListener::bind(cb.store.join("daemon.sock")).unwrap();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut line = String::new();
+            let _ = BufReader::new(s.try_clone().unwrap()).read_line(&mut line);
+            log.lock().unwrap().push(line);
+            if let Some(a) = answer {
+                let _ = s.write_all(format!("{a}\n").as_bytes());
+            }
+        }
+    });
+    seen
+}
+
+/// Makes the note's file differ from the index, so the next scan has work to do.
+#[cfg(unix)]
+fn dirty(cb: &Cb, name: &str) {
+    let p = cb.note_path("2", name);
+    let text = std::fs::read_to_string(&p).unwrap();
+    std::fs::write(&p, format!("{text}\nEin Nachtrag.\n")).unwrap();
+}
+
+/// Calibrated against the state before: scan never asked the daemon, so the fake one saw
+/// nothing and the CLI printed its own report.
+#[cfg(unix)]
+#[test]
+fn a_scan_with_changes_goes_to_the_daemon_and_one_without_stays_here() {
+    let cb = Cb::new();
+    cb.write("2", "stand", "wolfpack ist abgeschaltet.");
+    let seen = fake_daemon(
+        &cb,
+        Some(r#"{"code":0,"stdout":"from the daemon\n","stderr":null,"reason":null}"#),
+    );
+    // Nothing changed: answered here, the daemon is not asked.
+    let quiet = with_daemon(&cb).args(["scan"]).output().unwrap();
+    assert!(quiet.status.success(), "{}", text(&quiet));
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "{:?}",
+        seen.lock().unwrap()
+    );
+    assert!(!String::from_utf8_lossy(&quiet.stdout).contains("from the daemon"));
+
+    dirty(&cb, "stand");
+    let out = with_daemon(&cb).args(["scan"]).output().unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "from the daemon\n");
+    let lines = seen.lock().unwrap().clone();
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    let req: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(req["v"], 3);
+    assert_eq!(req["op"]["op"], "scan");
+    assert_eq!(req["op"]["full"], false);
+}
+
+/// A scan that went out and got no answer may have happened: it is not run a second time
+/// here. Calibrated against the state before: the scan ran locally and exited 0.
+#[cfg(unix)]
+#[test]
+fn a_scan_the_daemon_may_have_done_is_not_repeated_here() {
+    let cb = Cb::new();
+    cb.write("2", "stand", "wolfpack ist abgeschaltet.");
+    dirty(&cb, "stand");
+    let seen = fake_daemon(&cb, None);
+    let out = with_daemon(&cb).args(["--json", "scan"]).output().unwrap();
+    assert_ne!(out.status.code(), Some(0), "{}", text(&out));
+    assert!(text(&out).contains("may or may not"), "{}", text(&out));
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    // Not scanned here: the index still holds the old text.
+    let hits = cb.ok(&["recall", "Nachtrag"]);
+    assert_eq!(hits["hits"].as_array().map(Vec::len), Some(0), "{hits:#}");
+}
+
+/// Through the real daemon, a scan prints what the local one prints and exits the same.
+#[cfg(unix)]
+#[test]
+fn a_scan_through_the_daemon_is_the_scan_the_cli_would_have_done() {
+    let setup = || {
+        let cb = Cb::new();
+        cb.install_model(7);
+        cb.write("2", "stand", "postgres moved pgdata");
+        cb.write("2", "anderes", "redis maxmemory config");
+        dirty(&cb, "stand");
+        std::fs::remove_file(cb.note_path("2", "anderes")).unwrap();
+        cb
+    };
+    let strip = |o: &Output| -> Value {
+        let mut v: Value = serde_json::from_slice(&o.stdout).unwrap_or(Value::Null);
+        v.as_object_mut().map(|m| m.remove("elapsed_ms"));
+        v
+    };
+    let local = setup();
+    let here = local.run(&["--json", "scan"]);
+
+    let cb = setup();
+    let sock = cb.store.join("daemon.sock");
+    let mut daemon = with_daemon(&cb)
+        .args(["daemon", "--idle-secs", "30"])
+        .spawn()
+        .unwrap();
+    wait_for("the socket", || sock.exists());
+    let there = with_daemon(&cb).args(["--json", "scan"]).output().unwrap();
+    assert_eq!(there.status.code(), here.status.code(), "{}", text(&there));
+    assert_eq!(strip(&there), strip(&here));
+    assert_eq!(strip(&there)["reindexed_changed"], 1, "{:#}", strip(&there));
+    assert_eq!(strip(&there)["dropped_missing_file"][0], "anderes");
+    // And the index behind it is the one the CLI sees next.
+    let hits = cb.ok(&["recall", "Nachtrag"]);
+    assert_eq!(hits["hits"][0]["note_name"], "stand", "{hits:#}");
+    let _ = daemon.kill();
+    let _ = daemon.wait();
+}
