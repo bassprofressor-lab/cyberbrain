@@ -48,7 +48,10 @@ running it against the broken state first.
 
 **Measure claims, do not argue them.** "This is faster" needs two numbers. There is a
 retrieval evaluation harness in [`scripts/recall-eval.py`](scripts/recall-eval.py) for changes
-to search quality; a change that cannot be measured with it should say why.
+to search quality, and [`scripts/retrieval-bench.py`](scripts/retrieval-bench.py) for a
+reproducible lexical-against-hybrid run on the public LongMemEval-S set with latency (how to run
+it, and the numbers so far, are in [`eval-local/ERGEBNISSE.md`](eval-local/ERGEBNISSE.md)); a
+change that cannot be measured with either should say why.
 
 **Comments say why, not what.** The code says what it does. The comment exists for the
 decision behind it, the thing that was tried and did not work, or the trap the next reader is
