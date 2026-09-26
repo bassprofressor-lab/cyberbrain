@@ -541,6 +541,8 @@ fn run_write(
                         retention: req.retention.clone().flatten(),
                         supersedes: Vec::new(),
                         superseded_by: None,
+                        valid_from: None,
+                        invalid_at: None,
                         pii: w.pii,
                     },
                     body,
@@ -637,6 +639,8 @@ pub async fn put_note(
             choice: None,
             expected_updated: parsed.expected_updated,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: dry.is_on(),
         };
@@ -694,6 +698,8 @@ pub async fn post_note(
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: dry.is_on(),
         };

@@ -218,6 +218,8 @@ pub struct RecallRequest {
     pub ring: Option<Ring>,
     /// Restrict to notes of this department, team or domain.
     pub bereich: Option<String>,
+    /// Judge validity as of this moment instead of now (`recall --stand`).
+    pub at: Option<jiff::Timestamp>,
 }
 
 #[derive(Debug, Clone)]
@@ -240,6 +242,11 @@ pub struct WriteRequest {
     pub retention: Option<Option<String>>,
     /// Names of notes this one replaces. `None` keeps what the note has; `Some` sets it.
     pub supersedes: Option<Vec<String>>,
+    /// From when the note holds. Three states, like `bereich`: `None` keeps what the note
+    /// has, `Some(None)` removes it, `Some(Some(t))` sets it.
+    pub valid_from: Option<Option<jiff::Timestamp>>,
+    /// From when the note no longer holds. Three states, like `valid_from`.
+    pub invalid_at: Option<Option<jiff::Timestamp>>,
     /// Write despite findings, stamping `flagged`. The CLI's `--force`.
     pub force: bool,
     /// The operator's answer to a hold, when the caller already asked (the UI, §8.1).
@@ -349,6 +356,38 @@ pub struct ReviewReport {
         serialize_with = "cyberbrain_core::path_serde::slash_opt"
     )]
     pub path: Option<PathBuf>,
+    pub blocks: usize,
+    pub vectors: usize,
+    pub dry_run: bool,
+    pub audit_preview: Vec<String>,
+}
+
+/// `cyberbrain invalidate`: declare after the fact that a note stopped holding.
+#[derive(Debug, Clone)]
+pub struct InvalidateRequest {
+    pub name: String,
+    /// From when it no longer holds. `None` is now.
+    pub at: Option<jiff::Timestamp>,
+    /// Take a declaration back instead: the note holds again, open-ended.
+    pub clear: bool,
+    /// The note that replaces it, written into its head as `superseded_by`.
+    pub by: Option<String>,
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct InvalidatedNote {
+    pub id: NoteId,
+    pub name: String,
+    pub ring: Ring,
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+    pub path: PathBuf,
+    /// What the head says now; `None` after `--clear`.
+    pub invalid_at: Option<jiff::Timestamp>,
+    /// What it said before, so a mistaken date can be put back by hand.
+    pub previous_invalid_at: Option<jiff::Timestamp>,
+    pub superseded_by: Option<String>,
+    pub updated: jiff::Timestamp,
     pub blocks: usize,
     pub vectors: usize,
     pub dry_run: bool,
@@ -1489,6 +1528,7 @@ impl App {
             // the ring 0 note — has no such context, and gets them. `--ring 0|1` always
             // searches them.
             skip_resident: matches!(self.actor, Actor::Agent(_)),
+            at: req.at,
         };
         let embedder_state = self.embedder();
         let mut result = {
@@ -2107,6 +2147,15 @@ impl App {
             superseded_by: existing
                 .as_ref()
                 .and_then(|n| n.front.superseded_by.clone()),
+            // Absent keeps what the note has; an explicit `Some(None)` removes it.
+            valid_from: match req.valid_from {
+                None => existing.as_ref().and_then(|n| n.front.valid_from),
+                Some(v) => v,
+            },
+            invalid_at: match req.invalid_at {
+                None => existing.as_ref().and_then(|n| n.front.invalid_at),
+                Some(v) => v,
+            },
             pii,
         };
         let note = Note {
@@ -2151,6 +2200,87 @@ impl App {
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         }))
+    }
+
+    /// Declare that a note stopped holding at a moment (or, with `clear`, that it holds
+    /// again). Only the head changes: the body is not scanned again, because it is not
+    /// rewritten. Everything else is the write path's — the ring owner's guard, one
+    /// `note.write` row naming the operation and the bounds, and a reindex in the same
+    /// request, so the next recall already ranks the note down and says since when.
+    pub fn invalidate(&self, req: InvalidateRequest) -> Result<InvalidatedNote> {
+        let name = frontmatter::normalize_name(req.name.trim()).into_owned();
+        if let Some(by) = &req.by {
+            let by = frontmatter::normalize_name(by.trim());
+            let why = if by == name {
+                Some("is the note itself")
+            } else {
+                frontmatter::validate_name(&by).err()
+            };
+            if let Some(why) = why {
+                return Err(Error::Frontmatter {
+                    path: PathBuf::from(format!("{name}.md")),
+                    reason: format!("replaced by `{by}`: {why}"),
+                });
+            }
+        }
+        let w = self.writers(req.dry_run);
+        let policy = w.policy.get();
+        let existing = self.store.read(&name)?;
+        self.refuse_resident_unless_operator(
+            &name,
+            existing.front.ring,
+            Some(&existing),
+            req.dry_run,
+        )?;
+
+        let now = jiff::Timestamp::now();
+        let mut front = existing.front.clone();
+        front.invalid_at = if req.clear {
+            None
+        } else {
+            Some(req.at.unwrap_or(now))
+        };
+        if let Some(by) = &req.by {
+            front.superseded_by = Some(frontmatter::normalize_name(by.trim()).into_owned());
+        }
+        front.updated = now;
+        let note = Note {
+            front,
+            body: existing.body.clone(),
+            path: PathBuf::new(),
+        };
+        // Refuses an `invalid_at` that is not after the note's `valid_from`.
+        let bytes = frontmatter::render(&note.front, &note.body)?.len();
+        let path = w.notes.write(&note)?;
+        let note = Note { path, ..note };
+        let op = if req.clear {
+            "revalidate"
+        } else {
+            "invalidate"
+        };
+        if let Err(e) = policy.record_write_as(&note.front, bytes, Some(op)) {
+            Self::undo_note_write(&w, &note, Some(&existing), &e);
+            return Err(e);
+        }
+        let (blocks, _) = blocks_of(&note, MAX_BLOCK_TOKENS);
+        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+        self.declare_profile(&w)?;
+        let vectors = self.embed_blocks(&texts)?;
+        let outcome = w.index.upsert_note(&note, &blocks, vectors.as_deref())?;
+        Ok(InvalidatedNote {
+            id: note.front.id,
+            name,
+            ring: note.front.ring,
+            path: note.path,
+            invalid_at: note.front.invalid_at,
+            previous_invalid_at: existing.front.invalid_at,
+            superseded_by: note.front.superseded_by,
+            updated: now,
+            blocks: outcome.blocks,
+            vectors: outcome.vectors,
+            dry_run: req.dry_run,
+            audit_preview: w.policy.preview(),
+        })
     }
 
     /// Write the `manifest.json` a model artefact needs, from the files themselves.
@@ -2299,6 +2429,8 @@ impl App {
                 retention: req.retention.flatten(),
                 supersedes: req.supersedes.clone().unwrap_or_default(),
                 superseded_by: None,
+                valid_from: req.valid_from.flatten(),
+                invalid_at: req.invalid_at.flatten(),
                 pii,
             },
             body,
@@ -3198,6 +3330,9 @@ impl App {
             let incoming_created = sent.as_ref().map(|f| f.created).unwrap_or(incoming_stamp);
             let incoming_tags = sent.as_ref().map(|f| f.tags.clone()).unwrap_or_default();
             let incoming_retention = sent.as_ref().and_then(|f| f.retention.clone());
+            // Validity travels with the note: an expiry declared on one machine that
+            // arrived here without it would make this machine's recall say the opposite.
+            let incoming_validity = sent.as_ref().map(|f| (f.valid_from, f.invalid_at));
 
             let taken = serde_json::json!({
                 "name": name,
@@ -3219,6 +3354,8 @@ impl App {
                     choice: None,
                     expected_updated: None,
                     supersedes: None,
+                    valid_from: incoming_validity.map(|v| v.0),
+                    invalid_at: incoming_validity.map(|v| v.1),
                     arriving: Some(Arriving {
                         id: incoming_id,
                         created: incoming_created,
@@ -4277,6 +4414,8 @@ mod ring_owner_tests {
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: false,
         }
@@ -4362,6 +4501,8 @@ mod recall_check_tests {
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: false,
         })
@@ -4502,6 +4643,8 @@ mod duplicate_tests {
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: false,
         })

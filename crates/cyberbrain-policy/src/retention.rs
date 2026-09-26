@@ -258,6 +258,8 @@ mod tests {
             retention: retention.map(str::to_owned),
             supersedes: Vec::new(),
             superseded_by: None,
+            valid_from: None,
+            invalid_at: None,
             pii: PiiState::None,
         }
     }

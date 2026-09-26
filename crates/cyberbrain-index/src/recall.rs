@@ -34,6 +34,11 @@ pub struct RecallOptions {
     /// already holds. A block of another ring whose text is the same as a resident block's
     /// is left out with it.
     pub skip_resident: bool,
+    /// The moment validity is judged at: `invalid_at`, `valid_from` and supersession are
+    /// read against it. `None` is now. Set, it answers "what held on that day"; notes are
+    /// not filtered by when they were written, since a note from September may well say
+    /// what held in August.
+    pub at: Option<jiff::Timestamp>,
 }
 
 impl Default for RecallOptions {
@@ -46,6 +51,7 @@ impl Default for RecallOptions {
             bereich: None,
             min_cosine: 0.0,
             skip_resident: false,
+            at: None,
         }
     }
 }
@@ -168,12 +174,20 @@ impl Index {
             }
         }
 
-        // 4. Ring weight, then recency, then supersession. The ring is the citation's first
-        // component, so no lookup; `updated` and the note name need one, and only for the
-        // candidates that survived fusion.
+        // 4. Ring weight, then recency, then whether the note still holds. The ring is the
+        // citation's first component, so no lookup; `updated`, the note name and its
+        // validity need one, and only for the candidates that survived fusion.
         let stand = self.updated_by_citation(fused.keys().copied())?;
-        let replaced = self.superseded()?;
         let now = jiff::Timestamp::now();
+        let at = opts.at.unwrap_or(now);
+        if let Some(a) = opts.at {
+            caveats.push(format!(
+                "validity judged as of {a}: `invalid_at`, `valid_from` and supersession are \
+                 read against that moment; notes written later are not left out"
+            ));
+        }
+        let replaced = self.superseded_at(at)?;
+        let mut outdated: HashMap<String, Outdated> = HashMap::new();
         let mut ranked: Vec<(String, f32)> = fused
             .into_iter()
             .map(|(cit, s)| {
@@ -181,18 +195,25 @@ impl Index {
                     .parse::<cyberbrain_core::Citation>()
                     .map(|c| c.ring)
                     .unwrap_or(Ring::External);
-                let (recency, succession) = match stand.get(cit) {
-                    Some((u, name)) => (
-                        u.map(|u| recency_weight(u, now)).unwrap_or(1.0),
-                        if replaced.contains_key(name) {
-                            SUPERSEDED_WEIGHT
-                        } else {
-                            1.0
-                        },
-                    ),
+                let (recency, stale) = match stand.get(cit) {
+                    Some(t) => {
+                        let o = Outdated {
+                            superseded_by: replaced.get(&t.name).cloned(),
+                            valid_from: t.valid_from.filter(|f| *f > at),
+                            invalid_at: t.invalid_at.filter(|i| *i <= at),
+                        };
+                        // One weight however many reasons: a note that is both replaced and
+                        // expired is not twice as wrong, and ×0.25 would bury the history
+                        // somebody may have asked for.
+                        let w = if o.any() { OUTDATED_WEIGHT } else { 1.0 };
+                        if o.any() {
+                            outdated.insert(cit.to_string(), o);
+                        }
+                        (t.updated.map(|u| recency_weight(u, now)).unwrap_or(1.0), w)
+                    }
                     None => (1.0, 1.0),
                 };
-                (cit.to_string(), s * ring.weight() * recency * succession)
+                (cit.to_string(), s * ring.weight() * recency * stale)
             })
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
@@ -209,6 +230,7 @@ impl Index {
             .ix()?;
         let mut cands: Vec<Candidate> = Vec::with_capacity(ranked.len());
         for (cit, score) in ranked {
+            let o = outdated.remove(&cit).unwrap_or_default();
             let (id, name, ring, text, updated): (String, String, i64, String, String) = stmt
                 .query_row([&cit], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -222,7 +244,9 @@ impl Index {
                         .map_err(|e| Error::Index(format!("stored note id {id:?}: {e}")))?,
                     ring: Ring::try_from(ring as u8)?,
                     updated: updated.parse().ok(),
-                    superseded_by: replaced.get(&name).cloned(),
+                    superseded_by: o.superseded_by,
+                    valid_from: o.valid_from,
+                    invalid_at: o.invalid_at,
                     note_name: name,
                     score,
                     text,
@@ -259,26 +283,40 @@ impl Index {
         })
     }
 
-    /// `updated` and name of the note behind each citation, for the recency weight and
-    /// supersession. One prepared statement for the whole candidate set.
+    /// `updated`, name and validity of the note behind each citation, for the recency
+    /// weight, supersession and validity. One prepared statement for the whole candidate set.
     fn updated_by_citation<'a>(
         &self,
         citations: impl Iterator<Item = &'a str>,
-    ) -> Result<HashMap<String, (Option<jiff::Timestamp>, String)>> {
+    ) -> Result<HashMap<String, NoteTimes>> {
         let mut out = HashMap::new();
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT n.updated, n.name FROM blocks b JOIN notes n ON n.id = b.note_id \
-                 WHERE b.citation = ?1",
+                "SELECT n.updated, n.name, n.valid_from, n.invalid_at FROM blocks b \
+                 JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
             )
             .ix()?;
+        let moment = |s: Option<String>| s.and_then(|s| s.parse::<jiff::Timestamp>().ok());
         for cit in citations {
             match stmt.query_row([cit], |r| {
-                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
             }) {
-                Ok((stamp, name)) => {
-                    out.insert(cit.to_string(), (stamp.parse().ok(), name));
+                Ok((stamp, name, from, until)) => {
+                    out.insert(
+                        cit.to_string(),
+                        NoteTimes {
+                            updated: stamp.parse().ok(),
+                            name,
+                            valid_from: moment(from),
+                            invalid_at: moment(until),
+                        },
+                    );
                 }
                 Err(rusqlite::Error::QueryReturnedNoRows) => {}
                 Err(e) => return Err(Error::Index(format!("updated of {cit}: {e}"))),
@@ -291,24 +329,43 @@ impl Index {
     /// `superseded_by` on the old note and `supersedes` on the new one. Where two notes
     /// claim the same one, the first by name wins, so the answer does not depend on order.
     pub fn superseded(&self) -> Result<HashMap<String, String>> {
+        self.superseded_at(jiff::Timestamp::now())
+    }
+
+    /// As [`superseded`](Self::superseded), as of `at`: a replacement counts from the
+    /// successor's `valid_from`, or, without one, from when the successor was written. A
+    /// successor the index does not hold counts always, as it did before validity existed.
+    pub fn superseded_at(&self, at: jiff::Timestamp) -> Result<HashMap<String, String>> {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT name AS old, superseded_by AS new FROM notes \
-                 WHERE superseded_by IS NOT NULL \
-                 UNION ALL \
-                 SELECT j.value, n.name FROM notes n, json_each(n.supersedes) j \
-                 WHERE n.supersedes <> '[]' \
+                "SELECT p.old, p.new, s.valid_from, s.created FROM ( \
+                   SELECT name AS old, superseded_by AS new FROM notes \
+                   WHERE superseded_by IS NOT NULL \
+                   UNION ALL \
+                   SELECT j.value, n.name FROM notes n, json_each(n.supersedes) j \
+                   WHERE n.supersedes <> '[]' \
+                 ) p LEFT JOIN notes s ON s.name = p.new \
                  ORDER BY 1, 2",
             )
             .ix()?;
         let rows = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                ))
+            })
             .ix()?;
         let mut out = HashMap::new();
         for r in rows {
-            let (old, new) = r.ix()?;
-            if old != new {
+            let (old, new, from, created) = r.ix()?;
+            let since = from
+                .or(created)
+                .and_then(|s| s.parse::<jiff::Timestamp>().ok());
+            if old != new && since.is_none_or(|t| t <= at) {
                 out.entry(old).or_insert(new);
             }
         }
@@ -474,6 +531,33 @@ pub(crate) fn recency_weight(updated: jiff::Timestamp, now: jiff::Timestamp) -> 
     };
     1.0 - RECENCY_AMPLITUDE + 2.0 * RECENCY_AMPLITUDE * decay
 }
+
+/// When the note behind a candidate was written, and between which moments it holds.
+struct NoteTimes {
+    updated: Option<jiff::Timestamp>,
+    name: String,
+    valid_from: Option<jiff::Timestamp>,
+    invalid_at: Option<jiff::Timestamp>,
+}
+
+/// Why a candidate no longer (or not yet) holds at the moment recall was asked about.
+#[derive(Default)]
+struct Outdated {
+    superseded_by: Option<String>,
+    valid_from: Option<jiff::Timestamp>,
+    invalid_at: Option<jiff::Timestamp>,
+}
+
+impl Outdated {
+    fn any(&self) -> bool {
+        self.superseded_by.is_some() || self.valid_from.is_some() || self.invalid_at.is_some()
+    }
+}
+
+/// What the score of a note that does not hold at the moment asked about is multiplied by:
+/// replaced, expired (`invalid_at` passed) or not yet in force (`valid_from` ahead). The
+/// same factor as supersession, and applied once whichever reasons apply.
+pub const OUTDATED_WEIGHT: f32 = SUPERSEDED_WEIGHT;
 
 /// What a replaced note's score is multiplied by. Large on purpose: fused scores sit in a
 /// band a few per cent wide, so anything gentler would leave the old note where it was.

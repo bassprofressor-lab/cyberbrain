@@ -538,6 +538,8 @@ mod tests {
             ring,
             updated: None,
             superseded_by: None,
+            valid_from: None,
+            invalid_at: None,
             score: 1.0,
             text: text.into(),
         }

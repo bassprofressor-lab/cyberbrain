@@ -696,6 +696,8 @@ mod tests {
                 retention: None,
                 supersedes: Vec::new(),
                 superseded_by: None,
+                valid_from: None,
+                invalid_at: None,
                 pii: PiiState::None,
             },
             body: "# A\n\none\n\n# B\n\ntwo\n".into(),

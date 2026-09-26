@@ -60,6 +60,7 @@ pub async fn recall(
         n: p.n,
         ring,
         bereich: None,
+        at: None,
     };
     let result = st.app.recall(&q, &req).await?;
     let retrieval = &st.app.config().retrieval;
@@ -80,6 +81,8 @@ pub async fn recall(
                 ring: h.ring,
                 updated: h.updated,
                 superseded_by: h.superseded_by,
+                valid_from: h.valid_from,
+                invalid_at: h.invalid_at,
                 score: h.score,
                 text: h.text,
                 block_idx,

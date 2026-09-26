@@ -133,6 +133,10 @@ pub struct Hit {
     pub updated: Option<jiff::Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<jiff::Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invalid_at: Option<jiff::Timestamp>,
     pub score: f32,
     pub text: String,
     pub block_idx: u32,

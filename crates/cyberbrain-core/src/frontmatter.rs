@@ -19,7 +19,7 @@ use std::path::Path;
 const FENCE: &str = "---";
 
 /// Keys the head may contain. Anything else is a typo or a field from another tool.
-const KNOWN_KEYS: [&str; 13] = [
+const KNOWN_KEYS: [&str; 15] = [
     "id",
     "name",
     "ring",
@@ -32,6 +32,8 @@ const KNOWN_KEYS: [&str; 13] = [
     "retention",
     "supersedes",
     "superseded_by",
+    "valid_from",
+    "invalid_at",
     "pii",
 ];
 
@@ -105,8 +107,24 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
     for n in front.supersedes.iter().chain(&front.superseded_by) {
         validate_name(n).map_err(|r| fail(format!("supersession names `{n}`, which {r}")))?;
     }
+    validate_validity(front.valid_from, front.invalid_at).map_err(fail)?;
 
     Ok(Parsed { front, body })
+}
+
+/// A note cannot stop holding before it starts to: `invalid_at` must lie after
+/// `valid_from` when both are set. Either alone is always fine.
+pub fn validate_validity(
+    valid_from: Option<jiff::Timestamp>,
+    invalid_at: Option<jiff::Timestamp>,
+) -> std::result::Result<(), String> {
+    match (valid_from, invalid_at) {
+        (Some(from), Some(until)) if until <= from => Err(format!(
+            "invalid_at {until} is not after valid_from {from}; a note cannot stop holding \
+             before it starts to"
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// Render a head and body back into file text. Inverse of [`parse`]: the output starts
@@ -116,6 +134,12 @@ pub fn render(front: &Frontmatter, body: &str) -> Result<String> {
     validate_name(&front.name).map_err(|r| Error::Frontmatter {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
         reason: format!("name `{}`: {r}", front.name),
+    })?;
+    // Checked here as well as in `parse`, so no write path can put a head on disk that
+    // the next read would refuse.
+    validate_validity(front.valid_from, front.invalid_at).map_err(|r| Error::Frontmatter {
+        path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
+        reason: r,
     })?;
     let yaml = serde_yaml_ng::to_string(front).map_err(|e| Error::Frontmatter {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
@@ -312,6 +336,14 @@ fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(
         "created" | "updated" => as_::<jiff::Timestamp>(value),
         "tags" | "links" | "supersedes" => as_::<Vec<String>>(value),
         "superseded_by" => as_::<Option<String>>(value),
+        "valid_from" | "invalid_at" => match value {
+            serde_yaml_ng::Value::Null => Ok(()),
+            serde_yaml_ng::Value::String(s) => crate::types::moment::parse(s).map(|_| ()),
+            other => Err(format!(
+                "expected a date (YYYY-MM-DD) or an RFC 3339 timestamp, found {}",
+                yaml_kind(other)
+            )),
+        },
         "bereich" => as_::<Option<String>>(value),
         "retention" => as_::<Option<String>>(value),
         "pii" => as_::<PiiState>(value),
@@ -517,6 +549,46 @@ Body in Markdown. Links to other notes are written [[like-this]].
             "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\nname: a\nring: 2\nkind: bug\n\
              created: yesterday\nupdated: 2026-09-05T09:12:03Z\n---\n",
             "created",
+        );
+    }
+
+    const VALIDITY_HEAD: &str = "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAV\nname: a\nring: 2\n\
+        kind: bug\ncreated: 2026-09-05T09:12:03Z\nupdated: 2026-09-05T09:12:03Z\n";
+
+    /// A person writes a date; the head keeps it as a timestamp at 00:00 UTC, and the
+    /// rendered head reads back to the same value.
+    #[test]
+    fn validity_takes_a_date_or_a_timestamp_and_round_trips() {
+        let text = format!(
+            "{VALIDITY_HEAD}valid_from: 2026-07-01\ninvalid_at: 2026-09-10T08:30:00Z\n---\n\nx\n"
+        );
+        let parsed = parse(p(), &text).unwrap();
+        assert_eq!(
+            parsed.front.valid_from.unwrap().to_string(),
+            "2026-07-01T00:00:00Z"
+        );
+        assert_eq!(
+            parsed.front.invalid_at.unwrap().to_string(),
+            "2026-09-10T08:30:00Z"
+        );
+        let rendered = render(&parsed.front, parsed.body).unwrap();
+        let again = parse(p(), &rendered).unwrap();
+        assert_eq!(again.front, parsed.front);
+        // Absent stays absent: a head without the fields renders without them.
+        let plain = parse(p(), SPEC_EXAMPLE).unwrap();
+        assert!(plain.front.valid_from.is_none() && plain.front.invalid_at.is_none());
+        assert!(!render(&plain.front, plain.body).unwrap().contains("valid"));
+    }
+
+    #[test]
+    fn validity_that_ends_before_it_starts_is_refused() {
+        expect_reason(
+            &format!("{VALIDITY_HEAD}valid_from: 2026-09-10\ninvalid_at: 2026-09-01\n---\n"),
+            "not after valid_from",
+        );
+        expect_reason(
+            &format!("{VALIDITY_HEAD}invalid_at: gestern\n---\n"),
+            "field `invalid_at`",
         );
     }
 

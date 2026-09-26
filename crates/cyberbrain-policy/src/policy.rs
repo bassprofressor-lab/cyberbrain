@@ -119,11 +119,39 @@ impl Policy {
 
     /// Record that a note was written. Call after the file is on disk.
     pub fn record_write(&self, front: &Frontmatter, bytes: usize) -> Result<()> {
+        self.record_write_as(front, bytes, None)
+    }
+
+    /// As [`record_write`](Self::record_write), naming the operation when it is narrower
+    /// than a write of the whole note (`"invalidate"`). A note's validity bounds go into the
+    /// row whenever it has them, so the log says when a note was declared to stop holding
+    /// and by whom, not only that its file changed.
+    pub fn record_write_as(
+        &self,
+        front: &Frontmatter,
+        bytes: usize,
+        op: Option<&str>,
+    ) -> Result<()> {
+        let mut detail = json!({ "name": front.name, "ring": front.ring, "kind": front.kind, "bytes": bytes, "pii": front.pii, "scanned": front.pii.was_scanned() });
+        if let Some(m) = detail.as_object_mut() {
+            if let Some(op) = op {
+                m.insert("op".into(), json!(op));
+            }
+            if let Some(t) = front.valid_from {
+                m.insert("valid_from".into(), json!(t.to_string()));
+            }
+            if let Some(t) = front.invalid_at {
+                m.insert("invalid_at".into(), json!(t.to_string()));
+            }
+            if let Some(n) = &front.superseded_by {
+                m.insert("superseded_by".into(), json!(n));
+            }
+        }
         self.audit.record(
             &self.actor,
             AuditAction::NoteWrite,
             format!("note:{}", front.id),
-            json!({ "name": front.name, "ring": front.ring, "kind": front.kind, "bytes": bytes, "pii": front.pii, "scanned": front.pii.was_scanned() }),
+            detail,
         )?;
         Ok(())
     }
@@ -253,6 +281,8 @@ mod tests {
             retention: None,
             supersedes: Vec::new(),
             superseded_by: None,
+            valid_from: None,
+            invalid_at: None,
             pii: PiiState::Unscanned,
         };
         p.record_write(&f, 120).unwrap();

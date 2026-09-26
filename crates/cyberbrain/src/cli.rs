@@ -69,6 +69,10 @@ pub enum Command {
         /// Restrict to notes of this department, team or domain.
         #[arg(long)]
         bereich: Option<String>,
+        /// Judge validity as of this day (YYYY-MM-DD, 00:00 UTC) or moment (RFC 3339):
+        /// what had expired by then, or was not yet in force, is ranked down and marked.
+        #[arg(long, value_name = "DATE", value_parser = moment)]
+        stand: Option<jiff::Timestamp>,
     },
 
     /// Exact line ranges for a symbol, so the agent reads a slice and not a file.
@@ -113,10 +117,39 @@ pub enum Command {
         /// old note and ranks it lower; the old note itself is not changed.
         #[arg(long)]
         supersedes: Vec<String>,
+        /// From when what the note says holds: YYYY-MM-DD (00:00 UTC) or RFC 3339. Absent
+        /// keeps what the note has; a new note without it holds as far back as anyone asks.
+        #[arg(long, value_name = "DATE", value_parser = moment)]
+        valid_from: Option<jiff::Timestamp>,
+        /// From when what the note says no longer holds. Recall still finds it, ranked
+        /// down and marked. Absent keeps what the note has.
+        #[arg(long, value_name = "DATE", value_parser = moment)]
+        invalid_at: Option<jiff::Timestamp>,
         /// Write despite PII findings, recording them as flagged rather than reviewed.
         #[arg(long)]
         force: bool,
         /// Run the real path with no-op writers and report what would have happened.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Declare that a note stopped holding, from a day on, without rewriting its text.
+    ///
+    /// Sets `invalid_at` in the note's head (and `superseded_by` with --by), writes one
+    /// audit row and reindexes. Recall keeps finding the note, ranked down and marked
+    /// "invalid since …". Rings 0 and 1 stay the operator's, as for every write.
+    Invalidate {
+        /// Note name.
+        name: String,
+        /// From when it no longer holds: YYYY-MM-DD (00:00 UTC) or RFC 3339. Default: now.
+        #[arg(long, value_name = "DATE", value_parser = moment, conflicts_with = "clear")]
+        at: Option<jiff::Timestamp>,
+        /// The note that replaces it.
+        #[arg(long, value_name = "NAME", conflicts_with = "clear")]
+        by: Option<String>,
+        /// Take the declaration back: the note holds again.
+        #[arg(long)]
+        clear: bool,
         #[arg(long)]
         dry_run: bool,
     },
@@ -1030,4 +1063,9 @@ pub enum PrincipalCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+}
+
+/// `--stand`, `--valid-from`, `--invalid-at`, `invalidate --at`: a date or a timestamp.
+fn moment(s: &str) -> Result<jiff::Timestamp, String> {
+    cyberbrain_core::types::moment::parse(s)
 }

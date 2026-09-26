@@ -422,6 +422,7 @@ async fn recall(app: &App, raw: &Value) -> Result<Value, RpcError> {
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
         ring: a.ring("ring")?,
         bereich: a.string("bereich")?,
+        at: None,
     };
     Ok(match app.recall(&query, &req).await {
         // Caveats travel twice on purpose: verbatim in `structuredContent.caveats`, and as
@@ -529,6 +530,8 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         choice,
         expected_updated,
         supersedes: None,
+        valid_from: None,
+        invalid_at: None,
         arriving: None,
         dry_run: a.boolean("dry_run")?.unwrap_or(false),
     };

@@ -61,6 +61,8 @@ impl Fixture {
                 choice: None,
                 expected_updated: None,
                 supersedes: None,
+                valid_from: None,
+                invalid_at: None,
                 arriving: None,
                 dry_run: false,
             })
@@ -1123,6 +1125,8 @@ fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: Some(crate::app::Arriving {
                 id,
                 created,
@@ -1167,6 +1171,8 @@ fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
         choice: None,
         expected_updated: None,
         supersedes: None,
+        valid_from: None,
+        invalid_at: None,
         arriving: None,
         dry_run: false,
     })

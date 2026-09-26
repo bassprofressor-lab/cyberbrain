@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 4;
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -121,6 +121,14 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE notes ADD COLUMN supersedes TEXT NOT NULL DEFAULT '[]';
     ALTER TABLE notes ADD COLUMN superseded_by TEXT;
+    "#,
+    // v5: validity — from when a note holds and from when it no longer does (RFC 3339,
+    // UTC). NULL is "unbounded", which is exactly what every note written before says, so
+    // no rescan is needed. A build that knows only v4 refuses the index afterwards: the
+    // way back is to delete cyberbrain.db and `scan --full` with the old build.
+    r#"
+    ALTER TABLE notes ADD COLUMN valid_from TEXT;
+    ALTER TABLE notes ADD COLUMN invalid_at TEXT;
     "#,
 ];
 

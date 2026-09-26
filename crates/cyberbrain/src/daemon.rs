@@ -148,6 +148,11 @@ pub fn recall(
     req: &RecallRequest,
     json: bool,
 ) -> Option<String> {
+    // A recall as of another day is not part of the protocol; asked without it, the daemon
+    // would answer as of today, so it is answered here.
+    if req.at.is_some() {
+        return None;
+    }
     let op = Op::Recall {
         query: query.to_string(),
         n: req.n,
@@ -172,10 +177,12 @@ pub fn recall(
 /// none at all. A request that went out and got no readable answer is an error.
 pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Result<Answer> {
     let what = format!("the write of {}", req.name);
-    // `supersedes` is not part of the protocol's write, so such a write stays local rather
-    // than arriving at the daemon without it.
+    // `supersedes` and the validity bounds are not part of the protocol's write, so such a
+    // write stays local rather than arriving at the daemon without them.
     if req.body.len() > MAX_REQUEST / 2
         || req.supersedes.is_some()
+        || req.valid_from.is_some()
+        || req.invalid_at.is_some()
         || req.choice.is_some()
         || req.expected_updated.is_some()
         || req.arriving.is_some()
@@ -571,7 +578,12 @@ mod server {
                 bereich,
             } => {
                 let ring = ring.map(cyberbrain_core::Ring::try_from).transpose()?;
-                let rr = RecallRequest { n, ring, bereich };
+                let rr = RecallRequest {
+                    n,
+                    ring,
+                    bereich,
+                    at: None,
+                };
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -592,6 +604,8 @@ mod server {
                     choice: None,
                     expected_updated: None,
                     supersedes: None,
+                    valid_from: None,
+                    invalid_at: None,
                     arriving: None,
                     dry_run: w.dry_run,
                 };

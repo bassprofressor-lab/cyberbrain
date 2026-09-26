@@ -213,6 +213,7 @@ fn refuse(command: &Command) -> Option<&'static str> {
         | Command::Recall { .. }
         | Command::Find { .. }
         | Command::Write { .. }
+        | Command::Invalidate { .. }
         | Command::Forget { .. }
         | Command::Doctor
         | Command::Status

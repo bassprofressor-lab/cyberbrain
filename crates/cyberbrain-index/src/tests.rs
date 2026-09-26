@@ -91,6 +91,8 @@ fn note(name: &str, ring: Ring, body: &str, links: &[&str]) -> Note {
             retention: None,
             supersedes: Vec::new(),
             superseded_by: None,
+            valid_from: None,
+            invalid_at: None,
             pii: PiiState::None,
         },
         body: body.into(),
@@ -205,6 +207,88 @@ fn schema_migrates_and_is_idempotent() {
         !tables.contains(&"audit".to_string()),
         "the audit record must not live in the cache: {tables:?}"
     );
+}
+
+/// An index written by a v4 build (no validity columns) is brought to the current version
+/// on open, in place, and every note in it holds: no rescan, no mark, no demotion.
+#[test]
+fn a_v4_index_migrates_and_its_notes_hold() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cyberbrain.db");
+    {
+        let mut ix = Index::open(&path).unwrap();
+        ix.set_embedding_profile(&profile_of(&e)).unwrap();
+        for n in corpus() {
+            put(&mut ix, &e, &n);
+        }
+        // Turn it back into what a v4 build left behind.
+        ix.conn
+            .execute_batch(
+                "ALTER TABLE notes DROP COLUMN valid_from;
+                 ALTER TABLE notes DROP COLUMN invalid_at;
+                 UPDATE meta SET value = '4' WHERE key = 'schema_version';",
+            )
+            .unwrap();
+    }
+    let ix = Index::open(&path).unwrap();
+    assert_eq!(ix.schema_version().unwrap(), 5);
+    assert_eq!(ix.stats().unwrap().notes, 4, "nothing was dropped");
+    let r = ix
+        .recall("bind mount inode", Some(&e), &RecallOptions::default())
+        .unwrap();
+    assert_eq!(r.hits[0].note_name, "docker-bind-mount-inode-drift");
+    for h in &r.hits {
+        assert!(h.invalid_at.is_none() && h.valid_from.is_none(), "{h:?}");
+    }
+    let rec = ix.note(&id_for("pg18-moves-pgdata")).unwrap().unwrap();
+    assert!(rec.front.valid_from.is_none() && rec.front.invalid_at.is_none());
+}
+
+/// The bounds are compared with the moment asked about, at the index level: expired and
+/// not-yet-valid notes are demoted by the same factor as a replaced one, once.
+#[test]
+fn validity_demotes_once_and_is_judged_at_the_moment_asked() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let body = "Zeitmodell stichtag probe.";
+    let holds = note("gilt", Ring::Knowledge, body, &[]);
+    let mut expired = note("abgelaufen", Ring::Knowledge, body, &[]);
+    expired.front.invalid_at = Some("2026-09-10T00:00:00Z".parse().unwrap());
+    // Also replaced: still one factor, not two.
+    expired.front.superseded_by = Some("gilt".into());
+    for n in [&holds, &expired] {
+        put(&mut ix, &e, n);
+    }
+    let score = |r: &cyberbrain_core::RecallResult, n: &str| {
+        r.hits.iter().find(|h| h.note_name == n).unwrap().score
+    };
+    let now = ix
+        .recall("Zeitmodell stichtag", Some(&e), &RecallOptions::default())
+        .unwrap();
+    let ratio = score(&now, "abgelaufen") / score(&now, "gilt");
+    assert!((ratio - 0.5).abs() < 0.05, "{ratio}");
+    let h = now
+        .hits
+        .iter()
+        .find(|h| h.note_name == "abgelaufen")
+        .unwrap();
+    assert!(h.invalid_at.is_some() && h.superseded_by.is_some());
+
+    let before = RecallOptions {
+        at: Some("2026-09-01T00:00:00Z".parse().unwrap()),
+        ..RecallOptions::default()
+    };
+    let r = ix.recall("Zeitmodell stichtag", Some(&e), &before).unwrap();
+    let h = r.hits.iter().find(|h| h.note_name == "abgelaufen").unwrap();
+    assert!(
+        h.invalid_at.is_none(),
+        "not yet expired on 1 September: {h:?}"
+    );
+    // The successor note carries no valid_from and was "created" 2026-09-05 in this
+    // fixture, so on 1 September it did not replace anything yet either.
+    assert!(h.superseded_by.is_none(), "{h:?}");
 }
 
 #[test]

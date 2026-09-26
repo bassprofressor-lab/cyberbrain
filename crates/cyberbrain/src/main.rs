@@ -23,7 +23,9 @@ mod terminal;
 mod usage;
 mod writers;
 
-use app::{App, AuditView, RecallRequest, ScanOptions, WriteOutcome, WriteRequest};
+use app::{
+    App, AuditView, InvalidateRequest, RecallRequest, ScanOptions, WriteOutcome, WriteRequest,
+};
 use clap::Parser;
 use cli::{Cli, Command, ExportFormat, PolicyCommand};
 use cyberbrain_core::{Error, Result, Ring};
@@ -378,6 +380,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             n,
             ring,
             bereich,
+            stand,
         } => {
             if let Some(id) = id {
                 let r = app.recall_id(&id)?;
@@ -391,6 +394,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     n: Some(n),
                     ring,
                     bereich,
+                    at: stand,
                 };
                 // The resident daemon answers in milliseconds what takes this process over a
                 // second to load for (`daemon.rs`); anything short of a clean answer lands here.
@@ -418,6 +422,8 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             bereich,
             retention,
             supersedes,
+            valid_from,
+            invalid_at,
             force,
             dry_run,
         } => {
@@ -437,6 +443,8 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 choice: None,
                 expected_updated: None,
                 supersedes: (!supersedes.is_empty()).then_some(supersedes),
+                valid_from: valid_from.map(Some),
+                invalid_at: invalid_at.map(Some),
                 arriving: None,
                 dry_run,
             };
@@ -494,6 +502,8 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 choice: None,
                 expected_updated: None,
                 supersedes: None,
+                valid_from: None,
+                invalid_at: None,
                 arriving: None,
                 dry_run,
             };
@@ -542,6 +552,22 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             out.emit(&r, render::reviewed)?;
         }
 
+        Command::Invalidate {
+            name,
+            at,
+            by,
+            clear,
+            dry_run,
+        } => {
+            let r = app.invalidate(InvalidateRequest {
+                name,
+                at,
+                clear,
+                by,
+                dry_run,
+            })?;
+            out.emit(&r, render::invalidated)?;
+        }
         Command::Forget { target, dry_run } => {
             // Read before the erasure, because afterwards there is nothing left to ask.
             let shared = app.shared_copy_sentence(&target);

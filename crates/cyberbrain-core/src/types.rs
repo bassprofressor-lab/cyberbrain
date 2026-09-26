@@ -174,8 +174,58 @@ pub struct Frontmatter {
     /// The note that replaces this one, when it is said here rather than there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    /// From when what the note says holds. Absent means: as long as anyone can tell, which
+    /// is what every note written before the field existed says. A date `YYYY-MM-DD` in a
+    /// hand-edited head is read as 00:00 UTC.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "moment::option"
+    )]
+    pub valid_from: Option<jiff::Timestamp>,
+    /// From when what the note says no longer holds. Recall still finds the note, ranks it
+    /// down and says since when (`cyberbrain invalidate`, `write --invalid-at`).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "moment::option"
+    )]
+    pub invalid_at: Option<jiff::Timestamp>,
     #[serde(default)]
     pub pii: PiiState,
+}
+
+/// The moments a note's validity is bounded by (`valid_from`, `invalid_at`, `recall
+/// --stand`): an RFC 3339 timestamp, or a calendar date read as 00:00 UTC. A date is what a
+/// person types and means; UTC keeps the same head meaning the same on every machine.
+pub mod moment {
+    use serde::Deserialize;
+
+    pub fn parse(s: &str) -> Result<jiff::Timestamp, String> {
+        let s = s.trim();
+        if let Ok(t) = s.parse::<jiff::Timestamp>() {
+            return Ok(t);
+        }
+        match s.parse::<jiff::civil::Date>() {
+            Ok(d) => d
+                .to_zoned(jiff::tz::TimeZone::UTC)
+                .map(|z| z.timestamp())
+                .map_err(|e| format!("`{s}`: {e}")),
+            Err(_) => Err(format!(
+                "`{s}` is neither a date (YYYY-MM-DD) nor an RFC 3339 timestamp"
+            )),
+        }
+    }
+
+    pub fn option<'de, D>(d: D) -> Result<Option<jiff::Timestamp>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        match Option::<String>::deserialize(d)? {
+            None => Ok(None),
+            Some(s) => parse(&s).map(Some).map_err(serde::de::Error::custom),
+        }
+    }
 }
 
 /// A note as it exists on disk. The file is authoritative; the index is a cache.
@@ -210,6 +260,14 @@ pub struct Hit {
     /// hit is still returned, demoted and marked, never hidden.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub superseded_by: Option<String>,
+    /// Set when the note's `valid_from` lies after the moment recall was asked about: what
+    /// it says does not hold yet. Demoted and marked, never hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub valid_from: Option<jiff::Timestamp>,
+    /// Set when the note's `invalid_at` lies at or before the moment recall was asked
+    /// about: what it says held until then. Demoted and marked, never hidden.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub invalid_at: Option<jiff::Timestamp>,
     pub score: f32,
     pub text: String,
 }

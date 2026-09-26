@@ -80,6 +80,8 @@ retention: P2Y           # ISO-8601 duration, optional; absent means indefinite
 bereich: disposition     # department, team or domain; optional, absent means private
 supersedes: [pg17-pgdata]  # notes this one replaces; optional (`write --supersedes`)
 superseded_by: pg19-note  # the note replacing this one; optional, set by hand
+valid_from: 2026-07-01T00:00:00Z  # from when it holds; optional, absent means unbounded
+invalid_at: 2026-09-10T00:00:00Z  # from when it no longer holds; optional (`invalidate`)
 pii: none | reviewed | flagged
 ---
 
@@ -96,6 +98,10 @@ Rules:
   in a write, a lookup or a `[[link]]`, is composed to NFC before it is used.
 - A `[[link]]` to a non-existent note is **valid** and denotes intent. It is reported by
   `cyberbrain doctor` as a dangling link, never auto-created, never an error.
+- `valid_from` and `invalid_at` accept a date (`2026-09-10`, read as 00:00 UTC) or an RFC
+  3339 timestamp and are written back as timestamps. `invalid_at` must lie after
+  `valid_from` when both are set. A note without them holds at every moment, which is what
+  every note written before the fields existed says.
 - The file on disk is authoritative. The index is a cache and must be rebuildable from
   the files alone, with no information loss.
 
@@ -196,7 +202,8 @@ platform. FTS5 for lexical search.
 
 Tables (indicative, implementer may refine):
 
-- `notes(id, name, ring, kind, path, created, updated, mtime, size, hash)` — `hash` and the
+- `notes(id, name, ring, kind, path, created, updated, mtime, size, hash, …, valid_from,
+  invalid_at)` — the validity bounds (schema v5) are NULL for "unbounded" — `hash` and the
   stamp are computed by **one function in `cyberbrain-core`**, called by both the scanner and
   the index. Two implementations of the same hash silently drift apart and the incremental
   compare then reports changes that are not there, or worse, misses ones that are.
@@ -314,6 +321,12 @@ tool whose best mode is opt-in will be used in its worst mode.
 8. A note named in another's `supersedes`, or carrying `superseded_by` itself, is scored
    ×0.5 before sorting and its hits carry `superseded_by`. It is not hidden. Every hit
    carries the note's `updated`.
+9. Validity is judged at a moment: now, or the day `recall --stand` names. A note whose
+   `invalid_at` is at or before it carries `invalid_at` ("invalid since …"); one whose
+   `valid_from` lies after it carries `valid_from` ("valid from …"). A replacement counts
+   from the successor's `valid_from`, else from its `created`. A note that does not hold for
+   any of these reasons is scored ×0.5 once, however many apply, and is never hidden. Notes
+   are not filtered by when they were written: a September note may say what held in August.
 
 **Vector search is a linear SIMD scan.** At the expected corpus size (tens of thousands of
 blocks, a few tens of MB of f32) a flat scan is single-digit milliseconds and cannot go stale.
@@ -332,10 +345,12 @@ check is skipped and its absence is stated in the output.
 ```
 cyberbrain init [--store PATH]        create a store, write config, print next steps
 cyberbrain scan [--full]              (re)build the index from the notes tree
-cyberbrain recall <query> [-n N] [--ring R] [--json]
+cyberbrain recall <query> [-n N] [--ring R] [--stand DATE] [--json]
 cyberbrain recall --id <citation>     expand a citation to its full note
 cyberbrain find <symbol>              exact line ranges from the code index
-cyberbrain write --ring R --kind K --name N [--stdin]
+cyberbrain write --ring R --kind K --name N [--stdin] [--valid-from D] [--invalid-at D]
+cyberbrain invalidate <name> [--at D] [--by NAME] [--clear] [--dry-run]
+                                      declare a note no longer holding; one audit row
 cyberbrain propose --ring R --kind K --name N        offer a note for somebody to accept (§8.0.3)
 cyberbrain review [<name> --accept|--reject --reason] what is waiting, and deciding it
 cyberbrain forget <name|id> [--dry-run]   erase note, blocks, vectors, links, and say what went

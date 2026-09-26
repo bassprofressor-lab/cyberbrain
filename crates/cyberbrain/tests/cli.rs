@@ -2802,3 +2802,319 @@ fn a_scan_through_the_daemon_is_the_scan_the_cli_would_have_done() {
     let _ = daemon.kill();
     let _ = daemon.wait();
 }
+
+// ---------------------------------------------------------------------------------------
+// Validity: valid_from / invalid_at (2026-09-26)
+
+fn names(v: &Value) -> Vec<String> {
+    v["hits"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{v:#}"))
+        .iter()
+        .map(|h| h["note_name"].as_str().unwrap().to_string())
+        .collect()
+}
+
+fn hit<'a>(v: &'a Value, name: &str) -> &'a Value {
+    v["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["note_name"] == name)
+        .unwrap_or_else(|| panic!("{name} not among the hits: {v:#}"))
+}
+
+/// `write --invalid-at` on a note: recall still finds it, below the note that holds, and
+/// says since when. Calibrated against the state before: the CLI rejected the flag.
+#[test]
+fn a_note_past_its_invalid_at_is_marked_and_ranked_below() {
+    let cb = Cb::new();
+    cb.write("2", "wolfpack-heute", "wolfpack wolfpack ist abgeschaltet.");
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "wolfpack-juli",
+        "--invalid-at",
+        "2026-09-10",
+        "--body",
+        "wolfpack wolfpack wolfpack läuft live.",
+    ]);
+    let head = std::fs::read_to_string(cb.note_path("2", "wolfpack-juli")).unwrap();
+    assert!(
+        head.contains("invalid_at: 2026-09-10T00:00:00Z"),
+        "the head keeps the bound: {head}"
+    );
+    let v = cb.ok(&["recall", "wolfpack"]);
+    assert_eq!(names(&v), ["wolfpack-heute", "wolfpack-juli"], "{v:#}");
+    assert_eq!(
+        hit(&v, "wolfpack-juli")["invalid_at"],
+        "2026-09-10T00:00:00Z"
+    );
+    assert!(
+        hit(&v, "wolfpack-heute").get("invalid_at").is_none(),
+        "{v:#}"
+    );
+    let out = cb.run(&["recall", "wolfpack"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("[invalid since 2026-09-10]"), "{text}");
+
+    // Without the bound, the same two notes rank the other way round: the demotion is
+    // what moved it, not the text.
+    let (_, code, err) = cb.json(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "wolfpack-juli-ohne",
+        "--body",
+        "wolfpack wolfpack wolfpack läuft live.",
+    ]);
+    assert_eq!(code, 0, "{err}");
+    let v = cb.ok(&["recall", "wolfpack"]);
+    assert_eq!(names(&v)[0], "wolfpack-juli-ohne", "{v:#}");
+}
+
+/// `invalidate` changes the head only, writes one audit row that names the operation and
+/// the bound, and the next recall already knows. `--clear` takes it back.
+/// Calibrated against the state before: there was no such command.
+#[test]
+fn invalidate_declares_a_note_expired_with_one_audit_row() {
+    let cb = Cb::new();
+    cb.write("2", "carry-neu", "carry trail ist scharf seit September.");
+    cb.write("2", "carry-alt", "carry trail carry trail ist aus.");
+    let before = std::fs::read_to_string(cb.note_path("2", "carry-alt")).unwrap();
+    let body_before = before.split("\n---\n").nth(1).unwrap().to_string();
+    // Reading the log is itself logged (`audit.export`); those rows are not counted.
+    let writes = |rows: &[Value]| {
+        rows.iter()
+            .filter(|r| r["action"] != "audit.export")
+            .count()
+    };
+    let rows_before = writes(&cb.audit_rows());
+
+    let r = cb.ok(&[
+        "invalidate",
+        "carry-alt",
+        "--at",
+        "2026-09-18",
+        "--by",
+        "carry-neu",
+    ]);
+    assert_eq!(r["invalid_at"], "2026-09-18T00:00:00Z", "{r:#}");
+    assert_eq!(r["superseded_by"], "carry-neu", "{r:#}");
+
+    let after = std::fs::read_to_string(cb.note_path("2", "carry-alt")).unwrap();
+    assert!(
+        after.contains("invalid_at: 2026-09-18T00:00:00Z"),
+        "{after}"
+    );
+    assert!(after.contains("superseded_by: carry-neu"), "{after}");
+    assert_eq!(
+        after.split("\n---\n").nth(1).unwrap(),
+        body_before,
+        "the text is not rewritten"
+    );
+
+    let rows = cb.audit_rows();
+    assert_eq!(writes(&rows), rows_before + 1, "exactly one row: {rows:#?}");
+    let row = rows
+        .iter()
+        .find(|r| r["action"] == "note.write" && r["detail"]["op"] == "invalidate")
+        .unwrap_or_else(|| panic!("{rows:#?}"));
+    assert_eq!(row["detail"]["invalid_at"], "2026-09-18T00:00:00Z");
+    assert_eq!(row["detail"]["superseded_by"], "carry-neu");
+    assert!(
+        cb.ok(&["policy", "audit", "--verify"])["verified"]["Ok"].is_number(),
+        "the chain still verifies"
+    );
+
+    let v = cb.ok(&["recall", "carry trail"]);
+    assert_eq!(names(&v)[0], "carry-neu", "{v:#}");
+    let old = hit(&v, "carry-alt");
+    assert_eq!(old["invalid_at"], "2026-09-18T00:00:00Z");
+    assert_eq!(old["superseded_by"], "carry-neu");
+
+    // Taken back: the head loses the bound, the log says so, recall stops marking it.
+    let r = cb.ok(&["invalidate", "carry-alt", "--clear"]);
+    assert!(r["invalid_at"].is_null(), "{r:#}");
+    assert_eq!(r["previous_invalid_at"], "2026-09-18T00:00:00Z");
+    let after = std::fs::read_to_string(cb.note_path("2", "carry-alt")).unwrap();
+    assert!(!after.contains("invalid_at"), "{after}");
+    assert!(
+        cb.audit_rows()
+            .iter()
+            .any(|r| r["detail"]["op"] == "revalidate"),
+        "the clearing is logged too"
+    );
+    let v = cb.ok(&["recall", "carry trail"]);
+    assert!(hit(&v, "carry-alt").get("invalid_at").is_none(), "{v:#}");
+
+    // A note that does not exist is an error, not a new empty note.
+    let (_, code, _) = cb.json(&["invalidate", "gibt-es-nicht"]);
+    assert_ne!(code, 0);
+    assert!(!cb.note_path("2", "gibt-es-nicht").exists());
+    // A bound before the note's own valid_from is refused before anything is written.
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "ab-oktober",
+        "--valid-from",
+        "2026-10-01",
+        "--body",
+        "gilt ab Oktober.",
+    ]);
+    let head = std::fs::read_to_string(cb.note_path("2", "ab-oktober")).unwrap();
+    let (_, code, err) = cb.json(&["invalidate", "ab-oktober", "--at", "2026-09-01"]);
+    assert_ne!(code, 0);
+    assert!(err.contains("not after valid_from"), "{err}");
+    assert_eq!(
+        std::fs::read_to_string(cb.note_path("2", "ab-oktober")).unwrap(),
+        head
+    );
+}
+
+/// An agent may not declare a ring 0 note expired any more than it may rewrite it: the
+/// same guard, the same refusal row.
+#[test]
+fn invalidate_keeps_rings_zero_and_one_the_operators() {
+    let cb = Cb::new();
+    cb.write("0", "regel", "config.py nie nach S2 kopieren.");
+    let before = std::fs::read_to_string(cb.note_path("0", "regel")).unwrap();
+    let out = Cb::bin()
+        .env("CLAUDECODE", "1")
+        .env("CLAUDE_CODE_SESSION_ID", "testsess")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["invalidate", "regel"])
+        .output()
+        .unwrap();
+    assert_ne!(out.status.code(), Some(0), "{}", text(&out));
+    assert_eq!(
+        std::fs::read_to_string(cb.note_path("0", "regel")).unwrap(),
+        before
+    );
+    assert!(
+        cb.audit_rows()
+            .iter()
+            .any(|r| r["action"] == "policy.refusal"),
+        "the refusal is logged"
+    );
+}
+
+/// `recall --stand <day>` judges validity at that day: a note that expired later is not
+/// marked, one that was not yet in force is, and a replacement written after the day does
+/// not count yet. Calibrated against the state before: the CLI rejected `--stand`.
+#[test]
+fn recall_as_of_a_day_judges_validity_at_that_day() {
+    let cb = Cb::new();
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "sommer",
+        "--invalid-at",
+        "2026-09-10",
+        "--body",
+        "stichtag regel sommer.",
+    ]);
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "herbst",
+        "--valid-from",
+        "2026-09-10",
+        "--body",
+        "stichtag regel herbst.",
+    ]);
+    cb.write("2", "alt", "stichtag regel alt.");
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "nachfolger",
+        "--supersedes",
+        "alt",
+        "--body",
+        "stichtag regel nachfolger.",
+    ]);
+
+    // As of 1 September: summer holds, autumn does not yet, and the successor was only
+    // written today, so the old note is not replaced yet.
+    let v = cb.ok(&["recall", "stichtag regel", "--stand", "2026-09-01"]);
+    assert!(hit(&v, "sommer").get("invalid_at").is_none(), "{v:#}");
+    assert_eq!(hit(&v, "herbst")["valid_from"], "2026-09-10T00:00:00Z");
+    assert!(hit(&v, "alt").get("superseded_by").is_none(), "{v:#}");
+    assert!(
+        v["caveats"].as_array().unwrap().iter().any(|c| c
+            .as_str()
+            .unwrap()
+            .contains("validity judged as of 2026-09-01")),
+        "{v:#}"
+    );
+    let out = cb.run(&["recall", "stichtag regel", "--stand", "2026-09-01"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("[valid from 2026-09-10]"),
+        "{}",
+        text(&out)
+    );
+
+    // Today: the other way round.
+    let v = cb.ok(&["recall", "stichtag regel"]);
+    assert_eq!(hit(&v, "sommer")["invalid_at"], "2026-09-10T00:00:00Z");
+    assert!(hit(&v, "herbst").get("valid_from").is_none(), "{v:#}");
+    assert_eq!(hit(&v, "alt")["superseded_by"], "nachfolger");
+    // Ranked: the two that hold today above the two that do not.
+    let order = names(&v);
+    let pos = |n: &str| order.iter().position(|x| x == n).unwrap();
+    assert!(
+        pos("herbst") < pos("sommer") && pos("nachfolger") < pos("alt"),
+        "{order:?}"
+    );
+
+    // A bound that is not a date is refused by the CLI, not guessed at.
+    let (_, code, _) = cb.json(&["recall", "stichtag", "--stand", "gestern"]);
+    assert_ne!(code, 0);
+}
+
+/// A note written before the fields existed has neither and holds: no mark, no demotion.
+#[test]
+fn a_note_without_validity_holds() {
+    let cb = Cb::new();
+    cb.write("2", "ohne", "zeitlos gültige zeitlos notiz.");
+    let head = std::fs::read_to_string(cb.note_path("2", "ohne")).unwrap();
+    assert!(
+        !head.contains("valid_from") && !head.contains("invalid_at"),
+        "{head}"
+    );
+    for args in [
+        vec!["recall", "zeitlos"],
+        vec!["recall", "zeitlos", "--stand", "1990-01-01"],
+    ] {
+        let v = cb.ok(&args);
+        let h = hit(&v, "ohne");
+        assert!(
+            h.get("invalid_at").is_none() && h.get("valid_from").is_none(),
+            "{v:#}"
+        );
+    }
+}

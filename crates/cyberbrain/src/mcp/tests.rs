@@ -428,6 +428,8 @@ async fn rings_zero_and_one_are_refused_over_mcp() {
             choice: None,
             expected_updated: None,
             supersedes: None,
+            valid_from: None,
+            invalid_at: None,
             arriving: None,
             dry_run: false,
         })
@@ -836,6 +838,8 @@ fn stdout_carries_protocol_only_over_real_pipes() {
                 choice: None,
                 expected_updated: None,
                 supersedes: None,
+                valid_from: None,
+                invalid_at: None,
                 arriving: None,
                 dry_run: false,
             })

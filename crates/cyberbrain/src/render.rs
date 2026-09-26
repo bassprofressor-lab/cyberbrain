@@ -169,9 +169,17 @@ pub fn recall(r: &RecallResult) -> String {
             .as_deref()
             .map(|n| format!("  [superseded by {n}]"))
             .unwrap_or_default();
+        let expired = h
+            .invalid_at
+            .map(|t| format!("  [invalid since {}]", day_or_moment(t)))
+            .unwrap_or_default();
+        let pending = h
+            .valid_from
+            .map(|t| format!("  [valid from {}]", day_or_moment(t)))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "{}. {}  {}  {}{date}  ({:.0}% of top){replaced}",
+            "{}. {}  {}  {}{date}  ({:.0}% of top){replaced}{expired}{pending}",
             i + 1,
             h.citation,
             h.ring,
@@ -191,6 +199,42 @@ pub fn recall(r: &RecallResult) -> String {
     }
     for c in &r.caveats {
         let _ = writeln!(s, "caveat: {c}");
+    }
+    s
+}
+
+/// A validity bound as a person wrote it: the date alone when it is a whole day (the
+/// common case, `--at 2026-09-10`), the full moment otherwise.
+fn day_or_moment(t: jiff::Timestamp) -> String {
+    let s = t.to_string();
+    match s.strip_suffix("T00:00:00Z") {
+        Some(day) => day.to_string(),
+        None => s,
+    }
+}
+
+pub fn invalidated(r: &crate::app::InvalidatedNote) -> String {
+    let mut s = String::new();
+    let what = match r.invalid_at {
+        Some(t) => format!("invalid since {}", day_or_moment(t)),
+        None => "holds again (invalid_at removed)".to_string(),
+    };
+    let _ = writeln!(
+        s,
+        "{}{} ({}): {what}",
+        if r.dry_run { "[dry run] " } else { "" },
+        r.name,
+        r.ring
+    );
+    if let Some(by) = &r.superseded_by {
+        let _ = writeln!(s, "  superseded by {by}");
+    }
+    if let Some(prev) = r.previous_invalid_at {
+        let _ = writeln!(s, "  before: invalid since {}", day_or_moment(prev));
+    }
+    let _ = writeln!(s, "  {}", Slash(&r.path));
+    for line in &r.audit_preview {
+        let _ = writeln!(s, "  audit: {line}");
     }
     s
 }
