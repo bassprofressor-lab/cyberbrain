@@ -30,9 +30,19 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub const SOCKET: &str = "daemon.sock";
-/// 2: `op` and `write` (2026-09-25). 3: `scan` (2026-09-25). A daemon of another version
-/// refuses the request before doing anything, and the client does it itself.
-const PROTOCOL: u32 = 3;
+/// 2: `op` and `write` (2026-09-25). 3: `scan` (2026-09-25). 4: validity — `at` on a
+/// recall, `supersedes`, `valid_from` and `invalid_at` on a write (2026-09-27).
+///
+/// A daemon refuses a version it does not know before doing anything, and the client then
+/// does the work itself. So a client sends the version it speaks, and a 3-daemon refuses a
+/// 4-request rather than carry out a write without the bounds it asked for. A daemon
+/// accepts every version from [`OLDEST_PROTOCOL`] on: a request of an older version is
+/// one without the newer fields, and means exactly what it meant there. That lets a CLI or
+/// hook still on 0.6.x be answered by a 0.7 daemon while the binaries are swapped.
+const PROTOCOL: u32 = 4;
+/// The oldest request version a daemon still carries out.
+#[cfg_attr(not(unix), allow(dead_code))]
+const OLDEST_PROTOCOL: u32 = 3;
 /// A path longer than this does not fit `sockaddr_un` on every platform.
 const MAX_SOCKET_PATH: usize = 100;
 /// The server reads at most this much of a request line; a longer body is written locally.
@@ -55,6 +65,9 @@ enum Op {
         n: Option<usize>,
         ring: Option<u8>,
         bereich: Option<String>,
+        /// `--stand`: judge validity as of this moment. Protocol 4; absent is now.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        at: Option<jiff::Timestamp>,
     },
     Write(WriteArgs),
     Scan {
@@ -76,6 +89,33 @@ struct WriteArgs {
     retention: Option<String>,
     force: bool,
     dry_run: bool,
+    /// Protocol 4. Absent keeps what the note has, as in [`WriteRequest`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supersedes: Option<Vec<String>>,
+    /// Protocol 4. Three states, as in [`WriteRequest`]: absent keeps what the note has,
+    /// `null` removes it, a timestamp sets it.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    valid_from: Option<Option<jiff::Timestamp>>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present"
+    )]
+    invalid_at: Option<Option<jiff::Timestamp>>,
+}
+
+/// A key that is there, even as `null`, is `Some`: `null` is "remove it", which is not the
+/// same request as leaving the key out. (serde alone reads `null` as the outer `None`.)
+fn present<'de, D, T>(d: D) -> std::result::Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -148,16 +188,14 @@ pub fn recall(
     req: &RecallRequest,
     json: bool,
 ) -> Option<String> {
-    // A recall as of another day is not part of the protocol; asked without it, the daemon
-    // would answer as of today, so it is answered here.
-    if req.at.is_some() {
-        return None;
-    }
+    // `at` needs protocol 4; a daemon that does not speak it refuses the request as a
+    // whole, and this recall is then answered here, as of the day asked.
     let op = Op::Recall {
         query: query.to_string(),
         n: req.n,
         ring: req.ring.map(|r| r.as_u8()),
         bereich: req.bereich.clone(),
+        at: req.at,
     };
     match send(root, actor, op, json)? {
         Sent::Answered(Response {
@@ -177,12 +215,10 @@ pub fn recall(
 /// none at all. A request that went out and got no readable answer is an error.
 pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Result<Answer> {
     let what = format!("the write of {}", req.name);
-    // `supersedes` and the validity bounds are not part of the protocol's write, so such a
-    // write stays local rather than arriving at the daemon without them.
+    // `supersedes` and the validity bounds travel since protocol 4. What the CLI never
+    // sets (an operator's choice, an expected timestamp, a note arriving from a hub) is not
+    // part of the protocol, so such a write stays local rather than arriving without it.
     if req.body.len() > MAX_REQUEST / 2
-        || req.supersedes.is_some()
-        || req.valid_from.is_some()
-        || req.invalid_at.is_some()
         || req.choice.is_some()
         || req.expected_updated.is_some()
         || req.arriving.is_some()
@@ -199,6 +235,9 @@ pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Resu
         retention: req.retention.clone().flatten(),
         force: req.force,
         dry_run: req.dry_run,
+        supersedes: req.supersedes.clone(),
+        valid_from: req.valid_from,
+        invalid_at: req.invalid_at,
     });
     once(
         send(root, actor, op, json),
@@ -328,6 +367,12 @@ mod client {
     pub(super) fn ask(_: &Path, _: &Path, _: &Request) -> Option<Sent> {
         None
     }
+}
+
+/// Whether a daemon carries out a request of version `v`.
+#[cfg_attr(not(unix), allow(dead_code))]
+fn accepts(v: u32) -> bool {
+    (OLDEST_PROTOCOL..=PROTOCOL).contains(&v)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -534,8 +579,11 @@ mod server {
             Ok(r) => r,
             Err(e) => return not_done(&format!("not a daemon request: {e}")),
         };
-        if req.v != PROTOCOL {
-            return not_done(&format!("protocol {} is not {PROTOCOL}", req.v));
+        if !accepts(req.v) {
+            return not_done(&format!(
+                "protocol {} is not one of {OLDEST_PROTOCOL}..={PROTOCOL}",
+                req.v
+            ));
         }
         let json = req.json;
         match carry_out(s, req) {
@@ -576,13 +624,14 @@ mod server {
                 n,
                 ring,
                 bereich,
+                at,
             } => {
                 let ring = ring.map(cyberbrain_core::Ring::try_from).transpose()?;
                 let rr = RecallRequest {
                     n,
                     ring,
                     bereich,
-                    at: None,
+                    at,
                 };
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
@@ -603,9 +652,9 @@ mod server {
                     force: w.force,
                     choice: None,
                     expected_updated: None,
-                    supersedes: None,
-                    valid_from: None,
-                    invalid_at: None,
+                    supersedes: w.supersedes,
+                    valid_from: w.valid_from,
+                    invalid_at: w.invalid_at,
                     arriving: None,
                     dry_run: w.dry_run,
                 };
@@ -635,6 +684,59 @@ mod tests {
     fn the_actor_round_trips_through_its_name() {
         for a in [Actor::Operator, Actor::Agent("claude-code:8c734a31".into())] {
             assert_eq!(actor_from(&a.to_string()).to_string(), a.to_string());
+        }
+    }
+
+    /// What a 0.6.x client sends: protocol 3, none of the newer keys. It is carried out
+    /// and means what it meant, so the binaries need not be swapped in one instant.
+    #[test]
+    fn a_protocol_3_request_is_still_understood() {
+        let line = r#"{"v":3,"op":{"op":"write","ring":2,"kind":"knowledge","name":"x","body":"y","tags":[],"bereich":null,"retention":null,"force":false,"dry_run":false},"actor":"operator","json":true}"#;
+        let req: Request = serde_json::from_str(line).unwrap();
+        assert!(accepts(req.v));
+        let Op::Write(w) = req.op else {
+            panic!("a write")
+        };
+        assert_eq!(
+            (w.supersedes, w.valid_from, w.invalid_at),
+            (None, None, None),
+            "absent keeps what the note has"
+        );
+        let line = r#"{"v":3,"op":{"op":"recall","query":"q","n":null,"ring":null,"bereich":null},"actor":"operator","json":false}"#;
+        let req: Request = serde_json::from_str(line).unwrap();
+        assert!(matches!(req.op, Op::Recall { at: None, .. }));
+        assert!(!accepts(2) && !accepts(PROTOCOL + 1));
+    }
+
+    /// The three states of a bound survive the socket: absent, `null` (remove), a value.
+    #[test]
+    fn validity_keeps_its_three_states_on_the_wire() {
+        let t: jiff::Timestamp = "2026-09-01T00:00:00Z".parse().unwrap();
+        for (from, to) in [
+            (None, None),
+            (Some(None), Some(Some(t))),
+            (Some(Some(t)), Some(None)),
+        ] {
+            let args = WriteArgs {
+                ring: 2,
+                kind: NoteKind::Knowledge,
+                name: "x".into(),
+                body: "y".into(),
+                tags: Vec::new(),
+                bereich: None,
+                retention: None,
+                force: false,
+                dry_run: false,
+                supersedes: Some(vec!["alt".into()]),
+                valid_from: from,
+                invalid_at: to,
+            };
+            let line = serde_json::to_string(&Op::Write(args)).unwrap();
+            let Op::Write(back) = serde_json::from_str(&line).unwrap() else {
+                panic!("a write")
+            };
+            assert_eq!((back.valid_from, back.invalid_at), (from, to), "{line}");
+            assert_eq!(back.supersedes, Some(vec!["alt".to_string()]));
         }
     }
 

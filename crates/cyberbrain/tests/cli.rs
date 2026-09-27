@@ -2787,7 +2787,7 @@ fn a_scan_with_changes_goes_to_the_daemon_and_one_without_stays_here() {
     let lines = seen.lock().unwrap().clone();
     assert_eq!(lines.len(), 1, "{lines:?}");
     let req: Value = serde_json::from_str(&lines[0]).unwrap();
-    assert_eq!(req["v"], 3);
+    assert_eq!(req["v"], 4);
     assert_eq!(req["op"]["op"], "scan");
     assert_eq!(req["op"]["full"], false);
 }
@@ -3164,4 +3164,165 @@ fn a_note_without_validity_holds() {
             "{v:#}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------
+// Validity through the daemon (daemon.rs protocol 4, 2026-09-27)
+
+/// A write with bounds and a recall as of a day go to the daemon and carry what was asked.
+/// Calibrated against the state before: both stayed local, the fake daemon saw nothing.
+#[cfg(unix)]
+#[test]
+fn a_write_with_bounds_and_a_recall_as_of_a_day_go_to_the_daemon() {
+    let cb = Cb::new();
+    let seen = fake_daemon(
+        &cb,
+        Some(r#"{"code":0,"stdout":"from the daemon\n","stderr":null,"reason":null}"#),
+    );
+    let w = with_daemon(&cb)
+        .args([
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "sommer",
+            "--valid-from",
+            "2026-06-01",
+            "--invalid-at",
+            "2026-09-10",
+            "--supersedes",
+            "fruehling",
+            "--body",
+            "stichtag regel sommer.",
+        ])
+        .output()
+        .unwrap();
+    assert!(w.status.success(), "{}", text(&w));
+    assert_eq!(String::from_utf8_lossy(&w.stdout), "from the daemon\n");
+    let r = with_daemon(&cb)
+        .args(["recall", "stichtag", "--stand", "2026-09-01"])
+        .output()
+        .unwrap();
+    assert!(r.status.success(), "{}", text(&r));
+    assert_eq!(String::from_utf8_lossy(&r.stdout), "from the daemon\n");
+
+    let lines = seen.lock().unwrap().clone();
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    let w: Value = serde_json::from_str(&lines[0]).unwrap();
+    assert_eq!(w["v"], 4);
+    assert_eq!(w["op"]["op"], "write");
+    assert_eq!(w["op"]["valid_from"], "2026-06-01T00:00:00Z");
+    assert_eq!(w["op"]["invalid_at"], "2026-09-10T00:00:00Z");
+    assert_eq!(w["op"]["supersedes"], serde_json::json!(["fruehling"]));
+    let r: Value = serde_json::from_str(&lines[1]).unwrap();
+    assert_eq!(r["op"]["op"], "recall");
+    assert_eq!(r["op"]["at"], "2026-09-01T00:00:00Z");
+}
+
+/// A daemon that does not speak protocol 4 (a 0.6.x one still running) refuses the whole
+/// request, and the client then does it itself — with the bounds, not without them.
+#[cfg(unix)]
+#[test]
+fn an_older_daemon_refuses_and_the_write_happens_here_with_its_bounds() {
+    let cb = Cb::new();
+    let seen = fake_daemon(
+        &cb,
+        Some(r#"{"code":null,"stdout":null,"stderr":null,"reason":"protocol 4 is not 3"}"#),
+    );
+    let w = with_daemon(&cb)
+        .args([
+            "--json",
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "sommer",
+            "--invalid-at",
+            "2026-09-10",
+            "--body",
+            "stichtag regel sommer.",
+        ])
+        .output()
+        .unwrap();
+    assert!(w.status.success(), "{}", text(&w));
+    assert_eq!(seen.lock().unwrap().len(), 1, "asked first");
+    let head = std::fs::read_to_string(cb.note_path("2", "sommer")).unwrap();
+    assert!(head.contains("invalid_at: 2026-09-10T00:00:00Z"), "{head}");
+}
+
+/// Through the real daemon: the bounds arrive in the note, a recall as of a day prints
+/// what the local one prints, and a request of protocol 3 (a 0.6.x client) is still
+/// carried out.
+#[cfg(unix)]
+#[test]
+fn the_real_daemon_writes_bounds_and_answers_as_of_a_day() {
+    use std::io::{BufRead, BufReader, Write};
+    let cb = Cb::new();
+    cb.write("2", "herbst", "stichtag regel herbst.");
+    let sock = cb.store.join("daemon.sock");
+    let mut daemon = with_daemon(&cb)
+        .args(["daemon", "--idle-secs", "30"])
+        .spawn()
+        .unwrap();
+    wait_for("the socket", || sock.exists());
+
+    let w = with_daemon(&cb)
+        .args([
+            "--json",
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "sommer",
+            "--invalid-at",
+            "2026-09-10",
+            "--body",
+            "stichtag regel sommer.",
+        ])
+        .output()
+        .unwrap();
+    assert!(w.status.success(), "{}", text(&w));
+    let head = std::fs::read_to_string(cb.note_path("2", "sommer")).unwrap();
+    assert!(head.contains("invalid_at: 2026-09-10T00:00:00Z"), "{head}");
+
+    for args in [
+        vec![
+            "--json",
+            "recall",
+            "stichtag regel",
+            "--stand",
+            "2026-09-01",
+        ],
+        vec!["recall", "stichtag regel", "--stand", "2026-09-01"],
+        vec!["--json", "recall", "stichtag regel"],
+    ] {
+        let local = cb.run(&args);
+        let via = with_daemon(&cb).args(&args).output().unwrap();
+        assert!(via.status.success(), "{}", text(&via));
+        assert_eq!(
+            String::from_utf8_lossy(&via.stdout),
+            String::from_utf8_lossy(&local.stdout),
+            "{args:?}"
+        );
+    }
+
+    // What a 0.6.x client sends, written straight to the socket.
+    let mut s = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    s.write_all(
+        br#"{"v":3,"op":{"op":"recall","query":"stichtag","n":null,"ring":null,"bereich":null},"actor":"operator","json":true}
+"#,
+    )
+    .unwrap();
+    let mut line = String::new();
+    BufReader::new(s).read_line(&mut line).unwrap();
+    let answer: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(answer["code"], 0, "{answer:#}");
+    let _ = daemon.kill();
+    let _ = daemon.wait();
 }
