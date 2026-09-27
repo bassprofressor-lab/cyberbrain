@@ -4,7 +4,9 @@ ui/node_modules/
 ui/dist/
 *.db
 crates/cyberbrain/ui-dist/
-eval-local/
+# Query sets over real stores stay local; only the numbers are published.
+eval-local/*
+!eval-local/ERGEBNISSE.md
 crates/cyberbrain/LICENSE.md
 packaging/windows/cyberbrain-setup-*.exe
 
