@@ -2423,6 +2423,11 @@ fn governed(cb: &Cb, port: u16, mode: &str) {
 }
 
 fn pre_tool_use(cb: &Cb, tool: &str, input: Value) -> String {
+    pre_tool_use_both(cb, tool, input).0
+}
+
+/// stdout and stderr of one pre-tool-use run.
+fn pre_tool_use_both(cb: &Cb, tool: &str, input: Value) -> (String, String) {
     use std::io::Write;
     let payload = serde_json::json!({
         "session_id": "s1", "hook_event_name": "PreToolUse", "cwd": cb.store.parent().unwrap(),
@@ -2447,7 +2452,10 @@ fn pre_tool_use(cb: &Cb, tool: &str, input: Value) -> String {
         .unwrap();
     let out = child.wait_with_output().unwrap();
     assert_eq!(out.status.code(), Some(0), "a hook never fails the harness");
-    String::from_utf8_lossy(&out.stdout).to_string()
+    (
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
 }
 
 fn decision(stdout: &str) -> Option<String> {
@@ -2509,6 +2517,45 @@ fn shadow_records_and_never_stops_anything() {
     let out = pre_tool_use(&cb, "Bash", serde_json::json!({"command": "rm -rf build"}));
     assert!(out.is_empty(), "{out}");
     assert_eq!(seen.lock().unwrap().len(), 1, "asked all the same");
+}
+
+/// An AgentGuard from before 27.09.: a shadow agent's answer is `allow` and says nothing
+/// more. The log line stays what it was.
+#[test]
+fn shadow_with_an_old_answer_logs_what_the_service_said() {
+    let cb = Cb::new();
+    let (port, _) =
+        fake_governance(r#"{"permission":"allow","action_type":"shell","mode":"shadow"}"#);
+    governed(&cb, port, "shadow");
+    let (out, err) = pre_tool_use_both(&cb, "Bash", serde_json::json!({"command": "ls"}));
+    assert!(out.is_empty(), "{out}");
+    assert!(
+        err.contains("governance (shadow): Bash would be allow (shell)"),
+        "{err}"
+    );
+}
+
+/// An AgentGuard from 27.09. on: a shadow agent's call is still let through, and the
+/// answer says what would have happened instead. Calibrated against the state before: the
+/// line said "would be allow (file_delete)" for a call the service would have refused.
+#[test]
+fn shadow_with_a_new_answer_logs_what_would_have_happened() {
+    let cb = Cb::new();
+    let (port, _) = fake_governance(
+        r#"{"permission":"allow","action_type":"file_delete","mode":"shadow","shadow_permission":"deny","shadow_outcome":"block","shadow_reason":"scope_nicht_mandatiert"}"#,
+    );
+    governed(&cb, port, "shadow");
+    let (out, err) = pre_tool_use_both(&cb, "Bash", serde_json::json!({"command": "rm -rf build"}));
+    assert!(out.is_empty(), "shadow never stops anything: {out}");
+    assert!(
+        err.contains("governance (shadow): Bash would be deny (scope_nicht_mandatiert)"),
+        "{err}"
+    );
+    // In enforce, the service's own `permission` decides; what it withheld does not.
+    let cb = Cb::new();
+    governed(&cb, port, "enforce");
+    let out = pre_tool_use(&cb, "Bash", serde_json::json!({"command": "rm -rf build"}));
+    assert!(out.is_empty(), "{out}");
 }
 
 #[test]

@@ -11,7 +11,9 @@
 //! - `shadow`: the service's answer is recorded and never stops anything; an unreachable
 //!   service stops nothing either. The service keeps a shadow agent at "allow" on its own;
 //!   this is the second lock, so that a misconfigured service cannot block a session that
-//!   was meant to be observed.
+//!   was meant to be observed. What the service would have decided arrives beside that
+//!   allow as `shadow_permission`/`shadow_reason` (AgentGuard from 2026-09-27) and is what
+//!   the log line names; a service without the fields is logged as before.
 //! - `enforce`: deny and ask are carried out. An unreachable service lets reads through and
 //!   asks about everything else — a restart of the service must not stop every session, and
 //!   must not wave a delete through either.
@@ -79,10 +81,7 @@ pub fn check(app: &App, payload: &Payload, actor: &Actor) -> Verdict {
         })
         .and_then(|k| ask(app, cfg, url, &k, tool, payload, actor));
     match (answer, cfg.mode) {
-        (Ok(a), GovernanceMode::Shadow) => Verdict::Proceed(format!(
-            "governance (shadow): {tool} would be {} ({})",
-            a.permission, a.summary
-        )),
+        (Ok(a), GovernanceMode::Shadow) => Verdict::Proceed(shadow_line(tool, &a)),
         (Ok(a), GovernanceMode::Enforce) => match a.permission.as_str() {
             "allow" => Verdict::Proceed(format!("governance: allow ({})", a.summary)),
             "deny" => Verdict::Decide("deny", format!("AgentGuard refused this: {}", a.summary)),
@@ -110,9 +109,74 @@ pub fn check(app: &App, payload: &Payload, actor: &Actor) -> Verdict {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
 struct Answer {
     permission: String,
     summary: String,
+    /// What the service would have decided, when it did not decide it: a shadow agent's
+    /// call is always let through (`permission` is `allow`), and since the service reports
+    /// the judgement it withheld (`shadow_permission`, `shadow_reason`, 2026-09-27) the log
+    /// can say "would be deny" instead of "would be allow". Absent from a service that
+    /// predates the fields, and absent when nothing would have been refused.
+    shadow: Option<Shadow>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct Shadow {
+    permission: String,
+    reason: Option<String>,
+}
+
+/// The shadow log line. With the withheld judgement it names that; without it, what the
+/// service answered, as before the fields existed.
+fn shadow_line(tool: &str, a: &Answer) -> String {
+    match &a.shadow {
+        Some(Shadow {
+            permission,
+            reason: Some(reason),
+        }) => format!("governance (shadow): {tool} would be {permission} ({reason})"),
+        Some(Shadow {
+            permission,
+            reason: None,
+        }) => format!(
+            "governance (shadow): {tool} would be {permission} ({})",
+            a.summary
+        ),
+        None => format!(
+            "governance (shadow): {tool} would be {} ({})",
+            a.permission, a.summary
+        ),
+    }
+}
+
+/// Reads the service's answer. Every field but `permission` is optional; a missing
+/// `permission` is read as `ask`, the answer that neither waves through nor refuses.
+fn answer_of(v: &Value) -> Answer {
+    let permission = v["permission"].as_str().unwrap_or("ask").to_string();
+    let mut summary = v["action_type"].as_str().unwrap_or("?").to_string();
+    if let Some(gate) = v["deciding_gate"].as_str() {
+        summary.push_str(&format!(", gate {gate}"));
+    }
+    if let Some(reason) = v["reason"].as_str() {
+        summary.push_str(&format!(": {reason}"));
+    }
+    // `shadow_outcome` (block, escalate, hold) is the service's own word for what
+    // `shadow_permission` already says in the harness's words, so it is not repeated.
+    let shadow = v["shadow_permission"]
+        .as_str()
+        .filter(|p| !p.is_empty())
+        .map(|p| Shadow {
+            permission: p.to_string(),
+            reason: v["shadow_reason"]
+                .as_str()
+                .filter(|r| !r.is_empty())
+                .map(str::to_string),
+        });
+    Answer {
+        permission,
+        summary,
+        shadow,
+    }
 }
 
 fn ask(
@@ -182,18 +246,7 @@ fn ask(
         let detail = v["detail"].as_str().unwrap_or("no detail");
         return Err(Error::Index(format!("HTTP {}: {detail}", resp.status)));
     }
-    let permission = v["permission"].as_str().unwrap_or("ask").to_string();
-    let mut summary = v["action_type"].as_str().unwrap_or("?").to_string();
-    if let Some(gate) = v["deciding_gate"].as_str() {
-        summary.push_str(&format!(", gate {gate}"));
-    }
-    if let Some(reason) = v["reason"].as_str() {
-        summary.push_str(&format!(": {reason}"));
-    }
-    Ok(Answer {
-        permission,
-        summary,
-    })
+    Ok(answer_of(&v))
 }
 
 /// Programs that only look. A Bash command reads only when every simple command in it runs
@@ -281,5 +334,45 @@ mod tests {
         }
         let write = Payload::parse(r#"{"tool_name":"Write","tool_input":{"file_path":"/x"}}"#);
         assert!(!reads_only("Write", &write));
+    }
+
+    /// An AgentGuard from before 27.09. sends no `shadow_*` fields: the line is what it
+    /// always was.
+    #[test]
+    fn an_answer_without_shadow_fields_is_logged_as_before() {
+        let a =
+            answer_of(&json!({"permission": "allow", "action_type": "shell", "mode": "shadow"}));
+        assert_eq!(a.shadow, None);
+        assert_eq!(
+            shadow_line("Bash", &a),
+            "governance (shadow): Bash would be allow (shell)"
+        );
+    }
+
+    /// Calibrated against the state before: the line said "would be allow" for a call the
+    /// service would have refused, because a shadow agent's `permission` is always allow.
+    #[test]
+    fn an_answer_with_shadow_fields_says_what_would_have_happened() {
+        let a = answer_of(&json!({
+            "permission": "allow", "action_type": "file_delete", "mode": "shadow",
+            "shadow_permission": "deny", "shadow_outcome": "block",
+            "shadow_reason": "scope_nicht_mandatiert",
+        }));
+        assert_eq!(
+            a.permission, "allow",
+            "what the harness is told does not change"
+        );
+        assert_eq!(
+            shadow_line("Bash", &a),
+            "governance (shadow): Bash would be deny (scope_nicht_mandatiert)"
+        );
+        // Without a reason, the summary stands in for it.
+        let a = answer_of(&json!({
+            "permission": "allow", "action_type": "file_write", "shadow_permission": "ask",
+        }));
+        assert_eq!(
+            shadow_line("Write", &a),
+            "governance (shadow): Write would be ask (file_write)"
+        );
     }
 }
