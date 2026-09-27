@@ -279,7 +279,7 @@ Zeile ruht, und wie sicher sich der Autor ist.</sub>
 
 Compliance ist ein Teilsystem, kein Abschnitt in der Dokumentation. `cyberbrain policy egress`
 druckt jeden Weg, auf dem Bytes den Rechner verlassen können, was jeder trägt und ob er an
-ist. Heute hat diese Liste zwei Einträge und endet mit „Telemetry does not exist."
+ist. Heute hat diese Liste acht Einträge und endet mit „Telemetry does not exist."
 
 - **Löschung, die löscht** (DSGVO Art. 17): `cyberbrain forget` entfernt die Notiz, ihre
   Blöcke, ihre Vektoren, ihre Indexzeilen und ihre Ableitungen in einer Transaktion und

@@ -266,7 +266,7 @@ author is of it.</sub>
 
 Compliance is a subsystem, not a section in the docs. `cyberbrain policy egress` prints
 every path by which bytes can leave the machine, what each carries, and whether it is on.
-Today that list has two entries and ends with "Telemetry does not exist."
+Today that list has eight entries, and it ends with "Telemetry does not exist."
 
 - **Erasure that erases** (GDPR Art. 17): `cyberbrain forget` removes the note, its blocks,
   its vectors, its index rows and its derivatives in one transaction, and prints what went.
