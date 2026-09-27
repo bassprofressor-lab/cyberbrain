@@ -10,6 +10,131 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] — 2026-09-27
+
+### Upgrading: index schema v5, swap everything at once
+
+**This release changes the index schema from v3 (0.6.1) to v5.** The first command of this
+version that opens a store migrates its `cyberbrain.db` in place: new columns, no rescan, a
+second or less. From then on **an older binary refuses that index** ("newer than this
+build"), and there is no downgrade in place. The way back is to delete `cyberbrain.db` and
+run `scan --full` with the old binary; the notes themselves are Markdown files and are not
+touched.
+
+So the CLI, the hooks, the MCP server and the background daemon must be the same version.
+They are usually one file (`/usr/local/bin/cyberbrain`), which makes that easy: copy the
+index aside (`cyberbrain.db` with its `-wal` file, or `cyberbrain.db` after the daemon has
+stopped), replace the binary, and stop any `cyberbrain daemon` still running from the old
+one (a development build may have started one; 0.6.1 had none). A daemon notices a replaced
+binary and leaves on its next request by itself, but one that is stopped cannot write into
+the migrated index with a writer that does not know the new columns. A machine with a second copy of cyberbrain (an MCP entry or a service pointing
+at another path) needs that copy replaced too.
+
+**Run `cyberbrain install` again in every project.** The pre-tool-use hook now also watches
+`Bash` and `WebFetch` (see below); a project installed with 0.6.x keeps the old matcher
+(`Edit|Write|MultiEdit|NotebookEdit`) until then, and neither the shell guard nor the
+governance check sees a shell command there.
+
+### Security
+
+- **An agent at the command line is an agent.** Inside Claude Code (`CLAUDECODE`, or
+  `CYBERBRAIN_AGENT` for any other harness) the CLI now opens the store as
+  `agent:claude-code:<session>` instead of as the operator. In 0.6.1 an agent that ran
+  `cyberbrain write --ring 0` through its shell passed the ring-owner check and the audit log
+  called it the operator. It is refused now, and recorded as the agent. `serve` stays the
+  operator. Deciding on a ring 0 or 1 proposal is the operator's too: `review --by` is a
+  typed name, and an agent could propose a ring 0 note and accept it under a second name.
+
+- **pre-tool-use reads shell commands.** It refuses a shell write or delete aimed at rings
+  0 and 1, `audit.db`, the store and its notes tree, and dropping `CLAUDECODE` next to a
+  cyberbrain call. It judges each simple command and only the arguments that program writes
+  (every path for `rm`/`mv`, the last for `cp`, the files of an in-place `sed`, `dd of=`,
+  an extracting `tar`), so reading the store, copying it to `/tmp` or a grep that merely
+  mentions a pattern goes through. A heuristic, not a sandbox.
+
+### Added
+
+- **Governance: pre-tool-use asks AgentGuard before a tool call runs.** With `[governance]`
+  in `cyberbrain.toml` (url, tenant, agent_id, mode, timeout_ms), Bash, Edit, Write,
+  MultiEdit, NotebookEdit and WebFetch calls go to `POST <url>/v1/tool-calls` before they
+  run. The key comes from `CYBERBRAIN_AGENTGUARD_KEY` or `~/.config/cyberbrain/agentguard.key`,
+  never from the store, and travels as a header. `mode = "shadow"` records the answer and
+  stops nothing, not even when the service is unreachable; `mode = "enforce"` carries out deny
+  and ask, and with the service unreachable lets plain reads through and asks about
+  everything else. The store's own guard decides first. The call is a registered egress
+  purpose of its own, `governance`: the configured endpoint only, loopback or private range,
+  no redirects, one audit row per call closed with what happened. In shadow the log line
+  names what AgentGuard *would* have decided when the service sends it
+  (`shadow_permission`, `shadow_reason`): "would be deny (scope_nicht_mandatiert)". A service
+  that does not send those fields is logged as before.
+
+- **A note can say from when it holds and from when it no longer does.** `valid_from` and
+  `invalid_at` in the head (a date, read as 00:00 UTC, or RFC 3339), `write --valid-from` /
+  `--invalid-at`, and `cyberbrain invalidate <name> [--at DATE] [--by NAME] [--clear]`, which
+  changes the head only, keeps rings 0 and 1 the operator's, and writes one audit row. Recall
+  judges validity at a moment, now or `recall --stand <date>` ("what held on 1 September"):
+  a note that does not hold is marked ("[invalid since …]", "[valid from …]"), scored ×0.5
+  once, and never hidden. A replacement counts from its successor's `valid_from`, else its
+  `created`. The bounds travel with a note pulled from a hub, over MCP (`write` takes
+  `valid_from`, `invalid_at` — `null` removes one — and `supersedes`; `recall` takes
+  `stand`) and over HTTP (`front.valid_from`, `front.invalid_at`, `front.supersedes`,
+  `GET /recall?stand=`).
+
+- **Supersession, and every hit says how old it is.** `write --supersedes <name>` (or
+  `supersedes:` / `superseded_by:` in a head) marks a note as replaced: recall still finds
+  it, ranked ×0.5 and marked "[superseded by …]". Every hit carries its note's `updated`,
+  on the text line as a date.
+
+- **A background daemon keeps the model loaded.** A CLI `recall` spent 1.08 of its 1.4 s
+  building the tokenizer. `recall`, `write` and a `scan` with work to do now ask
+  `<store>/daemon.sock` first; nobody there, the CLI starts `cyberbrain daemon` and answers
+  this one call itself. Measured on a 1,495-note store: recall 1.37 s / 584 MB → 0.01 s /
+  11 MB, write 1.57 s → 0.01 s, scan with one changed note 1.51 s → 0.15 s. The daemon
+  answers byte for byte what the CLI would have printed, keeps one identity per caller so
+  the audit log still names who asked, leaves after 30 idle minutes or when its binary,
+  `cyberbrain.toml` or the model changes, and listens on a `0600` socket. A write or scan
+  that went out and got no answer is reported as "may or may not have happened", never done
+  twice. `CYBERBRAIN_NO_DAEMON=1` turns it off; Windows answers locally. A daemon refuses a
+  request of a protocol it does not speak before doing anything, and the client then does
+  the work itself, so a daemon left over from another build never half-carries a write.
+
+- **`scripts/retrieval-bench.py`, a reproducible retrieval benchmark.** Lexical against
+  hybrid on LongMemEval-S (470 questions, no LLM calls) and on a labelled copy of a real
+  store, with recall@k, MRR, nDCG@10 and latency cold, first call and warm through the
+  daemon. First run in `eval-local/ERGEBNISSE.md`: LongMemEval-S hybrid r@3 0.934 against
+  lexical 0.932; the own store 0.794 against 0.676; warm hybrid through the daemon 8–14 ms
+  (p50) against 1.5 s cold.
+
+- **`doctor` names notes that share most of their blocks** ("shared blocks"): 98 pairs in
+  one real store, the largest two notes sharing 73 of 77 blocks.
+
+### Changed
+
+- **Recall shows each text once.** Blocks whose text is equal (from 80 characters, case and
+  whitespace aside) collapse into one hit, which keeps the best place and score and shows
+  the copy from the lowest ring, then the newest note. In one real store 19 % of blocks had a
+  twin elsewhere, and twins took 6 of the top 8 places for some questions; now none.
+
+- **An agent's recall leaves rings 0 and 1 out,** and copies of their text with them: its
+  session start injects both whole, so a hit from them is a second copy of its context. A
+  caveat counts what was left out, `--ring 0|1` still searches them, and a person at the
+  terminal, the page or an MCP client gets them as before.
+
+- **Loading the model got cheap where nothing is embedded.** Weights are memory-mapped, a
+  verified file is not hashed again while length, mtime and inode are unchanged, and
+  `status`, `doctor` and an idle `scan` no longer load the model at all: 2.7 s → 0.1–0.2 s
+  each. New dependency: `memmap2` (MIT OR Apache-2.0).
+
+- **The web page got one design system** — tokens, controls, tables, a mobile shell — and the
+  audit log and egress register now fit a 1440 px screen without cutting anything off.
+
+### Fixed
+
+- **A recall wrote two audit rows for a contradiction check it then skipped.** The inference
+  client was opened (endpoint check, `egress.permitted`) before deciding whether to check at
+  all: 27 % of one store's audit log. The check is planned from disk first, and only a check
+  that runs opens the client; hits from one ring are no longer booked as a 0 ms check.
+
 ## [0.6.1] — 2026-09-23
 
 ### Security
@@ -1071,7 +1196,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.0...v0.5.1
