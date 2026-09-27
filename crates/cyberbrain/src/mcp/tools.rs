@@ -77,6 +77,19 @@ fn ring_schema(cmd: &str) -> Value {
     )
 }
 
+/// `valid_from` / `invalid_at` on `write`: a date or timestamp sets the bound, `null`
+/// removes it, leaving it out keeps what the note has.
+fn bound_schema(arg: &str) -> Value {
+    let mut v = schema_prop("write", arg, json!({ "type": ["string", "null"] }));
+    let help = v["description"].as_str().unwrap_or_default().to_string();
+    v["description"] = Value::String(
+        format!("{help} Over MCP, `null` removes the bound.")
+            .trim()
+            .to_string(),
+    );
+    v
+}
+
 fn description(cli_about: String, envelope: &str) -> String {
     format!("{cli_about}\n\n{envelope}")
 }
@@ -98,6 +111,8 @@ pub fn catalogue() -> Vec<Tool> {
                     "query": schema_prop("recall", "query", json!({ "type": "string" })),
                     "n": schema_prop("recall", "n", json!({ "type": "integer", "minimum": 1 })),
                     "ring": ring_schema("recall"),
+                    "bereich": schema_prop("recall", "bereich", json!({ "type": "string" })),
+                    "stand": schema_prop("recall", "stand", json!({ "type": "string" })),
                 },
                 "required": ["query"],
                 "additionalProperties": false,
@@ -168,6 +183,9 @@ pub fn catalogue() -> Vec<Tool> {
                     "tags": schema_prop("write", "tags", json!({ "type": "array", "items": { "type": "string" } })),
                     "bereich": schema_prop("write", "bereich", json!({ "type": "string" })),
                     "retention": schema_prop("write", "retention", json!({ "type": "string" })),
+                    "supersedes": schema_prop("write", "supersedes", json!({ "type": "array", "items": { "type": "string" } })),
+                    "valid_from": bound_schema("valid_from"),
+                    "invalid_at": bound_schema("invalid_at"),
                     "force": schema_prop("write", "force", json!({ "type": "boolean" })),
                     "dry_run": schema_prop("write", "dry_run", json!({ "type": "boolean" })),
                     "choice": {
@@ -334,6 +352,27 @@ impl<'a> Args<'a> {
         )
     }
 
+    /// A date (`YYYY-MM-DD`, 00:00 UTC) or an RFC 3339 timestamp, as the CLI takes it.
+    fn moment(&self, key: &str) -> Result<Option<jiff::Timestamp>, RpcError> {
+        self.expect(
+            key,
+            "a date (YYYY-MM-DD) or an RFC 3339 timestamp",
+            self.map.get(key).map(|v| match v {
+                Value::String(s) => cyberbrain_core::types::moment::parse(s),
+                other => Err(format!("got {}", kind_of(other))),
+            }),
+        )
+    }
+
+    /// A validity bound: absent keeps what the note has (`None`), `null` removes it
+    /// (`Some(None)`), a moment sets it.
+    fn bound(&self, key: &str) -> Result<Option<Option<jiff::Timestamp>>, RpcError> {
+        match self.map.get(key) {
+            Some(Value::Null) => Ok(Some(None)),
+            _ => Ok(self.moment(key)?.map(Some)),
+        }
+    }
+
     fn ring(&self, key: &str) -> Result<Option<Ring>, RpcError> {
         self.expect(
             key,
@@ -415,14 +454,14 @@ pub async fn call(app: &App, name: &str, raw_args: &Value) -> Result<Value, RpcE
 }
 
 async fn recall(app: &App, raw: &Value) -> Result<Value, RpcError> {
-    let a = Args::new("recall", raw, &["query", "n", "ring", "bereich"])?;
+    let a = Args::new("recall", raw, &["query", "n", "ring", "bereich", "stand"])?;
     let query = a.string_required("query")?;
     let req = RecallRequest {
         n: a.uint("n", 1)?
             .map(|n| usize::try_from(n).unwrap_or(usize::MAX)),
         ring: a.ring("ring")?,
         bereich: a.string("bereich")?,
-        at: None,
+        at: a.moment("stand")?,
     };
     Ok(match app.recall(&query, &req).await {
         // Caveats travel twice on purpose: verbatim in `structuredContent.caveats`, and as
@@ -480,6 +519,9 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
             "tags",
             "bereich",
             "retention",
+            "supersedes",
+            "valid_from",
+            "invalid_at",
             "force",
             "dry_run",
             "choice",
@@ -529,9 +571,9 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         force: a.boolean("force")?.unwrap_or(false),
         choice,
         expected_updated,
-        supersedes: None,
-        valid_from: None,
-        invalid_at: None,
+        supersedes: a.string_list("supersedes")?,
+        valid_from: a.bound("valid_from")?,
+        invalid_at: a.bound("invalid_at")?,
         arriving: None,
         dry_run: a.boolean("dry_run")?.unwrap_or(false),
     };

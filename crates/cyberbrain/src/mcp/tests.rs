@@ -940,3 +940,89 @@ fn stdout_carries_protocol_only_over_real_pipes() {
     assert!(status.success(), "child failed: {err}");
     assert!(err.contains("cyberbrain mcp: serving on stdio"), "{err}");
 }
+
+/// Validity and supersession over MCP (2026-09-27): `write` takes `valid_from`,
+/// `invalid_at` and `supersedes`, `null` removes a bound, and `recall` takes `stand`.
+/// Calibrated against the state before: the three write arguments and `stand` were refused
+/// as unknown, so an agent could say from when a note held only by editing its file.
+#[tokio::test]
+async fn validity_and_supersession_travel_over_mcp() {
+    let (_d, root, app) = temp_app();
+    session(app, |mut c| async move {
+        c.init().await;
+        let w = c
+            .call(
+                "write",
+                json!({
+                    "ring": 2, "kind": "knowledge", "name": "sommer",
+                    "body": "stichtag regel sommer.",
+                    "valid_from": "2026-06-01", "invalid_at": "2026-09-10T00:00:00Z",
+                }),
+            )
+            .await;
+        assert_eq!(w["structuredContent"]["outcome"], "written", "{w}");
+        let w = c
+            .call(
+                "write",
+                json!({
+                    "ring": 2, "kind": "knowledge", "name": "herbst",
+                    "body": "stichtag regel herbst.", "supersedes": ["sommer"],
+                }),
+            )
+            .await;
+        assert_eq!(w["structuredContent"]["outcome"], "written", "{w}");
+        let head = std::fs::read_to_string(root.join("notes/r2/sommer.md")).unwrap();
+        assert!(head.contains("valid_from: 2026-06-01T00:00:00Z"), "{head}");
+        assert!(head.contains("invalid_at: 2026-09-10T00:00:00Z"), "{head}");
+        let head = std::fs::read_to_string(root.join("notes/r2/herbst.md")).unwrap();
+        assert!(
+            head.contains("supersedes:") && head.contains("- sommer"),
+            "{head}"
+        );
+
+        // As of 1 September the summer note held and its successor did not exist yet.
+        let r = c
+            .call(
+                "recall",
+                json!({ "query": "stichtag regel", "stand": "2026-09-01" }),
+            )
+            .await;
+        assert_eq!(r["isError"], false, "{r}");
+        let hits = r["structuredContent"]["hits"].as_array().unwrap().clone();
+        let sommer = hits.iter().find(|h| h["note_name"] == "sommer").unwrap();
+        assert!(sommer.get("invalid_at").is_none(), "{r}");
+        assert!(
+            text_of(&r).contains("validity judged as of 2026-09-01"),
+            "{}",
+            text_of(&r)
+        );
+        // Today it has expired.
+        let r = c.call("recall", json!({ "query": "stichtag regel" })).await;
+        let hits = r["structuredContent"]["hits"].as_array().unwrap().clone();
+        let sommer = hits.iter().find(|h| h["note_name"] == "sommer").unwrap();
+        assert_eq!(sommer["invalid_at"], "2026-09-10T00:00:00Z", "{r}");
+
+        // `null` removes a bound; leaving it out keeps it.
+        let w = c
+            .call(
+                "write",
+                json!({
+                    "ring": 2, "kind": "knowledge", "name": "sommer",
+                    "body": "stichtag regel sommer.", "invalid_at": null,
+                }),
+            )
+            .await;
+        assert_eq!(w["structuredContent"]["outcome"], "written", "{w}");
+        let head = std::fs::read_to_string(root.join("notes/r2/sommer.md")).unwrap();
+        assert!(!head.contains("invalid_at"), "{head}");
+        assert!(head.contains("valid_from: 2026-06-01T00:00:00Z"), "{head}");
+
+        // Not a date: a protocol error naming the argument, not a guess.
+        let e = c
+            .call_err("recall", json!({ "query": "x", "stand": "gestern" }))
+            .await;
+        assert!(e["message"].as_str().unwrap().contains("`stand`"), "{e}");
+        c
+    })
+    .await;
+}
