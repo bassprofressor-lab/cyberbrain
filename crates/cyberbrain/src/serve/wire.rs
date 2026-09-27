@@ -121,6 +121,8 @@ pub struct RecallParams {
     pub q: Option<String>,
     pub n: Option<usize>,
     pub ring: Option<u8>,
+    /// Judge validity as of this day (`YYYY-MM-DD`) or moment (RFC 3339): `recall --stand`.
+    pub stand: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -148,6 +150,8 @@ pub struct RecallEcho {
     pub q: String,
     pub n: usize,
     pub ring: Option<Ring>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stand: Option<jiff::Timestamp>,
     pub k_lex: usize,
     pub k_sem: usize,
 }

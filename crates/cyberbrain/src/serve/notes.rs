@@ -380,6 +380,25 @@ struct FrontEdits {
     bereich: Option<Option<String>>,
     /// `Some(None)` is an explicit `null`: clear the retention.
     retention: Option<Option<String>>,
+    /// Names of the notes this one replaces; `[]` clears the list.
+    supersedes: Option<Vec<String>>,
+    /// Validity bounds, three states like `bereich`: absent keeps, `null` removes.
+    valid_from: Option<Option<jiff::Timestamp>>,
+    invalid_at: Option<Option<jiff::Timestamp>>,
+}
+
+/// `front.valid_from` / `front.invalid_at`: a date (00:00 UTC) or RFC 3339, or `null`.
+fn bound(key: &str, val: &Value) -> ApiResult<Option<jiff::Timestamp>> {
+    match val {
+        Value::Null => Ok(None),
+        Value::String(s) if s.trim().is_empty() => Ok(None),
+        Value::String(s) => cyberbrain_core::types::moment::parse(s)
+            .map(Some)
+            .map_err(|e| bad_front(format!("`front.{key}`: {e}"))),
+        _ => Err(bad_front(format!(
+            "`front.{key}` must be a date (YYYY-MM-DD), an RFC 3339 timestamp or null"
+        ))),
+    }
 }
 
 struct ParsedWrite {
@@ -466,6 +485,13 @@ fn parse_write(v: &Value) -> ApiResult<ParsedWrite> {
                             _ => return Err(bad_front("`front.retention` must be a string or null")),
                         })
                     }
+                    "supersedes" => {
+                        front.supersedes = Some(serde_json::from_value(val.clone()).map_err(
+                            |_| bad_front("`front.supersedes` must be an array of note names"),
+                        )?)
+                    }
+                    "valid_from" => front.valid_from = Some(bound(k, val)?),
+                    "invalid_at" => front.invalid_at = Some(bound(k, val)?),
                     other => {
                         return Err(bad_front(format!(
                             "`front.{other}` is not a frontmatter field a write may set"
@@ -513,6 +539,11 @@ fn run_write(
     held_findings: Option<&[Finding]>,
 ) -> ApiResult<Response> {
     let dry_run = req.dry_run;
+    // What a dry run's detail falls back on for a field the request leaves alone.
+    let before = dry_run
+        .then(|| st.app.store().read(&req.name).ok())
+        .flatten()
+        .map(|n| n.front);
     let outcome = st
         .app
         .write(req.clone())
@@ -539,10 +570,19 @@ fn run_write(
                         links: link_targets(&body),
                         bereich: req.bereich.clone().flatten(),
                         retention: req.retention.clone().flatten(),
-                        supersedes: Vec::new(),
-                        superseded_by: None,
-                        valid_from: None,
-                        invalid_at: None,
+                        supersedes: req.supersedes.clone().unwrap_or_else(|| {
+                            before
+                                .as_ref()
+                                .map(|f| f.supersedes.clone())
+                                .unwrap_or_default()
+                        }),
+                        superseded_by: before.as_ref().and_then(|f| f.superseded_by.clone()),
+                        valid_from: req
+                            .valid_from
+                            .unwrap_or_else(|| before.as_ref().and_then(|f| f.valid_from)),
+                        invalid_at: req
+                            .invalid_at
+                            .unwrap_or_else(|| before.as_ref().and_then(|f| f.invalid_at)),
                         pii: w.pii,
                     },
                     body,
@@ -638,9 +678,9 @@ pub async fn put_note(
             force: false,
             choice: None,
             expected_updated: parsed.expected_updated,
-            supersedes: None,
-            valid_from: None,
-            invalid_at: None,
+            supersedes: parsed.front.supersedes.clone(),
+            valid_from: parsed.front.valid_from,
+            invalid_at: parsed.front.invalid_at,
             arriving: None,
             dry_run: dry.is_on(),
         };
@@ -697,9 +737,9 @@ pub async fn post_note(
             force: false,
             choice: None,
             expected_updated: None,
-            supersedes: None,
-            valid_from: None,
-            invalid_at: None,
+            supersedes: parsed.front.supersedes.clone(),
+            valid_from: parsed.front.valid_from,
+            invalid_at: parsed.front.invalid_at,
             arriving: None,
             dry_run: dry.is_on(),
         };

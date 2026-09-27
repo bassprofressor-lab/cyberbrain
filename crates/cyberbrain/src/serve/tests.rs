@@ -1852,3 +1852,103 @@ fn a_terminal_address_is_never_handed_to_a_browser() {
     assert!(!should_open(false, false), "--no-open still means no");
     assert!(!should_open(false, true));
 }
+
+/// Validity and supersession over HTTP (2026-09-27): a write's `front` takes `valid_from`,
+/// `invalid_at` and `supersedes`, `null` removes a bound, the detail shows them, and
+/// `/recall?stand=` judges as of that day. Calibrated against the state before: the three
+/// keys were refused with 400 `bad-frontmatter` and `stand` was ignored.
+#[tokio::test]
+async fn validity_and_supersession_travel_over_http() {
+    let fx = Fx::new();
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "stichtag regel sommer.", "front": {
+                "name": "sommer", "ring": 2, "kind": "knowledge",
+                "valid_from": "2026-06-01", "invalid_at": "2026-09-10T00:00:00Z" } })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["front"]["valid_from"], "2026-06-01T00:00:00Z");
+    assert_eq!(v["front"]["invalid_at"], "2026-09-10T00:00:00Z");
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "stichtag regel herbst.", "front": {
+                "name": "herbst", "ring": 2, "kind": "knowledge", "supersedes": ["sommer"] } })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["front"]["supersedes"], json!(["sommer"]));
+
+    let r = fx
+        .ok("/api/v1/recall?q=stichtag%20regel&stand=2026-09-01")
+        .await;
+    let sommer = r["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["note_name"] == "sommer")
+        .unwrap()
+        .clone();
+    assert!(sommer.get("invalid_at").is_none(), "{r}");
+    assert_eq!(r["params"]["stand"], "2026-09-01T00:00:00Z");
+    let r = fx.ok("/api/v1/recall?q=stichtag%20regel").await;
+    let sommer = r["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["note_name"] == "sommer")
+        .unwrap()
+        .clone();
+    assert_eq!(sommer["invalid_at"], "2026-09-10T00:00:00Z", "{r}");
+    assert!(r["params"].get("stand").is_none(), "{r}");
+    let (s, v) = fx.get("/api/v1/recall?q=x&stand=gestern").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+
+    // A dry run shows what the note would carry; `null` removes, absent keeps.
+    let updated = fx.ok("/api/v1/notes/sommer").await["front"]["updated"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (s, v) = fx
+        .call(
+            Method::PUT,
+            "/api/v1/notes/sommer?dry_run=true",
+            Some(
+                json!({ "body": "stichtag regel sommer.", "expected_updated": updated,
+                         "front": { "invalid_at": null } }),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(v["front"].get("invalid_at").is_none(), "{v}");
+    assert_eq!(v["front"]["valid_from"], "2026-06-01T00:00:00Z", "{v}");
+    let (s, v) = fx
+        .call(
+            Method::PUT,
+            "/api/v1/notes/sommer",
+            Some(
+                json!({ "body": "stichtag regel sommer.", "expected_updated": updated,
+                         "front": { "invalid_at": null } }),
+            ),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let text = std::fs::read_to_string(fx.note_path(2, "sommer")).unwrap();
+    assert!(!text.contains("invalid_at"), "{text}");
+    assert!(text.contains("valid_from: 2026-06-01T00:00:00Z"), "{text}");
+
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "x", "front": {
+                "name": "kaputt", "ring": 2, "kind": "knowledge", "valid_from": "gestern" } })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(err_of(&v)["code"], "bad-frontmatter");
+}

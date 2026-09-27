@@ -55,12 +55,20 @@ pub async fn recall(
         )));
     }
     let ring = p.ring.map(Ring::try_from).transpose()?;
+    let stand = p
+        .stand
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(cyberbrain_core::types::moment::parse)
+        .transpose()
+        .map_err(|e| ApiError::bad_request(format!("`stand`: {e}")))?;
     let started = Instant::now();
     let req = RecallRequest {
         n: p.n,
         ring,
         bereich: None,
-        at: None,
+        at: stand,
     };
     let result = st.app.recall(&q, &req).await?;
     let retrieval = &st.app.config().retrieval;
@@ -112,6 +120,7 @@ pub async fn recall(
             q,
             n,
             ring,
+            stand,
             k_lex: retrieval.k_lex,
             k_sem: retrieval.k_sem,
         },

@@ -83,6 +83,14 @@ export interface Frontmatter {
    * without one is never shared with a hub, whatever else is configured.
    */
   bereich?: string;
+  /** Names of the notes this one replaces. Absent when empty. */
+  supersedes?: string[];
+  /** The note that replaces this one, when said here (`cyberbrain invalidate --by`). */
+  superseded_by?: string;
+  /** RFC 3339. From when the note holds; absent means unbounded. */
+  valid_from?: string;
+  /** RFC 3339. From when the note no longer holds; absent means it still does. */
+  invalid_at?: string;
   pii: PiiState;
 }
 
@@ -195,6 +203,11 @@ export interface RecallParams {
   n?: number;
   /** Restrict to one ring. 400 (`variant: "bad-ring"`) for anything else. */
   ring?: Ring;
+  /**
+   * Judge validity as of this day (`YYYY-MM-DD`, 00:00 UTC) or RFC 3339 moment instead of
+   * now (`recall --stand`). 400 if it is neither.
+   */
+  stand?: string;
 }
 
 /** `wire::Hit`: core's `Hit` plus `block_idx` and `sources`. */
@@ -203,6 +216,14 @@ export interface Hit {
   note_id: NoteId;
   note_name: string;
   ring: Ring;
+  /** RFC 3339: when the hit's note was last updated. */
+  updated?: string;
+  /** Present when the note is replaced, as of the moment judged (SPEC §7 step 8). */
+  superseded_by?: string;
+  /** Present when the note is not yet in force at the moment judged (SPEC §7 step 9). */
+  valid_from?: string;
+  /** Present when the note no longer holds at the moment judged (SPEC §7 step 9). */
+  invalid_at?: string;
   /** Fused, ring-weighted score (SPEC §7 step 4). Not normalised; compare within a result. */
   score: number;
   text: string;
@@ -237,7 +258,15 @@ export interface RecallResult {
   /** Wall clock of the whole request, fractional. */
   elapsed_ms: number;
   /** Echo of the effective parameters. */
-  params: { q: string; n: number; ring: Ring | null; k_lex: number; k_sem: number };
+  params: {
+    q: string;
+    n: number;
+    ring: Ring | null;
+    /** RFC 3339; present only when `stand` was asked. */
+    stand?: string;
+    k_lex: number;
+    k_sem: number;
+  };
 }
 
 /**
@@ -341,9 +370,15 @@ export interface NoteWriteRequest {
    * A `ring` different from the current one is refused by the store with 400
    * `bad-frontmatter` ("already exists in ring rN; remove it first to move the note").
    */
-  front?: Partial<Pick<Frontmatter, "name" | "ring" | "kind" | "tags">> & {
+  front?: Partial<Pick<Frontmatter, "name" | "ring" | "kind" | "tags" | "supersedes">> & {
     retention?: string | null;
     bereich?: string | null;
+    /**
+     * A date (`YYYY-MM-DD`, 00:00 UTC) or RFC 3339. Absent keeps what the note has, null
+     * (or `""`) removes the bound. `invalid_at` must lie after `valid_from`.
+     */
+    valid_from?: string | null;
+    invalid_at?: string | null;
   };
   /**
    * Optimistic concurrency: the `updated` you last saw. 409 `write-conflict` (with
@@ -363,6 +398,9 @@ export interface NoteCreateRequest {
     tags?: string[];
     retention?: string;
     bereich?: string;
+    supersedes?: string[];
+    valid_from?: string;
+    invalid_at?: string;
   };
 }
 
