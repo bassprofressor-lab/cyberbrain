@@ -15,7 +15,9 @@
 //! - **pins the connection** to the addresses the gate resolved and checked
 //!   (`resolve_to_addrs`), so a DNS answer cannot change between the check and the connect;
 //! - verifies TLS against the **platform** trust store (`rustls-platform-verifier`) with the
-//!   `ring` provider. No root store is compiled into the binary; no OpenSSL.
+//!   `ring` provider. No root store is compiled into the binary; no OpenSSL. A client for
+//!   an http ticket gets an empty root store instead, since it never negotiates TLS and
+//!   loading the platform store is the most expensive part of building it.
 //!
 //! Bodies are read fully into memory. The largest thing that goes through here is a ~30 MB
 //! model artefact.
@@ -221,6 +223,21 @@ fn client(ticket: &EgressTicket, pin: Option<CertificatePin>) -> Result<reqwest:
                 provider,
             }))
             .with_no_client_auth();
+        b = b.use_preconfigured_tls(config);
+    } else if dest.scheme == "http" {
+        // An http ticket can only be spent on http: `check` compares the scheme and no
+        // redirect is followed, so this client never shakes hands. Left to the default,
+        // `build()` still reads the whole platform trust store (about 240 files, 4-5 ms
+        // measured on the governance hook, which runs before every tool call) for a
+        // verifier nothing consults. An empty root store makes that explicit: were a TLS
+        // handshake ever attempted, it would fail rather than trust anything.
+        let config = rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .map_err(|e| err_for(ticket.purpose(), format!("TLS versions: {e}")))?
+        .with_root_certificates(rustls::RootCertStore::empty())
+        .with_no_client_auth();
         b = b.use_preconfigured_tls(config);
     }
     b.build()
