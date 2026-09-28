@@ -10,6 +10,28 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] — 2026-09-28
+
+### Fixed
+
+- **On Windows, the store guard now sees paths written with backslashes.** The
+  `pre-tool-use` hook refuses a Bash command that writes into rings 0 and 1 or the audit
+  log, but it recognised those paths with forward slashes only. A command such as
+  `echo x > C:\…\.cyberbrain\notes\r0\x.md` was let through. Backslashes now count as
+  separators on every platform, and on Windows the comparison ignores case, as the file
+  system there does. Reads and unrelated paths are still let through.
+- **Four embedder tests failed on Windows** because they rewrote the model file while the
+  model was still loaded. Since 0.7.0 the weights are memory-mapped, and Windows refuses to
+  rewrite a mapped file. The tests now release the model first. Nothing changed in the
+  program itself; a model file can still not be replaced on Windows while a process has it
+  loaded, which is how that system treats any mapped file.
+- CI runs every test binary even after one fails (`--no-fail-fast`). The Windows failure in
+  the hook tests had hidden the four above since 0.7.0.
+
+### Upgrading
+
+Nothing to do beyond replacing the binary. The index schema is still v5.
+
 ## [0.7.1] — 2026-09-28
 
 ### Fixed
@@ -1219,7 +1241,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.0...v0.6.1
