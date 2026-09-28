@@ -587,8 +587,15 @@ fn bash_verdict(cmd: &str) -> Option<String> {
     }
     // A path is guarded when it names ring 0/1 or the audit log, or a directory that holds
     // them: the store itself, or its notes/ tree (`rm -rf .cyberbrain` takes all of it).
+    // Backslashes count as separators everywhere (a Windows path in a command reads
+    // `.cyberbrain\notes\r0`), and on Windows case does not count either, as it does not
+    // for the file system there.
     let guarded = |t: &str| {
-        let t = t.trim_matches(['\'', '"']).trim_end_matches('/');
+        let mut t = t.trim_matches(['\'', '"']).replace('\\', "/");
+        if cfg!(windows) {
+            t = t.to_lowercase();
+        }
+        let t = t.trim_end_matches('/');
         ["notes/r0", "notes/r1", "audit.db"]
             .iter()
             .any(|g| t.contains(g))
@@ -941,6 +948,40 @@ mod bash_tests {
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
         }
+    }
+
+    /// On Windows a path in a command is as likely to use backslashes as slashes, and the
+    /// store guard only knew slashes: `echo x > C:\…\notes\r0\x.md` went through
+    /// (windows CI, `the_stores_own_guard_decides_first_…`, 0.7.0 and 0.7.1).
+    #[test]
+    fn backslash_paths_are_guarded_like_slash_paths() {
+        for cmd in [
+            r"echo x > C:\Users\a\proj\.cyberbrain\notes\r0\x.md",
+            r"echo x >> .cyberbrain\notes\r1\engine.md",
+            r"rm -rf .cyberbrain\notes\r1",
+            r"cp C:\tmp\x.md .cyberbrain\notes\r0\x.md",
+            r"rm -rf C:\proj\.cyberbrain\",
+            r"mv .cyberbrain\notes C:\tmp\weg",
+            r"sqlite3 C:\proj\.cyberbrain\audit.db 'delete from audit'",
+            r"echo x > C:/proj/.cyberbrain\notes\r0/x.md",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        for cmd in [
+            r"cat .cyberbrain\notes\r0\identity.md",
+            r"cp .cyberbrain\notes\r2\x.md C:\tmp\",
+            r"echo hi > C:\tmp\x",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
+        }
+    }
+
+    /// Windows file names do not care about case, so neither does the guard there.
+    #[cfg(windows)]
+    #[test]
+    fn on_windows_the_guard_ignores_case() {
+        assert!(bash_verdict(r"echo x > C:\P\.CYBERBRAIN\NOTES\R0\x.md").is_some());
+        assert!(bash_verdict(r"echo x > .Cyberbrain\Audit.db").is_some());
     }
 
     #[test]
