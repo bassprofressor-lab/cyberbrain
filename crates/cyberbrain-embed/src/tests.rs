@@ -12,6 +12,9 @@ const VOCAB: [&str; 8] = [
 ];
 const DIM: usize = 6;
 
+/// A synthetic model on disk and loaded. A test that rewrites the weights must not keep
+/// the loaded one (bind it to `_`, not `_e`): the loaded model maps its weights, and
+/// Windows refuses to rewrite a mapped file (os error 1224).
 fn model(seed: u64) -> (TempDir, StaticEmbedder, ModelPaths, ArtefactManifest) {
     let dir = TempDir::new().unwrap();
     let (paths, manifest) = write_synthetic_model(dir.path(), &VOCAB, DIM, seed).unwrap();
@@ -245,7 +248,7 @@ fn profile_id_is_stable_across_loads() {
 
 #[test]
 fn corrupted_weights_fail_to_load() {
-    let (_d, _e, paths, manifest) = model(1);
+    let (_d, _, paths, manifest) = model(1);
     corrupt_byte(&paths.weights, 3); // inside the tensor data, after the header
     let err = StaticEmbedder::load(&paths, &manifest).unwrap_err();
     assert!(matches!(err, Error::Embed(_)), "{err}");
@@ -259,7 +262,7 @@ fn corrupted_weights_fail_to_load() {
 
 #[test]
 fn corrupted_tokenizer_fails_to_load() {
-    let (_d, _e, paths, manifest) = model(1);
+    let (_d, _, paths, manifest) = model(1);
     corrupt_byte(&paths.tokenizer, 2);
     let err = StaticEmbedder::load(&paths, &manifest).unwrap_err();
     assert!(err.to_string().contains("tokenizer artefact"), "{err}");
@@ -267,7 +270,7 @@ fn corrupted_tokenizer_fails_to_load() {
 
 #[test]
 fn wrong_manifest_fails_even_when_files_are_fine() {
-    let (_d, _e, paths, manifest) = model(1);
+    let (_d, _, paths, manifest) = model(1);
     let mut wrong = manifest.clone();
     wrong.weights_blake3 = manifest.tokenizer_blake3.clone();
     assert!(StaticEmbedder::load(&paths, &wrong).is_err());
@@ -275,7 +278,7 @@ fn wrong_manifest_fails_even_when_files_are_fine() {
 
 #[test]
 fn malformed_manifest_is_a_config_error() {
-    let (_d, _e, paths, _) = model(1);
+    let (_d, _, paths, _) = model(1);
     let bad = ArtefactManifest {
         weights_blake3: "DEADBEEF".into(),
         tokenizer_blake3: "x".repeat(64),
@@ -289,7 +292,7 @@ fn malformed_manifest_is_a_config_error() {
 fn hash_matches_but_content_is_garbage_fails_on_parse() {
     // A manifest that honestly describes a broken file must still refuse: the hash proves
     // identity, not sanity.
-    let (_d, _e, paths, mut manifest) = model(1);
+    let (_d, _, paths, mut manifest) = model(1);
     std::fs::write(&paths.weights, b"not a safetensors file").unwrap();
     manifest.weights_blake3 = hash_file(&paths.weights).unwrap();
     let err = StaticEmbedder::load(&paths, &manifest).unwrap_err();
@@ -341,7 +344,11 @@ fn f16_and_bf16_weights_load_and_match_f32() {
     let dir = TempDir::new().unwrap();
     let (paths, manifest) = write_synthetic_model(dir.path(), &VOCAB, DIM, 4).unwrap();
     let f32_model = StaticEmbedder::load(&paths, &manifest).unwrap();
-    let reference = &f32_model.embed(&["alpha gamma theta"]).unwrap()[0];
+    let reference = f32_model.embed(&["alpha gamma theta"]).unwrap()[0].clone();
+    let f32_profile = f32_model.profile_id().to_string();
+    // The weights are mapped while a model is loaded, and Windows refuses to rewrite a
+    // mapped file (os error 1224), so the f32 model goes before its file is replaced.
+    drop(f32_model);
 
     let w = synthetic_weights(VOCAB.len() + 1, DIM, 4);
     // bf16 is the top 16 bits of f32; write it that way and expect the same ranking-scale
@@ -366,13 +373,13 @@ fn f16_and_bf16_weights_load_and_match_f32() {
     assert_eq!(bf.info().weights_dtype, "bf16");
     let v = &bf.embed(&["alpha gamma theta"]).unwrap()[0];
     assert!(
-        dot(v, reference) > 0.999,
+        dot(v, &reference) > 0.999,
         "bf16 cosine to f32: {}",
-        dot(v, reference)
+        dot(v, &reference)
     );
     assert_ne!(
         bf.profile_id(),
-        f32_model.profile_id(),
+        f32_profile,
         "different bytes, different profile"
     );
 }
@@ -481,13 +488,13 @@ fn age(path: &Path, secs: u64) {
 
 #[test]
 fn a_fresh_file_is_never_recorded_so_every_load_hashes_it() {
-    let (d, _e, _paths, _manifest) = model(1);
+    let (d, _, _paths, _manifest) = model(1);
     assert!(!d.path().join(crate::VERIFIED_FILE).exists());
 }
 
 #[test]
 fn an_old_file_is_recorded_and_any_change_to_it_is_still_caught() {
-    let (_d, _e, paths, manifest) = model(1);
+    let (_d, _, paths, manifest) = model(1);
     age(&paths.weights, 60);
     StaticEmbedder::load(&paths, &manifest).unwrap();
     let record = paths.weights.with_file_name(crate::VERIFIED_FILE);
@@ -507,7 +514,7 @@ fn an_old_file_is_recorded_and_any_change_to_it_is_still_caught() {
 
 #[test]
 fn a_record_for_another_digest_does_not_vouch_for_the_file() {
-    let (_d, _e, paths, manifest) = model(1);
+    let (_d, _, paths, manifest) = model(1);
     age(&paths.weights, 60);
     StaticEmbedder::load(&paths, &manifest).unwrap();
     // A manifest that now expects a different file: the record's digest does not match

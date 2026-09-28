@@ -35,7 +35,9 @@ jobs:
       # actually runs the comparison.
       - if: matrix.os == 'ubuntu-latest'
         run: pip install --break-system-packages blake3
-      - run: cargo test --workspace --no-default-features
+      # --no-fail-fast: cargo otherwise stops at the first failing test binary, and on
+      # windows a failure in the hook tests hid four more in cyberbrain-embed (2026-09-28).
+      - run: cargo test --workspace --no-default-features --no-fail-fast
 
   # The installer is the only artefact nobody can try on the machine that writes it, so it
   # gets built on every push rather than first at release time, where a typo in the script
