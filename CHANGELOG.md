@@ -10,6 +10,29 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] — 2026-09-28
+
+### Fixed
+
+- **The governance hook no longer reads the system trust store before every tool call.**
+  Every egress request built its HTTP client with the platform certificate verifier, and
+  building it read the whole trust store (about 240 files on a Debian or Ubuntu machine)
+  even when the destination was plain `http` on loopback, where no TLS handshake can take
+  place. On the `pre-tool-use` hook with `[governance]` configured, that was 4 to 5 ms of
+  every call and pushed the hook over its own 15 ms budget. A client for an `http`
+  destination now gets an empty root store: nothing is read, and a handshake, were one ever
+  attempted, would trust nothing. `https` destinations and pinned hub certificates are
+  unchanged.
+
+  Measured against a loopback stub, 5 × 200 calls, old and new binary alternating: median
+  12.0 → 7.8 ms, slowest 1 % 16–23 → about 10 ms, budget overruns 9 → 0. The hook without
+  `[governance]` is unchanged at about 4 ms.
+
+### Upgrading
+
+Nothing to do beyond replacing the binary. The index schema is still v5, as in 0.7.0, so
+0.7.0 and 0.7.1 can read each other's stores.
+
 ## [0.7.0] — 2026-09-27
 
 ### Upgrading: index schema v5, swap everything at once
@@ -1196,7 +1219,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.5.1...v0.6.0
