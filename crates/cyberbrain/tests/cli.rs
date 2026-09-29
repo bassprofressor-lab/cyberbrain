@@ -3479,3 +3479,43 @@ fn forget_leaves_no_trace_of_the_text_in_the_database_file() {
         "the other note is untouched"
     );
 }
+
+/// 2026-09-29: tags skipped the PII gate. An e-mail address in `--tags` was written with
+/// `pii: none`, indexed and shown unredacted.
+#[test]
+fn a_tag_with_personal_data_is_refused() {
+    let cb = Cb::new();
+    let (_, code, err) = cb.json(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "t",
+        "--body",
+        "harmlos",
+        "--tags",
+        "max.mustermann@firma.de",
+    ]);
+    assert_eq!(code, 3, "{err}");
+    assert!(err.contains("policy-refusal") && err.contains("tag"), "{err}");
+    assert!(
+        !cb.store.join("notes/r2/t.md").exists(),
+        "nothing was written"
+    );
+    let (_, code, err) = cb.json(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "t",
+        "--body",
+        "harmlos",
+        "--tags",
+        "postgres",
+    ]);
+    assert_eq!(code, 0, "an ordinary tag still goes through: {err}");
+}

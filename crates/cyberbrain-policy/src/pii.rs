@@ -421,13 +421,35 @@ static ASSIGNED_SECRET: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
         r#"(?ix)
         \b(?:api[_-]?key|apikey|secret[_-]?key|client[_-]?secret|secret|access[_-]?token
-           |auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|private[_-]?key
+           |auth[_-]?token|refresh[_-]?token|token|password|passwd|pwd|passwort|kennwort|private[_-]?key
            |fernet[_-]?key|encryption[_-]?key|signing[_-]?key|api[_-]?secret)
-        \b \s* [:=] \s* ["']? ([A-Za-z0-9_\-./+=]{12,})
+        \b \s* [:=] \s* ["']? ([A-Za-z0-9_\-./+=!\#$%&*?@~^]{12,})
         "#,
     )
     .unwrap()
 });
+
+/// A password inside a URL: `postgres://admin:S3cret@db`, `redis://:pw@redis`. Missed until
+/// 2026-09-29 because nothing names it, so the assigned-secret rule never saw a key word,
+/// and it is short enough to pass under the long-token rule. The capture is the password
+/// alone, so a redaction keeps scheme, user and host readable.
+static URL_CREDENTIALS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b[A-Za-z][A-Za-z0-9+.\-]{1,20}://[^\s:/@]*:([^\s/@]+)@[^\s/@]").unwrap()
+});
+
+/// Words that stand in a URL where a real password would go, in documentation.
+fn url_password_placeholder(v: &str) -> bool {
+    let l = v.to_ascii_lowercase();
+    matches!(
+        l.as_str(),
+        "password" | "passwort" | "pass" | "pw" | "secret" | "pwd" | "passwd"
+    ) || l.starts_with('$')
+        || l.starts_with('<')
+        || l.starts_with('{')
+        || l.starts_with('%')
+        || l.chars().all(|c| c == '*' || c == 'x' || c == '.')
+        || looks_like_placeholder(v)
+}
 
 static BEARER: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)\bbearer\s+([A-Za-z0-9_\-./+=]{16,})").unwrap());
@@ -475,6 +497,21 @@ fn find_api_keys(text: &str, out: &mut Vec<Finding>) {
             v.end(),
             Confidence::High,
             "value assigned to a key/secret/token/password name",
+        );
+    }
+    for c in URL_CREDENTIALS.captures_iter(text) {
+        let v = c.get(1).unwrap();
+        if url_password_placeholder(v.as_str()) {
+            continue;
+        }
+        push(
+            out,
+            PiiKind::ApiKey,
+            text,
+            v.start(),
+            v.end(),
+            Confidence::High,
+            "password inside a URL",
         );
     }
     for c in BEARER.captures_iter(text) {
@@ -969,9 +1006,13 @@ mod tests {
         );
         let f = scan(r#"password: "Tr0ub4dor3xyz9&more""#);
         assert_eq!(f.len(), 1);
+        // Until 2026-09-29 the value stopped at the first character outside [A-Za-z0-9_-./+=],
+        // so a redaction left `&more` of the password standing and `passwort: Kr7!…` was not
+        // seen at all. Punctuation that passwords are made of is part of the value now; the
+        // closing quote still ends it.
         assert_eq!(
-            f[0].matched, "Tr0ub4dor3xyz9",
-            "the value stops at the first non-token character"
+            f[0].matched, "Tr0ub4dor3xyz9&more",
+            "the whole password, up to the closing quote"
         );
         let f = scan("curl -H 'Authorization: Bearer AbCdEf0123456789xyzXYZ' https://x");
         assert!(
@@ -1211,5 +1252,53 @@ mod tests {
         assert!(iban_mod97_ok("DE89370400440532013000"));
         assert!(!iban_mod97_ok("DE89370400440532013001"));
         assert!(!iban_mod97_ok("DE8937"));
+    }
+
+    /// 2026-09-29: a password inside a URL went through as `pii: none`.
+    #[test]
+    fn a_password_inside_a_url_is_a_secret() {
+        for (text, secret) in [
+            (
+                "postgres://admin:S3cretPass!@db.example.com:5432/app",
+                "S3cretPass!",
+            ),
+            ("redis://:pw9Xq@redis:6379", "pw9Xq"),
+            ("amqp://guest:Zq8-rT2v@rabbit/", "Zq8-rT2v"),
+        ] {
+            let f = scan(text);
+            assert!(
+                f.iter()
+                    .any(|f| f.kind == PiiKind::ApiKey && f.matched == secret),
+                "{text}: {f:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_url_with_a_placeholder_password_is_documentation() {
+        for text in [
+            "postgres://user:password@localhost/db",
+            "postgres://user:${DB_PASSWORD}@db/app",
+            "mysql://root:<pass>@127.0.0.1/x",
+            "https://user:****@host/",
+            "https://example.com/path?a=b",
+            "git@github.com:org/repo.git",
+        ] {
+            assert!(
+                !scan(text).iter().any(|f| f.kind == PiiKind::ApiKey),
+                "{text}: {:?}",
+                scan(text)
+            );
+        }
+    }
+
+    #[test]
+    fn a_german_password_label_counts_like_an_english_one() {
+        let f = scan("passwort: Kr7!mzQ9wLp2vT");
+        assert!(
+            f.iter()
+                .any(|f| f.kind == PiiKind::ApiKey && f.matched == "Kr7!mzQ9wLp2vT"),
+            "{f:?}"
+        );
     }
 }

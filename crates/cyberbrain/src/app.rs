@@ -2095,6 +2095,39 @@ impl App {
         })
     }
 
+    /// Tags are indexed and shown as they are, and half a tag cannot be redacted, so a tag
+    /// that carries personal data or a secret is refused outright rather than held (until
+    /// 2026-09-29 tags skipped the scan entirely: an e-mail address or an IBAN in `--tag`
+    /// was written with `pii: none`). The body is where such a thing can be held or redacted.
+    fn refuse_pii_in_tags(&self, policy: &Policy, tags: &[String]) -> Result<()> {
+        if tags.is_empty() {
+            return Ok(());
+        }
+        let text = tags.join("\n");
+        if let WriteVerdict::Held { findings } =
+            cyberbrain_policy::write_gate::check_write(policy.profile(), &text)
+        {
+            let mut kinds: Vec<&str> = findings.iter().map(|f| f.kind.as_str()).collect();
+            kinds.sort_unstable();
+            kinds.dedup();
+            return Err(Error::PolicyRefusal {
+                profile: format!("{:?}", policy.profile()).to_lowercase(),
+                reason: format!(
+                    "a tag carries {} ({}). Tags are indexed and shown unredacted, so they are \
+                     refused rather than held; put it in the body, where the PII gate can hold \
+                     or redact it",
+                    if findings.len() == 1 {
+                        "a finding"
+                    } else {
+                        "findings"
+                    },
+                    kinds.join(", ")
+                ),
+            });
+        }
+        Ok(())
+    }
+
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
         let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
@@ -2139,6 +2172,7 @@ impl App {
         }
 
         // SPEC §12.4: the scan runs before any byte is written.
+        self.refuse_pii_in_tags(policy, &req.tags)?;
         let (body, pii, redacted) = match policy.check_write(&name, &req.body)? {
             WriteVerdict::Proceed { pii, .. } => (req.body.clone(), pii, 0),
             WriteVerdict::Held { findings } => {
@@ -2455,6 +2489,7 @@ impl App {
         let policy = w.policy.get();
 
         // SPEC §12.4: the scan runs before any byte is written, here as anywhere.
+        self.refuse_pii_in_tags(policy, &req.tags)?;
         let (body, pii, redacted) = match policy.check_write(&name, &req.body)? {
             WriteVerdict::Proceed { pii, .. } => (req.body.clone(), pii, 0),
             WriteVerdict::Held { findings } => {
