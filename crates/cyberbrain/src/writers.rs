@@ -79,6 +79,11 @@ pub trait IndexWriter: Send + Sync {
     ) -> Result<UpsertOutcome>;
     fn delete_note(&self, id: &NoteId) -> Result<Erasure>;
     fn clear(&self) -> Result<Erased>;
+    /// After erasures: nothing of the erased text left in the database file. A dry run has
+    /// erased nothing and has nothing to scrub.
+    fn scrub(&self) -> Result<()> {
+        Ok(())
+    }
 }
 
 pub fn lock_index(index: &Mutex<Index>) -> Result<MutexGuard<'_, Index>> {
@@ -117,6 +122,10 @@ impl IndexWriter for SqliteIndexWriter {
 
     fn clear(&self) -> Result<Erased> {
         lock_index(&self.index)?.clear()
+    }
+
+    fn scrub(&self) -> Result<()> {
+        lock_index(&self.index)?.scrub()
     }
 }
 

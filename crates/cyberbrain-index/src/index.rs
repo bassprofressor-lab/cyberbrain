@@ -229,6 +229,11 @@ impl Index {
 
     fn finish(mut conn: Connection, path: Option<PathBuf>) -> Result<Self> {
         conn.pragma_update(None, "foreign_keys", "ON").ix()?;
+        // An erased note has to be gone from the file, not only from the rows (SPEC §12.2).
+        // Without this, SQLite marks the freed pages free and leaves their bytes where they
+        // were: after `forget`, the block text was still readable four times over in
+        // cyberbrain.db (2026-09-29). With it, freed content is overwritten with zeros.
+        conn.pragma_update(None, "secure_delete", "ON").ix()?;
         conn.busy_timeout(Duration::from_secs(5)).ix()?;
         schema::migrate(&mut conn)?;
         Ok(Self {
@@ -656,6 +661,26 @@ impl Index {
     /// Remove every trace of a note from the index, in one transaction (SPEC §12.2). The
     /// file on disk is the caller's business, and so is the audit row: the returned
     /// [`Erasure`] names the note and counts what went, the caller logs it.
+    /// After an erasure: leave nothing of the erased text in the database file.
+    ///
+    /// `secure_delete` zeroes pages as SQLite frees them, but FTS5 does not free the pages of
+    /// a deleted row: it writes a delete marker and keeps the old segment, token list and all,
+    /// until segments are merged. `optimize` merges them into one, so the old segments are
+    /// freed (and zeroed). The checkpoint then carries that into the main file and truncates
+    /// the WAL, which otherwise still holds the pre-erasure pages. Costs a rewrite of the
+    /// full-text index, which is why it runs after an erasure and not after every delete.
+    pub fn scrub(&self) -> Result<()> {
+        self.conn
+            .execute("INSERT INTO blocks_fts(blocks_fts) VALUES ('optimize')", [])
+            .ix()?;
+        if self.path.is_some() {
+            self.conn
+                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+                .ix()?;
+        }
+        Ok(())
+    }
+
     pub fn delete_note(&mut self, id: &NoteId) -> Result<Erasure> {
         let id_s = id.to_string();
         let tx = write_tx(&mut self.conn)?;

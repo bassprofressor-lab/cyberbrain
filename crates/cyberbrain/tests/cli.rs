@@ -3425,3 +3425,57 @@ fn parallel_writers_do_not_tear_the_store_apart() {
         "every written note is in the index: {names:?}"
     );
 }
+
+/// 2026-09-29: `forget` erased the rows and left the text in the file. The block text and its
+/// FTS tokens were still readable in cyberbrain.db, so every copy or backup of the store
+/// carried what the operator had asked to be erased (SPEC §12.2).
+#[test]
+fn forget_leaves_no_trace_of_the_text_in_the_database_file() {
+    let cb = Cb::new();
+    for (name, body) in [
+        ("vergessen-mich", "geheimniswort zebrakuchen steht hier"),
+        ("bleibt", "anderer inhalt"),
+    ] {
+        let out = cb.run(&[
+            "-q",
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            name,
+            "--body",
+            body,
+        ]);
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    let out = cb.run(&["-q", "forget", "vergessen-mich"]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    for entry in std::fs::read_dir(&cb.store).unwrap().flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !name.starts_with("cyberbrain.db") {
+            continue;
+        }
+        let bytes = std::fs::read(entry.path()).unwrap();
+        assert!(
+            !bytes
+                .windows(b"zebrakuchen".len())
+                .any(|w| w == b"zebrakuchen"),
+            "{name} still holds the erased text"
+        );
+    }
+    let out = cb.run(&["recall", "anderer"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("bleibt"),
+        "the other note is untouched"
+    );
+}

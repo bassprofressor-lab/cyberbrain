@@ -2792,6 +2792,7 @@ impl App {
             index: w.index.as_ref(),
         };
         let mut report = w.policy.get().forget(&mut eraser, &req)?;
+        w.index.scrub()?;
         if dry_run {
             for a in w.policy.preview() {
                 report
@@ -4005,6 +4006,8 @@ impl App {
                 result: result.map_err(|e| e.to_string()),
             });
         }
+        w.index.scrub()?;
+
         report.audit_preview = w.policy.preview();
         Ok(report)
     }
