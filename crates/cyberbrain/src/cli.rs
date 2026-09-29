@@ -284,6 +284,11 @@ pub enum Command {
         /// at startup carries a token in its fragment — open that address and no other.
         #[arg(long)]
         terminal: bool,
+        /// Let this server write rings 0 and 1. Off by default: it asks no credentials, so any
+        /// program on this machine, an agent included, could set operator instructions
+        /// through it. Without it, rings 0 and 1 are written at a terminal.
+        #[arg(long)]
+        allow_resident_writes: bool,
     },
 
     /// Agent harness integration. Reads the payload on stdin, answers on stdout.

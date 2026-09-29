@@ -277,8 +277,15 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             port,
             no_open,
             terminal,
+            allow_resident_writes,
         } => {
-            let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Operator)?);
+            // Whoever starts it: an agent that runs `serve` is still an agent (2026-09-29;
+            // this was `Actor::Operator` whoever it was).
+            let app = App::open(cli.store.as_deref(), cli_actor())?;
+            if !allow_resident_writes {
+                app.refuse_resident_writes();
+            }
+            let app = std::sync::Arc::new(app);
             runtime()?.block_on(serve::serve(app, port, !no_open, terminal))?;
             return Ok(0);
         }

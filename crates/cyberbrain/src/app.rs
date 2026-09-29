@@ -878,6 +878,9 @@ pub struct App {
     embedder: OnceLock<EmbedderState>,
     identity: OnceLock<ModelIdentity>,
     llm: Mutex<Option<LlmState>>,
+    /// Set by `serve` unless started with `--allow-resident-writes`. See
+    /// [`App::refuse_resident_writes`].
+    resident_writes_refused: std::sync::atomic::AtomicBool,
 }
 
 /// The loaded model is not freed, it is left to the operating system.
@@ -1012,6 +1015,7 @@ impl App {
             embedder: OnceLock::new(),
             identity: OnceLock::new(),
             llm: Mutex::new(None),
+            resident_writes_refused: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -2256,6 +2260,20 @@ impl App {
         })
     }
 
+    /// This surface cannot tell who is asking, so it writes nothing into rings 0 and 1.
+    ///
+    /// `serve` opens the store as the operator and asks no credentials: every program on this
+    /// machine is somebody it answers. An agent's `curl -X POST /api/v1/notes` with
+    /// `"ring": 0` came back 201, the note stood in `notes/r0` and the audit row said
+    /// `operator` (2026-09-29). A token would not change that: the page's address goes into the
+    /// browser's command line, which any process of the same user reads out of `/proc`. So a
+    /// served store refuses resident writes unless the operator started it with
+    /// `--allow-resident-writes`, and rings 0 and 1 are edited at a terminal.
+    pub fn refuse_resident_writes(&self) {
+        self.resident_writes_refused
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn refuse_resident_unless_operator(
         &self,
         name: &str,
@@ -2263,21 +2281,34 @@ impl App {
         existing: Option<&Note>,
         dry_run: bool,
     ) -> Result<()> {
-        if matches!(self.actor, Actor::Operator | Actor::Cli) {
+        let surface_refuses = self
+            .resident_writes_refused
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if matches!(self.actor, Actor::Operator | Actor::Cli) && !surface_refuses {
             return Ok(());
         }
         let held = existing.map(|n| n.front.ring).filter(|r| r.is_resident());
         let Some(r) = held.or(Some(ring).filter(|r| r.is_resident())) else {
             return Ok(());
         };
-        let reason = format!(
-            "ring {} belongs to the operator; {} may not write it (note {name}). Propose the \
+        let reason = if surface_refuses && matches!(self.actor, Actor::Operator | Actor::Cli) {
+            format!(
+                "ring {} is not written over HTTP (note {name}): this server cannot tell the \
+                 operator from any other program on this machine. Write it at a terminal with \
+                 `cyberbrain write --ring {} …`, or restart serve with --allow-resident-writes",
+                r.as_u8(),
+                r.as_u8(),
+            )
+        } else {
+            format!(
+                "ring {} belongs to the operator; {} may not write it (note {name}). Propose the \
              text instead — `cyberbrain propose --ring {} --kind … --name {name}` — and the \
              operator accepts it with `cyberbrain review {name} --accept`",
-            r.as_u8(),
-            self.actor,
-            r.as_u8(),
-        );
+                r.as_u8(),
+                self.actor,
+                r.as_u8(),
+            )
+        };
         // A refusal is the most interesting audit row there is (§12.1). A dry run writes
         // nothing, this row included.
         if !dry_run {

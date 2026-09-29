@@ -1952,3 +1952,31 @@ async fn validity_and_supersession_travel_over_http() {
     assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
     assert_eq!(err_of(&v)["code"], "bad-frontmatter");
 }
+
+/// 2026-09-29: serve asks no credentials, so it answers every program on this machine. An
+/// agent's `curl` with `"ring": 0` came back 201 and the audit row said `operator`. A served
+/// store writes rings 0 and 1 only when started with `--allow-resident-writes`.
+#[tokio::test]
+async fn a_served_store_does_not_write_rings_zero_and_one() {
+    let fx = Fx::new();
+    fx.app.refuse_resident_writes();
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "per curl", "front": { "name": "r0-per-http", "ring": 0, "kind": "decision" } })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::FORBIDDEN, "{v}");
+    assert_eq!(err_of(&v)["code"], "policy-refusal", "{v}");
+    assert!(!fx.store.join("notes/r0/r0-per-http.md").exists());
+
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({ "body": "per curl", "front": { "name": "r2-per-http", "ring": 2, "kind": "knowledge" } })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+}
