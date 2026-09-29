@@ -10,6 +10,24 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] — 2026-09-29
+
+### Fixed
+
+- **0.7.3 made two hooks slow.** Looking for the resident attestations that 0.7.3 introduced,
+  `session-start` and `user-prompt-submit` read the whole audit log on every call: the audit
+  reader matches actions as families and so fetched every row to filter it. On a store with
+  16,000 audit rows both hooks took about 40 ms against their 15 ms budget (0.7.2: 6–9 ms).
+  The lookup now asks the log for the one exact action, which its index answers: 6–8 ms
+  again, process start included.
+- The hook budget benchmark now runs against an audit log of 20,000 rows. It fails against
+  the 0.7.3 lookup and would have caught this before the release.
+
+### Upgrading
+
+Replace the binary. Coming from 0.7.2 or earlier, the two steps under 0.7.3's "Before you
+upgrade" apply. The index schema is still v5.
+
 ## [0.7.3] — 2026-09-29
 
 Found in a full review of 0.7.2 on 2026-09-29; every item below was reproduced against 0.7.2
