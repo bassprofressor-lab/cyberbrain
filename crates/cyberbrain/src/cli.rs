@@ -401,6 +401,17 @@ pub enum PolicyCommand {
     },
     /// Identity, source, licence and hash of every model artefact in use.
     ModelCard,
+    /// Declare the files now in rings 0 and 1 to be the operator's. A resident note is
+    /// injected into sessions only while its file is what the operator last wrote through
+    /// cyberbrain; run this once after upgrading, and after editing a resident note by hand.
+    ///
+    /// Without --yes it only shows what it would attest, each file with its first line:
+    /// attesting a file somebody else put there would make it an operator instruction.
+    Attest {
+        /// Record the attestation. Without it, nothing is recorded.
+        #[arg(long)]
+        yes: bool,
+    },
     /// Record consent for the one model download, or withdraw it.
     Consent {
         #[arg(long)]

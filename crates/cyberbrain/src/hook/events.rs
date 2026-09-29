@@ -188,9 +188,8 @@ fn ts_of(t: SystemTime) -> String {
 // session-start
 
 fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
-    let store = ctx.app.store();
     let source = ctx.payload.source.as_deref().unwrap_or("unknown");
-    let res = resident::read(store);
+    let res = resident::read_checked(ctx.app);
 
     // State: continue an existing session on resume/compact, start fresh otherwise.
     let id = ctx.session_id(out);
@@ -435,7 +434,7 @@ fn user_prompt_submit(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         out.note("cannot compare the resident rings against an earlier injection; nothing added");
         return Ok(());
     };
-    let res = resident::read(ctx.app.store());
+    let res = resident::read_checked(ctx.app);
     match ctx.load_state(&id, out) {
         None => {
             // session-start never ran for this session: the hook was registered mid-way,

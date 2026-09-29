@@ -2530,6 +2530,36 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             let r = app.policy_model_card();
             out.emit(&r, |r| render::model_cards(&r.cards, &r.absent))?;
         }
+        PolicyCommand::Attest { yes } => {
+            let r = app.attest_resident_files(!yes)?;
+            out.emit(&r, |r| {
+                let mut s = String::new();
+                let verb = if r.dry_run {
+                    "would attest"
+                } else {
+                    "attested"
+                };
+                for (k, first) in r.attested.iter().zip(&r.first_lines) {
+                    s.push_str(&format!("{verb}: {k}\n    {first}\n"));
+                }
+                for k in &r.unchanged {
+                    s.push_str(&format!("already attested: {k}\n"));
+                }
+                for k in &r.skipped {
+                    s.push_str(&format!("skipped: {k}\n"));
+                }
+                if s.is_empty() {
+                    s.push_str("rings 0 and 1 are empty\n");
+                } else if r.dry_run && !r.attested.is_empty() {
+                    s.push_str(
+                        "\nNothing recorded. Read the list: every file on it becomes an operator \
+                         instruction in every session. Remove what is not yours, then run \
+                         `cyberbrain policy attest --yes`.\n",
+                    );
+                }
+                s
+            })?;
+        }
         PolicyCommand::Consent { withdraw } => {
             let r = app.policy_consent(!withdraw)?;
             out.emit(&r, render::consent)?;

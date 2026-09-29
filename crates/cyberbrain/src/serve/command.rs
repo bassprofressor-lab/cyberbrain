@@ -288,6 +288,10 @@ fn refuse_policy(command: &crate::cli::PolicyCommand) -> Option<&'static str> {
             "`policy audit --export` writes a file wherever it is pointed, and this surface \
              has no authentication. Read the log without it, or export it at a prompt.",
         ),
+        P::Attest { .. } => Some(
+            "`policy attest` declares whatever lies in rings 0 and 1 to be the operator's, and \
+             this surface cannot tell who is asking. Run it in your own terminal.",
+        ),
         P::Audit { .. }
         | P::Egress
         | P::Obligations

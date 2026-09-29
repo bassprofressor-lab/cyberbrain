@@ -29,8 +29,8 @@ use cyberbrain_core::frontmatter;
 use cyberbrain_core::links::link_targets;
 use cyberbrain_core::store::{DB_FILE, NOTES_DIR, write_atomic};
 use cyberbrain_core::{
-    Citation, Config, EgressGate, Embedder, Error, Frontmatter, Note, NoteId, NoteKind, PiiState,
-    RecallResult, Result, Ring, Store,
+    Citation, Config, EgressGate, Embedder, Error, Fingerprint, Frontmatter, Note, NoteId,
+    NoteKind, PiiState, RecallResult, Result, Ring, Store,
 };
 use cyberbrain_embed::{ArtefactManifest, ModelPaths, StaticEmbedder};
 use cyberbrain_index::{
@@ -47,7 +47,7 @@ use cyberbrain_policy::{
 };
 use serde::Serialize;
 use serde_json::json;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -750,6 +750,24 @@ struct Writers<'a> {
     _lock: Option<StoreLock>,
 }
 
+/// The audit action that files a resident note's content hash. See
+/// [`App::resident_attestations`].
+pub const RESIDENT_ATTEST: &str = "resident.attest";
+
+#[derive(Debug, Default, Serialize)]
+pub struct AttestReport {
+    /// Newly recorded as the operator's (or, on a dry run, what would be).
+    pub attested: Vec<String>,
+    /// The first non-empty line of each body in `attested`, same order: enough for the
+    /// operator to recognise their own note and to notice one that is not.
+    pub first_lines: Vec<String>,
+    /// Already recorded with this content.
+    pub unchanged: Vec<String>,
+    /// Not readable as a note of the ring it lies in; not attested.
+    pub skipped: Vec<String>,
+    pub dry_run: bool,
+}
+
 /// One writer per store at a time, across processes (2026-09-29).
 ///
 /// Nothing serialised writers before. Twenty `write --name same` in parallel left the file
@@ -1348,6 +1366,7 @@ impl App {
     pub fn scan(&self, opts: ScanOptions) -> Result<ScanReport> {
         let started = Instant::now();
         let w = self.writers(opts.dry_run)?;
+        let attested = self.resident_attestations()?;
         let listing = self.store.list()?;
         let mut report = ScanReport {
             dry_run: opts.dry_run,
@@ -1425,12 +1444,33 @@ impl App {
             // Links are derived from the body and written back (SPEC §3.1).
             let targets = link_targets(&note.body);
             if targets != note.front.links {
-                note.front.links = targets;
-                match w.notes.write(&note) {
-                    Ok(_) => report.links_written_back += 1,
-                    Err(e) => report
-                        .link_writeback_failed
-                        .push(format!("{}: {e}", note.front.name)),
+                // A resident note keeps its attestation through a link write-back only if it
+                // had one: the scan re-attests what the operator wrote, and leaves a file that
+                // somebody else dropped into r0/r1 exactly as unattested as it found it.
+                let resident = note.front.ring.is_resident();
+                let was_attested = resident && {
+                    let key = Self::resident_key(note.front.ring, &note.path);
+                    let now = Fingerprint::of(&note.path).map(|f| f.hash_hex()).ok();
+                    now.is_some() && attested.get(&key) == now.as_ref()
+                };
+                if resident && !was_attested {
+                    report.link_writeback_failed.push(format!(
+                        "{}: in ring {} without the operator's attestation; left as it is",
+                        note.front.name, note.front.ring
+                    ));
+                } else {
+                    note.front.links = targets;
+                    match w.notes.write(&note) {
+                        Ok(_) => {
+                            report.links_written_back += 1;
+                            if resident && !opts.dry_run {
+                                self.attest_resident(w.policy.get(), &note, "scan: links")?;
+                            }
+                        }
+                        Err(e) => report
+                            .link_writeback_failed
+                            .push(format!("{}: {e}", note.front.name)),
+                    }
                 }
             }
 
@@ -2060,6 +2100,141 @@ impl App {
     /// `write` meets it rather than each caller having to remember it. The operator is
     /// `Operator` (CLI, web UI) and `Cli`; anybody else is pointed at `propose`. Nobody else
     /// may overwrite an existing ring 0/1 note either, whatever ring they ask for.
+    /// The key an attestation is filed under: ring directory and file name, `r0/x.md`.
+    pub fn resident_key(ring: Ring, path: &Path) -> String {
+        format!(
+            "{}/{}",
+            ring.dir(),
+            path.file_name()
+                .map(|f| f.to_string_lossy())
+                .unwrap_or_default()
+        )
+    }
+
+    /// For every file in rings 0 and 1: the content hash the operator last put there.
+    ///
+    /// Rings 0 and 1 are injected into every session as the operator's word (§3.2). Before
+    /// 2026-09-29 the hook injected whatever file lay in `notes/r0` and `notes/r1`: a file an
+    /// agent dropped there with `python -c`, `echo >` or through a symlink became an operator
+    /// invariant at the next session start, and the only trace was "changed after the last
+    /// index write". Now every write of a resident note by the operator records the file's
+    /// blake3 in a `resident.attest` audit row, and the hook injects a resident file only if
+    /// its hash is the one last recorded for that path.
+    ///
+    /// What this does not do: the agent runs as the same user and can write the audit log
+    /// too. Forging a chained row is a deliberate act; dropping a file was not even that.
+    /// The line that holds against a determined agent is a separate user account.
+    pub fn resident_attestations(&self) -> Result<BTreeMap<String, String>> {
+        let rows = self.policy.audit().read(&cyberbrain_policy::AuditFilter {
+            action: Some(RESIDENT_ATTEST.into()),
+            ..Default::default()
+        })?;
+        let mut out = BTreeMap::new();
+        for r in rows {
+            // Oldest first; the last row for a path wins. A null hash is a withdrawal.
+            let (Some(key), hash) = (
+                r.detail.get("path").and_then(|v| v.as_str()),
+                r.detail.get("hash").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            match hash {
+                Some(h) => out.insert(key.to_string(), h.to_string()),
+                None => out.remove(key),
+            };
+        }
+        Ok(out)
+    }
+
+    /// Record that these bytes in ring 0/1 are the operator's. No-op outside rings 0/1.
+    fn attest_resident(&self, policy: &Policy, note: &Note, why: &str) -> Result<()> {
+        if !note.front.ring.is_resident() {
+            return Ok(());
+        }
+        let hash = Fingerprint::of(&note.path)?.hash_hex();
+        policy.audit().record_raw(
+            &self.actor.to_string(),
+            RESIDENT_ATTEST,
+            format!("note:{}", note.front.id),
+            json!({
+                "name": note.front.name,
+                "ring": note.front.ring,
+                "path": Self::resident_key(note.front.ring, &note.path),
+                "hash": hash,
+                "why": why,
+            }),
+        )?;
+        Ok(())
+    }
+
+    /// `cyberbrain policy attest`: the operator declares the files now in rings 0 and 1 to
+    /// be theirs. Needed once after upgrading to a version that checks, and after editing a
+    /// resident note by hand. Refused to an agent, like every other write to rings 0/1.
+    pub fn attest_resident_files(&self, dry_run: bool) -> Result<AttestReport> {
+        if !matches!(self.actor, Actor::Operator | Actor::Cli) {
+            return Err(Error::PolicyRefusal {
+                profile: format!("{:?}", self.policy.profile()).to_lowercase(),
+                reason: format!(
+                    "rings 0 and 1 belong to the operator; {} may not attest them",
+                    self.actor
+                ),
+            });
+        }
+        let known = self.resident_attestations()?;
+        let w = self.writers(dry_run)?;
+        let policy = w.policy.get();
+        let mut report = AttestReport::default();
+        for ring in [Ring::Invariant, Ring::Protocol] {
+            let Ok(entries) = std::fs::read_dir(self.store.ring_dir(ring)) else {
+                continue;
+            };
+            let mut paths: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+                .collect();
+            paths.sort();
+            for path in paths {
+                let key = Self::resident_key(ring, &path);
+                let note = match self.store.read_path(&path) {
+                    Ok(n) if n.front.ring == ring => n,
+                    Ok(n) => {
+                        report.skipped.push(format!(
+                            "{key}: frontmatter says ring {}, the file is in {ring}",
+                            n.front.ring
+                        ));
+                        continue;
+                    }
+                    Err(e) => {
+                        report.skipped.push(format!("{key}: {e}"));
+                        continue;
+                    }
+                };
+                let hash = Fingerprint::of(&path)?.hash_hex();
+                if known.get(&key) == Some(&hash) {
+                    report.unchanged.push(key);
+                    continue;
+                }
+                if !dry_run {
+                    self.attest_resident(policy, &note, "operator attest")?;
+                }
+                let first: String = note
+                    .body
+                    .lines()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or("(empty body)")
+                    .chars()
+                    .take(100)
+                    .collect();
+                report.first_lines.push(first);
+                report.attested.push(key);
+            }
+        }
+        report.dry_run = dry_run;
+        Ok(report)
+    }
+
     /// `mark-reviewed` says a person looked at the finding and decided it is not personal
     /// data. An agent cannot say that about itself: over MCP it passed the choice on its first
     /// call and the note was written `pii: reviewed`, with no hold anybody saw (2026-09-29).
@@ -2313,6 +2488,9 @@ impl App {
             Self::undo_note_write(&w, &note, existing.as_ref(), &e);
             return Err(e);
         }
+        if !req.dry_run {
+            self.attest_resident(policy, &note, "write")?;
+        }
 
         // A write reindexes the note in the same request (§8.1).
         let (blocks, _) = blocks_of(&note, MAX_BLOCK_TOKENS);
@@ -2396,7 +2574,16 @@ impl App {
         } else {
             "invalidate"
         };
-        if let Err(e) = policy.record_write_as(&note.front, bytes, Some(op)) {
+        if let Err(e) = policy
+            .record_write_as(&note.front, bytes, Some(op))
+            .and_then(|()| {
+                if req.dry_run {
+                    Ok(())
+                } else {
+                    self.attest_resident(policy, &note, op)
+                }
+            })
+        {
             Self::undo_note_write(&w, &note, Some(&existing), &e);
             return Err(e);
         }
@@ -2805,6 +2992,7 @@ impl App {
                 ..accepted
             };
             policy.record_write(&accepted.front, bytes)?;
+            self.attest_resident(policy, &accepted, "review accept")?;
             let (blocks, _) = blocks_of(&accepted, MAX_BLOCK_TOKENS);
             let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
             self.declare_profile(&w)?;

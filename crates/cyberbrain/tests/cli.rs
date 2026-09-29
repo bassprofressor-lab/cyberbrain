@@ -3545,3 +3545,104 @@ fn a_huge_n_is_bounded_not_a_crash() {
     assert!(out.status.success(), "{err}");
     assert!(!err.contains("overflow"), "{err}");
 }
+
+/// 2026-09-29: rings 0 and 1 are injected into every session as the operator's word, and the
+/// hook used to inject any file lying there. One dropped in with a script became an operator
+/// invariant at the next session start.
+#[test]
+fn only_what_the_operator_wrote_to_ring_zero_is_injected() {
+    let cb = Cb::new();
+    let start = |id: &str| -> String {
+        let mut child = Cb::bin()
+            .arg("--store")
+            .arg(&cb.store)
+            .args(["hook", "session-start"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write as _;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(format!(r#"{{"session_id":"{id}","source":"startup"}}"#).as_bytes())
+            .unwrap();
+        String::from_utf8_lossy(&child.wait_with_output().unwrap().stdout).into_owned()
+    };
+    let before = |text: &str, needle: &str| {
+        text.split("NOT injected")
+            .next()
+            .unwrap_or("")
+            .contains(needle)
+    };
+
+    let out = cb.run(&[
+        "-q",
+        "write",
+        "--ring",
+        "0",
+        "--kind",
+        "decision",
+        "--name",
+        "regel",
+        "--body",
+        "BETREIBERTEXT",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        before(&start("a"), "BETREIBERTEXT"),
+        "the operator's own note is injected"
+    );
+
+    std::fs::write(
+        cb.store.join("notes/r0/fremd.md"),
+        "---\nid: 01M3AAAAAAAAAAAAAAAAAAAAAA\nname: fremd\nring: 0\nkind: decision\n\
+         created: 2026-09-29T00:00:00Z\nupdated: 2026-09-29T00:00:00Z\n---\nFREMDTEXT\n",
+    )
+    .unwrap();
+    let text = start("b");
+    assert!(
+        !before(&text, "FREMDTEXT"),
+        "a dropped file is not an instruction: {text}"
+    );
+    assert!(
+        text.contains("fremd.md"),
+        "and it is named, not hidden: {text}"
+    );
+
+    // An agent may not declare it the operator's.
+    let out = Cb::bin()
+        .env("CLAUDECODE", "1")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["policy", "attest", "--yes"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(3),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(!before(&start("c"), "FREMDTEXT"));
+
+    // Without --yes the operator only sees the list.
+    let out = cb.run(&["policy", "attest"]);
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("FREMDTEXT"),
+        "the first line is shown"
+    );
+    assert!(
+        !before(&start("d"), "FREMDTEXT"),
+        "and nothing was recorded"
+    );
+
+    // With it, the file is theirs.
+    assert!(cb.run(&["policy", "attest", "--yes"]).status.success());
+    assert!(before(&start("e"), "FREMDTEXT"));
+}
