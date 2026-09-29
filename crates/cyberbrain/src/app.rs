@@ -2134,10 +2134,7 @@ impl App {
     /// too. Forging a chained row is a deliberate act; dropping a file was not even that.
     /// The line that holds against a determined agent is a separate user account.
     pub fn resident_attestations(&self) -> Result<BTreeMap<String, String>> {
-        let rows = self.policy.audit().read(&cyberbrain_policy::AuditFilter {
-            action: Some(RESIDENT_ATTEST.into()),
-            ..Default::default()
-        })?;
+        let rows = self.audit_sink.read_exact_action(RESIDENT_ATTEST)?;
         let mut out = BTreeMap::new();
         for r in rows {
             // Oldest first; the last row for a path wins. A null hash is a withdrawal.

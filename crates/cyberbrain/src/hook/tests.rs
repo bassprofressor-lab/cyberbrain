@@ -901,6 +901,22 @@ fn big_fixture() -> Fixture {
         )
         .unwrap();
     }
+    // An audit log the size a store has after a few weeks of use (orderflow: 16,000 rows on
+    // 2026-09-29). 0.7.3 read every row of it on each session-start and user-prompt-submit,
+    // looking for resident attestations, and a fixture with an empty log could not see that.
+    let app = f.open();
+    for i in 0..20_000 {
+        app.policy()
+            .audit()
+            .record_raw(
+                "cli",
+                "note.write",
+                format!("note:fill-{i}"),
+                serde_json::json!({ "i": i }),
+            )
+            .unwrap();
+    }
+    drop(app);
     f
 }
 

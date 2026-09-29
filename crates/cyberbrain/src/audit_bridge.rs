@@ -48,6 +48,23 @@ impl StoreAuditSink {
 
     /// A poisoned lock means a writer panicked mid-append. Fail closed rather than write
     /// after it: the egress gate proceeds on `Ok`, and an unrecorded permit is the hole.
+    /// Rows whose action is exactly `action`, oldest first, found through the store's index.
+    ///
+    /// [`AuditSink::read`] matches actions as families (`note` means `note.*`) and so reads
+    /// every row and filters here. On a log of 16,000 rows that was 2,100 page reads and
+    /// 30 ms, and the resident attestation check runs on every `session-start` and
+    /// `user-prompt-submit` (0.7.3 put both hooks at about 40 ms against a 15 ms budget).
+    pub fn read_exact_action(&self, action: &str) -> Result<Vec<AuditEvent>> {
+        let rows = self.lock()?.read(&cyberbrain_index::AuditFilter {
+            since: None,
+            action: Some(action.to_string()),
+            subject: None,
+            contains: None,
+            limit: None,
+        })?;
+        rows.into_iter().map(to_event).collect()
+    }
+
     fn lock(&self) -> Result<MutexGuard<'_, AuditStore>> {
         self.store.lock().map_err(|_| {
             Error::Index("audit store lock poisoned; refusing to touch the record".into())
