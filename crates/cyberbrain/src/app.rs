@@ -495,6 +495,9 @@ pub struct StatusReport {
     pub embedding: EmbeddingStatus,
     pub inference: InferenceStatus,
     pub policy: PolicyStatus,
+    /// Whether a daemon answers for this store (2026-09-29; before, a store whose path was
+    /// too long for a socket simply never had one, and nothing said so).
+    pub daemon: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3492,6 +3495,7 @@ impl App {
             files_skipped: listing.skipped.len(),
             resident_tokens: self.store.resident_tokens()?,
             resident_cap: self.store.resident_cap(),
+            daemon: crate::daemon::state(&self.root),
             index_stale: not_indexed + changed + gone > 0,
             index,
             audit: AuditSummary {

@@ -401,6 +401,7 @@ pub fn status(r: &StatusReport) -> String {
         }
     );
     let _ = writeln!(s, "embedding: {}", embedder_line(&r.embedding.embedder));
+    let _ = writeln!(s, "daemon: {}", r.daemon);
     let _ = writeln!(s, "  model dir: {}", Slash(&r.embedding.model_dir));
     match (&r.embedding.index_profile, r.embedding.matches_index) {
         (Some(p), Some(true)) => {

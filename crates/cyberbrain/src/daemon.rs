@@ -148,7 +148,53 @@ pub enum Answer {
 
 fn socket_path(root: &Path) -> Option<PathBuf> {
     let p = root.join(SOCKET);
+    if p.as_os_str().len() <= MAX_SOCKET_PATH {
+        return Some(p);
+    }
+    // A store deeper than a socket path can reach used to mean no daemon at all, silently:
+    // every recall paid 1.5 s instead of 8 ms and neither `status` nor `doctor` said so
+    // (2026-09-29). The socket goes to a directory of this user's own instead, named by a hash
+    // of the store's path. Never /tmp: another account could create the name first and read
+    // what the client sends it.
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .filter(|d| d.is_absolute())
+        .map(|d| d.join("cyberbrain"))
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(PathBuf::from)
+                .map(|h| h.join(".cache").join("cyberbrain"))
+        })?;
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let tag = blake3::hash(root.as_os_str().as_encoded_bytes()).to_hex();
+    let p = dir.join(format!("{}.sock", &tag[..16]));
     (p.as_os_str().len() <= MAX_SOCKET_PATH).then_some(p)
+}
+
+/// For `status`: whether a daemon answers for this store, in one line.
+pub fn state(root: &Path) -> String {
+    if disabled() {
+        return "off (CYBERBRAIN_NO_DAEMON is set); every command loads the model itself".into();
+    }
+    let Some(path) = socket_path(root) else {
+        return "unavailable: no socket path short enough; every command loads the model itself"
+            .into();
+    };
+    #[cfg(unix)]
+    {
+        if std::os::unix::net::UnixStream::connect(&path).is_ok() {
+            return format!("running at {}", cyberbrain_core::Slash(&path));
+        }
+        format!(
+            "not running (socket {}); the next command that needs the model starts one",
+            cyberbrain_core::Slash(&path)
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        "not available on this platform; every command loads the model itself".into()
+    }
 }
 
 fn disabled() -> bool {
@@ -465,6 +511,17 @@ mod server {
     }
 
     pub(super) fn run(base: App, idle_secs: u64) -> Result<i32> {
+        if let Some(dir) = socket_path(base.root())
+            .as_deref()
+            .and_then(Path::parent)
+            .filter(|d| !d.starts_with(base.root()))
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            let _ = std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(dir);
+        }
         let Some(socket) = socket_path(base.root()) else {
             return Err(Error::Config(format!(
                 "the store path is too long for a socket ({} > {MAX_SOCKET_PATH} bytes); \
@@ -808,9 +865,29 @@ mod tests {
         }
     }
 
+    /// A deep store used to get no daemon at all. Its socket now lives in a directory of this
+    /// user's own, short enough to bind, and never in the store or in /tmp.
     #[test]
-    fn a_path_too_long_for_a_socket_gets_no_daemon() {
-        assert!(socket_path(Path::new("/s")).is_some());
-        assert!(socket_path(&PathBuf::from("/".to_string() + &"x".repeat(120))).is_none());
+    fn a_store_too_deep_for_a_socket_gets_one_elsewhere() {
+        assert_eq!(
+            socket_path(Path::new("/s")),
+            Some(PathBuf::from("/s").join(SOCKET))
+        );
+        let deep = PathBuf::from("/".to_string() + &"x".repeat(120));
+        match socket_path(&deep) {
+            Some(p) => {
+                assert!(p.as_os_str().len() <= MAX_SOCKET_PATH, "{p:?}");
+                assert!(!p.starts_with(&deep) && !p.starts_with("/tmp"), "{p:?}");
+                assert_eq!(
+                    socket_path(&deep),
+                    Some(p),
+                    "the same store, the same socket"
+                );
+            }
+            // Neither XDG_RUNTIME_DIR nor HOME: nowhere of this user's own to put it.
+            None => assert!(
+                std::env::var_os("XDG_RUNTIME_DIR").is_none() && std::env::var_os("HOME").is_none()
+            ),
+        }
     }
 }
