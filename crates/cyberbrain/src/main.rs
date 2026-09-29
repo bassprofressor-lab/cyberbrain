@@ -213,7 +213,17 @@ fn main() {
 }
 
 fn real_main() -> i32 {
-    let cli = Cli::parse();
+    // SPEC §8: 1 is a user error, 2 an internal one. clap exits 2 for a bad argument, the
+    // usual convention for a usage error, and so `--ring 5` or `--stand kaputt` read as a
+    // crash to every script that follows the spec (2026-09-29). Help and version still exit
+    // 0; everything clap refuses is the user's to fix and exits 1.
+    let cli = match Cli::try_parse() {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = e.print();
+            return if e.use_stderr() { 1 } else { 0 };
+        }
+    };
     let out = Out {
         json: cli.json,
         quiet: cli.quiet,

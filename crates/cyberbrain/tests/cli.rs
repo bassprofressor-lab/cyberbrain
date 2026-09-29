@@ -3717,3 +3717,28 @@ fn the_longest_valid_name_can_be_written() {
         String::from_utf8_lossy(&out.stderr)
     );
 }
+
+/// SPEC §8: 1 is a user error, 2 an internal one. A bad argument exited 2 (clap's default)
+/// until 2026-09-29.
+#[test]
+fn a_bad_argument_is_a_user_error() {
+    let cb = Cb::new();
+    let out = cb.run(&[
+        "write",
+        "--ring",
+        "5",
+        "--kind",
+        "knowledge",
+        "--name",
+        "x",
+        "--body",
+        "y",
+    ]);
+    assert_eq!(out.status.code(), Some(1));
+    let out = cb.run(&["recall", "x", "--stand", "kaputt"]);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        Cb::bin().arg("--help").output().unwrap().status.code(),
+        Some(0)
+    );
+}
