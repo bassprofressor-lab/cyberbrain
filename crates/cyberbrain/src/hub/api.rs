@@ -191,6 +191,47 @@ enum Who {
     TooEarly,
 }
 
+/// Who a session cookie belongs to *now*.
+///
+/// A session remembers who signed in and with which role, and slides for twelve hours. It used
+/// to be believed for all of them: after `hub principal revoke`, the revoked person's open
+/// session still passed the admin check (`POST /devices` answered 303), and a role changed
+/// in the record did not reach a session already open (2026-09-29). A principal's session is
+/// now checked against the record on every request: gone or revoked closes it, and the role
+/// is the one the record holds. The hub's own administrator has no record row to check.
+fn session_who(state: &HubState, token: &str) -> Option<super::admin::Who> {
+    let hub = state.hub().ok()?;
+    session_who_in(state, token, &hub)
+}
+
+/// [`session_who`] for a caller that already holds the record. Taking the lock a second time
+/// on the same thread would wait for itself.
+fn session_who_in(
+    state: &HubState,
+    token: &str,
+    hub: &super::store::HubStore,
+) -> Option<super::admin::Who> {
+    let who = state.sessions.who(token, jiff::Timestamp::now())?;
+    let super::admin::Who::Principal { id, .. } = &who else {
+        return Some(who);
+    };
+    let current = hub
+        .principals()
+        .ok()
+        .and_then(|all| all.into_iter().find(|p| &p.id == id));
+    match current {
+        Some(p) if p.is_active() => Some(super::admin::Who::Principal {
+            id: p.id,
+            name: p.name,
+            role: p.role,
+        }),
+        _ => {
+            state.sessions.close(token);
+            None
+        }
+    }
+}
+
 fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Who {
     let claimed = {
         match state.hub() {
@@ -214,7 +255,7 @@ fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Wh
     // the same login and gets the same cookie; asking only whether the cookie was live made
     // every signed-in editor, auditor and countersigner an administrator on every page and
     // form that asks this question — including the one that hands out bereich grants.
-    match cookie.and_then(|t| state.sessions.who(&t, jiff::Timestamp::now())) {
+    match cookie.and_then(|t| session_who(&state, &t)) {
         Some(super::admin::Who::Admin) => Who::Admin,
         Some(super::admin::Who::Principal { role, .. }) if role.administers() => Who::Admin,
         _ => Who::Stranger,
@@ -790,7 +831,7 @@ fn signed_in(state: &HubState, headers: &HeaderMap) -> Option<super::admin::Who>
     // whose session it is, that one about the page a visitor gets.
     let token =
         super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))?;
-    state.sessions.who(&token, jiff::Timestamp::now())
+    session_who(state, &token)
 }
 
 /// Where somebody belongs after signing in, and where `/` sends them.
@@ -1426,7 +1467,7 @@ fn session_principal(
     token: Option<&str>,
     hub: &super::store::HubStore,
 ) -> Option<super::access::Principal> {
-    let who = state.sessions.who(token?, jiff::Timestamp::now())?;
+    let who = session_who_in(state, token?, hub)?;
     let super::admin::Who::Principal { id, .. } = who else {
         return None;
     };

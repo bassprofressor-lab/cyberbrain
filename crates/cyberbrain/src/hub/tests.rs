@@ -4080,3 +4080,51 @@ async fn the_operator_at_the_machine_still_claims_it() {
     assert_eq!(r.status(), StatusCode::SEE_OTHER);
     assert!(admin::is_claimed(&state.hub.lock().unwrap()));
 }
+
+/// 2026-09-29: a revoked principal's open session went on passing the admin check for as long
+/// as it kept sliding (twelve hours at a time).
+#[tokio::test]
+async fn a_revoked_principal_is_signed_out_at_the_next_request() {
+    let hub = hub_with_password("admin-passwort-lang-genug");
+    let (who, credential) = hub.add_principal("A. Weber", Role::Admin, NOW).unwrap();
+    let state = state_for(hub, false);
+    let signed_in = sign_in_from(state.clone(), "127.0.0.1:51000", &credential).await;
+    let cookie = cookie_of(&signed_in);
+    let cookie = cookie.split(';').next().unwrap().to_string();
+    assert!(!cookie.is_empty(), "the principal signed in");
+
+    let add_device = |state: Arc<super::api::HubState>, cookie: String| async move {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/devices")
+            .header("content-type", "application/x-www-form-urlencoded")
+            .header("cookie", cookie)
+            .body(Body::from("name=laptop-neu"))
+            .unwrap();
+        req.extensions_mut().insert(ConnectInfo(
+            "127.0.0.1:51000".parse::<std::net::SocketAddr>().unwrap(),
+        ));
+        super::api::router(state).oneshot(req).await.unwrap()
+    };
+    let before = add_device(state.clone(), cookie.clone()).await;
+    assert_eq!(
+        before.status(),
+        StatusCode::SEE_OTHER,
+        "an administrator may add a device"
+    );
+
+    assert!(
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .revoke_principal(&who.id, NOW)
+            .unwrap()
+    );
+    let after = add_device(state.clone(), cookie).await;
+    assert_ne!(
+        after.status(),
+        StatusCode::SEE_OTHER,
+        "revoked means signed out"
+    );
+}
