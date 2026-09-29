@@ -67,6 +67,33 @@ before it was changed, and has a test that fails without the change.
 - **A malformed hub licence took the hub down until a restart**: a panic on a non-ASCII
   character poisoned the hub's lock. It is refused now, and a poisoned lock is recovered.
 - **`recall -n` with a huge number aborted the process.** `n` is bounded to 1..1000.
+- **A settled note gave no sign of it.** A hit now names up to three notes updated after it
+  that link to it (`↳ newer notes link here: …`), so an "open: …" that a later note closed is
+  no longer read as still open. `conflict` could not say so when both sat in one ring.
+- **`invalidate --clear` left the note marked superseded**, with no command to lift it, and
+  `--by` accepted names no note had. `--clear` removes the mark, `--by` needs an existing note,
+  and `doctor` reports supersession that points at nothing.
+- **`doctor` reported copies pair by pair**: sixty copies of one note were 1,770 warnings. A
+  group of copies is one finding now, and at most fifty are listed.
+- **A name the validator accepts failed on disk** from 221 bytes, because the temporary file
+  added 35 to it.
+- **A bad argument exited 2**, which the spec reserves for internal errors. It exits 1.
+- **In the web page, `[[wikilinks]]` to existing notes led nowhere** (`href=""`): the
+  markdown sanitiser dropped the `wiki:` address before the page could turn it into a link.
+- **A store deeper than a socket path allows got no daemon, silently**, and every recall
+  loaded the model again (1.5 s instead of milliseconds). The socket moves to
+  `$XDG_RUNTIME_DIR/cyberbrain` in that case, and `status` has a `daemon:` line.
+
+### Performance
+
+- **One malloc arena.** A cold `recall` on a 1,500-note store: 1.48 s → 1.20 s, 668 → 570 MB
+  (release build, mean of five). A `MALLOC_ARENA_MAX` you set yourself still wins.
+
+### CI
+
+- Runs weekly as well as on push, so a new RustSec advisory is noticed without a commit. The
+  workflow token is read-only, every action is pinned to a commit, and Dependabot proposes
+  updates to the pins.
 
 ### Upgrading
 
