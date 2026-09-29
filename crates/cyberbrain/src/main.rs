@@ -196,7 +196,28 @@ fn read_stdin() -> Result<String> {
 /// needed; it is far enough above it that the next few subcommands do not bring this back.
 const STACK_BYTES: usize = 16 * 1024 * 1024;
 
+/// One malloc arena, unless the operator set `MALLOC_ARENA_MAX` themselves.
+///
+/// Loading the tokenizer makes some half a million small allocations. glibc spreads them over
+/// one arena per thread that touches the heap, and the model loads on another thread than the
+/// one that started: measured 2026-09-29 on the orderflow store, a cold `recall` took 1.48 s
+/// at 668 MB and 1.16 s at 570 MB with a single arena (mean of five, release build). Set
+/// before any thread exists, which is the only time it is safe to change.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn one_malloc_arena() {
+    if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
+        // SAFETY: mallopt only adjusts allocator parameters; called before any other thread.
+        unsafe {
+            libc::mallopt(libc::M_ARENA_MAX, 1);
+        }
+    }
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn one_malloc_arena() {}
+
 fn main() {
+    one_malloc_arena();
     // Named, because a stack overflow names the thread and "cyberbrain" is a better thing to
     // read in that message than "unnamed".
     let worker = std::thread::Builder::new()
