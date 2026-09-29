@@ -901,6 +901,8 @@ impl Drop for App {
 
 /// From this share of its comparable blocks on, `doctor` names a note as a copy of
 /// another. Half: below that the notes are two notes that quote each other.
+/// Most `shared blocks` findings `doctor` lists before it counts the rest.
+const SHARED_BLOCKS_SHOWN: usize = 50;
 const SHARED_BLOCKS_PERCENT: usize = 50;
 
 /// Ledger task names for the contradiction check. The abandoned one is separate on purpose:
@@ -3210,19 +3212,87 @@ impl App {
         // this says where the copies are, so somebody can merge them. Measured on the
         // orderflow store: 19 % of all blocks had a textual twin in another note.
         checks.push("shared blocks");
-        for sb in lock_index(&self.index)?.shared_blocks(SHARED_BLOCKS_PERCENT)? {
+        // Pairs, grouped (2026-09-29): sixty copies of one note were 1,770 pairwise warnings,
+        // and at 20,000 notes 9,029 of 9,031 lines of `doctor` were this check. Notes joined
+        // by shared blocks form a group; a group of two is still said as a pair, with the
+        // numbers, a larger one once with its members. At most SHARED_BLOCKS_SHOWN findings,
+        // then a count of the rest.
+        let pairs = lock_index(&self.index)?.shared_blocks(SHARED_BLOCKS_PERCENT)?;
+        let mut parent: BTreeMap<String, String> = BTreeMap::new();
+        fn root(parent: &mut BTreeMap<String, String>, x: &str) -> String {
+            let mut r = x.to_string();
+            while let Some(p) = parent.get(&r).filter(|p| **p != r).cloned() {
+                r = p;
+            }
+            r
+        }
+        for sb in &pairs {
+            for n in [&sb.note, &sb.other] {
+                parent.entry(n.clone()).or_insert_with(|| n.clone());
+            }
+            let (a, b) = (root(&mut parent, &sb.note), root(&mut parent, &sb.other));
+            if a != b {
+                let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+                parent.insert(hi, lo);
+            }
+        }
+        let mut groups: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        let names: Vec<String> = parent.keys().cloned().collect();
+        for n in names {
+            let r = root(&mut parent, &n);
+            groups.entry(r).or_default().push(n);
+        }
+        let mut shown = 0usize;
+        let mut not_shown = 0usize;
+        for members in groups.values() {
+            if shown == SHARED_BLOCKS_SHOWN {
+                not_shown += 1;
+                continue;
+            }
+            shown += 1;
+            if members.len() == 2 {
+                let sb = pairs
+                    .iter()
+                    .find(|p| members.contains(&p.note) && members.contains(&p.other))
+                    .expect("a group of two is one pair");
+                push(
+                    "warning",
+                    "shared blocks",
+                    format!(
+                        "{} shares {} of {} block(s) ({}%) with {}; consider merging them or \
+                         linking one from the other",
+                        sb.note,
+                        sb.shared,
+                        sb.of,
+                        sb.shared * 100 / sb.of.max(1),
+                        sb.other
+                    ),
+                );
+            } else {
+                let listed: Vec<&str> = members.iter().take(8).map(String::as_str).collect();
+                let more = members.len().saturating_sub(listed.len());
+                push(
+                    "warning",
+                    "shared blocks",
+                    format!(
+                        "{} notes are largely copies of one another: {}{}; consider keeping \
+                         one and linking it from the rest",
+                        members.len(),
+                        listed.join(", "),
+                        if more > 0 {
+                            format!(" and {more} more")
+                        } else {
+                            String::new()
+                        }
+                    ),
+                );
+            }
+        }
+        if not_shown > 0 {
             push(
                 "warning",
                 "shared blocks",
-                format!(
-                    "{} shares {} of {} block(s) ({}%) with {}; consider merging them or linking \
-                     one from the other",
-                    sb.note,
-                    sb.shared,
-                    sb.of,
-                    sb.shared * 100 / sb.of.max(1),
-                    sb.other
-                ),
+                format!("{not_shown} more group(s) of copied notes not listed"),
             );
         }
 
@@ -5117,6 +5187,29 @@ mod duplicate_tests {
     }
 
     /// Calibrated against the state before: doctor had no such check and said nothing.
+    /// Sixty copies of one note were 1,770 pairwise warnings. A group is said once.
+    #[test]
+    fn doctor_says_a_group_of_copies_once() {
+        let (_d, app) = store();
+        const T: &str = "Ein Absatz, der absichtlich in mehreren Notizen steht, damit doctor \
+                         die Kopien als eine Gruppe meldet und nicht als jedes einzelne Paar.";
+        for i in 0..6 {
+            write(&app, Ring::Knowledge, &format!("kopie-{i}"), T);
+        }
+        let r = app.doctor().unwrap();
+        let shared: Vec<&DoctorFinding> = r
+            .findings
+            .iter()
+            .filter(|f| f.check == "shared blocks")
+            .collect();
+        assert_eq!(shared.len(), 1, "{:?}", r.findings);
+        assert!(
+            shared[0].detail.starts_with("6 notes"),
+            "{}",
+            shared[0].detail
+        );
+    }
+
     #[test]
     fn doctor_names_notes_that_share_most_of_their_blocks() {
         let (_d, app) = store();
