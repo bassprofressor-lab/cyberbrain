@@ -4,6 +4,17 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly, with no push: a new RustSec advisory against a dependency arrives without any
+  # change here, and the deny job below is what notices it (2026-09-29: CI ran on push only,
+  # so a quiet week meant nobody would learn of one).
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+# Reading the code is all this workflow does. Actions are pinned to commits, not tags: a tag
+# can be moved to other code, a commit cannot. Dependabot proposes the updates.
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -18,11 +29,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo fmt --all --check
       # `--no-default-features` leaves the `ui` feature off, so this job needs no node
       # toolchain and no built page. The embed is proven by the `ui` job below, which
@@ -51,13 +62,13 @@ jobs:
     env:
       HUB_TEST_LICENCE: ${{ secrets.HUB_TEST_LICENCE }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           package-manager-cache: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       # The page, before the binary. This job used to build --no-default-features, which is
       # a supported build and is not the product: the installer it produced put a Start menu
@@ -83,7 +94,7 @@ jobs:
 
       # The one artefact nobody here can click. Uploading it from every push is how a
       # person with a Windows machine gets to try the current state without a release.
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: windows-installer
           path: packaging/windows/cyberbrain-setup-0.0.0-ci.exe
@@ -258,9 +269,9 @@ jobs:
     name: windows hook through cmd.exe
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release -p cyberbrain --no-default-features
       - name: install into a path containing a space
         shell: cmd
@@ -282,9 +293,9 @@ jobs:
     name: release binary runs on a bare image
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: cargo build --release -p cyberbrain --no-default-features
       - name: run it where no toolchain, sqlite or openssl exists
         run: |
@@ -295,20 +306,20 @@ jobs:
     name: licences and advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       # The action runs in its own container without our pinned toolchain, and
       # `rust-toolchain.toml` would make it try to fetch one it does not need: cargo-deny
       # reads manifests and the lockfile, it does not compile anything.
       - name: keep the toolchain pin out of the deny container
         run: mv rust-toolchain.toml rust-toolchain.toml.off
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
         with:
           command: check
       - run: mv rust-toolchain.toml.off rust-toolchain.toml
       # From v5 the action caches on its own. The lock file is in ui/, not at the root, so
       # that lookup would fail; the page is small enough that no cache is the honest default.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           package-manager-cache: false
@@ -323,8 +334,8 @@ jobs:
     name: build-time C footprint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - run: cargo tree --workspace --edges normal,build --prefix none --format "{p}" | sort -u > /tmp/deps.txt
       - name: refuse cmake, aws-lc-sys, openssl-sys, native-tls
         run: |
@@ -337,15 +348,15 @@ jobs:
     name: ui builds and typechecks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # From v5 the action caches on its own. The lock file is in ui/, not at the root, so
       # that lookup would fail; the page is small enough that no cache is the honest default.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 22
           package-manager-cache: false
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - run: npm ci
         working-directory: ui
       - run: npx tsc --noEmit
@@ -365,9 +376,9 @@ jobs:
     name: performance budgets
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       # SPEC §15's budgets are only real if something measures them. Debug builds are
       # 15x slower and would either fail always or need a meaningless limit, so these
       # run in release and are #[ignore]d elsewhere.
