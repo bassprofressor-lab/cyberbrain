@@ -549,16 +549,16 @@ where
         .filter(|p| !p.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let file_name = path
-        .file_name()
-        .ok_or_else(|| {
-            io_err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "path has no file name",
-            ))
-        })?
-        .to_string_lossy();
-    let tmp = dir.join(format!(".{file_name}.tmp-{}", ulid::Ulid::generate()));
+    if path.file_name().is_none() {
+        return Err(io_err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "path has no file name",
+        )));
+    }
+    // Not `.{file_name}.tmp-…`: that added 35 bytes to a name the validator allows up to 240,
+    // and a 221-byte name then failed with "File name too long" after passing validation
+    // (2026-09-29). The ulid alone is unique in the directory; the dot keeps it hidden.
+    let tmp = dir.join(format!(".cb-tmp-{}", ulid::Ulid::generate()));
 
     let attempt = (|| -> io::Result<()> {
         let mut f = File::create_new(&tmp)?;

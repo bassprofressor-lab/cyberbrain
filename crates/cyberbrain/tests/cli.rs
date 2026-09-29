@@ -3692,3 +3692,28 @@ fn invalidate_by_needs_a_real_note_and_clear_takes_the_mark_off() {
     let file = std::fs::read_to_string(cb.store.join("notes/r2/alt.md")).unwrap();
     assert!(!file.contains("superseded_by"), "{file}");
 }
+
+/// 2026-09-29: a name the validator accepts (up to 240 bytes) failed on disk from 221 bytes,
+/// because the temporary file added 35.
+#[test]
+fn the_longest_valid_name_can_be_written() {
+    let cb = Cb::new();
+    let name = "ä".repeat(120); // 240 bytes, 120 characters: the limit on both counts
+    let out = cb.run(&[
+        "-q",
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        &name,
+        "--body",
+        "lang",
+    ]);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
