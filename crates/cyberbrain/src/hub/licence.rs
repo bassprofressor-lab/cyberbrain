@@ -124,13 +124,17 @@ fn key_from_hex(hex: &str) -> Result<VerifyingKey> {
         .map_err(|e| Error::Config(format!("issuer key is not a valid ed25519 key: {e}")))
 }
 
+/// Over bytes, not over `str` slices: `&s[i..i + 2]` panicked on the first multi-byte
+/// character (`0é00…`), and it panicked while the hub's mutex was held, which poisoned it and
+/// left every later request answering 500 until a restart (2026-09-29).
 fn decode_hex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
+    let b = s.as_bytes();
+    if !b.len().is_multiple_of(2) {
         return None;
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok())
+    let nibble = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    b.chunks_exact(2)
+        .map(|p| Some(nibble(p[0])? << 4 | nibble(p[1])?))
         .collect()
 }
 
@@ -383,5 +387,13 @@ mod file_shape_tests {
         // file's shape and not about its contents.
         let tampered = mangled.replace("Beispiel GmbH", "Jemand Anderes");
         assert!(parse_with_key(&tampered, &public).is_err());
+    }
+
+    #[test]
+    fn a_licence_with_a_non_ascii_character_is_refused_not_a_panic() {
+        assert_eq!(decode_hex("0é00"), None);
+        assert_eq!(decode_hex("ä"), None);
+        assert_eq!(decode_hex("0a1B"), Some(vec![0x0a, 0x1b]));
+        assert_eq!(decode_hex("0g"), None);
     }
 }

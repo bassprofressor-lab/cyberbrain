@@ -68,6 +68,20 @@ pub fn router(state: Arc<HubState>) -> Router {
         .with_state(state)
 }
 
+impl HubState {
+    /// The record, whatever an earlier request did to the lock.
+    ///
+    /// A panic while the mutex was held used to poison it, and from then on every page and
+    /// every device's ingest answered 500 "poisoned lock" until the hub was restarted: one
+    /// malformed licence took the whole hub down (2026-09-29). The record is SQLite, and a
+    /// transaction interrupted by a panic is rolled back when it drops, so there is nothing
+    /// half-written to protect by refusing. Kept as a `Result` so the call sites read as
+    /// before; it is always `Ok`.
+    pub fn hub(&self) -> Result<std::sync::MutexGuard<'_, HubStore>, String> {
+        Ok(self.hub.lock().unwrap_or_else(|p| p.into_inner()))
+    }
+}
+
 /// Whether this request came from the machine the hub runs on.
 ///
 /// The page shows who is on the network and can install a licence, and the hub binds an
@@ -179,7 +193,7 @@ enum Who {
 
 fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Who {
     let claimed = {
-        match state.hub.lock() {
+        match state.hub() {
             Ok(hub) => super::admin::is_claimed(&hub),
             Err(_) => true, // fail towards asking for a password
         }
@@ -272,7 +286,7 @@ async fn page(
             };
         }
     }
-    let hub = match state.hub.lock() {
+    let hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -311,7 +325,7 @@ async fn claim(
     if !at_the_machine(&from, &headers) {
         return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
     }
-    let hub = match state.hub.lock() {
+    let hub = match state.hub() {
         Ok(h) => h,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     };
@@ -364,7 +378,7 @@ async fn login(
     // and a person with the credential `hub principal add` printed for them. Tried in that
     // order, and the refusal is the same sentence either way — saying which one nearly
     // worked would tell an unknown caller what kind of secret they are holding.
-    let who = match state.hub.lock() {
+    let who = match state.hub() {
         Ok(hub) => {
             if super::admin::verify(&hub, &form.password) {
                 Some(super::admin::Who::Admin)
@@ -468,7 +482,7 @@ async fn change_password(
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
     let outcome = {
-        let hub = match state.hub.lock() {
+        let hub = match state.hub() {
             Ok(h) => h,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
@@ -519,7 +533,7 @@ async fn install_licence(
         return html(super::page::login_page(None));
     }
     let outcome = {
-        let hub = match state.hub.lock() {
+        let hub = match state.hub() {
             Ok(h) => h,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
@@ -570,7 +584,7 @@ async fn add_device(
         return html(super::page::login_page(None));
     }
     let outcome = {
-        let hub = match state.hub.lock() {
+        let hub = match state.hub() {
             Ok(h) => h,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
@@ -711,7 +725,7 @@ async fn add_grant(
         return html(super::page::login_page(None));
     }
     let now = jiff::Timestamp::now().to_string();
-    let Ok(hub) = state.hub.lock() else {
+    let Ok(hub) = state.hub() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
     };
     let problem = (|| -> Result<(), String> {
@@ -760,7 +774,7 @@ async fn revoke_grant(
         return html(super::page::login_page(None));
     }
     let now = jiff::Timestamp::now().to_string();
-    if let Ok(hub) = state.hub.lock()
+    if let Ok(hub) = state.hub()
         && hub.revoke_grant(&id, &now).unwrap_or(false)
     {
         let _ = hub.record("hub-page", "grant.revoked", json!({ "id": id }), &now);
@@ -811,7 +825,7 @@ async fn get_conflicts(State(state): State<Arc<HubState>>, headers: HeaderMap) -
     let Some((id, name)) = editor_of(&state, &headers) else {
         return Redirect::to("/login").into_response();
     };
-    let Ok(hub) = state.hub.lock() else {
+    let Ok(hub) = state.hub() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
     };
     match hub.conflicts_for_principal(&id) {
@@ -839,7 +853,7 @@ async fn post_conflict(
         return Redirect::to("/login").into_response();
     };
     let now = jiff::Timestamp::now().to_string();
-    let Ok(hub) = state.hub.lock() else {
+    let Ok(hub) = state.hub() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
     };
     // Checked against this person's bereiche, not against the id alone. Otherwise a
@@ -880,7 +894,7 @@ async fn post_fetch(
         .ok()
         .and_then(|v| v.get("since").and_then(|s| s.as_str()).map(str::to_string));
     let token = bearer(&headers);
-    let hub = match state.hub.lock() {
+    let hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -911,7 +925,7 @@ async fn post_erase(
 ) -> Response {
     let token = bearer(&headers);
     let now = jiff::Timestamp::now().to_string();
-    let mut hub = match state.hub.lock() {
+    let mut hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -943,7 +957,7 @@ async fn post_notes(
 ) -> Response {
     let token = bearer(&headers);
     let now = jiff::Timestamp::now().to_string();
-    let mut hub = match state.hub.lock() {
+    let mut hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -977,7 +991,7 @@ async fn post_ingest(
     let machine = client_machine(&headers);
     let now = jiff::Timestamp::now().to_string();
 
-    let mut hub = match state.hub.lock() {
+    let mut hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -1047,7 +1061,7 @@ async fn get_fleet(
         )
             .into_response();
     }
-    let hub = match state.hub.lock() {
+    let hub = match state.hub() {
         Ok(h) => h,
         Err(e) => {
             return (
@@ -1094,7 +1108,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
     let Some((id, name, role)) = signer_of(&state, &headers) else {
         return Redirect::to("/login").into_response();
     };
-    let Ok(hub) = state.hub.lock() else {
+    let Ok(hub) = state.hub() else {
         return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
     };
     let now = jiff::Timestamp::now();
@@ -1172,7 +1186,7 @@ async fn countersign_purge(
     }
     let now = jiff::Timestamp::now().to_string();
     {
-        let Ok(hub) = state.hub.lock() else {
+        let Ok(hub) = state.hub() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
         };
         let token =
@@ -1280,7 +1294,7 @@ fn enrol_and_record(
 ) -> Result<Response, (super::store::EnrolRefusal, bool)> {
     use super::store::EnrolRefusal as R;
     let now = jiff::Timestamp::now();
-    let Ok(hub) = state.hub.lock() else {
+    let Ok(hub) = state.hub() else {
         ticket.unasked(std::time::Instant::now());
         return Ok((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -1370,7 +1384,7 @@ async fn post_request(
     }
     let now = jiff::Timestamp::now().to_string();
     {
-        let Ok(hub) = state.hub.lock() else {
+        let Ok(hub) = state.hub() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
         };
         // Through `principal_for`, not through the session alone: it is the one place that
@@ -1433,7 +1447,7 @@ async fn approve(
     }
     let now = jiff::Timestamp::now();
     {
-        let Ok(hub) = state.hub.lock() else {
+        let Ok(hub) = state.hub() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
         };
         let token =
@@ -1474,7 +1488,7 @@ async fn countersign(
     }
     let now = jiff::Timestamp::now().to_string();
     {
-        let Ok(hub) = state.hub.lock() else {
+        let Ok(hub) = state.hub() else {
             return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
         };
         let token =

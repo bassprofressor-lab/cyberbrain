@@ -1595,7 +1595,10 @@ impl App {
     pub async fn recall(&self, query: &str, req: &RecallRequest) -> Result<RecallResult> {
         let r = &self.config.retrieval;
         let opts = RecallOptions {
-            n: req.n.unwrap_or(r.n),
+            // Bounded (2026-09-29): `-n 18446744073709551615` and MCP `n: 1e12` reached a
+            // `Vec::with_capacity` and aborted the process with a capacity overflow. serve
+            // already capped at 100; a thousand hits is more than any reader reads.
+            n: req.n.unwrap_or(r.n).clamp(1, 1000),
             k_lex: r.k_lex,
             k_sem: r.k_sem,
             ring: req.ring,

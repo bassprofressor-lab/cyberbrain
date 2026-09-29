@@ -3522,3 +3522,26 @@ fn a_tag_with_personal_data_is_refused() {
     ]);
     assert_eq!(code, 0, "an ordinary tag still goes through: {err}");
 }
+
+/// 2026-09-29: `-n` the size of a u64 reached a `Vec::with_capacity` and aborted.
+#[test]
+fn a_huge_n_is_bounded_not_a_crash() {
+    let cb = Cb::new();
+    let out = cb.run(&[
+        "-q",
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "a",
+        "--body",
+        "hallo welt",
+    ]);
+    assert!(out.status.success());
+    let out = cb.run(&["recall", "hallo", "-n", "18446744073709551615"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{err}");
+    assert!(!err.contains("overflow"), "{err}");
+}
