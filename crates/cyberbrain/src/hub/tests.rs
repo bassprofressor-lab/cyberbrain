@@ -1619,9 +1619,10 @@ fn view_of(
 fn the_page_is_only_for_the_machine_the_hub_runs_on() {
     let yes = ["127.0.0.1:51000", "[::1]:51000"];
     let no = ["192.168.1.20:51000", "10.0.0.5:51000", "[2001:db8::1]:443"];
+    let none = axum::http::HeaderMap::new();
     for a in yes {
         assert!(
-            super::api::at_the_machine(&a.parse().unwrap()),
+            super::api::at_the_machine(&a.parse().unwrap(), &none),
             "{a} is the machine itself"
         );
     }
@@ -1629,7 +1630,10 @@ fn the_page_is_only_for_the_machine_the_hub_runs_on() {
     // network can reach. Getting this backwards is the difference between a status page and
     // an open console.
     for a in no {
-        assert!(!super::api::at_the_machine(&a.parse().unwrap()), "{a}");
+        assert!(
+            !super::api::at_the_machine(&a.parse().unwrap(), &none),
+            "{a}"
+        );
     }
 }
 
@@ -3971,4 +3975,108 @@ async fn refusals_for_a_real_invitation_are_recorded_but_never_lock() {
     assert_eq!(refused[0]["refusal"]["refused"], "not-licensed");
     assert_eq!(refused[0]["machine"], "ws-000");
     assert!(hub_actions(&state, "enrolment.locked").is_empty());
+}
+
+// ---------------------------------------------------------------------------------------
+// 2026-09-29: DNS rebinding and cross-site forms against the hub page.
+
+fn hosted(host: &str) -> axum::http::HeaderMap {
+    let mut h = axum::http::HeaderMap::new();
+    h.insert("host", host.parse().unwrap());
+    h
+}
+
+#[test]
+fn loopback_under_a_foreign_name_is_not_the_machine() {
+    let from: std::net::SocketAddr = "127.0.0.1:51000".parse().unwrap();
+    for ok in [
+        "127.0.0.1:7788",
+        "localhost:7788",
+        "[::1]:7788",
+        "LOCALHOST",
+    ] {
+        assert!(super::api::at_the_machine(&from, &hosted(ok)), "{ok}");
+    }
+    // A page on attacker.example whose name now resolves to 127.0.0.1 connects from
+    // loopback. Its Host is still its own name, and that is what gives it away.
+    for bad in [
+        "evil.example:7788",
+        "evil.example",
+        "127.0.0.1.evil.example:7788",
+    ] {
+        assert!(!super::api::at_the_machine(&from, &hosted(bad)), "{bad}");
+    }
+}
+
+async fn claim_with(
+    state: Arc<super::api::HubState>,
+    headers: &[(&str, &str)],
+) -> axum::response::Response {
+    let mut b = Request::builder()
+        .method("POST")
+        .uri("/claim")
+        .header("content-type", "application/x-www-form-urlencoded");
+    for (k, v) in headers {
+        b = b.header(*k, *v);
+    }
+    let mut req = b
+        .body(Body::from(
+            "password=Sup3r-lang-genug&again=Sup3r-lang-genug",
+        ))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "127.0.0.1:51000".parse::<std::net::SocketAddr>().unwrap(),
+    ));
+    super::api::router(state).oneshot(req).await.unwrap()
+}
+
+#[tokio::test]
+async fn a_rebound_page_cannot_claim_an_unclaimed_hub() {
+    let state = state_for(HubStore::in_memory().unwrap(), false);
+    // Reproduced against 0.7.2: this answered 303 with a session cookie.
+    let r = claim_with(
+        state.clone(),
+        &[
+            ("host", "evil.example:7788"),
+            ("origin", "http://evil.example:7788"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(
+        !admin::is_claimed(&state.hub.lock().unwrap()),
+        "nobody may own it yet"
+    );
+}
+
+#[tokio::test]
+async fn another_website_cannot_post_a_form_to_the_hub() {
+    let state = state_for(HubStore::in_memory().unwrap(), false);
+    let r = claim_with(
+        state.clone(),
+        &[
+            ("host", "127.0.0.1:7788"),
+            ("origin", "https://evil.example"),
+            ("sec-fetch-site", "cross-site"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(!admin::is_claimed(&state.hub.lock().unwrap()));
+}
+
+#[tokio::test]
+async fn the_operator_at_the_machine_still_claims_it() {
+    let state = state_for(HubStore::in_memory().unwrap(), false);
+    let r = claim_with(
+        state.clone(),
+        &[
+            ("host", "127.0.0.1:7788"),
+            ("origin", "http://127.0.0.1:7788"),
+            ("sec-fetch-site", "same-origin"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(admin::is_claimed(&state.hub.lock().unwrap()));
 }

@@ -64,6 +64,7 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/grants/{id}/approve", post(countersign))
         .route("/purges/{id}/approve", post(countersign_purge))
         .route("/api/v1/fleet", get(get_fleet))
+        .layer(axum::middleware::from_fn(browser_guard))
         .with_state(state)
 }
 
@@ -73,8 +74,74 @@ pub fn router(state: Arc<HubState>) -> Router {
 /// address the whole network can reach. Rather than invent a sign-in for this slice, the
 /// rule is that you have to be at the machine: a rule with an obvious shape, which cannot be
 /// misconfigured. A networked view can come later behind the admin role that already exists.
-pub(crate) fn at_the_machine(who: &std::net::SocketAddr) -> bool {
-    who.ip().is_loopback()
+///
+/// 2026-09-29: a loopback peer alone is not enough. A browser on this machine that opened
+/// `attacker.example`, whose name then resolves to 127.0.0.1 (DNS rebinding), connects from
+/// loopback too, and before anybody had set a password that was enough to claim the hub:
+/// `curl -H 'Host: evil.example' -d 'password=x&again=x' 127.0.0.1:<port>/claim` answered 303
+/// with a session. The one thing such a page cannot change is the name it carries, so the
+/// `Host` has to be a loopback name as well. A reverse proxy on the same machine now counts
+/// as the network it forwards, which is what it is.
+pub(crate) fn at_the_machine(who: &std::net::SocketAddr, headers: &HeaderMap) -> bool {
+    who.ip().is_loopback() && host_is_loopback(host_of(headers).as_deref())
+}
+
+/// The `Host` a request names, without the port.
+fn host_of(headers: &HeaderMap) -> Option<String> {
+    let raw = headers.get(header::HOST)?.to_str().unwrap_or("\u{fffd}");
+    let name = if let Some(rest) = raw.strip_prefix('[') {
+        // [::1]:port
+        rest.split(']').next().unwrap_or(rest).to_string()
+    } else {
+        raw.rsplit_once(':').map_or(raw, |(h, _)| h).to_string()
+    };
+    Some(name.to_ascii_lowercase())
+}
+
+/// No `Host` at all is a program speaking HTTP/1.0 by hand, not a browser: DNS rebinding needs
+/// a browser, and a browser always sends one. A literal loopback address cannot be rebound.
+fn host_is_loopback(host: Option<&str>) -> bool {
+    match host {
+        None => true,
+        Some(h) => {
+            h == "localhost"
+                || h.parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        }
+    }
+}
+
+/// Every state-changing request that a browser sends has to come from this hub's own page.
+///
+/// The same rule as `serve` (see `serve/origin.rs`), with the hub's own name taken from the
+/// request: a hub is reached under whatever name the network gives it. An `Origin` that is
+/// not that name, or a `Sec-Fetch-Site` that is not `same-origin`/`none`, is another website
+/// asking the visitor's browser to post a form here. Devices and scripts send neither header
+/// and are unaffected.
+pub(crate) async fn browser_guard(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let headers = req.headers();
+    let owned = |name: &str| {
+        headers
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_string)
+    };
+    let (origin, site, host) = (
+        owned(header::ORIGIN.as_str()),
+        owned("sec-fetch-site"),
+        owned(header::HOST.as_str()),
+    );
+    let ours: Vec<String> = host
+        .iter()
+        .flat_map(|h| [format!("http://{h}"), format!("https://{h}")])
+        .collect();
+    match crate::serve::origin::allowed(req.method(), origin.as_deref(), site.as_deref(), &ours) {
+        Ok(()) => next.run(req).await,
+        Err(why) => (StatusCode::FORBIDDEN, why).into_response(),
+    }
 }
 
 const ELSEWHERE: &str = "This hub has not been set up yet. Open it on the machine it runs \
@@ -94,8 +161,8 @@ const PLAINTEXT: &str = "This hub is not encrypted, so a password typed here wou
 ///
 /// Encrypted: from anywhere, which is the entire reason the page has a password. Not
 /// encrypted: only from the machine itself, where nothing goes over a wire at all.
-fn password_may_travel(state: &HubState, from: &std::net::SocketAddr) -> bool {
-    state.encrypted || at_the_machine(from)
+fn password_may_travel(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> bool {
+    state.encrypted || at_the_machine(from, headers)
 }
 
 /// What a caller is allowed to see.
@@ -121,7 +188,7 @@ fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Wh
         // Before there is a password, being at the machine is the credential. Whoever is at
         // the console can read the record with any SQLite tool, so this grants nothing that
         // was not already theirs.
-        return if at_the_machine(from) {
+        return if at_the_machine(from, headers) {
             Who::MayClaim
         } else {
             Who::TooEarly
@@ -237,10 +304,11 @@ pub struct ClaimForm {
 /// Set the first password, from the machine itself.
 async fn claim(
     State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
     ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
     Form(form): Form<ClaimForm>,
 ) -> Response {
-    if !at_the_machine(&from) {
+    if !at_the_machine(&from, &headers) {
         return (StatusCode::FORBIDDEN, ELSEWHERE).into_response();
     }
     let hub = match state.hub.lock() {
@@ -283,12 +351,13 @@ pub struct LoginForm {
 
 async fn login(
     State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
     ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
     Form(form): Form<LoginForm>,
 ) -> Response {
     // Before the password is looked at, not after: a hub that checks first and refuses
     // afterwards has already been told the password by the time it objects.
-    if !password_may_travel(&state, &from) {
+    if !password_may_travel(&state, &headers, &from) {
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
     // Two kinds of caller arrive at the same box: the administrator with the hub password,
@@ -395,7 +464,7 @@ async fn change_password(
     // The form carries the current password and the new one, so the same rule applies here
     // as at sign-in. Reachable only with a session, which over plain text can only have been
     // opened at the machine — belt and braces, and it costs one comparison.
-    if !password_may_travel(&state, &from) {
+    if !password_may_travel(&state, &headers, &from) {
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
     let outcome = {
