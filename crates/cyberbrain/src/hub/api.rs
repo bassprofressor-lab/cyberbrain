@@ -255,7 +255,7 @@ fn who(state: &HubState, headers: &HeaderMap, from: &std::net::SocketAddr) -> Wh
     // the same login and gets the same cookie; asking only whether the cookie was live made
     // every signed-in editor, auditor and countersigner an administrator on every page and
     // form that asks this question — including the one that hands out bereich grants.
-    match cookie.and_then(|t| session_who(&state, &t)) {
+    match cookie.and_then(|t| session_who(state, &t)) {
         Some(super::admin::Who::Admin) => Who::Admin,
         Some(super::admin::Who::Principal { role, .. }) if role.administers() => Who::Admin,
         _ => Who::Stranger,
