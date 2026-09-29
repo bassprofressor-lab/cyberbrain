@@ -745,6 +745,67 @@ struct Writers<'a> {
     notes: Box<dyn NoteWriter>,
     index: Box<dyn IndexWriter>,
     policy: PolicyRef<'a>,
+    /// Held for as long as these writers live. `None` on a dry run and when this thread
+    /// already holds the store (a writer calling a writer).
+    _lock: Option<StoreLock>,
+}
+
+/// One writer per store at a time, across processes (2026-09-29).
+///
+/// Nothing serialised writers before. Twenty `write --name same` in parallel left the file
+/// with one writer's text and the index with another's, under a different id, and nineteen
+/// of them reported failure after one of them had already replaced the file. A `scan` running
+/// beside a `write` listed the files, the write landed, and the scan then dropped the new row
+/// as "file missing at scan". Parallel sub-agents are exactly this case.
+///
+/// An exclusive advisory lock on `<store>/.lock`, taken when a set of writers is made and
+/// released when it is dropped, so every mutating operation (write, scan, invalidate,
+/// review, forget, import) runs whole or waits. Readers take no lock: a recall during a
+/// write sees the index before or after it, both of which are consistent.
+///
+/// Re-entrant per thread, because the lock is per open file: a second `open` of `.lock` on
+/// the same thread would wait for itself.
+struct StoreLock {
+    root: PathBuf,
+    _file: std::fs::File,
+}
+
+thread_local! {
+    static HELD: std::cell::RefCell<Vec<PathBuf>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+impl StoreLock {
+    fn take(root: &Path) -> Result<Option<Self>> {
+        if HELD.with(|h| h.borrow().iter().any(|r| r == root)) {
+            return Ok(None);
+        }
+        let path = root.join(".lock");
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .map_err(|source| Error::Io {
+                path: path.clone(),
+                source,
+            })?;
+        file.lock().map_err(|source| Error::Io {
+            path: path.clone(),
+            source,
+        })?;
+        HELD.with(|h| h.borrow_mut().push(root.to_path_buf()));
+        Ok(Some(Self {
+            root: root.to_path_buf(),
+            _file: file,
+        }))
+    }
+}
+
+impl Drop for StoreLock {
+    fn drop(&mut self) {
+        // The file closes after this, and closing releases the lock.
+        HELD.with(|h| h.borrow_mut().retain(|r| r != &self.root));
+    }
 }
 
 fn kind_name(k: NoteKind) -> String {
@@ -1036,7 +1097,18 @@ impl App {
         &self.actor
     }
 
-    fn writers(&self, dry_run: bool) -> Writers<'_> {
+    fn writers(&self, dry_run: bool) -> Result<Writers<'_>> {
+        Ok(self.writers_unlocked_if(
+            dry_run,
+            if dry_run {
+                None
+            } else {
+                StoreLock::take(&self.root)?
+            },
+        ))
+    }
+
+    fn writers_unlocked_if(&self, dry_run: bool, lock: Option<StoreLock>) -> Writers<'_> {
         if dry_run {
             let sink = Arc::new(MemoryAuditSink::new());
             let policy = Policy::new(
@@ -1052,6 +1124,7 @@ impl App {
                     index: self.index.clone(),
                 }),
                 policy: PolicyRef::Dry(Box::new(policy), sink),
+                _lock: None,
             }
         } else {
             Writers {
@@ -1062,6 +1135,7 @@ impl App {
                     index: self.index.clone(),
                 }),
                 policy: PolicyRef::Real(&self.policy),
+                _lock: lock,
             }
         }
     }
@@ -1273,7 +1347,7 @@ impl App {
 
     pub fn scan(&self, opts: ScanOptions) -> Result<ScanReport> {
         let started = Instant::now();
-        let w = self.writers(opts.dry_run);
+        let w = self.writers(opts.dry_run)?;
         let listing = self.store.list()?;
         let mut report = ScanReport {
             dry_run: opts.dry_run,
@@ -1434,9 +1508,14 @@ impl App {
             if seen.contains(&rec.front.id) {
                 continue;
             }
+            // Looked at again before the row goes: the listing is from the start of the scan,
+            // and a file that exists now is not "missing at scan" whatever the listing says.
+            if self.root.join(&rec.path).is_file() || rec.path.is_file() {
+                continue;
+            }
             let erased = w.index.delete_note(&rec.front.id)?;
             w.policy.get().audit().record_raw(
-                &Actor::Cli.to_string(),
+                &self.actor.to_string(),
                 "index.note-dropped",
                 format!("note:{}", erased.id),
                 json!({
@@ -2041,7 +2120,7 @@ impl App {
                 });
             }
         }
-        let w = self.writers(req.dry_run);
+        let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
 
         let existing = match self.store.read(&name) {
@@ -2223,7 +2302,7 @@ impl App {
                 });
             }
         }
-        let w = self.writers(req.dry_run);
+        let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
         let existing = self.store.read(&name)?;
         self.refuse_resident_unless_operator(
@@ -2372,7 +2451,7 @@ impl App {
             )));
         }
 
-        let w = self.writers(req.dry_run);
+        let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
 
         // SPEC §12.4: the scan runs before any byte is written, here as anywhere.
@@ -2567,7 +2646,7 @@ impl App {
         // no gate at all. Deciding on a ring 0/1 proposal is the operator's, whichever way.
         self.refuse_resident_unless_operator(&name, note.front.ring, None, req.dry_run)?;
 
-        let w = self.writers(req.dry_run);
+        let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
 
         if !req.accept {
@@ -2707,7 +2786,7 @@ impl App {
     /// `Policy`; this method is the operator's entry to it.
     pub fn forget(&self, target: &str, dry_run: bool) -> Result<ErasureReport> {
         let req = self.erase_request(target, EraseReason::OperatorForget, dry_run)?;
-        let w = self.writers(dry_run);
+        let w = self.writers(dry_run)?;
         let mut eraser = StoreEraser {
             notes: w.notes.as_ref(),
             index: w.index.as_ref(),
@@ -3910,7 +3989,7 @@ impl App {
         if !apply {
             return Ok(report);
         }
-        let w = self.writers(dry_run);
+        let w = self.writers(dry_run)?;
         let mut eraser = StoreEraser {
             notes: w.notes.as_ref(),
             index: w.index.as_ref(),

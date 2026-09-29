@@ -3326,3 +3326,102 @@ fn the_real_daemon_writes_bounds_and_answers_as_of_a_day() {
     let _ = daemon.kill();
     let _ = daemon.wait();
 }
+
+/// 2026-09-29: writers are serialised across processes. Before, twenty parallel writes to one
+/// name left the file with one writer's id and the index with another's, and a `scan` beside
+/// forty writes dropped rows as "file missing at scan" whose files were there.
+#[test]
+fn parallel_writers_do_not_tear_the_store_apart() {
+    let cb = Cb::new();
+    let spawn = |args: Vec<String>| {
+        Cb::bin()
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    };
+    let mut kids: Vec<_> = (0..12)
+        .map(|i| {
+            spawn(
+                [
+                    "-q",
+                    "write",
+                    "--ring",
+                    "2",
+                    "--kind",
+                    "knowledge",
+                    "--name",
+                    "gleich",
+                    "--body",
+                ]
+                .iter()
+                .map(|s| s.to_string())
+                .chain([format!("version {i}")])
+                .collect(),
+            )
+        })
+        .collect();
+    for k in &mut kids {
+        k.wait().unwrap();
+    }
+    let file = std::fs::read_to_string(cb.store.join("notes/r2/gleich.md")).unwrap();
+    let file_id = file
+        .lines()
+        .find_map(|l| l.strip_prefix("id: "))
+        .unwrap()
+        .trim()
+        .to_string();
+    let (hit, code, err) = cb.json(&["recall", "gleich", "-n", "1"]);
+    assert_eq!(code, 0, "{err}");
+    let hits = hit["hits"]
+        .as_array()
+        .or(hit["results"].as_array())
+        .unwrap();
+    assert_eq!(
+        hits[0]["note_id"].as_str().unwrap(),
+        file_id,
+        "file and index name one note"
+    );
+
+    let mut kids: Vec<_> = (0..16)
+        .map(|i| {
+            spawn(
+                ["-q", "write", "--ring", "2", "--kind", "knowledge"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .chain([
+                        "--name".into(),
+                        format!("par-{i}"),
+                        "--body".into(),
+                        format!("inhalt {i}"),
+                    ])
+                    .collect(),
+            )
+        })
+        .chain((0..4).map(|_| spawn(vec!["-q".into(), "scan".into()])))
+        .collect();
+    for k in &mut kids {
+        k.wait().unwrap();
+    }
+    let out = cb.run(&["policy", "audit", "--action", "index.note-dropped"]);
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !text.contains("note-dropped"),
+        "nothing was missing: {text}"
+    );
+    let (v, _, _) = cb.json(&["recall", "inhalt", "-n", "50"]);
+    let hits = v["hits"].as_array().or(v["results"].as_array()).unwrap();
+    let names: std::collections::BTreeSet<_> = hits
+        .iter()
+        .filter_map(|h| h["note_name"].as_str())
+        .filter(|n| n.starts_with("par-"))
+        .collect();
+    assert_eq!(
+        names.len(),
+        16,
+        "every written note is in the index: {names:?}"
+    );
+}
