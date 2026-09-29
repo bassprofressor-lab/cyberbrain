@@ -21,6 +21,6 @@ pub use frontmatter::validate_name;
 pub use path::{Slash, slash};
 pub use store::{Change, Fingerprint, Store};
 pub use types::{
-    Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit, Note,
-    NoteId, NoteKind, PiiState, RecallResult, Ring,
+    Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit,
+    NewerLink, Note, NoteId, NoteKind, PiiState, RecallResult, Ring,
 };

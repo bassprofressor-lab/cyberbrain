@@ -247,6 +247,7 @@ impl Index {
                     superseded_by: o.superseded_by,
                     valid_from: o.valid_from,
                     invalid_at: o.invalid_at,
+                    newer_links: Vec::new(),
                     note_name: name,
                     score,
                     text,
@@ -269,6 +270,9 @@ impl Index {
             }
             hits.push(group);
         }
+        for h in &mut hits {
+            h.newer_links = self.newer_links_to(h)?;
+        }
         if resident_left_out > 0 {
             caveats.push(format!(
                 "{resident_left_out} hit(s) from rings 0/1 left out: those rings are in the \
@@ -281,6 +285,48 @@ impl Index {
             conflicts: Vec::new(),
             caveats,
         })
+    }
+
+    /// Notes updated after `hit`'s that link to its note, newest first, at most three.
+    /// Only for the hits returned, so it costs `n` indexed lookups and nothing per candidate.
+    fn newer_links_to(&self, hit: &Hit) -> Result<Vec<cyberbrain_core::NewerLink>> {
+        let Some(since) = hit.updated else {
+            return Ok(Vec::new());
+        };
+        let mut stmt = self
+            .conn
+            .prepare_cached(
+                "SELECT n.name, n.ring, n.updated FROM links l JOIN notes n ON n.id = l.from_note \
+                 WHERE l.resolved_note_id = ?1 AND n.id != ?1",
+            )
+            .ix()?;
+        let rows = stmt
+            .query_map([hit.note_id.to_string()], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                ))
+            })
+            .ix()?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (name, ring, updated) = row.ix()?;
+            let Ok(updated) = updated.parse::<jiff::Timestamp>() else {
+                continue;
+            };
+            if updated <= since {
+                continue;
+            }
+            out.push(cyberbrain_core::NewerLink {
+                name,
+                ring: Ring::try_from(ring as u8)?,
+                updated,
+            });
+        }
+        out.sort_by(|a, b| b.updated.cmp(&a.updated).then_with(|| a.name.cmp(&b.name)));
+        out.truncate(3);
+        Ok(out)
     }
 
     /// `updated`, name and validity of the note behind each citation, for the recency

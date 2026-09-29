@@ -540,6 +540,7 @@ mod tests {
             superseded_by: None,
             valid_from: None,
             invalid_at: None,
+            newer_links: Vec::new(),
             score: 1.0,
             text: text.into(),
         }

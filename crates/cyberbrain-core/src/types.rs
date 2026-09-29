@@ -268,8 +268,23 @@ pub struct Hit {
     /// about: what it says held until then. Demoted and marked, never hidden.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid_at: Option<jiff::Timestamp>,
+    /// Notes updated after this one that link to it with `[[…]]`, newest first, at most
+    /// three. Not a verdict: a later note may extend this one as well as overrule it. But a
+    /// reader who meets an "open: …" line should see that something newer points here before
+    /// repeating it as open (2026-09-29, where exactly that happened twice in one morning
+    /// and `conflict` could not say so, because both notes sat in the same ring).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub newer_links: Vec<NewerLink>,
     pub score: f32,
     pub text: String,
+}
+
+/// A later note that links to a hit. See [`Hit::newer_links`].
+#[derive(Debug, Clone, PartialEq, Serialize, serde::Deserialize)]
+pub struct NewerLink {
+    pub name: String,
+    pub ring: Ring,
+    pub updated: jiff::Timestamp,
 }
 
 /// Two hits that disagree. The lower ring wins and both are named (SPEC §7).

@@ -186,6 +186,18 @@ pub fn recall(r: &RecallResult) -> String {
             h.note_name,
             h.score / top * 100.0
         );
+        if !h.newer_links.is_empty() {
+            let names: Vec<String> = h
+                .newer_links
+                .iter()
+                .map(|l| format!("{} ({}, {})", l.name, l.ring, &l.updated.to_string()[..10]))
+                .collect();
+            let _ = writeln!(
+                s,
+                "     \u{21b3} newer notes link here: {}. If this may have changed, look there first.",
+                names.join(", ")
+            );
+        }
         for line in h.text.lines() {
             let _ = writeln!(s, "     {line}");
         }

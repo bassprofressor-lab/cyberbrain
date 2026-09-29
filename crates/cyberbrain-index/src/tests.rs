@@ -1777,3 +1777,63 @@ fn short_identical_blocks_stay_separate() {
         .unwrap();
     assert_eq!(r.hits.len(), 2, "{r:?}");
 }
+
+/// 2026-09-29: an "open: …" line in one note, settled by a later note in the same ring that
+/// links back to it. `conflict` cannot say so (it compares rings), so the hit says who points
+/// at it from later.
+#[test]
+fn a_hit_names_the_later_notes_that_link_to_it() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let mut settled = note_at(
+        "bunker-erledigt",
+        Ring::Session,
+        "Entschieden: kein Konzernmutter-Satz. Siehe [[bunker-offen]].",
+        "2026-09-29T08:00:00Z",
+    );
+    settled.front.links = vec!["bunker-offen".into()];
+    let mut older_ref = note_at(
+        "bunker-vorher",
+        Ring::Knowledge,
+        "Vorgeschichte, siehe [[bunker-offen]].",
+        "2026-09-01T00:00:00Z",
+    );
+    older_ref.front.links = vec!["bunker-offen".into()];
+    for n in [
+        note_at(
+            "bunker-offen",
+            Ring::Knowledge,
+            "Offen: Konzernmutter bestaetigen lassen.",
+            "2026-09-28T20:00:00Z",
+        ),
+        settled,
+        older_ref,
+    ] {
+        put(&mut ix, &e, &n);
+    }
+    let r = ix
+        .recall(
+            "Konzernmutter bestaetigen",
+            Some(&e),
+            &RecallOptions::default(),
+        )
+        .unwrap();
+    let hit = r
+        .hits
+        .iter()
+        .find(|h| h.note_name == "bunker-offen")
+        .unwrap();
+    let names: Vec<&str> = hit.newer_links.iter().map(|l| l.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["bunker-erledigt"],
+        "only the later note, not the older one"
+    );
+    let later = r
+        .hits
+        .iter()
+        .find(|h| h.note_name == "bunker-erledigt")
+        .unwrap();
+    assert!(later.newer_links.is_empty());
+}
