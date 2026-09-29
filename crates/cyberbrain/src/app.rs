@@ -2057,6 +2057,27 @@ impl App {
     /// `write` meets it rather than each caller having to remember it. The operator is
     /// `Operator` (CLI, web UI) and `Cli`; anybody else is pointed at `propose`. Nobody else
     /// may overwrite an existing ring 0/1 note either, whatever ring they ask for.
+    /// `mark-reviewed` says a person looked at the finding and decided it is not personal
+    /// data. An agent cannot say that about itself: over MCP it passed the choice on its first
+    /// call and the note was written `pii: reviewed`, with no hold anybody saw (2026-09-29).
+    /// An agent may still redact, or write with `--force`, which stamps the note `flagged`
+    /// for a person to look at later.
+    fn refuse_review_unless_operator(&self, name: &str, choice: OperatorChoice) -> Result<()> {
+        if choice != OperatorChoice::MarkReviewed
+            || matches!(self.actor, Actor::Operator | Actor::Cli)
+        {
+            return Ok(());
+        }
+        Err(Error::PolicyRefusal {
+            profile: format!("{:?}", self.policy.profile()).to_lowercase(),
+            reason: format!(
+                "only the operator may mark a PII finding as reviewed; {} may not (note {name}). \
+                 Redact it, or write with --force to have it stamped `flagged` for review",
+                self.actor
+            ),
+        })
+    }
+
     fn refuse_resident_unless_operator(
         &self,
         name: &str,
@@ -2192,6 +2213,7 @@ impl App {
                         });
                     }
                     Some(c) => {
+                        self.refuse_review_unless_operator(&name, c)?;
                         let r = policy.resolve_hold(&name, &req.body, &findings, c)?;
                         (r.body, r.pii, r.redacted)
                     }
@@ -2509,6 +2531,7 @@ impl App {
                         });
                     }
                     Some(c) => {
+                        self.refuse_review_unless_operator(&name, c)?;
                         let r = policy.resolve_hold(&name, &req.body, &findings, c)?;
                         (r.body, r.pii, r.redacted)
                     }

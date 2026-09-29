@@ -3499,7 +3499,10 @@ fn a_tag_with_personal_data_is_refused() {
         "max.mustermann@firma.de",
     ]);
     assert_eq!(code, 3, "{err}");
-    assert!(err.contains("policy-refusal") && err.contains("tag"), "{err}");
+    assert!(
+        err.contains("policy-refusal") && err.contains("tag"),
+        "{err}"
+    );
     assert!(
         !cb.store.join("notes/r2/t.md").exists(),
         "nothing was written"

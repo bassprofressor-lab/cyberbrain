@@ -168,8 +168,9 @@ pub fn catalogue() -> Vec<Tool> {
                 describe::about("write"),
                 "Result: `outcome` is `written`, `held` or `conflict`. A held write is a \
                  decision, not a failure: the PII findings are returned and nothing was \
-                 written; answer with `choice` (redact, mark-reviewed, proceed-flagged), \
-                 `force` (same as proceed-flagged), or a changed body. Rings 0 and 1 belong \
+                 written; answer with `choice` (redact or proceed-flagged; mark-reviewed is \
+                 the operator's and refused here), `force` (same as proceed-flagged), or a \
+                 changed body. Rings 0 and 1 belong \
                  to the operator and are refused here with `policy-refusal`; hand the text \
                  to the operator to `cyberbrain propose` instead.",
             ),
@@ -588,9 +589,10 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
                     format!(
                         "{rendered}Nothing was written. Call write again with the same body \
                          and `choice`: \"redact\" (replace the findings with placeholders), \
-                         \"mark-reviewed\" (write as is, findings accepted) or \
-                         \"proceed-flagged\" (write as is, findings stand); or `force: true` \
-                         (same as proceed-flagged); or change the body.\n"
+                         \"proceed-flagged\" (write as is, findings stand, for a person to \
+                         review); or `force: true` (same as proceed-flagged); or change the \
+                         body. \"mark-reviewed\" says a person accepted the findings and is \
+                         refused to an agent.\n"
                     ),
                     structured,
                     true,

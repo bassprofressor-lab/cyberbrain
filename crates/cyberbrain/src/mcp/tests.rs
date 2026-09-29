@@ -543,6 +543,15 @@ async fn a_held_write_is_a_result_carrying_its_findings() {
         assert_eq!(r["structuredContent"]["outcome"], "written");
         assert_eq!(r["structuredContent"]["pii"], "flagged", "{r}");
 
+        // 2026-09-29: an agent may not declare its own finding reviewed.
+        let mut reviewed = args.clone();
+        reviewed["name"] = json!("contact-three");
+        reviewed["choice"] = json!("mark-reviewed");
+        let r = c.call("write", reviewed).await;
+        assert_eq!(r["isError"], true, "{r}");
+        assert!(r.to_string().contains("policy-refusal"), "{r}");
+        assert!(!root.join("notes/r2/contact-three.md").exists());
+
         // Concurrency guard (§8.1): a stale expected_updated is a conflict result.
         let mut stale = args.clone();
         stale["choice"] = json!("mark-reviewed");
