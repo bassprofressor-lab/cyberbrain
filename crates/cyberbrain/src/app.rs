@@ -2571,6 +2571,25 @@ impl App {
                     reason: format!("replaced by `{by}`: {why}"),
                 });
             }
+            // A replacement that does not exist is a typo, and one nobody would see: the
+            // note is demoted and marked "superseded by" a name that resolves to nothing
+            // (accepted without a word until 2026-09-29).
+            if req.clear {
+                return Err(Error::Config(
+                    "--clear says the note holds again; --by says what replaced it. Give one"
+                        .into(),
+                ));
+            }
+            match self.store.read(&by) {
+                Ok(_) => {}
+                Err(Error::NoSuchNote(_)) => {
+                    return Err(Error::Config(format!(
+                        "replaced by `{by}`, but there is no note by that name. Write it first, \
+                         or check the spelling"
+                    )));
+                }
+                Err(e) => return Err(e),
+            }
         }
         let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
@@ -2589,6 +2608,12 @@ impl App {
         } else {
             Some(req.at.unwrap_or(now))
         };
+        // "Holds again" is the whole of it: a note that holds is not replaced. Until
+        // 2026-09-29 `--clear` said "holds again" and left `superseded_by`, so the note stayed
+        // demoted and marked, with no command that could take the mark off.
+        if req.clear {
+            front.superseded_by = None;
+        }
         if let Some(by) = &req.by {
             front.superseded_by = Some(frontmatter::normalize_name(by.trim()).into_owned());
         }
@@ -3211,6 +3236,43 @@ impl App {
         // Notes that are mostly copies of each other. Recall already shows each text once;
         // this says where the copies are, so somebody can merge them. Measured on the
         // orderflow store: 19 % of all blocks had a textual twin in another note.
+        // `superseded_by` / `supersedes` that name no note (2026-09-29): the replaced note is
+        // demoted and marked for a replacement nobody can open. Written by hand, or by an
+        // older `invalidate --by` that took any name.
+        checks.push("supersession");
+        {
+            let ix = lock_index(&self.index)?;
+            let all = ix.notes()?;
+            let exists: HashSet<&str> = all.iter().map(|r| r.front.name.as_str()).collect();
+            for r in &all {
+                let f = &r.front;
+                if let Some(by) = &f.superseded_by
+                    && !exists.contains(by.as_str())
+                {
+                    push(
+                        "warning",
+                        "supersession",
+                        format!(
+                            "{} is marked superseded by `{by}`, which does not exist",
+                            f.name
+                        ),
+                    );
+                }
+                for old in &f.supersedes {
+                    if !exists.contains(old.as_str()) {
+                        push(
+                            "warning",
+                            "supersession",
+                            format!(
+                                "{} says it supersedes `{old}`, which does not exist",
+                                f.name
+                            ),
+                        );
+                    }
+                }
+            }
+        }
+
         checks.push("shared blocks");
         // Pairs, grouped (2026-09-29): sixty copies of one note were 1,770 pairwise warnings,
         // and at 20,000 notes 9,029 of 9,031 lines of `doctor` were this check. Notes joined

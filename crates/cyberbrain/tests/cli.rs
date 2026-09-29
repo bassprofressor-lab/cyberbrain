@@ -3646,3 +3646,49 @@ fn only_what_the_operator_wrote_to_ring_zero_is_injected() {
     assert!(cb.run(&["policy", "attest", "--yes"]).status.success());
     assert!(before(&start("e"), "FREMDTEXT"));
 }
+
+/// 2026-09-29: `invalidate --clear` said "holds again" and left `superseded_by` in place, and
+/// `--by` accepted a name that no note had.
+#[test]
+fn invalidate_by_needs_a_real_note_and_clear_takes_the_mark_off() {
+    let cb = Cb::new();
+    for (n, b) in [("alt", "alte fassung"), ("neu", "neue fassung")] {
+        assert!(
+            cb.run(&[
+                "-q",
+                "write",
+                "--ring",
+                "2",
+                "--kind",
+                "knowledge",
+                "--name",
+                n,
+                "--body",
+                b
+            ])
+            .status
+            .success()
+        );
+    }
+    let out = cb.run(&["-q", "invalidate", "alt", "--by", "gibtsnicht"]);
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        cb.run(&["-q", "invalidate", "alt", "--by", "neu"])
+            .status
+            .success()
+    );
+    let file = std::fs::read_to_string(cb.store.join("notes/r2/alt.md")).unwrap();
+    assert!(file.contains("superseded_by: neu"), "{file}");
+    assert!(
+        cb.run(&["-q", "invalidate", "alt", "--clear"])
+            .status
+            .success()
+    );
+    let file = std::fs::read_to_string(cb.store.join("notes/r2/alt.md")).unwrap();
+    assert!(!file.contains("superseded_by"), "{file}");
+}
