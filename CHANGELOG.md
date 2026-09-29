@@ -10,6 +10,68 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Found in a full review of 0.7.2 on 2026-09-29; every item below was reproduced against 0.7.2
+before it was changed, and has a test that fails without the change.
+
+### Before you upgrade
+
+- **Run `cyberbrain policy attest` once, read the list, then `cyberbrain policy attest --yes`**,
+  in your own terminal. Rings 0 and 1 are now injected into a session only if their files are
+  what the operator last wrote there through cyberbrain (below). Notes written by an older
+  version have no such record yet, and until you attest them every session reports them as
+  "not injected". `attest` without `--yes` records nothing and shows each file with its first
+  line: anything on that list becomes an operator instruction, so remove what is not yours.
+- **`serve` no longer writes rings 0 and 1** unless started with `--allow-resident-writes`.
+  Edit resident notes at a terminal, or start the page with that flag when you mean to.
+
+### Security
+
+- **Rings 0 and 1 inject only what the operator wrote there.** The hook injected any file in
+  `notes/r0` and `notes/r1`: one dropped in by a script (`python -c`, `echo >`, a symlink)
+  became an operator invariant at the next session start. Every resident write by the operator
+  now records the file's blake3 in a `resident.attest` audit row, and a file whose hash is not
+  the last one recorded for its path is listed as not injected instead. An agent runs as the
+  same user and could still forge a chained audit row; that is a deliberate act where a dropped
+  file was not even that. A separate account for agents is what holds against it.
+- **`serve` answered every program on the machine as the operator.** `curl -X POST
+  /api/v1/notes` with `"ring": 0` came back 201. Resident writes over HTTP are now refused by
+  default, and `serve` takes its actor from the environment like the CLI, so an agent that
+  starts `serve` is an agent.
+- **The daemon believed the actor a client sent.** A script at the socket claiming
+  `operator` wrote ring 0. The daemon now reads the connecting process's environment as of its
+  start (`SO_PEERCRED`, `/proc/<pid>/environ`, Linux); a process started as an agent is an
+  agent.
+- **An unclaimed hub could be claimed by any web page** whose name was rebound to 127.0.0.1:
+  a loopback peer was taken as "at the machine" whatever `Host` it named. The `Host` has to be
+  a loopback name as well, and every browser POST to the hub has to carry the hub's own origin.
+- **A revoked hub principal stayed signed in** for as long as the session kept sliding, with
+  its old role. A principal's session is checked against the record on every request.
+- **An agent could mark its own PII finding as reviewed** (`choice: mark-reviewed` over MCP).
+  That choice is the operator's; an agent may redact or proceed flagged.
+- **The PII gate missed passwords inside URLs** (`postgres://user:pass@host`,
+  `redis://:pw@host`), German labels (`passwort:`, `kennwort:`), and anything after the first
+  `!` or `&` of an assigned secret, which a redaction then left standing. Tags skipped the gate
+  entirely; a tag with a finding is now refused, since half a tag cannot be redacted.
+
+### Fixed
+
+- **`forget` left the erased text in `cyberbrain.db`.** The rows went, the bytes stayed, in
+  freed pages and old full-text segments, so every copy of the store carried what was asked to
+  be erased. Freed pages are zeroed now, the full-text index is compacted after an erasure,
+  and the write-ahead log is checkpointed and truncated.
+- **Parallel writers tore the store apart.** Twenty writes to one name left the file with one
+  id and the index with another; a `scan` beside forty writes dropped rows whose files existed.
+  Every mutating operation now holds an exclusive lock on `<store>/.lock`.
+- **A malformed hub licence took the hub down until a restart**: a panic on a non-ASCII
+  character poisoned the hub's lock. It is refused now, and a poisoned lock is recovered.
+- **`recall -n` with a huge number aborted the process.** `n` is bounded to 1..1000.
+
+### Upgrading
+
+Beyond the two steps above, replace the binary. The index schema is still v5.
+
 ## [0.7.2] — 2026-09-28
 
 ### Fixed
