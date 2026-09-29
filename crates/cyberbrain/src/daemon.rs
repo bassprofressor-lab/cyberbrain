@@ -18,8 +18,12 @@
 //! - It leaves after `--idle-secs` without a request, and at once when the binary,
 //!   `cyberbrain.toml` or the model manifest changes (answering the request that noticed
 //!   with "stale", so the client runs it locally).
-//! - The socket is `0600`; the client's actor is taken as sent, the same trust the CLI's
-//!   own environment gets. `CYBERBRAIN_NO_DAEMON=1` turns all of this off.
+//! - The socket is `0600`. The client's actor is taken as sent, except that the daemon reads
+//!   the connecting process's own environment (`SO_PEERCRED`, then `/proc/<pid>/environ`) and
+//!   a process started as an agent is an agent whatever it claims (2026-09-29; before, a
+//!   Python script at the socket that sent `"actor":"operator"` wrote ring 0). That is the
+//!   same trust the CLI's environment gets, now checked rather than asserted.
+//!   `CYBERBRAIN_NO_DAEMON=1` turns all of this off.
 //!
 //! Unix only. Elsewhere the client always answers locally and `daemon` refuses to start.
 
@@ -531,8 +535,55 @@ mod server {
         Ok(0)
     }
 
+    /// The agent behind this connection, from the connecting process's environment as it was
+    /// when that process started. `/proc/<pid>/environ` is fixed at exec: a script that
+    /// removes `CLAUDECODE` from its own environment afterwards still shows it here.
+    ///
+    /// Linux only; elsewhere, and if the process cannot be read (it has already gone), the
+    /// actor the client sent stands, which is where every client stood before this.
+    #[cfg(target_os = "linux")]
+    pub(super) fn peer_agent(stream: &UnixStream) -> Option<Actor> {
+        use std::os::fd::AsRawFd;
+        let mut cred = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: `cred` and `len` are valid for writes of the sizes given, and the fd is a
+        // live socket owned by `stream` for the duration of the call.
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&raw mut cred).cast(),
+                &raw mut len,
+            )
+        };
+        if rc != 0 || cred.pid <= 0 {
+            return None;
+        }
+        let raw = std::fs::read(format!("/proc/{}/environ", cred.pid)).ok()?;
+        let vars: std::collections::HashMap<String, String> = raw
+            .split(|b| *b == 0)
+            .filter_map(|kv| {
+                let kv = String::from_utf8_lossy(kv);
+                kv.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect();
+        crate::agent_from_env(|k| vars.get(k).cloned())
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn peer_agent(_stream: &UnixStream) -> Option<Actor> {
+        None
+    }
+
     fn handle(s: &Shared, stream: UnixStream) {
         s.last.store(now_secs(), Ordering::Relaxed);
+        let peer = peer_agent(&stream);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
         let mut line = String::new();
         let Ok(reader) = stream.try_clone() else {
@@ -552,7 +603,7 @@ mod server {
             // request, least of all half a write.
             not_done("incomplete request")
         } else {
-            answer(s, &line)
+            answer(s, &line, peer)
         };
         let mut out = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
         out.push('\n');
@@ -574,8 +625,8 @@ mod server {
 
     /// Carries a request out and answers the way the CLI would have: stdout, the stderr
     /// line of an error, the exit code. Only a request that cannot be read is "not done".
-    fn answer(s: &Shared, line: &str) -> Response {
-        let req: Request = match serde_json::from_str(line) {
+    fn answer(s: &Shared, line: &str, peer: Option<Actor>) -> Response {
+        let mut req: Request = match serde_json::from_str(line) {
             Ok(r) => r,
             Err(e) => return not_done(&format!("not a daemon request: {e}")),
         };
@@ -584,6 +635,9 @@ mod server {
                 "protocol {} is not one of {OLDEST_PROTOCOL}..={PROTOCOL}",
                 req.v
             ));
+        }
+        if let Some(agent) = peer {
+            req.actor = agent.to_string();
         }
         let json = req.json;
         match carry_out(s, req) {
@@ -679,6 +733,20 @@ mod server {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The daemon asks the connecting process, not the request. Over a socket pair inside this
+    /// test the peer is this very process, so the answer has to be whatever this process's
+    /// own environment says: an agent when run from Claude Code, the operator otherwise.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_peer_is_judged_by_its_own_environment() {
+        let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+        let expected = crate::agent_from_env(|k| std::env::var(k).ok());
+        assert_eq!(
+            super::server::peer_agent(&a).map(|x| x.to_string()),
+            expected.map(|x| x.to_string())
+        );
+    }
 
     #[test]
     fn the_actor_round_trips_through_its_name() {
