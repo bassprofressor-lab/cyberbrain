@@ -10,6 +10,21 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **A session starts with the handoff the previous one left.** Handoff notes are usually
+  written by an agent at the end of a day, into ring 2 or 3, where `recall` finds them only
+  for somebody who already thinks to ask. A fresh session does not: after a reboot one
+  checked the machine by hand and never ran the check script the handoff named. Now
+  `session-start` shows the newest note in ring 2 or 3 whose name contains `handoff`, after
+  the resident rings, with its citations, its date and how old it is, and says that rings 0
+  and 1 outrank it. Only on `startup` and `clear`, only if it is younger than a week and not
+  invalid, and blocks beyond 1,500 tokens are listed by citation. The new `[handoff]`
+  section sets the name patterns (an empty list turns it off), the age and the length. The
+  `session.start` audit row names the note it showed.
+
 ## [0.7.4] — 2026-09-29
 
 ### Fixed

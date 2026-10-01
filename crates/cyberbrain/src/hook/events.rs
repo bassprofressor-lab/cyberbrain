@@ -2,7 +2,7 @@
 //!
 //! | event | model sees | does |
 //! |---|---|---|
-//! | `session-start` | plain stdout | rings 0 and 1 in full with citations, a digest of store state, one audit row `session.start`; announces stand-down |
+//! | `session-start` | plain stdout | rings 0 and 1 in full with citations, on `startup`/`clear` the newest handoff note (ring 2/3, see `handoff`), a digest of store state, one audit row `session.start`; announces stand-down |
 //! | `user-prompt-submit` | plain stdout | re-injects a resident note that changed since it was injected; injects everything if no session-start ran; else nothing |
 //! | `pre-tool-use` | JSON decision | refuses a raw edit of the audit log or of rings 0/1, asks the operator about the config and rings 2..4; otherwise nothing |
 //! | `post-tool-use` | JSON `additionalContext` | after an allowed raw edit of a store file, says the index is now stale (or the chain broken); otherwise nothing |
@@ -38,6 +38,7 @@
 //! `session-start` reads back on `resume` and `compact`.
 
 use super::governance;
+use super::handoff;
 use super::paths::{self, StoreTarget};
 use super::payload::Payload;
 use super::resident::{self, Resident};
@@ -245,6 +246,20 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         _ => {}
     }
     resident::render_rings(&res, &mut text);
+    // The handoff belongs to a session's beginning. After a compaction or on resume the
+    // session has its own, newer account of where it stands, and the old handoff would
+    // only compete with it.
+    let handoff = match source {
+        "startup" | "clear" => {
+            let cfg = &ctx.app.config().handoff;
+            let h = handoff::latest(ctx.app.store(), cfg, jiff::Timestamp::now());
+            if let Some(h) = &h {
+                handoff::render(h, cfg, &mut text);
+            }
+            h
+        }
+        _ => None,
+    };
     digest(ctx, &res, state.as_ref(), source, &mut text);
     usage(&mut text);
     out.stdout = text;
@@ -264,6 +279,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
             "approx_tokens": res.tokens,
             "unreadable": res.unreadable.len(),
             "injection": state.as_ref().map(|s| s.injections),
+            "handoff": handoff.as_ref().map(|h| format!("{}/{}", h.note.front.ring, h.note.front.name)),
         }),
     )?;
 

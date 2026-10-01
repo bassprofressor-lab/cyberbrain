@@ -1202,3 +1202,193 @@ fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
         "a local edit must not drop the retention either"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// session-start: the newest handoff note (2026-10-01)
+
+/// Rewrites one frontmatter line of a note on disk, for the states a write cannot produce
+/// on demand: a handoff from last month, one declared invalid in the past.
+fn edit_front(f: &Fixture, ring: Ring, name: &str, key: &str, value: &str) {
+    let path = f
+        .store
+        .join("notes")
+        .join(format!("r{}", ring.as_u8()))
+        .join(format!("{name}.md"));
+    let text = std::fs::read_to_string(&path).unwrap();
+    let prefix = format!("{key}:");
+    let mut found = false;
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        if line.starts_with(&prefix) {
+            out.push(format!("{key}: {value}"));
+            found = true;
+        } else {
+            out.push(line.to_string());
+        }
+    }
+    if !found {
+        // Insert before the closing `---` of the frontmatter.
+        let close = out.iter().skip(1).position(|l| l == "---").unwrap() + 1;
+        out.insert(close, format!("{key}: {value}"));
+    }
+    std::fs::write(&path, out.join("\n") + "\n").unwrap();
+}
+
+fn set_handoff_config(f: &Fixture, toml: &str) {
+    let path = f.store.join("cyberbrain.toml");
+    let text = std::fs::read_to_string(&path).unwrap();
+    let start = text.find("[handoff]").unwrap();
+    let end = start + text[start..].find("\n[retrieval]").unwrap();
+    let new = format!("{}[handoff]\n{toml}\n{}", &text[..start], &text[end..]);
+    std::fs::write(&path, new).unwrap();
+}
+
+#[test]
+fn session_start_shows_the_newest_handoff_with_citations() {
+    let f = fixture();
+    f.write(
+        Ring::Knowledge,
+        "handoff-monday",
+        "Monday: run the old script.",
+    );
+    f.write(
+        Ring::Session,
+        "handoff-tuesday",
+        "Tuesday: after the reboot run check.sh first.",
+    );
+    f.write(Ring::Session, "pg18", "PG 18 moves PGDATA.");
+    let out = session_start(&f, "startup");
+    let s = &out.stdout;
+    assert!(s.contains("## Latest handoff (r3, not resident)"), "{s}");
+    assert!(s.contains("### r3 `handoff-tuesday`"), "{s}");
+    assert!(s.contains("after the reboot run check.sh first"), "{s}");
+    // Only the newest, and nothing else from rings 2 and 3.
+    assert!(!s.contains("Monday: run the old script"), "{s}");
+    assert!(!s.contains("PG 18 moves PGDATA"), "{s}");
+    // It comes after the resident rings and says it does not outrank them.
+    assert!(s.find("## Latest handoff").unwrap() > s.find("## Ring 0").unwrap());
+    assert!(s.contains("rings 0 and 1 outrank it"), "{s}");
+    // The citation resolves like a resident one.
+    let cit = s
+        .lines()
+        .find(|l| l.starts_with("[r3-"))
+        .expect("a ring 3 citation");
+    let app = f.open();
+    let expanded = app.recall_id(cit.trim_matches(['[', ']'])).unwrap();
+    assert_eq!(expanded.note.front.name, "handoff-tuesday");
+    // The record names it.
+    let row = app
+        .policy()
+        .audit()
+        .read(&AuditFilter::default())
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.action == "session.start")
+        .unwrap();
+    assert_eq!(row.detail["handoff"], "r3/handoff-tuesday");
+}
+
+#[test]
+fn the_handoff_is_shown_on_clear_but_not_after_compaction_or_on_resume() {
+    let f = fixture();
+    f.write(Ring::Session, "handoff-now", "Run check.sh first.");
+    assert!(
+        session_start(&f, "clear")
+            .stdout
+            .contains("Run check.sh first.")
+    );
+    for source in ["compact", "resume"] {
+        let s = session_start(&f, source).stdout;
+        assert!(!s.contains("Latest handoff"), "{source}: {s}");
+        assert!(!s.contains("Run check.sh first."), "{source}: {s}");
+    }
+}
+
+#[test]
+fn an_old_or_invalidated_handoff_is_not_shown() {
+    let f = fixture();
+    f.write(Ring::Session, "handoff-last-month", "Old plan.");
+    edit_front(
+        &f,
+        Ring::Session,
+        "handoff-last-month",
+        "updated",
+        "2020-01-01T00:00:00Z",
+    );
+    f.write(Ring::Session, "handoff-withdrawn", "Withdrawn plan.");
+    edit_front(
+        &f,
+        Ring::Session,
+        "handoff-withdrawn",
+        "invalid_at",
+        "2020-01-01T00:00:00Z",
+    );
+    let s = session_start(&f, "startup").stdout;
+    assert!(!s.contains("Latest handoff"), "{s}");
+    assert!(!s.contains("Old plan."), "{s}");
+    assert!(!s.contains("Withdrawn plan."), "{s}");
+    // And the record says there was none.
+    let row = f
+        .open()
+        .policy()
+        .audit()
+        .read(&AuditFilter::default())
+        .unwrap()
+        .into_iter()
+        .rfind(|e| e.action == "session.start")
+        .unwrap();
+    assert!(row.detail["handoff"].is_null(), "{}", row.detail);
+}
+
+#[test]
+fn handoff_names_are_configurable_and_an_empty_list_turns_it_off() {
+    let f = fixture();
+    f.write(Ring::Session, "uebergabe-abend", "Morgen zuerst pruefen.");
+    assert!(
+        !session_start(&f, "startup")
+            .stdout
+            .contains("Morgen zuerst")
+    );
+    set_handoff_config(&f, r#"name_contains = ["Uebergabe", "handoff"]"#);
+    let s = session_start(&f, "startup").stdout;
+    assert!(s.contains("Morgen zuerst pruefen."), "{s}");
+    assert!(s.contains("`Uebergabe` or `handoff`"), "{s}");
+    set_handoff_config(&f, "name_contains = []");
+    assert!(
+        !session_start(&f, "startup")
+            .stdout
+            .contains("Latest handoff")
+    );
+}
+
+#[test]
+fn a_long_handoff_lists_the_blocks_it_leaves_out() {
+    let f = fixture();
+    let body = (1..=4)
+        .map(|i| format!("## Part {i}\n\n{}", format!("word{i} ").repeat(80)))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    f.write(Ring::Session, "handoff-long", &body);
+    set_handoff_config(&f, "max_tokens = 1");
+    let s = session_start(&f, "startup").stdout;
+    // The first block is always shown, however small the budget.
+    assert!(s.contains("word1"), "{s}");
+    assert!(!s.contains("word2"), "{s}");
+    let line = s
+        .lines()
+        .find(|l| l.starts_with("Left out over handoff.max_tokens"))
+        .expect(&s);
+    // Parts 2 to 4, by citation.
+    assert_eq!(line.matches("r3-").count(), 3, "{line}");
+}
+
+#[test]
+fn an_empty_handoff_pattern_is_a_config_error() {
+    let err = cyberbrain_core::Config::parse(
+        "[handoff]\nname_contains = [\"\"]\n",
+        Path::new("cyberbrain.toml"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("handoff.name_contains"), "{err}");
+}

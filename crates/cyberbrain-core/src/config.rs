@@ -56,6 +56,7 @@ pub struct Config {
     #[serde(skip)]
     pub store: PathBuf,
     pub rings: RingsConfig,
+    pub handoff: HandoffConfig,
     pub retrieval: RetrievalConfig,
     pub embedding: EmbeddingConfig,
     pub inference: InferenceConfig,
@@ -136,6 +137,27 @@ pub struct RingsConfig {
     /// Rings 0 and 1 together may not exceed this many (approximate) tokens. Enforced at
     /// write time (SPEC §3.2).
     pub resident_cap_tokens: usize,
+}
+
+/// The newest handoff note, shown at session start beside the resident rings (2026-10-01).
+///
+/// A handoff is written at the end of one session for the start of the next: what was done,
+/// what to run first, what is open. Kept in ring 2 or 3 it is found only by somebody who
+/// already thinks to ask for it, and a fresh session does not. Moving it into ring 1 would
+/// make it the operator's to write and resident forever, which a note that is stale by the
+/// next evening should not be.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct HandoffConfig {
+    /// A note in ring 2 or 3 counts as a handoff when its name contains one of these,
+    /// ignoring case. Empty: no handoff is ever shown.
+    pub name_contains: Vec<String>,
+    /// A handoff whose `updated` is older than this is not shown. A week-old handoff is a
+    /// record, not a plan, and presenting it as the latest misleads.
+    pub max_age_days: u32,
+    /// Blocks beyond this many (approximate) tokens are left out, with their citations
+    /// listed so the rest can be expanded with `recall --id`.
+    pub max_tokens: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -228,6 +250,7 @@ impl Default for Config {
         Self {
             store: PathBuf::from(DEFAULT_STORE_DIR),
             rings: RingsConfig::default(),
+            handoff: HandoffConfig::default(),
             retrieval: RetrievalConfig::default(),
             embedding: EmbeddingConfig::default(),
             inference: InferenceConfig::default(),
@@ -242,6 +265,16 @@ impl Default for RingsConfig {
     fn default() -> Self {
         Self {
             resident_cap_tokens: DEFAULT_RESIDENT_CAP_TOKENS,
+        }
+    }
+}
+
+impl Default for HandoffConfig {
+    fn default() -> Self {
+        Self {
+            name_contains: vec!["handoff".to_string()],
+            max_age_days: 7,
+            max_tokens: 1500,
         }
     }
 }
@@ -313,6 +346,17 @@ pub const DEFAULT_TOML: &str = r#"# Cyberbrain configuration. Every key below is
 # Rings 0 and 1 are injected into every session, so together they carry a hard cap,
 # in approximate tokens. Exceeding it fails the write; nothing is truncated at read time.
 resident_cap_tokens = 8192
+
+[handoff]
+# Session start also shows the newest note in ring 2 or 3 whose name contains one of these
+# (ignoring case), so a session finds what the previous one left for it without having to
+# know to ask. It is shown as what it is: ring 2 or 3, dated, outranked by rings 0 and 1.
+# An empty list turns this off.
+name_contains = ["handoff"]
+# Older than this, a handoff is not shown at all.
+max_age_days = 7
+# Longer than this (approximate tokens), the remaining blocks are listed by citation only.
+max_tokens = 1500
 
 [retrieval]
 # Hybrid search: lexical (BM25) and semantic candidates, fused by reciprocal rank
@@ -429,6 +473,20 @@ impl Config {
             return Err(bad(
                 "rings.resident_cap_tokens",
                 "must be greater than 0".into(),
+            ));
+        }
+        if self.handoff.max_tokens == 0 {
+            return Err(bad("handoff.max_tokens", "must be greater than 0".into()));
+        }
+        if self
+            .handoff
+            .name_contains
+            .iter()
+            .any(|p| p.trim().is_empty())
+        {
+            return Err(bad(
+                "handoff.name_contains",
+                "an empty entry would match every note".into(),
             ));
         }
         for (key, v) in [

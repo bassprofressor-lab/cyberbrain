@@ -720,6 +720,19 @@ Hard requirements:
   worth handling — it counts, and it can address the human — but the promise of injection
   described something the interface does not offer.
 
+- **`session-start` also shows the newest handoff, labelled as not resident** (2026-10-01).
+  Ring 1 is the place for handoff state that must hold for every session (§3.2), but it is
+  the operator's to write, and the handoff one session writes for the next is usually
+  written by an agent, in ring 2 or 3, and stale by the next evening. There `recall` finds
+  it only for somebody who already thinks to ask, and a fresh session does not. So on
+  `startup` and `clear`, the newest note in ring 2 or 3 whose file name contains one of
+  `handoff.name_contains` (default `handoff`), younger than `handoff.max_age_days` (7) and
+  not invalid, follows the resident rings with its citations, its date and its age, and
+  says that rings 0 and 1 outrank it. It is read by file name from `notes/r2` and
+  `notes/r3`, not from the index, and only the matching files are parsed. Not on
+  `compact` or `resume`, where the session has its own newer account; never re-injected on
+  a prompt. The `session.start` audit row names it.
+
 - **The release profile must not abort on panic.** The never-fail rule is implemented by
   catching a panic and exiting 0, and `panic = "abort"` leaves nothing to catch. A binary
   built that way takes down the agent it serves, in release builds only, which is the worst
