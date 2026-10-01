@@ -10,7 +10,7 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.5] — 2026-10-01
 
 ### Added
 
@@ -24,6 +24,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   invalid, and blocks beyond 1,500 tokens are listed by citation. The new `[handoff]`
   section sets the name patterns (an empty list turns it off), the age and the length. The
   `session.start` audit row names the note it showed.
+
+### Upgrading
+
+Replace the binary. Nothing else is required: a configuration without `[handoff]` takes the
+defaults. If your handoff notes are named differently, add their word to
+`[handoff] name_contains`, and keep that word out of the names of notes that are not
+handoffs, because every note whose name contains it is a candidate. The index schema is
+still v5.
 
 ## [0.7.4] — 2026-09-29
 
