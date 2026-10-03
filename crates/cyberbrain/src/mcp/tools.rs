@@ -80,12 +80,13 @@ fn ring_schema(cmd: &str) -> Value {
 /// `valid_from` / `invalid_at` on `write`: a date or timestamp sets the bound, `null` or an
 /// empty string removes it, leaving it out keeps what the note has.
 ///
-/// `"type": "string"` with `"nullable": true`, not `"type": ["string", "null"]`: Gemini's
-/// function-calling API rejects a list as `type` and fails the whole request (n8n SEO agent,
-/// 2026-10-03), while JSON Schema clients ignore `nullable`. The empty string is the removal
-/// a client can always express, whatever it makes of `nullable`.
+/// A plain `"type": "string"`, not `["string", "null"]` and not `nullable`: Gemini's
+/// function-calling API rejects a list as `type` and fails the whole request, and n8n's
+/// schema conversion turns `nullable` back into exactly that list (n8n SEO agent,
+/// 2026-10-03). The empty string is the removal every client can express; `null` is still
+/// read as removal for clients that send it.
 fn bound_schema(arg: &str) -> Value {
-    let mut v = schema_prop("write", arg, json!({ "type": "string", "nullable": true }));
+    let mut v = schema_prop("write", arg, json!({ "type": "string" }));
     let help = v["description"].as_str().unwrap_or_default().to_string();
     v["description"] = Value::String(
         format!("{help} Over MCP, `null` or an empty string removes the bound.")

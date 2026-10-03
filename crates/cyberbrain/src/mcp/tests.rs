@@ -1232,6 +1232,8 @@ fn no_tool_schema_uses_a_list_as_type() {
                 if let Some(t) = m.get("type") {
                     assert!(!t.is_array(), "{path}: type is a list: {t}");
                 }
+                // n8n turns `nullable` into the same list on its way to Gemini.
+                assert!(!m.contains_key("nullable"), "{path}: nullable");
                 for (k, x) in m {
                     walk(x, &format!("{path}.{k}"));
                 }
