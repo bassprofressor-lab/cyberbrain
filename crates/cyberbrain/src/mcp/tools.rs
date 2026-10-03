@@ -77,13 +77,18 @@ fn ring_schema(cmd: &str) -> Value {
     )
 }
 
-/// `valid_from` / `invalid_at` on `write`: a date or timestamp sets the bound, `null`
-/// removes it, leaving it out keeps what the note has.
+/// `valid_from` / `invalid_at` on `write`: a date or timestamp sets the bound, `null` or an
+/// empty string removes it, leaving it out keeps what the note has.
+///
+/// `"type": "string"` with `"nullable": true`, not `"type": ["string", "null"]`: Gemini's
+/// function-calling API rejects a list as `type` and fails the whole request (n8n SEO agent,
+/// 2026-10-03), while JSON Schema clients ignore `nullable`. The empty string is the removal
+/// a client can always express, whatever it makes of `nullable`.
 fn bound_schema(arg: &str) -> Value {
-    let mut v = schema_prop("write", arg, json!({ "type": ["string", "null"] }));
+    let mut v = schema_prop("write", arg, json!({ "type": "string", "nullable": true }));
     let help = v["description"].as_str().unwrap_or_default().to_string();
     v["description"] = Value::String(
-        format!("{help} Over MCP, `null` removes the bound.")
+        format!("{help} Over MCP, `null` or an empty string removes the bound.")
             .trim()
             .to_string(),
     );
@@ -370,6 +375,7 @@ impl<'a> Args<'a> {
     fn bound(&self, key: &str) -> Result<Option<Option<jiff::Timestamp>>, RpcError> {
         match self.map.get(key) {
             Some(Value::Null) => Ok(Some(None)),
+            Some(Value::String(t)) if t.trim().is_empty() => Ok(Some(None)),
             _ => Ok(self.moment(key)?.map(Some)),
         }
     }

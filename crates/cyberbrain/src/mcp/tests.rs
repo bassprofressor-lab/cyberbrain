@@ -1221,3 +1221,27 @@ mod http_transport {
         }
     }
 }
+
+/// Gemini rejects a list as a schema `type` and fails the whole request (2026-10-03, the n8n
+/// SEO agent). No tool may declare one.
+#[test]
+fn no_tool_schema_uses_a_list_as_type() {
+    fn walk(v: &Value, path: &str) {
+        match v {
+            Value::Object(m) => {
+                if let Some(t) = m.get("type") {
+                    assert!(!t.is_array(), "{path}: type is a list: {t}");
+                }
+                for (k, x) in m {
+                    walk(x, &format!("{path}.{k}"));
+                }
+            }
+            Value::Array(a) => a
+                .iter()
+                .enumerate()
+                .for_each(|(i, x)| walk(x, &format!("{path}[{i}]"))),
+            _ => {}
+        }
+    }
+    walk(&crate::mcp::tools::list_value(), "tools");
+}
