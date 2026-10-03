@@ -4290,3 +4290,130 @@ fn mcp_client_tokens_are_shown_once_and_kept_only_as_a_digest() {
     assert!(run(&["mcp-client", "remove", "n8n"]).status.success());
     assert!(!text(&run(&["mcp-client", "list"])).contains("n8n"));
 }
+
+/// 2026-10-03: a client limited by [clients.bereiche] sees and writes only inside them.
+/// Same store, an unlisted agent, sees everything, so the limit is the client's, not the store's.
+#[test]
+fn a_client_limited_to_bereiche_sees_and_writes_only_inside_them() {
+    let cb = Cb::new();
+    for (name, bereich) in [
+        ("seo-note", Some("seo")),
+        ("finance-note", Some("finanzen")),
+        ("plain-note", None),
+    ] {
+        let mut args = vec![
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            name,
+            "--body",
+        ];
+        let body = format!("marker-scope {name}");
+        args.push(&body);
+        if let Some(b) = bereich {
+            args.extend(["--bereich", b]);
+        }
+        let out = cb.run(&args);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let path = cb.store.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&path).unwrap();
+    toml.push_str("\n[clients.bereiche]\n\"agent:seo\" = [\"seo\"]\n");
+    std::fs::write(&path, toml).unwrap();
+    let as_agent = |name: &str, args: &[&str]| {
+        Cb::bin()
+            .env("CYBERBRAIN_AGENT", name)
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let names = |out: &std::process::Output| -> Vec<String> {
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+        v["hits"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|h| h["note_name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let seen = names(&as_agent("seo", &["--json", "recall", "marker-scope"]));
+    assert_eq!(seen, vec!["seo-note".to_string()], "{seen:?}");
+    let mut all = names(&as_agent("other", &["--json", "recall", "marker-scope"]));
+    all.sort();
+    assert_eq!(all.len(), 3, "an unlisted agent is not limited: {all:?}");
+
+    let hits = cb.ok(&["recall", "marker-scope finance-note"]);
+    let cit = hits["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["note_name"] == "finance-note")
+        .unwrap()["citation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let out = as_agent("seo", &["recall", "--id", &cit]);
+    assert!(
+        !out.status.success(),
+        "a citation outside the limit: {}",
+        text(&out)
+    );
+    assert!(
+        as_agent("other", &["recall", "--id", &cit])
+            .status
+            .success()
+    );
+
+    let out = as_agent("seo", &["find", "main"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+
+    let out = as_agent(
+        "seo",
+        &[
+            "write", "--ring", "2", "--kind", "lesson", "--name", "seo-new", "--body", "x",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let note = std::fs::read_to_string(cb.store.join("notes/r2/seo-new.md")).unwrap();
+    assert!(note.contains("bereich: seo"), "filled in: {note}");
+    for args in [
+        vec![
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "lesson",
+            "--name",
+            "elsewhere",
+            "--body",
+            "x",
+            "--bereich",
+            "finanzen",
+        ],
+        vec![
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "lesson",
+            "--name",
+            "finance-note",
+            "--body",
+            "overwritten",
+            "--bereich",
+            "seo",
+        ],
+    ] {
+        let out = as_agent("seo", &args);
+        assert_eq!(out.status.code(), Some(3), "{args:?}: {}", text(&out));
+    }
+    let f = std::fs::read_to_string(cb.store.join("notes/r2/finance-note.md")).unwrap();
+    assert!(!f.contains("overwritten"), "{f}");
+}

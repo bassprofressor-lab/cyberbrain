@@ -64,6 +64,25 @@ pub struct Config {
     pub hub: HubConfig,
     pub governance: GovernanceConfig,
     pub provenance: ProvenanceConfig,
+    pub clients: ClientsConfig,
+}
+
+/// What a client may see and write (2026-10-03).
+///
+/// `bereiche` maps a client — the actor as the audit log writes it, `agent:mcp:seo` — to the
+/// bereiche it is limited to. Such a client recalls only notes in them (a note without a
+/// bereich is outside every limit), cannot expand a citation outside them, cannot search the
+/// code index, and writes only into them: with one bereich listed an unset one is filled in,
+/// with several it must name one. A client not listed is unlimited, as before.
+///
+/// ```toml
+/// [clients.bereiche]
+/// "agent:mcp:seo" = ["seo"]
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClientsConfig {
+    pub bereiche: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Clients whose writes are content from outside, whatever they say (C4, 2026-10-03).
@@ -277,6 +296,7 @@ impl Default for Config {
             hub: HubConfig::default(),
             governance: GovernanceConfig::default(),
             provenance: ProvenanceConfig::default(),
+            clients: ClientsConfig::default(),
         }
     }
 }

@@ -1660,6 +1660,7 @@ impl App {
             k_sem: r.k_sem,
             ring: req.ring,
             bereich: req.bereich.clone(),
+            scope: self.client_scope(),
             min_cosine: 0.0,
             // Rings 0 and 1 are injected whole when an agent's session starts
             // (hook/events.rs); for an agent a hit from them is a second copy of its own
@@ -2035,6 +2036,19 @@ impl App {
             ))
         })?;
         let note = self.note_view_at(&rec.path)?;
+        // A limited client gets the same answer for a note outside its bereiche as for one
+        // that does not exist: which notes exist elsewhere is itself what it may not see.
+        if let Some(scope) = self.client_scope()
+            && !note
+                .front
+                .bereich
+                .as_ref()
+                .is_some_and(|b| scope.contains(b))
+        {
+            return Err(Error::NoSuchNote(format!(
+                "citation {cit} (not in the index; run `cyberbrain scan` if the note exists)"
+            )));
+        }
         Ok(Expanded {
             citation: cit.to_string(),
             block: BlockView {
@@ -2339,6 +2353,52 @@ impl App {
     /// that carries personal data or a secret is refused outright rather than held (until
     /// 2026-09-29 tags skipped the scan entirely: an e-mail address or an IBAN in `--tag`
     /// was written with `pii: none`). The body is where such a thing can be held or redacted.
+    /// The bereiche this actor is limited to by `[clients.bereiche]`, if any.
+    fn client_scope(&self) -> Option<Vec<String>> {
+        let me = self.actor.to_string();
+        self.config()
+            .clients
+            .bereiche
+            .iter()
+            .find(|(c, _)| c.trim() == me)
+            .map(|(_, b)| b.clone())
+    }
+
+    /// A limited client writes only into its bereiche, and only over notes already in them.
+    /// With one bereich listed an unset one is filled in; with several the client names one.
+    fn keep_inside_scope(&self, req: &mut WriteRequest) -> Result<()> {
+        let Some(scope) = self.client_scope() else {
+            return Ok(());
+        };
+        let refuse = |why: String| Error::PolicyRefusal {
+            profile: "clients".to_string(),
+            reason: format!(
+                "{} may write only into bereiche {:?} ([clients.bereiche]): {why}",
+                self.actor, scope
+            ),
+        };
+        let name = frontmatter::normalize_name(req.name.trim()).into_owned();
+        if let Ok(existing) = self.store.read(&name)
+            && !existing
+                .front
+                .bereich
+                .as_ref()
+                .is_some_and(|b| scope.contains(b))
+        {
+            return Err(refuse(format!("a note named {name} exists outside them")));
+        }
+        match &req.bereich {
+            Some(Some(b)) if scope.contains(b) => Ok(()),
+            Some(Some(b)) => Err(refuse(format!("bereich {b:?} is not one of them"))),
+            Some(None) => Err(refuse("the bereich cannot be removed".into())),
+            None if scope.len() == 1 => {
+                req.bereich = Some(Some(scope[0].clone()));
+                Ok(())
+            }
+            None => Err(refuse("name one of them as bereich".into())),
+        }
+    }
+
     /// C4: a client the operator named in `[provenance] untrusted_clients` writes content
     /// from outside, whatever its tags say. Stamped here, before anything else looks at them.
     fn stamp_if_untrusted_client(&self, tags: &mut Vec<String>) {
@@ -2386,6 +2446,7 @@ impl App {
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
         let mut req = req;
         self.stamp_if_untrusted_client(&mut req.tags);
+        self.keep_inside_scope(&mut req)?;
         let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: PathBuf::from(format!("{name}.md")),
@@ -2782,6 +2843,7 @@ impl App {
     pub fn propose(&self, req: WriteRequest, who: &str) -> Result<Proposed> {
         let mut req = req;
         self.stamp_if_untrusted_client(&mut req.tags);
+        self.keep_inside_scope(&mut req)?;
         // 2026-10-03: `who` comes from the machine's identity, which is the person's even when
         // an agent runs the command. An agent's proposal then carried the person's name, the
         // person could not accept it (two-person rule), and anybody under a second name could.
@@ -3734,6 +3796,16 @@ impl App {
     /// defaults apply: `.cyberbrainignore` and `.gitignore` honoured, hidden entries
     /// skipped, files over 1 MiB not read.
     pub fn find(&self, symbol: &str, limit: usize) -> Result<FindReport> {
+        if self.client_scope().is_some() {
+            return Err(Error::PolicyRefusal {
+                profile: "clients".to_string(),
+                reason: format!(
+                    "{} is limited to bereiche in [clients.bereiche]; the code index has no \
+                     bereich and is not searched for it",
+                    self.actor
+                ),
+            });
+        }
         let opts = cyberbrain_code::FindOptions {
             exclude: vec![self.root.clone()],
             ..cyberbrain_code::FindOptions::default()

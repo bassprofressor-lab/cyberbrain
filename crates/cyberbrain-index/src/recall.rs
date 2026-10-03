@@ -25,6 +25,10 @@ pub struct RecallOptions {
     /// Restrict to notes of exactly this bereich. A filter, never a ranking input: a
     /// department decides whether a note is *eligible*, not how trustworthy it is.
     pub bereich: Option<String>,
+    /// A client's limit (2026-10-03): only notes whose bereich is one of these. Applied on
+    /// top of `bereich`, in the same SQL, and a note with no bereich is outside every limit.
+    /// `Some(vec![])` admits nothing.
+    pub scope: Option<Vec<String>>,
     /// A block must score strictly above this cosine to become a semantic candidate. The
     /// default `0.0` only drops blocks with no similarity evidence at all; RRF would
     /// otherwise hand a rank, and thus a score, to the top `k_sem` of an unrelated corpus.
@@ -49,10 +53,42 @@ impl Default for RecallOptions {
             k_sem: 50,
             ring: None,
             bereich: None,
+            scope: None,
             min_cosine: 0.0,
             skip_resident: false,
             at: None,
         }
+    }
+}
+
+/// `AND n.bereich = ?` for a bereich filter, `AND n.bereich IN (…)` for a client's scope,
+/// numbered after the arguments already bound. An empty scope admits nothing.
+fn bereich_clause(
+    sql: &mut String,
+    args: &mut Vec<Box<dyn rusqlite::ToSql>>,
+    bereich: Option<&str>,
+    scope: Option<&[String]>,
+) {
+    if let Some(bx) = bereich {
+        sql.push_str(" AND n.bereich = ?");
+        sql.push_str(&(args.len() + 1).to_string());
+        args.push(Box::new(bx.to_string()));
+    }
+    if let Some(sc) = scope {
+        if sc.is_empty() {
+            sql.push_str(" AND 0");
+            return;
+        }
+        sql.push_str(" AND n.bereich IN (");
+        for (i, b) in sc.iter().enumerate() {
+            if i > 0 {
+                sql.push(',');
+            }
+            sql.push('?');
+            sql.push_str(&(args.len() + 1).to_string());
+            args.push(Box::new(b.clone()));
+        }
+        sql.push(')');
     }
 }
 
@@ -103,29 +139,38 @@ impl Index {
 
         // 0. The bereich filter, resolved once to the citations it admits. The lexical half
         // filters in SQL; the semantic half has no SQL to join, so it tests membership here.
-        let allowed: Option<std::collections::HashSet<String>> = match &opts.bereich {
-            None => None,
-            Some(b) => {
-                let mut stmt = self
-                    .conn
-                    .prepare_cached(
-                        "SELECT b.citation FROM blocks b JOIN notes n ON n.id = b.note_id \
-                         WHERE n.bereich = ?1",
-                    )
-                    .ix()?;
+        let allowed: Option<std::collections::HashSet<String>> =
+            if opts.bereich.is_none() && opts.scope.is_none() {
+                None
+            } else {
+                let mut sql = String::from(
+                    "SELECT b.citation FROM blocks b JOIN notes n ON n.id = b.note_id WHERE 1=1",
+                );
+                let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+                bereich_clause(
+                    &mut sql,
+                    &mut args,
+                    opts.bereich.as_deref(),
+                    opts.scope.as_deref(),
+                );
+                let mut stmt = self.conn.prepare_cached(&sql).ix()?;
+                let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
                 let mut set = std::collections::HashSet::new();
-                let rows = stmt.query_map([b], |r| r.get::<_, String>(0)).ix()?;
+                let rows = stmt
+                    .query_map(params.as_slice(), |r| r.get::<_, String>(0))
+                    .ix()?;
                 for r in rows {
                     set.insert(r.ix()?);
                 }
                 if set.is_empty() {
-                    caveats.push(format!(
-                        "no note carries bereich {b:?}; no hits are possible"
-                    ));
+                    caveats.push(match &opts.bereich {
+                        Some(b) => format!("no note carries bereich {b:?}; no hits are possible"),
+                        None => "no note lies inside this client's bereiche; no hits are possible"
+                            .to_string(),
+                    });
                 }
                 Some(set)
-            }
-        };
+            };
 
         // 1. Lexical.
         let lexical: Vec<String> = match fts_query(query) {
@@ -134,7 +179,13 @@ impl Index {
                     .push("lexical search skipped: the query contains no searchable terms".into());
                 Vec::new()
             }
-            Some(q) => self.lexical(&q, opts.k_lex, opts.ring, opts.bereich.as_deref())?,
+            Some(q) => self.lexical(
+                &q,
+                opts.k_lex,
+                opts.ring,
+                opts.bereich.as_deref(),
+                opts.scope.as_deref(),
+            )?,
         };
 
         // 2. Semantic, behind the profile guard.
@@ -286,8 +337,11 @@ impl Index {
             }
             hits.push(group);
         }
-        for h in &mut hits {
-            h.newer_links = self.newer_links_to(h)?;
+        // Not for a client with a scope: the names of linking notes outside it would leak.
+        if opts.scope.is_none() {
+            for h in &mut hits {
+                h.newer_links = self.newer_links_to(h)?;
+            }
         }
         if resident_left_out > 0 {
             caveats.push(format!(
@@ -441,6 +495,7 @@ impl Index {
         k: usize,
         ring: Option<Ring>,
         bereich: Option<&str>,
+        scope: Option<&[String]>,
     ) -> Result<Vec<String>> {
         if k == 0 {
             return Ok(Vec::new());
@@ -457,7 +512,7 @@ impl Index {
         // another one.
         let mut out = Vec::new();
         let mut sql = String::from("SELECT f.citation FROM blocks_fts f");
-        if bereich.is_some() {
+        if bereich.is_some() || scope.is_some() {
             sql.push_str(
                 " JOIN blocks b ON b.citation = f.citation JOIN notes n ON n.id = b.note_id",
             );
@@ -469,11 +524,7 @@ impl Index {
             sql.push_str(&(args.len() + 1).to_string());
             args.push(Box::new(r.as_u8() as i64));
         }
-        if let Some(bx) = bereich {
-            sql.push_str(" AND n.bereich = ?");
-            sql.push_str(&(args.len() + 1).to_string());
-            args.push(Box::new(bx.to_string()));
-        }
+        bereich_clause(&mut sql, &mut args, bereich, scope);
         sql.push_str(" ORDER BY rank, f.citation LIMIT ?");
         sql.push_str(&(args.len() + 1).to_string());
         args.push(Box::new(k as i64));
@@ -692,3 +743,29 @@ fn collapse_duplicates(cands: Vec<Candidate>) -> Vec<Hit> {
 
 /// Why the semantic half did not run. Always becomes a caveat, never an error.
 struct SemanticSkipped(String);
+
+#[cfg(test)]
+mod scope_clause_tests {
+    use super::bereich_clause;
+
+    fn sql(bereich: Option<&str>, scope: Option<&[String]>) -> (String, usize) {
+        let mut s = String::from("WHERE x MATCH ?1");
+        let mut args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new("q")];
+        bereich_clause(&mut s, &mut args, bereich, scope);
+        (s, args.len())
+    }
+
+    #[test]
+    fn a_scope_is_an_in_list_after_the_bound_arguments_and_empty_admits_nothing() {
+        let sc = vec!["seo".to_string(), "web".to_string()];
+        assert_eq!(
+            sql(Some("seo"), Some(&sc)),
+            (
+                "WHERE x MATCH ?1 AND n.bereich = ?2 AND n.bereich IN (?3,?4)".into(),
+                4
+            )
+        );
+        assert_eq!(sql(None, Some(&[])), ("WHERE x MATCH ?1 AND 0".into(), 1));
+        assert_eq!(sql(None, None), ("WHERE x MATCH ?1".into(), 1));
+    }
+}

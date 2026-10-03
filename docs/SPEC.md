@@ -858,6 +858,25 @@ form, and for the same reason.
 
 ---
 
+#### 9.2.0 Limits per client
+
+`[clients.bereiche]` limits a client — the actor as the audit log names it — to bereiche:
+
+```toml
+[clients.bereiche]
+"agent:mcp:seo" = ["seo"]
+```
+
+Such a client recalls only notes in those bereiche (in the same SQL as the `bereich` filter,
+so a small bereich is not crowded out; a note without a bereich is outside every limit), gets
+"not in the index" for a citation outside them — whether a note exists elsewhere is what it
+may not learn — and recall leaves out the "newer notes link here" names, which would. It
+cannot search the code index, which has no bereich. It writes and proposes only into its
+bereiche and never over a note outside them; with one bereich listed an unset one is filled
+in, with several it names one. Unlisted clients, and the operator, are unlimited. This is
+what lets an agent whose model runs elsewhere read the store at all: without it, `recall`
+hands it everything.
+
 #### 9.2.1 MCP over HTTP
 
 `cyberbrain mcp --http <addr:port>` serves the same tools over HTTP (`POST /mcp`, the

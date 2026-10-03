@@ -29,6 +29,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   claimed `trust:trusted`. `cyberbrain mcp --client <name>` gives an MCP client its own name
   (`agent:mcp:<name>`) so it can be listed. A configuration with this section is refused by
   older binaries, like any new section; a fresh store does not get it.
+- **Limits per client.** `[clients.bereiche]` maps a client (`agent:mcp:seo`) to the
+  bereiche it may see and write: recall returns only notes in them, a citation outside
+  them reads as not found, the code index is closed to it, and its writes go only into
+  them (an unset bereich is filled in when one is listed). Unlisted clients are unlimited.
+  SPEC §9.2.0.
 - **MCP over HTTP, with a token per client.** `cyberbrain mcp --http <addr:port>` serves the
   MCP tools at `POST /mcp` for clients that cannot start a process here (n8n in a
   container). `cyberbrain mcp-client add <name>` prints a token once and stores only its
