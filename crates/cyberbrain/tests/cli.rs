@@ -2767,6 +2767,157 @@ fn decision(stdout: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// A stand-in for AgentGuard that answers by request line, for the A2 round trip: a POST
+/// of an action, then GETs of its approval.
+fn fake_agentguard(
+    approval: std::sync::Arc<std::sync::Mutex<&'static str>>,
+) -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use std::io::{Read, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let log = seen.clone();
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut s) = stream else { continue };
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 8192];
+            loop {
+                let n = s.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                let text = String::from_utf8_lossy(&buf).to_string();
+                if let Some(end) = text.find("\r\n\r\n") {
+                    let len = text[..end]
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .map(|v| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if buf.len() >= end + 4 + len {
+                        break;
+                    }
+                }
+            }
+            let req = String::from_utf8_lossy(&buf).to_string();
+            let answer = if req.starts_with("POST /v1/actions") {
+                r#"{"outcome":"escalate","deciding_gate":"human_confirm","approval_status":"pending"}"#
+                    .to_string()
+            } else {
+                format!(
+                    r#"{{"action_id":"x","status":"{}"}}"#,
+                    approval.lock().unwrap()
+                )
+            };
+            log.lock().unwrap().push(req);
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                answer.len(),
+                answer
+            );
+        }
+    });
+    (port, seen)
+}
+
+/// A2, 2026-10-03: an agent's proposal is reported to AgentGuard as memory_write, and
+/// `review --from-agentguard` accepts it once the approval recorded at propose time says
+/// approved — not before, and from an agent's pipeline too, since a person decided.
+#[test]
+fn an_agents_proposal_is_accepted_once_agentguard_approves_it() {
+    let cb = Cb::new();
+    let approval = std::sync::Arc::new(std::sync::Mutex::new("pending"));
+    let (port, seen) = fake_agentguard(approval.clone());
+    governed(&cb, port, "shadow");
+    let agent = |session: &str, args: &[&str]| {
+        Cb::bin()
+            .env("CYBERBRAIN_IDENTITY", "christoph")
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env("CYBERBRAIN_AGENTGUARD_KEY", "agk_testkey")
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = agent(
+        "sessaaaa",
+        &[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "mail-fact",
+            "--body",
+            "The supplier changed its bank account.",
+            "--tags",
+            "trust:untrusted",
+            "--tags",
+            "src:mail:91ab",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let posted = seen.lock().unwrap().join("\n");
+    assert!(posted.starts_with("POST /v1/actions"), "{posted}");
+    assert!(
+        posted.contains(r#""action_type":"memory_write""#),
+        "{posted}"
+    );
+    assert!(
+        posted.contains("bank account"),
+        "the content goes to the content gate: {posted}"
+    );
+    let action = posted
+        .split(r#""id":""#)
+        .nth(1)
+        .and_then(|r| r.split('"').next())
+        .unwrap()
+        .to_string();
+    assert!(action.starts_with("cb-"), "{action}");
+
+    let out = agent("sessbbbb", &["review", "mail-fact", "--from-agentguard"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(text(&out).contains("pending"), "{}", text(&out));
+    assert!(!cb.store.join("notes/r2/mail-fact.md").exists());
+
+    *approval.lock().unwrap() = "approved";
+    let out = agent("sessbbbb", &["review", "mail-fact", "--from-agentguard"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cb.store.join("notes/r2/mail-fact.md").is_file());
+    let last = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(
+        last.starts_with(&format!("GET /v1/actions/{action}/approval")),
+        "the approval of the recorded action is read, no other: {last}"
+    );
+}
+
+/// A proposal that never went to AgentGuard has no approval to accept on.
+#[test]
+fn from_agentguard_needs_a_proposal_that_was_reported() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose", "--ring", "2", "--kind", "bug", "--name", "local", "--body", "a thing",
+        ],
+    );
+    let out = cb.as_person("bernd", &["review", "local", "--from-agentguard"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains("not reported to AgentGuard"),
+        "{}",
+        text(&out)
+    );
+}
+
 const DENY: &str = r#"{"permission":"deny","outcome":"block","action_type":"file_delete","deciding_gate":"scope","reason":"scope_nicht_mandatiert"}"#;
 
 #[test]

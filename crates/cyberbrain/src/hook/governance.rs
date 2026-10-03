@@ -57,7 +57,7 @@ fn key_path() -> Option<PathBuf> {
     crate::identity::path().map(|p| p.with_file_name("agentguard.key"))
 }
 
-fn key() -> Option<String> {
+pub(crate) fn key() -> Option<String> {
     std::env::var(KEY_ENV)
         .ok()
         .or_else(|| std::fs::read_to_string(key_path()?).ok())

@@ -6,6 +6,7 @@
 //! This file is dispatch. Every command is a thin adapter over [`app::App`]; the wiring of
 //! the six crates lives in `app.rs` and nowhere else.
 
+mod agentguard;
 mod app;
 mod audit_bridge;
 mod cli;
@@ -569,6 +570,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             reject,
             reason,
             force,
+            from_agentguard,
             dry_run,
         } => {
             let Some(name) = target else {
@@ -576,6 +578,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 out.emit(&waiting, |w| render::proposals(w))?;
                 return Ok(0);
             };
+            let accept = accept || from_agentguard;
             if accept == reject {
                 return Err(Error::Config(
                     "say which: --accept or --reject. Listing what is waiting is \
@@ -589,6 +592,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 reason: reason.unwrap_or_default(),
                 by: identity::who(app.root())?,
                 force,
+                from_agentguard,
                 dry_run,
             };
             let r = app.review(req)?;

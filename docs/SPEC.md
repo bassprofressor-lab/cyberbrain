@@ -534,6 +534,18 @@ declared as from outside, not against an agent that hides where its text came fr
 everything one integration writes as untrusted, whatever it sends, is the next step (per
 client grants), not this one.
 
+**Approval through AgentGuard.** Where `[governance] url` is set, a proposal made by an agent,
+an MCP client or a hook is also reported there as an action of type `memory_write` (with
+its text, for AgentGuard's content gate, which drops it before its own audit row). AgentGuard
+escalates every `memory_write` and opens an approval for an admin, also for an agent it
+otherwise only shadows. The action id and AgentGuard's first answer go into the proposal's
+`note.proposed` row; an unreachable service is recorded there and changes nothing else.
+`review <name> --from-agentguard` reads the approval of *that* action back and accepts only
+on `approved`, recording `agentguard:<action id>` as the reviewer. Because a person has then
+decided, this is the one way an agent's pipeline may complete an acceptance; rings 0 and 1
+remain the operator's regardless. The AgentGuard agent needs `memory_write` in its scopes,
+or the scope gate refuses the action and there is no approval to read.
+
 ### 8.1 The HTTP API
 
 `cyberbrain serve` exposes the operations above over HTTP at `/api/v1` for the web UI. §13

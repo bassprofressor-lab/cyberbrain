@@ -341,6 +341,9 @@ pub struct ReviewRequest {
     pub by: String,
     /// Accept even though the note changed after the proposal was made.
     pub force: bool,
+    /// Accept on the strength of an AgentGuard approval (A2): the action id recorded when
+    /// the proposal was made is looked up, and only `approved` accepts.
+    pub from_agentguard: bool,
     pub dry_run: bool,
 }
 
@@ -2888,6 +2891,32 @@ impl App {
             self.store.write_proposal(&note)?
         };
 
+        // A2: an agent's proposal also goes to AgentGuard, where an admin can approve it.
+        // Failing to reach it changes nothing here: the proposal waits for `review` either
+        // way, and the row says what happened.
+        let agentguard = if matches!(self.actor, Actor::Agent(_) | Actor::Mcp | Actor::Hook(_))
+            && !req.dry_run
+        {
+            match crate::agentguard::submit_memory_write(
+                self,
+                &self.actor,
+                &name,
+                note.front.ring,
+                &note.body,
+                provenance::untrusted_source(&note.front.tags).as_deref(),
+            ) {
+                Ok(Some(s)) => serde_json::json!({
+                    "action_id": s.action_id,
+                    "outcome": s.outcome,
+                    "approval_status": s.approval_status,
+                }),
+                Ok(None) => serde_json::Value::Null,
+                Err(e) => serde_json::json!({ "error": e.to_string() }),
+            }
+        } else {
+            serde_json::Value::Null
+        };
+
         // Who proposed it lives here and only here. The chain is hashed, which makes it a
         // worse thing to forge than a line of YAML in a file anyone can edit — and it means
         // no note format changed for this feature.
@@ -2904,6 +2933,7 @@ impl App {
                 "changes_existing": replaces.is_some(),
                 "blake3": digest,
                 "on_behalf_of": on_behalf_of,
+                "agentguard": agentguard,
                 "dry_run": req.dry_run,
             }),
         )?;
@@ -2987,6 +3017,9 @@ impl App {
                             .get("blake3")
                             .and_then(|v| v.as_str())
                             .map(str::to_string),
+                        agentguard_action: e.detail["agentguard"]["action_id"]
+                            .as_str()
+                            .map(str::to_string),
                     })
             }
             // Accepted, rejected, or never proposed: whatever is in `proposals/` under this
@@ -3012,7 +3045,35 @@ impl App {
         // two-person rule, and an agent under another session id is not one. It may withdraw
         // its own, which is the same as never having proposed it.
         let mut req = req;
-        let agent = matches!(self.actor, Actor::Agent(_) | Actor::Mcp | Actor::Hook(_));
+        // A2: an admin's approval in AgentGuard is the second person. Read back for the action
+        // recorded at propose time, never one the caller names; only `approved` accepts, and
+        // then from any caller, an agent's pipeline included — the person already decided.
+        if req.from_agentguard {
+            if !req.accept {
+                return Err(Error::Config(
+                    "--from-agentguard accepts; to reject, use --reject with a reason".into(),
+                ));
+            }
+            let Some(action) = open.agentguard_action.as_deref() else {
+                return Err(Error::Config(format!(
+                    "{name} was not reported to AgentGuard when it was proposed, so there is no \
+                     approval to read. Review it here: `cyberbrain review {name} --accept`"
+                )));
+            };
+            let status = crate::agentguard::approval_status(self, &self.actor, action)?;
+            if status != "approved" {
+                return Err(Error::PolicyRefusal {
+                    profile: "review".to_string(),
+                    reason: format!(
+                        "AgentGuard says `{status}` for {name} (action {action}); only an \
+                         approved proposal is accepted this way"
+                    ),
+                });
+            }
+            req.by = format!("agentguard:{action}");
+        }
+        let agent = !req.from_agentguard
+            && matches!(self.actor, Actor::Agent(_) | Actor::Mcp | Actor::Hook(_));
         if agent {
             let me = self.actor.to_string();
             if req.accept || proposer != me {
@@ -5035,6 +5096,7 @@ mod ring_owner_tests {
             reason: String::new(),
             by: by.to_string(),
             force: false,
+            from_agentguard: false,
             dry_run: false,
         }
     }
@@ -5434,4 +5496,6 @@ struct OpenProposal {
     by: String,
     /// blake3 of the proposed file, hex. `None` for proposals made before 0.7.6.
     blake3: Option<String>,
+    /// The AgentGuard action this proposal was reported as, if it was (A2).
+    agentguard_action: Option<String>,
 }

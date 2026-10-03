@@ -297,6 +297,27 @@ pub async fn get(ticket: &EgressTicket, url: &str) -> Result<Response> {
     finish(ticket, resp).await
 }
 
+/// HTTP GET with request headers (an `authorization` header, say). The URL must be covered
+/// by the ticket. Added 2026-10-03 for the AgentGuard approval check, which is a GET that
+/// has to authenticate; the key goes in a header, never into the URL.
+pub async fn get_with_headers(
+    ticket: &EgressTicket,
+    url: &str,
+    headers: &[(&str, &str)],
+) -> Result<Response> {
+    let u = check(ticket, url)?;
+    let c = client(ticket, None)?;
+    let mut req = c.get(u);
+    for (k, v) in headers {
+        req = req.header(*k, *v);
+    }
+    let resp = req
+        .send()
+        .await
+        .map_err(|e| err_for(ticket.purpose(), format!("GET {}: {e}", redact(url))))?;
+    finish(ticket, resp).await
+}
+
 /// HTTP POST with a bearer token. The URL must be covered by the ticket.
 ///
 /// Used by audit delivery, which is the one path that sends a body of its own rather than

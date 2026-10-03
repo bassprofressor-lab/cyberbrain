@@ -23,6 +23,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   instead of into the notes tree; the write answers `quarantined` (exit 0, HTTP 202). The
   operator's writes and ordinary agent writes are unchanged. Tags rather than new
   frontmatter fields, so older binaries read these notes as before. SPEC §8.0.4.
+- **Agent proposals can be approved in AgentGuard.** With `[governance] url` set, a proposal
+  from an agent, MCP client or hook is also reported to AgentGuard as `memory_write`, which
+  always asks an admin (AgentGuard from 03.10.2026). `cyberbrain review <name>
+  --from-agentguard` accepts it once that approval says `approved`; the action id is the one
+  recorded at propose time, not one the caller names. Needs `memory_write` in the AgentGuard
+  agent's scopes.
 
 ### Fixed
 

@@ -205,6 +205,10 @@ pub enum Command {
         /// Accept even though the note changed after this was proposed.
         #[arg(long)]
         force: bool,
+        /// Accept because an admin approved it in AgentGuard: the approval recorded at
+        /// propose time is read back and must say `approved`.
+        #[arg(long, conflicts_with = "reject")]
+        from_agentguard: bool,
         #[arg(long)]
         dry_run: bool,
     },
