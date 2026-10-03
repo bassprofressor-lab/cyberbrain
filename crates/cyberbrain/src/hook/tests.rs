@@ -698,6 +698,10 @@ fn path_classification_holds_on_both_platforms() {
         Some(StoreTarget::Other)
     );
     assert_eq!(
+        classify(u, "/p/.cyberbrain", "/p", "/p/.cyberbrain/proposals/x.md"),
+        Some(StoreTarget::Proposal)
+    );
+    assert_eq!(
         classify(u, "/p/.cyberbrain", "/p", "/p/.cyberbrain/notes/r9/x.md"),
         Some(StoreTarget::Other)
     );

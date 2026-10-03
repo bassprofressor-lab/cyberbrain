@@ -47,6 +47,8 @@ pub enum StoreTarget {
     IndexCache,
     /// `sessions/*`: this module's own state.
     SessionState,
+    /// `proposals/*`: notes waiting for somebody else to accept them.
+    Proposal,
     /// Inside the store, none of the above (`models/`, a stray file).
     Other,
 }
@@ -188,6 +190,9 @@ pub fn classify(
     }
     if inside.len() >= 2 && inside[0] == "sessions" {
         return Some(StoreTarget::SessionState);
+    }
+    if inside.len() >= 2 && inside[0] == "proposals" {
+        return Some(StoreTarget::Proposal);
     }
     if inside.len() >= 3 && inside[0] == "notes" {
         let ring = Ring::ALL.iter().copied().find(|r| r.dir() == inside[1]);

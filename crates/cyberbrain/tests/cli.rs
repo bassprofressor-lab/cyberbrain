@@ -1538,6 +1538,81 @@ fn a_proposal_is_not_in_the_index_and_recall_cannot_return_it() {
     assert_eq!(hits["hits"].as_array().map(Vec::len), Some(1), "{hits:#}");
 }
 
+/// 2026-10-03: the file in `proposals/` could be rewritten between `propose` and `review`,
+/// and the reviewer then approved text the proposer never wrote, under the proposer's name.
+/// The digest recorded at propose time is checked at acceptance; rejecting still works.
+#[test]
+fn a_proposal_changed_after_it_was_proposed_cannot_be_accepted() {
+    let cb = Cb::new();
+    let out = cb.as_person(
+        "anna",
+        &[
+            "propose",
+            "--ring",
+            "2",
+            "--kind",
+            "decision",
+            "--name",
+            "deploy-days",
+            "--body",
+            "Deploys run Monday to Thursday.",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let path = cb.store.join("proposals/deploy-days.md");
+    let original = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, original.replace("Monday to Thursday", "every day")).unwrap();
+
+    let out = cb.as_person("bernd", &["review", "deploy-days", "--accept"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(
+        text(&out).contains("was changed after anna proposed it"),
+        "{}",
+        text(&out)
+    );
+    assert!(
+        !cb.store.join("notes/r2/deploy-days.md").exists(),
+        "the changed text must not become a note"
+    );
+
+    let out = cb.as_person(
+        "bernd",
+        &[
+            "review",
+            "deploy-days",
+            "--reject",
+            "--reason",
+            "changed after proposing",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!path.exists());
+}
+
+/// The same proposal, untouched, goes through: otherwise the test above would pass on a
+/// digest that never matches.
+#[test]
+fn an_untouched_proposal_is_accepted_with_its_digest_checked() {
+    let cb = Cb::new();
+    cb.as_person(
+        "anna",
+        &[
+            "propose",
+            "--ring",
+            "2",
+            "--kind",
+            "decision",
+            "--name",
+            "deploy-days",
+            "--body",
+            "Deploys run Monday to Thursday.",
+        ],
+    );
+    let out = cb.as_person("bernd", &["review", "deploy-days", "--accept"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cb.store.join("notes/r2/deploy-days.md").is_file());
+}
+
 #[test]
 fn a_proposal_cannot_be_accepted_by_the_person_who_made_it() {
     let cb = Cb::new();

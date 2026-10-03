@@ -611,7 +611,10 @@ fn bash_verdict(cmd: &str) -> Option<String> {
             t = t.to_lowercase();
         }
         let t = t.trim_end_matches('/');
-        ["notes/r0", "notes/r1", "audit.db"]
+        // `.cyberbrain/proposals` only under the default store name: a bare `proposals/`
+        // is too common a directory to refuse writes to. The digest check in `review` is
+        // what holds wherever the store lives.
+        ["notes/r0", "notes/r1", "audit.db", ".cyberbrain/proposals"]
             .iter()
             .any(|g| t.contains(g))
             || t.ends_with(".cyberbrain")
@@ -644,7 +647,8 @@ fn bash_verdict(cmd: &str) -> Option<String> {
         "this command writes to `{}` inside the cyberbrain store. The audit log is \
          append-only evidence and rings 0 and 1 are the operator's (SPEC §3.2, §12.6); the \
          file tools are refused the same edit. Reading is fine. For a note, use `cyberbrain \
-         write` (rings 2–4) or `cyberbrain propose` (rings 0/1).",
+         write` (rings 2–4) or `cyberbrain propose` (rings 0/1); a waiting proposal is changed by \
+         rejecting it and proposing again.",
         hit.trim_matches(['\'', '"'])
     ))
 }
@@ -802,6 +806,16 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
                  it is safe to delete."
             ),
         ),
+        StoreTarget::Proposal => (
+            "deny",
+            format!(
+                "`{rel}` is a proposal waiting for review. Its text is what the reviewer \
+                 approves under the proposer's name, so it is not edited in place; `review \
+                 --accept` would refuse it anyway, since the file no longer matches what was \
+                 proposed. To change it: `cyberbrain review <name> --reject --reason …` and \
+                 propose again."
+            ),
+        ),
         StoreTarget::Other => {
             out.note(format!(
                 "pre-tool-use: {rel} is inside the store but not a file the hooks guard; allowing"
@@ -861,6 +875,10 @@ fn post_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
             "cyberbrain: `{rel}` was written to by a tool. The audit log is append-only and \
              hash-chained; `cyberbrain policy audit --verify` will now name the first altered \
              row. Tell the operator."
+        ),
+        StoreTarget::Proposal => format!(
+            "cyberbrain: `{rel}` is a waiting proposal and was changed directly. `review \
+             --accept` will refuse it now; reject it and propose again."
         ),
         StoreTarget::IndexCache | StoreTarget::SessionState | StoreTarget::Other => {
             out.note(format!("post-tool-use: {rel} edited; nothing to add"));
@@ -962,6 +980,27 @@ mod bash_tests {
             "dd if=/dev/zero of=.cyberbrain/audit.db bs=1 count=1",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// A waiting proposal is approved as written; the shell is refused the edit the file
+    /// tools are (2026-10-03). Reading and listing stay free.
+    #[test]
+    fn shell_writes_into_waiting_proposals_are_refused() {
+        for cmd in [
+            "echo x >> .cyberbrain/proposals/friday-freeze.md",
+            "sed -i 's/Friday/Monday/' /root/orderflow/.cyberbrain/proposals/friday-freeze.md",
+            "cp /tmp/x.md .cyberbrain/proposals/friday-freeze.md",
+            r"echo x > C:\proj\.cyberbrain\proposals\x.md",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        for cmd in [
+            "cat .cyberbrain/proposals/friday-freeze.md",
+            "ls .cyberbrain/proposals",
+            "rm -rf /tmp/proposals/x",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
     }
 

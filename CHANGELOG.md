@@ -10,6 +10,19 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A proposal can no longer be rewritten before it is reviewed.** The file in `proposals/`
+  was not guarded: an agent could change a waiting proposal in place, and the reviewer then
+  accepted text the proposer never wrote, under the proposer's name. `propose` now records
+  the blake3 digest of the file in the hash-chained `note.proposed` row, and `review
+  --accept` refuses a file that no longer matches it (rejecting still works). The
+  pre-tool-use hook also refuses edits under `proposals/`, for the file tools and for the
+  usual shell writes. Proposals made with an older version carry no digest and are
+  reviewed as before.
+
 ## [0.7.5] — 2026-10-01
 
 ### Added

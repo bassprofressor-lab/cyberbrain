@@ -461,6 +461,16 @@ original proposer. So the state of a name is the last of `note.proposed`,
 `note.proposal.accepted` and `note.proposal.rejected` recorded against it, and only
 `note.proposed` means there is an open proposal to review.
 
+**What is accepted is what was proposed.** The file in `proposals/` is plain text, and
+anything with write access could change it between `propose` and `review`; the reviewer
+would then approve, under the proposer's name, text the proposer never wrote. So the
+`note.proposed` row also carries the blake3 digest of the file as written, and `review
+--accept` refuses a file that no longer matches it. Rejecting stays possible, since that is
+how such a file leaves the queue. Rows written before 0.7.6 carry no digest; those proposals
+are reviewed without the check. The pre-tool-use hook refuses edits under `proposals/` as
+well (file tools always; shell commands under the default `.cyberbrain` store name), but the
+hook is a heuristic and the digest is the guarantee.
+
 **A proposal cannot be reviewed by the person who made it**, in the same words the hub uses
 for a disclosure request and for the same reason. Identity comes from `CYBERBRAIN_IDENTITY`,
 then a line in the user's own configuration directory, then `git config user.email` — never

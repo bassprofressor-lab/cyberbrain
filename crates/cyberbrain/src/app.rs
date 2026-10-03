@@ -2821,7 +2821,14 @@ impl App {
             body,
             path: PathBuf::new(),
         };
-        let bytes = frontmatter::render(&note.front, &note.body)?.len();
+        let rendered = frontmatter::render(&note.front, &note.body)?;
+        let bytes = rendered.len();
+        // 2026-10-03: the file in `proposals/` is plain text that anything with write access
+        // can change between `propose` and `review`, and the hook's guard on it is a
+        // heuristic. The digest of exactly what was proposed goes into the hash-chained row
+        // below, and `review --accept` refuses a file that no longer matches it — otherwise the
+        // reviewer approves text the proposer never wrote, under the proposer's name.
+        let digest = blake3::hash(rendered.as_bytes()).to_hex().to_string();
 
         // The real path with the file write no-op'd, rather than a simulation beside it
         // (SPEC §8): everything above ran, including the gate and the rendering.
@@ -2845,6 +2852,7 @@ impl App {
                 "bytes": bytes,
                 "pii": pii,
                 "changes_existing": replaces.is_some(),
+                "blake3": digest,
                 "dry_run": req.dry_run,
             }),
         )?;
@@ -2870,7 +2878,7 @@ impl App {
         for note in self.store.list_proposals()? {
             let name = note.front.name.clone();
             out.push(ProposalSummary {
-                proposed_by: self.proposer_of(&name)?,
+                proposed_by: self.open_proposal(&name)?.map(|o| o.by),
                 changes_existing: self.store.read(&name).is_ok(),
                 name,
                 ring: note.front.ring,
@@ -2882,7 +2890,8 @@ impl App {
         Ok(out)
     }
 
-    /// Who the audit log says proposed the proposal that is **open right now**, if any.
+    /// Who the audit log says proposed the proposal that is **open right now**, if any,
+    /// and the digest of what they proposed.
     ///
     /// `None` means there is no open proposal of that name — either nothing was ever
     /// proposed under it, or what was has already been accepted or rejected. Either way the
@@ -2898,7 +2907,7 @@ impl App {
     /// it, and write an unapproved ring 0 note whose audit trail then named that person as
     /// its proposer. So the question is not "was this ever proposed" but "is the newest
     /// thing that happened to this name a proposal".
-    fn proposer_of(&self, name: &str) -> Result<Option<String>> {
+    fn open_proposal(&self, name: &str) -> Result<Option<OpenProposal>> {
         // Every row about this name in one read: they come back in sequence order, so the
         // last of the three that concern a proposal is the current state. Comparing
         // timestamps across three separate reads would be the same question asked worse —
@@ -2914,11 +2923,21 @@ impl App {
                 || e.action == AuditAction::NoteProposalRejected.as_str()
         });
         Ok(match last {
-            Some(e) if e.action == AuditAction::NoteProposed.as_str() => e
-                .detail
-                .get("by")
-                .and_then(|v| v.as_str())
-                .map(str::to_string),
+            Some(e) if e.action == AuditAction::NoteProposed.as_str() => {
+                e.detail
+                    .get("by")
+                    .and_then(|v| v.as_str())
+                    .map(|by| OpenProposal {
+                        by: by.to_string(),
+                        // Absent on rows written before 0.7.6; those proposals are reviewed as
+                        // before, without the check.
+                        blake3: e
+                            .detail
+                            .get("blake3")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                    })
+            }
             // Accepted, rejected, or never proposed: whatever is in `proposals/` under this
             // name now did not get there through `propose`.
             _ => None,
@@ -2930,13 +2949,14 @@ impl App {
         let note = self.store.read_proposal(&req.name)?;
         let name = note.front.name.clone();
 
-        let Some(proposer) = self.proposer_of(&name)? else {
+        let Some(open) = self.open_proposal(&name)? else {
             return Err(Error::Config(format!(
                 "the audit log has no record of {name} being proposed, so there is nobody to \
                  check this against. A file that appeared in proposals/ without going through \
                  `cyberbrain propose` is not a proposal; delete it or propose it properly"
             )));
         };
+        let proposer = open.by;
         // The hub's rule, in the same words, for the same reason (§14.1 of docs/HUB.md).
         if proposer == req.by {
             return Err(Error::PolicyRefusal {
@@ -2951,6 +2971,26 @@ impl App {
         // could accept it under a second name and the note moved into notes/r0 — propose was
         // no gate at all. Deciding on a ring 0/1 proposal is the operator's, whichever way.
         self.refuse_resident_unless_operator(&name, note.front.ring, None, req.dry_run)?;
+        // Rejecting a changed file stays possible: it is how the queue is cleared of it.
+        if req.accept
+            && let Some(expected) = &open.blake3
+        {
+            let path = self.store.proposal_path(&name)?;
+            let on_disk = std::fs::read(&path).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            if blake3::hash(&on_disk).to_hex().as_str() != expected {
+                return Err(Error::PolicyRefusal {
+                    profile: "review".to_string(),
+                    reason: format!(
+                        "{name} was changed after {proposer} proposed it: the file no longer \
+                         matches the digest recorded in the audit log. Accepting would approve \
+                         text nobody proposed. Reject it with a reason, and propose again"
+                    ),
+                });
+            }
+        }
 
         let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
@@ -5312,4 +5352,11 @@ mod duplicate_tests {
         assert!(shared[0].detail.contains("(100%)"), "{}", shared[0].detail);
         assert!(r.checks_run.contains(&"shared blocks"));
     }
+}
+
+/// The open proposal of a name, as the audit log records it.
+struct OpenProposal {
+    by: String,
+    /// blake3 of the proposed file, hex. `None` for proposals made before 0.7.6.
+    blake3: Option<String>,
 }
