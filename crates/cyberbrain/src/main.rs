@@ -330,8 +330,18 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let app = App::open(cli.store.as_deref(), Actor::System("daemon".into()))?;
             return daemon::serve(app, idle_secs);
         }
-        Command::Mcp => {
-            let app = std::sync::Arc::new(App::open(cli.store.as_deref(), Actor::Mcp)?);
+        Command::Mcp { client } => {
+            let actor = match client.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                Some(c) => Actor::Agent(format!(
+                    "mcp:{}",
+                    c.chars()
+                        .filter(|ch| ch.is_ascii_alphanumeric() || "-_.:".contains(*ch))
+                        .take(64)
+                        .collect::<String>()
+                )),
+                None => Actor::Mcp,
+            };
+            let app = std::sync::Arc::new(App::open(cli.store.as_deref(), actor)?);
             runtime()?.block_on(mcp::serve_stdio(app))?;
             return Ok(0);
         }
@@ -681,7 +691,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         Command::Init { .. }
         | Command::Hook { .. }
         | Command::Serve { .. }
-        | Command::Mcp
+        | Command::Mcp { .. }
         | Command::Daemon { .. }
         | Command::Install { .. }
         | Command::Hub { .. }

@@ -1840,6 +1840,73 @@ fn provenance_tags_that_contradict_themselves_are_refused() {
     }
 }
 
+/// C4, 2026-10-03: a client the operator named untrusted cannot file a trusted note, not by
+/// leaving the tag out and not by claiming `trust:trusted`. A client not named is untouched.
+#[test]
+fn a_client_named_untrusted_cannot_write_a_trusted_note() {
+    let cb = Cb::new();
+    let path = cb.store.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&path).unwrap();
+    toml.push_str("\n[provenance]\nuntrusted_clients = [\"agent:seo\"]\n");
+    std::fs::write(&path, toml).unwrap();
+    let as_agent = |name: &str, args: &[&str]| {
+        Cb::bin()
+            .env("CYBERBRAIN_IDENTITY", "christoph")
+            .env("CYBERBRAIN_AGENT", name)
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = as_agent(
+        "seo",
+        &[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "seo-finding",
+            "--body",
+            "Competitor pages say X, marker-c4.",
+            "--tags",
+            "trust:trusted",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!cb.store.join("notes/r2/seo-finding.md").exists());
+    let proposal = std::fs::read_to_string(cb.store.join("proposals/seo-finding.md")).unwrap();
+    assert!(
+        proposal.contains("trust:untrusted")
+            && proposal.contains("src:agent:seo")
+            && !proposal.contains("trust:trusted"),
+        "{proposal}"
+    );
+    let out = cb.as_person("christoph", &["review", "seo-finding", "--accept"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let hits = cb.ok(&["recall", "marker-c4", "--ring", "2"]);
+    assert_eq!(hits["hits"][0]["untrusted"], "agent:seo", "{hits:#}");
+
+    let out = as_agent(
+        "other",
+        &[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "other-note",
+            "--body",
+            "an ordinary note",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cb.store.join("notes/r2/other-note.md").is_file());
+}
+
 #[test]
 fn a_proposal_cannot_be_accepted_by_the_person_who_made_it() {
     let cb = Cb::new();

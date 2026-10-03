@@ -230,7 +230,7 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Serve { .. } => {
             Some("`serve` is what is answering this: the page you are reading is a running one.")
         }
-        Command::Mcp => {
+        Command::Mcp { .. } => {
             Some("`mcp` speaks a protocol over stdin and stdout, and there is no terminal here.")
         }
         Command::Daemon { .. } => Some(

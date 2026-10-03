@@ -2339,6 +2339,21 @@ impl App {
     /// that carries personal data or a secret is refused outright rather than held (until
     /// 2026-09-29 tags skipped the scan entirely: an e-mail address or an IBAN in `--tag`
     /// was written with `pii: none`). The body is where such a thing can be held or redacted.
+    /// C4: a client the operator named in `[provenance] untrusted_clients` writes content
+    /// from outside, whatever its tags say. Stamped here, before anything else looks at them.
+    fn stamp_if_untrusted_client(&self, tags: &mut Vec<String>) {
+        let me = self.actor.to_string();
+        if self
+            .config()
+            .provenance
+            .untrusted_clients
+            .iter()
+            .any(|c| c.trim() == me)
+        {
+            provenance::stamp_untrusted(tags, &me);
+        }
+    }
+
     fn refuse_pii_in_tags(&self, policy: &Policy, tags: &[String]) -> Result<()> {
         if tags.is_empty() {
             return Ok(());
@@ -2369,6 +2384,8 @@ impl App {
     }
 
     pub fn write(&self, req: WriteRequest) -> Result<WriteOutcome> {
+        let mut req = req;
+        self.stamp_if_untrusted_client(&mut req.tags);
         let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: PathBuf::from(format!("{name}.md")),
@@ -2763,6 +2780,8 @@ impl App {
     /// the one who answers for it. It runs again at acceptance over the same body, because
     /// the profile may have changed in between.
     pub fn propose(&self, req: WriteRequest, who: &str) -> Result<Proposed> {
+        let mut req = req;
+        self.stamp_if_untrusted_client(&mut req.tags);
         // 2026-10-03: `who` comes from the machine's identity, which is the person's even when
         // an agent runs the command. An agent's proposal then carried the person's name, the
         // person could not accept it (two-person rule), and anybody under a second name could.

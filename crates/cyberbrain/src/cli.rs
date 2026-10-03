@@ -305,7 +305,12 @@ pub enum Command {
     },
 
     /// Serve the same operations over MCP on stdio.
-    Mcp,
+    Mcp {
+        /// Name this client in the audit log as `agent:mcp:<name>` instead of `mcp`, so that
+        /// `[provenance] untrusted_clients` can name it. Letters, digits and `-_.:`.
+        #[arg(long)]
+        client: Option<String>,
+    },
 
     /// Keep the model loaded and answer `recall` for this store over a local socket.
     ///

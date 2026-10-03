@@ -72,6 +72,19 @@ pub fn untrusted_source(tags: &[String]) -> Option<String> {
     )
 }
 
+/// Mark `tags` as content from `client`, for a client the operator named untrusted (C4):
+/// `trust:trusted` is dropped, `trust:untrusted` added, and `src:<client>` added unless the
+/// client named a source of its own (which stays: it is more precise, and untrusted anyway).
+pub fn stamp_untrusted(tags: &mut Vec<String>, client: &str) {
+    tags.retain(|t| t != "trust:trusted");
+    if !is_untrusted(tags) {
+        tags.push(UNTRUSTED.to_string());
+    }
+    if !tags.iter().any(|t| t.starts_with(SRC_PREFIX)) {
+        tags.push(format!("{SRC_PREFIX}{client}"));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -89,6 +102,17 @@ mod tests {
         assert!(validate(&v(&["src:"])).is_err());
         assert!(validate(&v(&["src::"])).is_err());
         assert!(validate(&v(&["source:x", "trusty"])).is_ok());
+    }
+
+    #[test]
+    fn a_named_client_is_stamped_untrusted_whatever_it_sends() {
+        let mut t = v(&["trust:trusted", "x"]);
+        stamp_untrusted(&mut t, "agent:seo");
+        assert_eq!(t, v(&["x", "trust:untrusted", "src:agent:seo"]));
+        let mut t = v(&["src:web"]);
+        stamp_untrusted(&mut t, "mcp");
+        assert_eq!(t, v(&["src:web", "trust:untrusted"]));
+        assert!(validate(&t).is_ok());
     }
 
     #[test]

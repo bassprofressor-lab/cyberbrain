@@ -23,6 +23,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   instead of into the notes tree; the write answers `quarantined` (exit 0, HTTP 202). The
   operator's writes and ordinary agent writes are unchanged. Tags rather than new
   frontmatter fields, so older binaries read these notes as before. SPEC §8.0.4.
+- **The operator can name clients whose writes are always untrusted.** `[provenance]
+  untrusted_clients = ["agent:seo", "agent:mcp:n8n"]`: whatever such a client writes is
+  stamped `trust:untrusted` and `src:<client>` and quarantined, whether it tagged anything or
+  claimed `trust:trusted`. `cyberbrain mcp --client <name>` gives an MCP client its own name
+  (`agent:mcp:<name>`) so it can be listed. A configuration with this section is refused by
+  older binaries, like any new section; a fresh store does not get it.
 - **Agent proposals can be approved in AgentGuard.** With `[governance] url` set, a proposal
   from an agent, MCP client or hook is also reported to AgentGuard as `memory_write`, which
   always asks an admin (AgentGuard from 03.10.2026). `cyberbrain review <name>

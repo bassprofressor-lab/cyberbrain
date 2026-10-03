@@ -432,6 +432,34 @@ async fn untrusted_content_written_over_mcp_waits_in_proposals() {
     assert!(!root.join("notes/r2/from-mail.md").exists());
 }
 
+/// C4 over MCP: `cyberbrain mcp --client n8n` runs as `agent:mcp:n8n`; named untrusted, it
+/// cannot write a note directly even without any tag.
+#[tokio::test]
+async fn an_mcp_client_named_untrusted_is_quarantined_without_tagging_anything() {
+    let (_d, root) = temp_store();
+    let cfg = root.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&cfg).unwrap();
+    toml.push_str("\n[provenance]\nuntrusted_clients = [\"agent:mcp:n8n\"]\n");
+    std::fs::write(&cfg, toml).unwrap();
+    let app = Arc::new(App::open(Some(&root), Actor::Agent("mcp:n8n".into())).unwrap());
+    session(app, |mut c| async move {
+        c.init().await;
+        let r = c
+            .call(
+                "write",
+                json!({ "ring": 2, "kind": "knowledge", "name": "n8n-note", "body": "text" }),
+            )
+            .await;
+        assert_ne!(r["isError"], true, "{r}");
+        assert!(text_of(&r).contains("proposals/"), "{r}");
+        c
+    })
+    .await;
+    let p = std::fs::read_to_string(root.join("proposals/n8n-note.md")).unwrap();
+    assert!(p.contains("src:agent:mcp:n8n"), "{p}");
+    assert!(!root.join("notes/r2/n8n-note.md").exists());
+}
+
 /// Rings 0 and 1 are the operator's (2026-09-22). Session start injects them as invariants,
 /// so a `write {ring: 0}` over MCP was a standing prompt injection. Refused, pointed at
 /// `propose`, recorded in the audit log, and nothing on disk — for ring 0, ring 1, a dry

@@ -529,10 +529,21 @@ without `isError`). It is not in the index until a person accepts it, and once a
 keeps its tags and so its mark. The operator writes directly, untrusted or not; a note
 arriving from another machine was decided there. An agent's ordinary writes are not affected.
 
-The tag is set by whoever files the content, so this protects against content that is
-declared as from outside, not against an agent that hides where its text came from. Marking
-everything one integration writes as untrusted, whatever it sends, is the next step (per
-client grants), not this one.
+The tag is set by whoever files the content, so on its own this protects against content
+that is declared as from outside, not against an agent that hides where its text came from.
+For that, the operator names the client:
+
+```toml
+[provenance]
+untrusted_clients = ["agent:seo", "agent:mcp:n8n"]
+```
+
+A name is the actor as the audit log writes it: `agent:<CYBERBRAIN_AGENT>` for a CLI agent,
+`agent:mcp:<name>` for `cyberbrain mcp --client <name>`, `mcp` for every MCP client without
+one. Whatever such a client writes or proposes is stamped `trust:untrusted` and
+`src:<client>` (a source it names itself is kept), a `trust:trusted` it sends is dropped,
+and the note is quarantined like any other untrusted write. A fresh store's file does not
+carry the section, so a store without it stays readable by older binaries.
 
 **Approval through AgentGuard.** Where `[governance] url` is set, a proposal made by an agent,
 an MCP client or a hook is also reported there as an action of type `memory_write` (with

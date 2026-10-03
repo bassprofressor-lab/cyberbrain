@@ -63,6 +63,25 @@ pub struct Config {
     pub policy: PolicyConfig,
     pub hub: HubConfig,
     pub governance: GovernanceConfig,
+    pub provenance: ProvenanceConfig,
+}
+
+/// Clients whose writes are content from outside, whatever they say (C4, 2026-10-03).
+///
+/// `trust:untrusted` (see `provenance`) is set by whoever files the content, so an
+/// integration that forgets it, or an agent talked out of it, files outside text as a
+/// trusted note. Named here, a client cannot: every note it writes or proposes is stamped
+/// `trust:untrusted` and `src:<client>`, a `trust:trusted` it sends is dropped, and the note
+/// waits in `proposals/` for a person (SPEC §8.0.4).
+///
+/// Names are the actor as the audit log writes it: `agent:<CYBERBRAIN_AGENT>` for a CLI
+/// agent, `agent:mcp:<name>` for `cyberbrain mcp --client <name>`, `mcp` for every MCP
+/// client without a name. Not written into a fresh store's file: a store without the
+/// section stays readable by older binaries.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ProvenanceConfig {
+    pub untrusted_clients: Vec<String>,
 }
 
 /// Where the pre-tool-use hook asks before a tool call runs (AgentGuard, 2026-09-25).
@@ -257,6 +276,7 @@ impl Default for Config {
             policy: PolicyConfig::default(),
             hub: HubConfig::default(),
             governance: GovernanceConfig::default(),
+            provenance: ProvenanceConfig::default(),
         }
     }
 }
