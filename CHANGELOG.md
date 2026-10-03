@@ -10,7 +10,9 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.6] — 2026-10-03
+
+Memory protection: content from outside does not become a note on an agent's word.
 
 ### Added
 
@@ -70,6 +72,24 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   as `on_behalf_of`. Agents, MCP clients and hooks can no longer accept a proposal in any
   ring (ring 2–4 proposals were theirs to accept before); an agent can still withdraw its
   own.
+
+### Upgrading
+
+Replace the binary. Nothing else is required, and the index schema is still v5. Three things
+behave differently:
+
+- **No agent, MCP client or hook accepts a proposal any more**, in any ring; before, ring
+  2–4 proposals were theirs to accept. A person does it, at the terminal (`cyberbrain
+  review`) or in the new Approvals screen. A pipeline can still complete one through
+  `review --from-agentguard` once an admin approved it there.
+- **An agent's proposal names the agent** (`agent:<name>`), with the machine's identity as
+  `on_behalf_of`. The person can now accept their agent's proposals; before, the two-person
+  rule refused them.
+- **`trust:` and `src:` tags are checked.** A note with `trust:maybe`, both `trust:` values,
+  or an empty `src:` is refused. Other tags are not looked at.
+
+The new `[provenance]` and `[clients]` sections are optional and not written into a fresh
+store. A configuration that uses them is refused by 0.7.5 and older, as any new section is.
 
 ## [0.7.5] — 2026-10-01
 

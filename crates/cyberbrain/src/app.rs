@@ -3156,7 +3156,7 @@ impl App {
                 });
             }
         }
-        rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+        rows.sort_by_key(|a| std::cmp::Reverse(a.ts));
         rows.truncate(limit);
         Ok(rows)
     }
