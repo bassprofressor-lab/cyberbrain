@@ -1980,3 +1980,72 @@ async fn a_served_store_does_not_write_rings_zero_and_one() {
         .await;
     assert_eq!(s, StatusCode::CREATED, "{v}");
 }
+
+/// C5, 2026-10-03: the review screen's routes. An agent's untrusted write waits; the list
+/// shows who proposed it, where it came from and that the file is intact; a decision goes
+/// through `App::review` with this machine's identity as reviewer; the history names both.
+#[tokio::test]
+async fn the_review_routes_list_decide_and_record_a_quarantined_proposal() {
+    let fx = Fx::new();
+    let agent = App::open(Some(&fx.store), Actor::Agent("mcp:seo".into())).unwrap();
+    let w = agent
+        .write(crate::app::WriteRequest {
+            ring: cyberbrain_core::Ring::External,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: "seo-befund".into(),
+            body: "A finding from outside.".into(),
+            tags: vec!["trust:untrusted".into(), "src:web".into()],
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+        })
+        .unwrap();
+    assert!(matches!(w, crate::app::WriteOutcome::Quarantined(_)));
+
+    let list = fx.ok("/api/v1/proposals").await;
+    let p = &list[0];
+    assert_eq!(p["name"], "seo-befund", "{list}");
+    assert_eq!(p["proposed_by"], "agent:mcp:seo");
+    assert_eq!(p["untrusted"], "web");
+    assert_eq!(p["intact"], true);
+    assert_eq!(p["body"], "A finding from outside.");
+
+    // The reviewer is whoever this machine says it is; git beside the store is the fallback
+    // that needs no process-wide environment.
+    for args in [
+        vec!["init", "-q"],
+        vec!["config", "user.email", "reviewer@example.org"],
+    ] {
+        assert!(
+            std::process::Command::new("git")
+                .args(&args)
+                .current_dir(fx.store.parent().unwrap())
+                .status()
+                .unwrap()
+                .success()
+        );
+    }
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/proposals/seo-befund/decision",
+            Some(json!({ "accept": true })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    assert!(fx.note_path(4, "seo-befund").is_file());
+    assert_eq!(fx.ok("/api/v1/proposals").await, json!([]));
+
+    let h = fx.ok("/api/v1/proposals/history").await;
+    assert_eq!(h[0]["name"], "seo-befund", "{h}");
+    assert_eq!(h[0]["accepted"], true);
+    assert_eq!(h[0]["proposed_by"], "agent:mcp:seo");
+    assert_ne!(h[0]["by"], "agent:mcp:seo");
+}

@@ -31,6 +31,7 @@ mod notes;
 mod ops;
 pub(crate) mod origin;
 mod policy;
+mod proposals;
 mod wire;
 
 #[cfg(test)]
@@ -125,6 +126,9 @@ pub fn router_with(
         )
         .route("/holds/{id}", post(notes::resolve_hold))
         .route("/graph", get(notes::graph))
+        .route("/proposals", get(proposals::list))
+        .route("/proposals/history", get(proposals::history))
+        .route("/proposals/{name}/decision", post(proposals::decide))
         .route("/policy/egress", get(policy::egress))
         .route("/policy/obligations", get(policy::obligations))
         .route("/policy/audit", get(policy::audit))

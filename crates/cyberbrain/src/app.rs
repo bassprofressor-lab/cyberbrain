@@ -331,6 +331,41 @@ pub struct ProposalSummary {
     pub path: PathBuf,
 }
 
+/// A waiting proposal with everything a person needs to decide it (C5, 2026-10-03): the
+/// text, who proposed it and for whom, where its content came from, whether the file is
+/// still what was proposed, and what AgentGuard said.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposalDetail {
+    pub name: String,
+    pub ring: Ring,
+    pub kind: String,
+    pub created: jiff::Timestamp,
+    pub proposed_by: Option<String>,
+    pub on_behalf_of: Option<String>,
+    pub bereich: Option<String>,
+    pub tags: Vec<String>,
+    /// The source, when the content is marked `trust:untrusted`.
+    pub untrusted: Option<String>,
+    pub body: String,
+    pub changes_existing: bool,
+    /// `Some(false)`: the file no longer matches the digest recorded at propose time, and
+    /// accepting it will be refused. `None`: proposed before digests were recorded.
+    pub intact: Option<bool>,
+    /// AgentGuard's answer at propose time, as recorded (`action_id`, `outcome`, ...).
+    pub agentguard: Option<serde_json::Value>,
+}
+
+/// One decision on a proposal, from the audit log.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProposalDecision {
+    pub ts: jiff::Timestamp,
+    pub name: String,
+    pub accepted: bool,
+    pub by: Option<String>,
+    pub proposed_by: Option<String>,
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct ReviewRequest {
     pub name: String,
@@ -3050,6 +3085,80 @@ impl App {
             });
         }
         Ok(out)
+    }
+
+    /// The waiting proposals in full, oldest first (C5).
+    pub fn proposal_details(&self) -> Result<Vec<ProposalDetail>> {
+        let mut out = Vec::new();
+        for note in self.store.list_proposals()? {
+            let name = note.front.name.clone();
+            let filter = AuditFilter {
+                subject: Some(format!("note:{name}")),
+                action: Some(AuditAction::NoteProposed.as_str().to_string()),
+                ..AuditFilter::default()
+            };
+            let row = self.policy.audit().read(&filter)?.pop();
+            let open = self.open_proposal(&name)?;
+            let intact = match open.as_ref().and_then(|o| o.blake3.as_deref()) {
+                None => None,
+                Some(expected) => Some(
+                    std::fs::read(&note.path)
+                        .map(|b| blake3::hash(&b).to_hex().as_str() == expected)
+                        .unwrap_or(false),
+                ),
+            };
+            let detail = row.map(|r| r.detail).unwrap_or(serde_json::Value::Null);
+            out.push(ProposalDetail {
+                proposed_by: open.map(|o| o.by),
+                on_behalf_of: detail["on_behalf_of"].as_str().map(str::to_string),
+                agentguard: Some(detail["agentguard"].clone()).filter(|v| !v.is_null()),
+                changes_existing: self.store.read(&name).is_ok(),
+                untrusted: provenance::untrusted_source(&note.front.tags),
+                ring: note.front.ring,
+                kind: kind_name(note.front.kind).to_string(),
+                created: note.front.created,
+                bereich: note.front.bereich.clone(),
+                tags: note.front.tags.clone(),
+                body: note.body.clone(),
+                intact,
+                name,
+            });
+        }
+        Ok(out)
+    }
+
+    /// The most recent decisions on proposals, newest first (C5).
+    pub fn proposal_decisions(&self, limit: usize) -> Result<Vec<ProposalDecision>> {
+        let mut rows = Vec::new();
+        for action in [
+            AuditAction::NoteProposalAccepted,
+            AuditAction::NoteProposalRejected,
+        ] {
+            let filter = AuditFilter {
+                action: Some(action.as_str().to_string()),
+                ..AuditFilter::default()
+            };
+            for e in self.policy.audit().read(&filter)? {
+                if e.detail["dry_run"].as_bool() == Some(true) {
+                    continue;
+                }
+                rows.push(ProposalDecision {
+                    ts: e.ts,
+                    name: e
+                        .subject
+                        .strip_prefix("note:")
+                        .unwrap_or(&e.subject)
+                        .to_string(),
+                    accepted: action == AuditAction::NoteProposalAccepted,
+                    by: e.detail["by"].as_str().map(str::to_string),
+                    proposed_by: e.detail["proposed_by"].as_str().map(str::to_string),
+                    reason: e.detail["reason"].as_str().map(str::to_string),
+                });
+            }
+        }
+        rows.sort_by(|a, b| b.ts.cmp(&a.ts));
+        rows.truncate(limit);
+        Ok(rows)
     }
 
     /// Who the audit log says proposed the proposal that is **open right now**, if any,
