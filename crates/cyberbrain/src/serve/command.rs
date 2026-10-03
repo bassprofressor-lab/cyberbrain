@@ -233,6 +233,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Mcp { .. } => {
             Some("`mcp` speaks a protocol over stdin and stdout, and there is no terminal here.")
         }
+        Command::McpClient { .. } => Some(
+            "`mcp-client` hands out tokens that let a program on the network act on this \
+             store; that is done at a terminal, not from a page without authentication.",
+        ),
         Command::Daemon { .. } => Some(
             "`daemon` is started by `recall` itself and runs until it has been idle; there is \
              nothing to run by hand here.",

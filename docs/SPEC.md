@@ -858,6 +858,24 @@ form, and for the same reason.
 
 ---
 
+#### 9.2.1 MCP over HTTP
+
+`cyberbrain mcp --http <addr:port>` serves the same tools over HTTP (`POST /mcp`, the
+Streamable HTTP transport in its stateless form) for a client that cannot start a process on
+this machine — n8n in a container is the case it was built for (2026-10-03).
+
+- **A token per client.** `cyberbrain mcp-client add <name>` prints a token once and keeps only
+  its SHA-256, in `~/.config/cyberbrain/mcp-clients` beside the identity, never in the store.
+  Every request needs `Authorization: Bearer <token>` and runs as `agent:mcp:<name>`, the
+  name `[provenance] untrusted_clients` lists and the audit log records. `list` and `remove`
+  take effect at the next request; the file is read per request.
+- **Local network only.** The address must be loopback or private (as for an inference
+  endpoint); there is no TLS. `0.0.0.0` is refused: name the address the container reaches
+  this host on, such as the docker bridge.
+- **No browsers.** A request carrying `Origin` is refused, which also closes DNS rebinding.
+- **Stateless.** No session id and no event stream; `GET` and `DELETE` answer 405. A
+  notification is answered 202 with no body.
+
 ## 10. Code index
 
 `cyberbrain find <symbol>` returns exact file and line ranges so the agent reads a slice

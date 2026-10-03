@@ -308,8 +308,19 @@ pub enum Command {
     Mcp {
         /// Name this client in the audit log as `agent:mcp:<name>` instead of `mcp`, so that
         /// `[provenance] untrusted_clients` can name it. Letters, digits and `-_.:`.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "http")]
         client: Option<String>,
+        /// Serve over HTTP at this address instead of stdio (Streamable HTTP, POST /mcp).
+        /// Loopback or private addresses only; every request needs a client token from
+        /// `cyberbrain mcp-client add`, and is served as `agent:mcp:<client>`.
+        #[arg(long, value_name = "ADDR:PORT")]
+        http: Option<std::net::SocketAddr>,
+    },
+
+    /// The clients that may call `mcp --http`, one token each.
+    McpClient {
+        #[command(subcommand)]
+        command: McpClientCommand,
     },
 
     /// Keep the model loaded and answer `recall` for this store over a local socket.
@@ -1007,6 +1018,16 @@ pub enum LicenceCommand {
         #[arg(long, value_name = "PATH")]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpClientCommand {
+    /// Register a client and print its token. The token is shown once and not stored.
+    Add { name: String },
+    /// The registered clients, by name.
+    List,
+    /// Remove a client; its token stops working at the next request.
+    Remove { name: String },
 }
 
 #[derive(Debug, Subcommand)]

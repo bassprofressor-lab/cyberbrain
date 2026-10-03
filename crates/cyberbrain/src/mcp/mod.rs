@@ -14,6 +14,7 @@
 //! Entry point for the CLI: [`serve_stdio`]. The loop itself, [`serve`], is generic over
 //! the two streams so tests can drive it over an in-memory pipe.
 
+pub mod clients;
 mod describe;
 mod jsonrpc;
 mod stdio;
@@ -35,6 +36,9 @@ macro_rules! diag {
         eprintln!("cyberbrain mcp: {}", format_args!($($arg)*))
     };
 }
+
+// After the macro, which it uses.
+pub mod http;
 
 /// The protocol revision this server implements. Tool listing and calling, with
 /// `structuredContent` and `isError` on results, is the whole surface used.

@@ -29,6 +29,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   claimed `trust:trusted`. `cyberbrain mcp --client <name>` gives an MCP client its own name
   (`agent:mcp:<name>`) so it can be listed. A configuration with this section is refused by
   older binaries, like any new section; a fresh store does not get it.
+- **MCP over HTTP, with a token per client.** `cyberbrain mcp --http <addr:port>` serves the
+  MCP tools at `POST /mcp` for clients that cannot start a process here (n8n in a
+  container). `cyberbrain mcp-client add <name>` prints a token once and stores only its
+  hash outside the store; each request runs as `agent:mcp:<name>`, so `[provenance]
+  untrusted_clients` and the audit log can tell the clients apart. Loopback and private
+  addresses only, no browsers (`Origin` refused), stateless. SPEC §9.2.1.
 - **Agent proposals can be approved in AgentGuard.** With `[governance] url` set, a proposal
   from an agent, MCP client or hook is also reported to AgentGuard as `memory_write`, which
   always asks an admin (AgentGuard from 03.10.2026). `cyberbrain review <name>

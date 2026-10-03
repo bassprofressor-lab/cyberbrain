@@ -330,7 +330,39 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let app = App::open(cli.store.as_deref(), Actor::System("daemon".into()))?;
             return daemon::serve(app, idle_secs);
         }
-        Command::Mcp { client } => {
+        Command::Mcp {
+            http: Some(addr), ..
+        } => {
+            runtime()?.block_on(mcp::http::serve_http(cli.store.clone(), addr))?;
+            return Ok(0);
+        }
+        Command::McpClient { command } => {
+            match command {
+                cli::McpClientCommand::Add { name } => {
+                    let token = mcp::clients::add(&name)?;
+                    println!(
+                        "client {name} registered. Its token, shown this once:\n\n  {token}\n\n\
+                         Use it as `Authorization: Bearer <token>` against `mcp --http`. \
+                         Requests run as agent:mcp:{name}; to treat everything it writes as \
+                         from outside, add \"agent:mcp:{name}\" to [provenance] untrusted_clients."
+                    );
+                }
+                cli::McpClientCommand::List => {
+                    for (n, _) in mcp::clients::load() {
+                        println!("{n}");
+                    }
+                }
+                cli::McpClientCommand::Remove { name } => {
+                    if mcp::clients::remove(&name)? {
+                        println!("client {name} removed");
+                    } else {
+                        return Err(Error::Config(format!("no client named {name}")));
+                    }
+                }
+            }
+            return Ok(0);
+        }
+        Command::Mcp { client, .. } => {
             let actor = match client.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
                 Some(c) => Actor::Agent(format!(
                     "mcp:{}",
@@ -692,6 +724,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         | Command::Hook { .. }
         | Command::Serve { .. }
         | Command::Mcp { .. }
+        | Command::McpClient { .. }
         | Command::Daemon { .. }
         | Command::Install { .. }
         | Command::Hub { .. }

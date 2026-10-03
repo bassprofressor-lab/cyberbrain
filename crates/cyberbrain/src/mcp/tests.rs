@@ -1089,3 +1089,135 @@ async fn validity_and_supersession_travel_over_mcp() {
     })
     .await;
 }
+
+// ---------------------------------------------------------------------------------------
+// MCP over HTTP (http.rs, C3, 2026-10-03)
+
+mod http_transport {
+    use super::*;
+    use crate::mcp::{clients, http};
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use tower::ServiceExt;
+
+    fn router_with(root: &std::path::Path, token: &str) -> axum::Router {
+        http::router(
+            Some(root.to_path_buf()),
+            Some(vec![("n8n".to_string(), clients::digest(token))]),
+        )
+    }
+
+    async fn post(r: &axum::Router, auth: Option<&str>, body: Value) -> (StatusCode, Value) {
+        let mut req = Request::post("/mcp").header("content-type", "application/json");
+        if let Some(a) = auth {
+            req = req.header("authorization", format!("Bearer {a}"));
+        }
+        let resp = r
+            .clone()
+            .oneshot(req.body(Body::from(body.to_string())).unwrap())
+            .await
+            .unwrap();
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), 1 << 20)
+            .await
+            .unwrap();
+        (
+            status,
+            serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+        )
+    }
+
+    #[tokio::test]
+    async fn without_a_known_token_nothing_is_served() {
+        let (_d, root) = temp_store();
+        let r = router_with(&root, "cbm_right");
+        let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+        assert_eq!(
+            post(&r, None, ping.clone()).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            post(&r, Some("cbm_wrong"), ping.clone()).await.0,
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(post(&r, Some("cbm_right"), ping).await.0, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn a_browser_is_refused_and_there_is_no_event_stream() {
+        let (_d, root) = temp_store();
+        let r = router_with(&root, "cbm_right");
+        let resp = r
+            .clone()
+            .oneshot(
+                Request::post("/mcp")
+                    .header("authorization", "Bearer cbm_right")
+                    .header("origin", "http://evil.example")
+                    .body(Body::from(r#"{"jsonrpc":"2.0","id":1,"method":"ping"}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let resp = r
+            .oneshot(Request::get("/mcp").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    /// The round trip n8n makes, as agent:mcp:n8n, named untrusted: its write is quarantined
+    /// and the proposal names the client.
+    #[tokio::test]
+    async fn a_client_writes_as_itself_and_is_quarantined_when_named_untrusted() {
+        let (_d, root) = temp_store();
+        let cfg = root.join("cyberbrain.toml");
+        let mut toml = std::fs::read_to_string(&cfg).unwrap();
+        toml.push_str("\n[provenance]\nuntrusted_clients = [\"agent:mcp:n8n\"]\n");
+        std::fs::write(&cfg, toml).unwrap();
+        let r = router_with(&root, "cbm_right");
+
+        let (st, v) = post(
+            &r,
+            Some("cbm_right"),
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": LATEST_PROTOCOL, "capabilities": {},
+                "clientInfo": {"name": "n8n", "version": "0"}}}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_eq!(v["result"]["protocolVersion"], LATEST_PROTOCOL, "{v}");
+
+        let (st, _) = post(
+            &r,
+            Some("cbm_right"),
+            json!({"jsonrpc": "2.0", "method": "notifications/initialized"}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::ACCEPTED);
+
+        let (st, v) = post(
+            &r,
+            Some("cbm_right"),
+            json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "write", "arguments": {
+                    "ring": 2, "kind": "knowledge", "name": "from-n8n", "body": "text"}}}),
+        )
+        .await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        assert_ne!(v["result"]["isError"], true, "{v}");
+        let p = std::fs::read_to_string(root.join("proposals/from-n8n.md")).unwrap();
+        assert!(p.contains("src:agent:mcp:n8n"), "{p}");
+        assert!(!root.join("notes/r2/from-n8n.md").exists());
+    }
+
+    #[test]
+    fn only_loopback_and_private_addresses_are_bound() {
+        for ok in ["127.0.0.1:1", "172.17.0.1:1", "10.0.0.5:1", "[::1]:1"] {
+            assert!(http::check_bind(&ok.parse().unwrap()).is_ok(), "{ok}");
+        }
+        for bad in ["0.0.0.0:1", "8.8.8.8:1", "[::]:1"] {
+            assert!(http::check_bind(&bad.parse().unwrap()).is_err(), "{bad}");
+        }
+    }
+}

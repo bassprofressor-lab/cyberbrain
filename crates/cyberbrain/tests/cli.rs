@@ -4262,3 +4262,31 @@ fn a_bad_argument_is_a_user_error() {
         Some(0)
     );
 }
+
+/// C3: a client token is shown once and stored only as its digest.
+#[test]
+fn mcp_client_tokens_are_shown_once_and_kept_only_as_a_digest() {
+    let home = tempfile::tempdir().unwrap();
+    let run = |args: &[&str]| {
+        Cb::bin()
+            .env("XDG_CONFIG_HOME", home.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let out = run(&["mcp-client", "add", "n8n"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let shown = text(&out);
+    let token = shown
+        .split_whitespace()
+        .find(|w| w.starts_with("cbm_"))
+        .unwrap()
+        .to_string();
+    let file = std::fs::read_to_string(home.path().join("cyberbrain/mcp-clients")).unwrap();
+    assert!(file.starts_with("n8n "), "{file}");
+    assert!(!file.contains(&token), "the token itself is not kept");
+    assert!(!run(&["mcp-client", "add", "n8n"]).status.success());
+    assert!(text(&run(&["mcp-client", "list"])).contains("n8n"));
+    assert!(run(&["mcp-client", "remove", "n8n"]).status.success());
+    assert!(!text(&run(&["mcp-client", "list"])).contains("n8n"));
+}
