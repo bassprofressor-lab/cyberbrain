@@ -22,6 +22,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   pre-tool-use hook also refuses edits under `proposals/`, for the file tools and for the
   usual shell writes. Proposals made with an older version carry no digest and are
   reviewed as before.
+- **An agent's proposal names the agent, and only a person accepts.** Run by an agent, a
+  proposal carried the person's identity, so the person was refused by the two-person rule
+  and any other name was let through. It now records the agent as proposer and the person
+  as `on_behalf_of`. Agents, MCP clients and hooks can no longer accept a proposal in any
+  ring (ring 2–4 proposals were theirs to accept before); an agent can still withdraw its
+  own.
 
 ## [0.7.5] — 2026-10-01
 

@@ -92,6 +92,20 @@ impl Cb {
             .unwrap()
     }
 
+    /// The same run, as an agent working for somebody: Claude Code sets `CLAUDECODE`, and
+    /// the machine's identity is still the person's.
+    fn as_agent_of(&self, who: &str, session: &str, args: &[&str]) -> Output {
+        Self::bin()
+            .env("CYBERBRAIN_IDENTITY", who)
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .arg("--store")
+            .arg(&self.store)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
     fn json(&self, args: &[&str]) -> (Value, i32, String) {
         let mut full = vec!["--json"];
         full.extend_from_slice(args);
@@ -1611,6 +1625,73 @@ fn an_untouched_proposal_is_accepted_with_its_digest_checked() {
     let out = cb.as_person("bernd", &["review", "deploy-days", "--accept"]);
     assert!(out.status.success(), "{}", text(&out));
     assert!(cb.store.join("notes/r2/deploy-days.md").is_file());
+}
+
+/// 2026-10-03: an agent's proposal carried the person's name, so that person could not
+/// accept it and any second name could. An agent proposes as itself, the person accepts.
+#[test]
+fn an_agent_proposes_as_itself_and_the_person_it_works_for_accepts() {
+    let cb = Cb::new();
+    let out = cb.as_agent_of(
+        "christoph",
+        "sessaaaa",
+        &[
+            "propose",
+            "--ring",
+            "2",
+            "--kind",
+            "lesson",
+            "--name",
+            "learned",
+            "--body",
+            "Something the agent learned.",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let listed = text(&cb.as_person("christoph", &["review"]));
+    assert!(listed.contains("agent:claude-code:sessaaaa"), "{listed}");
+
+    let out = cb.as_person("christoph", &["review", "learned", "--accept"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(cb.store.join("notes/r2/learned.md").is_file());
+}
+
+/// No agent decides on a proposal: not under another session, not on somebody else's.
+/// Withdrawing its own stays possible.
+#[test]
+fn an_agent_cannot_accept_a_proposal_but_can_withdraw_its_own() {
+    let cb = Cb::new();
+    let propose = |name: &str| {
+        let out = cb.as_agent_of(
+            "christoph",
+            "sessaaaa",
+            &[
+                "propose", "--ring", "2", "--kind", "lesson", "--name", name, "--body", "text",
+            ],
+        );
+        assert!(out.status.success(), "{}", text(&out));
+    };
+    propose("first");
+    let out = cb.as_agent_of("christoph", "sessbbbb", &["review", "first", "--accept"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(text(&out).contains("cannot accept"), "{}", text(&out));
+    assert!(!cb.store.join("notes/r2/first.md").exists());
+
+    let out = cb.as_agent_of(
+        "christoph",
+        "sessbbbb",
+        &["review", "first", "--reject", "--reason", "not mine"],
+    );
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(cb.store.join("proposals/first.md").is_file());
+
+    let out = cb.as_agent_of(
+        "christoph",
+        "sessaaaa",
+        &["review", "first", "--reject", "--reason", "withdrawn"],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(!cb.store.join("proposals/first.md").exists());
 }
 
 #[test]

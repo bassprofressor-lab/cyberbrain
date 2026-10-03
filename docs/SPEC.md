@@ -471,6 +471,13 @@ are reviewed without the check. The pre-tool-use hook refuses edits under `propo
 well (file tools always; shell commands under the default `.cyberbrain` store name), but the
 hook is a heuristic and the digest is the guarantee.
 
+**An agent proposes as itself and never decides.** The machine's identity is the person's
+even when an agent runs the command, so an agent's proposal used to carry the person's name:
+that person could then not accept it, and anyone under a second name could. Since 0.7.6 a
+proposal made by an agent records the agent (`agent:claude-code:<session>`) as its proposer
+and the person as `on_behalf_of`. No agent, MCP client or hook accepts a proposal, in any
+ring; an agent may only withdraw (reject) one it proposed itself.
+
 **A proposal cannot be reviewed by the person who made it**, in the same words the hub uses
 for a disclosure request and for the same reason. Identity comes from `CYBERBRAIN_IDENTITY`,
 then a line in the user's own configuration directory, then `git config user.email` — never

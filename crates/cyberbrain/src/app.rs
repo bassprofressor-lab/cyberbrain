@@ -2724,6 +2724,15 @@ impl App {
     /// the one who answers for it. It runs again at acceptance over the same body, because
     /// the profile may have changed in between.
     pub fn propose(&self, req: WriteRequest, who: &str) -> Result<Proposed> {
+        // 2026-10-03: `who` comes from the machine's identity, which is the person's even when
+        // an agent runs the command. An agent's proposal then carried the person's name, the
+        // person could not accept it (two-person rule), and anybody under a second name could.
+        // An agent proposes as itself; the person it works for is kept beside it.
+        let (who, on_behalf_of) = match &self.actor {
+            Actor::Agent(_) => (self.actor.to_string(), Some(who.to_string())),
+            _ => (who.to_string(), None),
+        };
+        let who = who.as_str();
         let name = frontmatter::normalize_name(req.name.trim()).into_owned();
         frontmatter::validate_name(&name).map_err(|why| Error::Frontmatter {
             path: PathBuf::from(format!("{name}.md")),
@@ -2853,6 +2862,7 @@ impl App {
                 "pii": pii,
                 "changes_existing": replaces.is_some(),
                 "blake3": digest,
+                "on_behalf_of": on_behalf_of,
                 "dry_run": req.dry_run,
             }),
         )?;
@@ -2957,8 +2967,29 @@ impl App {
             )));
         };
         let proposer = open.by;
+        // An agent does not decide on proposals: accepting is the second person of the
+        // two-person rule, and an agent under another session id is not one. It may withdraw
+        // its own, which is the same as never having proposed it.
+        let mut req = req;
+        let agent = matches!(self.actor, Actor::Agent(_) | Actor::Mcp | Actor::Hook(_));
+        if agent {
+            let me = self.actor.to_string();
+            if req.accept || proposer != me {
+                return Err(Error::PolicyRefusal {
+                    profile: "review".to_string(),
+                    reason: format!(
+                        "{me} cannot {} {name}: deciding on a proposal is a person's, and an \
+                         agent only withdraws its own. Ask the operator to run `cyberbrain \
+                         review {name}`",
+                        if req.accept { "accept" } else { "reject" }
+                    ),
+                });
+            }
+            req.by = me;
+        }
         // The hub's rule, in the same words, for the same reason (§14.1 of docs/HUB.md).
-        if proposer == req.by {
+        // An agent past the block above is withdrawing its own, which the rule is not about.
+        if proposer == req.by && !agent {
             return Err(Error::PolicyRefusal {
                 profile: "review".to_string(),
                 reason: format!(
@@ -4982,14 +5013,17 @@ mod ring_owner_tests {
         assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
         assert!(!store.join("notes").join("r0").join("vorschlag.md").exists());
 
-        // The operator still decides it, and a ring 2 proposal stays the agent's to take.
+        // The operator still decides it. Since 2026-10-03 a ring 2 proposal is no longer the
+        // agent's to take either: no agent accepts a proposal, whatever the ring.
         let op = App::open(Some(&store), Actor::Operator).unwrap();
         op.review(review("vorschlag", "christoph")).unwrap();
         assert!(store.join("notes").join("r0").join("vorschlag.md").exists());
         agent
             .propose(req(Ring::Knowledge, "r2-vorschlag"), "agent-a")
             .unwrap();
-        agent.review(review("r2-vorschlag", "agent-b")).unwrap();
+        let err = agent.review(review("r2-vorschlag", "agent-b")).unwrap_err();
+        assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
+        op.review(review("r2-vorschlag", "christoph")).unwrap();
     }
 
     #[test]
