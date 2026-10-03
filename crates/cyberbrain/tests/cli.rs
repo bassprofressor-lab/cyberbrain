@@ -4268,8 +4268,10 @@ fn a_bad_argument_is_a_user_error() {
 fn mcp_client_tokens_are_shown_once_and_kept_only_as_a_digest() {
     let home = tempfile::tempdir().unwrap();
     let run = |args: &[&str]| {
+        // XDG_CONFIG_HOME on Unix, APPDATA on Windows (identity::path): both point here.
         Cb::bin()
             .env("XDG_CONFIG_HOME", home.path())
+            .env("APPDATA", home.path())
             .args(args)
             .output()
             .unwrap()
