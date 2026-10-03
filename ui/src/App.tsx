@@ -17,6 +17,7 @@ import { NoteScreen } from "@/screens/Note";
 import { SearchScreen } from "@/screens/Search";
 import { SimpleNotesScreen } from "@/screens/SimpleNotes";
 import { StatusScreen } from "@/screens/Status";
+import { ReviewScreen } from "@/screens/Review";
 import { TeamScreen } from "@/screens/Team";
 
 import { UsageScreen } from "@/screens/Usage";
@@ -143,6 +144,7 @@ export function App() {
             {route.screen === "search" ? <SearchScreen route={route} /> : null}
             {route.screen === "notes" || route.screen === "note" ? <NoteScreen route={route} /> : null}
             {route.screen === "team" ? <TeamScreen /> : null}
+            {route.screen === "review" ? <ReviewScreen /> : null}
             {route.screen === "graph" ? <GraphScreen /> : null}
             {route.screen === "usage" ? <UsageScreen route={route} /> : null}
             {route.screen === "compliance" ? <ComplianceScreen route={route} /> : null}

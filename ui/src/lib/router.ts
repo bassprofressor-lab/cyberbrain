@@ -4,12 +4,12 @@
  *
  *   #/search?q=…&ring=2   #/notes?ring=3   #/note/<name|id>   #/graph   #/usage?days=30
  *   #/compliance#audit
- *   #/status   #/console   #/terminals?t=<token>   #/team
+ *   #/status   #/console   #/terminals?t=<token>   #/team   #/review
  */
 import { useEffect, useState } from "react";
 import { getMode } from "./mode";
 
-export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status" | "console" | "terminals" | "team";
+export type Screen = "search" | "notes" | "note" | "graph" | "usage" | "compliance" | "status" | "console" | "terminals" | "team" | "review";
 
 export interface Route {
   screen: Screen;
@@ -36,6 +36,8 @@ export const SCREENS: Array<{ screen: NavScreen; key: string }> = [
   { screen: "search", key: "s" },
   { screen: "notes", key: "n" },
   { screen: "team", key: "m" },
+  // What agents want to add to memory and who decided (C5, 2026-10-03).
+  { screen: "review", key: "f" },
   { screen: "graph", key: "g" },
   { screen: "usage", key: "u" },
   { screen: "compliance", key: "c" },
@@ -74,7 +76,7 @@ export function parseRoute(hash: string, fallback: Screen = "status"): Route {
   // expert mode answers "is this store healthy and what did it cost" before the reader has
   // typed anything, and simple mode opens on the question box.
   const [seg = "", ...rest] = path.split("/");
-  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console", "terminals", "team"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : fallback;
+  const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console", "terminals", "team", "review"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : fallback;
   const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
   return { screen, param, query: new URLSearchParams(query), anchor };
 }

@@ -15,6 +15,8 @@
  */
 import {
   type HubStatus,
+  type ProposalDecision,
+  type ProposalDetail,
   ApiError,
   type AuditAction,
   type AuditPage,
@@ -1189,4 +1191,44 @@ export const mockClient: CyberbrainApi = {
     }
   },
 
+
+  // C5: one agent proposal from outside, one decision. Fabricated like everything here.
+  async proposals(): Promise<ProposalDetail[]> {
+    return latency(mockProposals);
+  },
+
+  async proposalHistory(): Promise<ProposalDecision[]> {
+    return latency(mockDecisions);
+  },
+
+  async decideProposal(name: string, accept: boolean, reason?: string) {
+    const i = mockProposals.findIndex((p) => p.name === name);
+    if (i < 0) throw err(404, "not-found", `no proposal named ${name}`, { variant: "no-such-note" });
+    if (!accept && !reason?.trim()) throw err(400, "bad-request", "rejecting needs a reason", { variant: "config" });
+    const [p] = mockProposals.splice(i, 1);
+    mockDecisions.unshift({ ts: new Date().toISOString(), name, accepted: accept, by: "mock-reviewer", proposed_by: p?.proposed_by ?? null, reason: reason?.trim() || null });
+    return latency({ name, accepted: accept });
+  },
 };
+
+const mockProposals: ProposalDetail[] = [
+  {
+    name: "seo-befund-mock",
+    ring: 4,
+    kind: "knowledge",
+    created: new Date(Date.now() - 3600_000).toISOString(),
+    proposed_by: "agent:mcp:seo",
+    on_behalf_of: null,
+    bereich: "seo",
+    tags: ["src:agent:seo", "trust:untrusted"],
+    untrusted: "agent:seo",
+    body: "The page /wissen/example ranks 34 for *example query* (gsc_daten, 90 days).",
+    changes_existing: false,
+    intact: true,
+    agentguard: { action_id: "cb-mock", outcome: "escalate", approval_status: "pending" },
+  },
+];
+
+const mockDecisions: ProposalDecision[] = [
+  { ts: new Date(Date.now() - 86_400_000).toISOString(), name: "seo-befund-old", accepted: false, by: "mock-reviewer", proposed_by: "agent:mcp:seo", reason: "no source" },
+];

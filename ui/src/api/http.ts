@@ -24,6 +24,8 @@ import {
   type ObligationsView,
   type PiiHoldResolution,
   type PiiReport,
+  type ProposalDecision,
+  type ProposalDetail,
   type RecallParams,
   type RecallResult,
   type RetentionApplyReport,
@@ -119,4 +121,9 @@ export const httpClient: CyberbrainApi = {
   doctor: () => request<DoctorReport>("GET", "/doctor"),
   scan: (full) => request<ScanReport>("POST", `/scan${qs({ full })}`),
   command: (line) => request<CommandResult>("POST", "/command", { line }),
+
+  proposals: () => request<ProposalDetail[]>("GET", "/proposals"),
+  proposalHistory: (limit) => request<ProposalDecision[]>("GET", `/proposals/history${qs({ limit })}`),
+  decideProposal: (name, accept, reason) =>
+    request<unknown>("POST", `/proposals/${encodeURIComponent(name)}/decision`, { accept, reason: reason ?? "" }),
 };

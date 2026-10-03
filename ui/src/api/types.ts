@@ -1252,6 +1252,36 @@ export interface CommandResult {
   truncated: boolean;
 }
 
+/** A proposal waiting for a person (C5, `GET /proposals`). */
+export interface ProposalDetail {
+  name: string;
+  ring: Ring;
+  kind: string;
+  created: string;
+  /** `null`: no `note.proposed` row; it cannot be accepted. */
+  proposed_by: string | null;
+  on_behalf_of: string | null;
+  bereich: string | null;
+  tags: string[];
+  /** The source, when the content is marked `trust:untrusted`. */
+  untrusted: string | null;
+  body: string;
+  changes_existing: boolean;
+  /** `false`: the file changed after it was proposed; accepting is refused. `null`: no digest recorded. */
+  intact: boolean | null;
+  agentguard: { action_id?: string; outcome?: string; approval_status?: string | null; error?: string } | null;
+}
+
+/** One decision on a proposal, from the audit log (`GET /proposals/history`). */
+export interface ProposalDecision {
+  ts: string;
+  name: string;
+  accepted: boolean;
+  by: string | null;
+  proposed_by: string | null;
+  reason: string | null;
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
@@ -1287,4 +1317,10 @@ export interface CyberbrainApi {
   scan(full: boolean): Promise<ScanReport>;
   /** Run a command line against this store. A command that fails resolves; only a refused or malformed line rejects. */
   command(line: string): Promise<CommandResult>;
+
+  /** What agents proposed and waits for a person. */
+  proposals(): Promise<ProposalDetail[]>;
+  proposalHistory(limit?: number): Promise<ProposalDecision[]>;
+  /** Accept, or reject with a reason. The reviewer is this machine's identity, never the proposer. */
+  decideProposal(name: string, accept: boolean, reason?: string): Promise<unknown>;
 }

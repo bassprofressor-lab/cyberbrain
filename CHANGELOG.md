@@ -29,6 +29,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   claimed `trust:trusted`. `cyberbrain mcp --client <name>` gives an MCP client its own name
   (`agent:mcp:<name>`) so it can be listed. A configuration with this section is refused by
   older binaries, like any new section; a fresh store does not get it.
+- **An approvals screen in the web UI** (`serve`, `#/review`, key `g f`). It lists what
+  agents proposed with everything a decision needs: who proposed it and for whom, whether the
+  text came from outside, whether the file is still what was proposed, AgentGuard's answer,
+  and the text. Accept, or reject with a reason, right there; below, the latest decisions
+  with who proposed and who decided. New routes `GET /api/v1/proposals`, `GET
+  /api/v1/proposals/history`, `POST /api/v1/proposals/{name}/decision`; the reviewer is this
+  machine's identity, as at the CLI.
 - **Limits per client.** `[clients.bereiche]` maps a client (`agent:mcp:seo`) to the
   bereiche it may see and write: recall returns only notes in them, a citation outside
   them reads as not found, the code index is closed to it, and its writes go only into
