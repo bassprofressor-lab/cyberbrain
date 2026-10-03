@@ -139,6 +139,8 @@ pub struct Hit {
     pub valid_from: Option<jiff::Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub invalid_at: Option<jiff::Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untrusted: Option<String>,
     pub score: f32,
     pub text: String,
     pub block_idx: u32,

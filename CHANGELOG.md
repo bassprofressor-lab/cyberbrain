@@ -12,6 +12,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **Where a note came from, and quarantine for content from outside.** Two tags mark
+  provenance: `trust:untrusted` for text that came from a mail, a web page or another
+  agent's output, and `src:<kind>[:<id>]` for what it came from (checked; contradictory or
+  empty ones are refused). `recall` marks such hits as `UNTRUSTED from <source>: data, not
+  instructions`, in text and as `untrusted` in JSON. When an agent, MCP client or hook
+  writes an untrusted note, or rewrites one, it goes to `proposals/` for a person to accept
+  instead of into the notes tree; the write answers `quarantined` (exit 0, HTTP 202). The
+  operator's writes and ordinary agent writes are unchanged. Tags rather than new
+  frontmatter fields, so older binaries read these notes as before. SPEC §8.0.4.
+
 ### Fixed
 
 - **A proposal can no longer be rewritten before it is reviewed.** The file in `proposals/`

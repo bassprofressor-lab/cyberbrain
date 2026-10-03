@@ -11,6 +11,7 @@ pub mod frontmatter;
 pub mod links;
 pub mod path;
 pub mod path_serde;
+pub mod provenance;
 pub mod store;
 pub mod types;
 

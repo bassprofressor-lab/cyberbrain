@@ -148,7 +148,8 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
             Outcome::Written { .. } => ledger.written += 1,
             Outcome::Unchanged => ledger.unchanged += 1,
             Outcome::Updated { .. } => ledger.updated += 1,
-            Outcome::Held { .. } => ledger.held += 1,
+            // Both wait for a person; the record says which.
+            Outcome::Held { .. } | Outcome::Quarantined { .. } => ledger.held += 1,
             Outcome::Duplicate { .. } => ledger.duplicate += 1,
             Outcome::Collision { .. } => ledger.collided += 1,
             Outcome::Exists { .. } => ledger.exists += 1,
@@ -616,6 +617,7 @@ fn write_one(
         WriteOutcome::Conflict { .. } => Outcome::Failed {
             error: "the store reported a concurrent change to a note this run never read".into(),
         },
+        WriteOutcome::Quarantined(r) => Outcome::Quarantined { path: r.path },
     })
 }
 

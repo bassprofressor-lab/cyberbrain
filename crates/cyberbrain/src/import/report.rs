@@ -155,6 +155,11 @@ pub enum Outcome {
     Exists {
         why: String,
     },
+    /// Marked `trust:untrusted` and run by an agent: waiting in `proposals/`.
+    Quarantined {
+        #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+        path: PathBuf,
+    },
     Failed {
         error: String,
     },
@@ -388,7 +393,7 @@ impl ImportReport {
                 Outcome::Written { .. } => counts.written += 1,
                 Outcome::Unchanged => counts.unchanged += 1,
                 Outcome::Updated { .. } => counts.updated += 1,
-                Outcome::Held { .. } => counts.held += 1,
+                Outcome::Held { .. } | Outcome::Quarantined { .. } => counts.held += 1,
                 Outcome::Duplicate { .. } => counts.duplicate += 1,
                 Outcome::Collision { .. } => counts.collided += 1,
                 Outcome::Exists { .. } => counts.exists += 1,

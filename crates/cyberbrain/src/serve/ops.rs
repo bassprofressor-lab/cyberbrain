@@ -91,6 +91,7 @@ pub async fn recall(
                 superseded_by: h.superseded_by,
                 valid_from: h.valid_from,
                 invalid_at: h.invalid_at,
+                untrusted: h.untrusted,
                 score: h.score,
                 text: h.text,
                 block_idx,

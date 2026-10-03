@@ -104,13 +104,18 @@ fn render_write(o: &WriteOutcome) -> String {
         } => {
             format!("{name} changed at {current_updated} since it was read; nothing was written\n")
         }
+        WriteOutcome::Quarantined(r) => format!(
+            "Marked trust:untrusted and written by an agent: it waits for a person in \
+             proposals/ instead of becoming a note.\n{}",
+            render::proposed(r)
+        ),
     }
 }
 
 /// The exit a write's outcome means: 0, 3 for a hold, an error for a conflict.
 fn write_exit(o: &WriteOutcome) -> Result<i32> {
     match o {
-        WriteOutcome::Written(_) => Ok(0),
+        WriteOutcome::Written(_) | WriteOutcome::Quarantined(_) => Ok(0),
         WriteOutcome::Held { .. } => Ok(3),
         WriteOutcome::Conflict { .. } => Err(Error::StoreIntegrity(
             "the note changed since it was read".into(),

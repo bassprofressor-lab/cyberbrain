@@ -541,6 +541,7 @@ mod tests {
             valid_from: None,
             invalid_at: None,
             newer_links: Vec::new(),
+            untrusted: None,
             score: 1.0,
             text: text.into(),
         }

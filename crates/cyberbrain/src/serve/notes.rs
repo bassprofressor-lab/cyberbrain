@@ -617,6 +617,7 @@ fn run_write(
             )
             .with("hold", hold))
         }
+        WriteOutcome::Quarantined(r) => Ok((StatusCode::ACCEPTED, Json(r)).into_response()),
         WriteOutcome::Conflict {
             name,
             current_updated,

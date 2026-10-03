@@ -224,18 +224,33 @@ impl Index {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT n.id, n.name, n.ring, b.text, n.updated FROM blocks b \
+                "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags FROM blocks b \
                  JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
             )
             .ix()?;
         let mut cands: Vec<Candidate> = Vec::with_capacity(ranked.len());
         for (cit, score) in ranked {
             let o = outdated.remove(&cit).unwrap_or_default();
-            let (id, name, ring, text, updated): (String, String, i64, String, String) = stmt
+            let (id, name, ring, text, updated, tags): (
+                String,
+                String,
+                i64,
+                String,
+                String,
+                String,
+            ) = stmt
                 .query_row([&cit], |r| {
-                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
                 })
                 .map_err(|e| Error::Index(format!("hit {cit} vanished during recall: {e}")))?;
+            let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
             cands.push(Candidate {
                 key: dedup_key(&text),
                 hit: Hit {
@@ -248,6 +263,7 @@ impl Index {
                     valid_from: o.valid_from,
                     invalid_at: o.invalid_at,
                     newer_links: Vec::new(),
+                    untrusted: cyberbrain_core::provenance::untrusted_source(&tags),
                     note_name: name,
                     score,
                     text,

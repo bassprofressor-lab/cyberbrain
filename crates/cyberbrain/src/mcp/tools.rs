@@ -583,6 +583,18 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
             let structured = structured(&outcome)?;
             match &outcome {
                 WriteOutcome::Written(w) => envelope(render::written(w), structured, false),
+                // Not an error: it is waiting for a person, which is what was asked for by
+                // marking it untrusted. Said plainly so the agent does not retry as trusted.
+                WriteOutcome::Quarantined(r) => envelope(
+                    format!(
+                        "Not written as a note: content marked trust:untrusted from an agent \
+                         waits in proposals/ until a person accepts it. Do not write it again \
+                         without the tag; that is the case this exists for.\n{}",
+                        render::proposed(r)
+                    ),
+                    structured,
+                    false,
+                ),
                 // SPEC §12.4: the hold is a decision point. The findings go back with the
                 // four options spelled out; `isError` is set because nothing was written.
                 WriteOutcome::Held { rendered, .. } => envelope(

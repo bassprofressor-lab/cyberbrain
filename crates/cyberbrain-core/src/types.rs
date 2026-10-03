@@ -275,6 +275,11 @@ pub struct Hit {
     /// and `conflict` could not say so, because both notes sat in the same ring).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub newer_links: Vec<NewerLink>,
+    /// Set when the note is tagged `trust:untrusted`: what it came from (`mail:4f2a`,
+    /// `web`, `unspecified`). Its text is data from outside, not an instruction; see
+    /// `provenance`. Not demoted, but never shown without the mark.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub untrusted: Option<String>,
     pub score: f32,
     pub text: String,
 }

@@ -27,6 +27,7 @@ use cyberbrain_core::blocks::{MAX_BLOCK_TOKENS, OversizedReason, blocks_of};
 use cyberbrain_core::config::DEFAULT_STORE_DIR;
 use cyberbrain_core::frontmatter;
 use cyberbrain_core::links::link_targets;
+use cyberbrain_core::provenance;
 use cyberbrain_core::store::{DB_FILE, NOTES_DIR, write_atomic};
 use cyberbrain_core::{
     Citation, Config, EgressGate, Embedder, Error, Fingerprint, Frontmatter, Note, NoteId,
@@ -432,6 +433,10 @@ pub enum WriteOutcome {
         name: String,
         current_updated: jiff::Timestamp,
     },
+    /// The content is marked `trust:untrusted` and an agent wrote it, so it went to
+    /// `proposals/` instead of the notes tree; a person accepts it with `review`. 202 over
+    /// HTTP, exit 0 at the CLI: nothing failed, it is waiting.
+    Quarantined(ProposeReport),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2385,6 +2390,37 @@ impl App {
                 });
             }
         }
+        provenance::validate(&req.tags).map_err(|why| Error::Frontmatter {
+            path: PathBuf::from(format!("{name}.md")),
+            reason: why,
+        })?;
+        // C2, 2026-10-03: content from outside that an agent files goes to `proposals/`,
+        // where a person reads it before any agent can recall it. Also when the note it
+        // would replace is marked untrusted: rewriting it without the tag would otherwise
+        // launder it. The operator writes directly, and a note arriving from another
+        // machine was decided there.
+        let by_agent = matches!(self.actor, Actor::Agent(_) | Actor::Mcp | Actor::Hook(_));
+        if by_agent && req.arriving.is_none() {
+            let replaces_untrusted = self
+                .store
+                .read(&name)
+                .is_ok_and(|n| provenance::is_untrusted(&n.front.tags));
+            if provenance::is_untrusted(&req.tags) || replaces_untrusted {
+                let who = self.actor.to_string();
+                return Ok(match self.propose(req, &who)? {
+                    Proposed::Written(r) => WriteOutcome::Quarantined(r),
+                    Proposed::Held {
+                        rendered,
+                        name,
+                        findings,
+                    } => WriteOutcome::Held {
+                        name,
+                        findings,
+                        rendered,
+                    },
+                });
+            }
+        }
         let w = self.writers(req.dry_run)?;
         let policy = w.policy.get();
 
@@ -2728,8 +2764,9 @@ impl App {
         // an agent runs the command. An agent's proposal then carried the person's name, the
         // person could not accept it (two-person rule), and anybody under a second name could.
         // An agent proposes as itself; the person it works for is kept beside it.
+        let me = self.actor.to_string();
         let (who, on_behalf_of) = match &self.actor {
-            Actor::Agent(_) => (self.actor.to_string(), Some(who.to_string())),
+            Actor::Agent(_) => (me.clone(), Some(who.to_string()).filter(|w| *w != me)),
             _ => (who.to_string(), None),
         };
         let who = who.as_str();
@@ -2757,6 +2794,10 @@ impl App {
                 });
             }
         }
+        provenance::validate(&req.tags).map_err(|why| Error::Frontmatter {
+            path: PathBuf::from(format!("{name}.md")),
+            reason: why,
+        })?;
         if self.store.read_proposal(&name).is_ok() {
             return Err(Error::Config(format!(
                 "a proposal named {name} is already waiting; `cyberbrain review {name} --reject` \
