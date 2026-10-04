@@ -10,6 +10,16 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- **`cyberbrain guard`: the AgentGuard check without a memory store.** The pre-tool-use hook
+  has asked AgentGuard about tool calls since 0.7.0, but only inside a project with a store.
+  `guard` takes the address, key and mode from the environment instead
+  (`CLAUDE_PLUGIN_OPTION_URL`/`_KEY`/`_MODE`, or `AGENTGUARD_URL` and friends), which is what
+  the AgentGuard plugin for Claude Code needs. Same decision, same rule that the service must
+  be loopback or private-range, same answer in `enforce` when it is down: reads go ahead,
+  everything else asks a person.
+
 ## [0.7.7] — 2026-10-04
 
 Ready for the Claude Code plugin (krynex-plugins), which brings its own hooks.

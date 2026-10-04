@@ -244,6 +244,9 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Hook { .. } => {
             Some("`hook` is called by an agent harness, with the session's payload on stdin.")
         }
+        Command::Guard => {
+            Some("`guard` is called by an agent harness, with the tool call's payload on stdin.")
+        }
         Command::Init { .. } => {
             Some("`init` creates a store, and this window already has one open.")
         }

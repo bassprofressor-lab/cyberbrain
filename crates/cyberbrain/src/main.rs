@@ -310,6 +310,15 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             return Ok(out.exit_code);
         }
 
+        Command::Guard => {
+            hook::install_never_fail_guard();
+            let mut raw = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut std::io::stdin(), &mut raw);
+            let out = hook::guard::run(&String::from_utf8_lossy(&raw));
+            out.emit();
+            return Ok(0);
+        }
+
         Command::Serve {
             port,
             no_open,
@@ -722,6 +731,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         Command::Policy { command } => return run_policy(&app, command, out),
         Command::Init { .. }
         | Command::Hook { .. }
+        | Command::Guard
         | Command::Serve { .. }
         | Command::Mcp { .. }
         | Command::McpClient { .. }

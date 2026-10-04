@@ -36,6 +36,7 @@ use std::time::Instant;
 pub mod dedupe;
 pub mod events;
 pub mod governance;
+pub mod guard;
 pub mod handoff;
 pub mod paths;
 pub mod payload;

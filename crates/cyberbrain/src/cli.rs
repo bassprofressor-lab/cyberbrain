@@ -304,6 +304,12 @@ pub enum Command {
         event: HookEvent,
     },
 
+    /// Ask AgentGuard about one tool call, without a memory store (pre-tool-use payload on
+    /// stdin). For the AgentGuard plugin: address, key and mode come from the environment
+    /// (`CLAUDE_PLUGIN_OPTION_URL`/`_KEY`/`_MODE`, or `AGENTGUARD_URL` and friends). Like
+    /// `hook`, it never fails the harness and always exits 0.
+    Guard,
+
     /// Serve the same operations over MCP on stdio.
     Mcp {
         /// Name this client in the audit log as `agent:mcp:<name>` instead of `mcp`, so that

@@ -26,7 +26,7 @@ use crate::app::App;
 use cyberbrain_core::config::{GovernanceConfig, GovernanceMode};
 use cyberbrain_core::{EgressPurpose, Error, Result};
 use cyberbrain_policy::Actor;
-use cyberbrain_policy::egress::Outcome;
+use cyberbrain_policy::egress::{Egress, Outcome};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -66,20 +66,37 @@ pub(crate) fn key() -> Option<String> {
 }
 
 pub fn check(app: &App, payload: &Payload, actor: &Actor) -> Verdict {
-    let cfg = &app.config().governance;
+    decide(
+        &app.config().governance,
+        app.policy().egress(),
+        key(),
+        payload,
+        actor,
+    )
+}
+
+/// The decision itself, from a configuration and a gate. `check` hands in the store's;
+/// `cyberbrain guard` (the plugin, no store) hands in its own (2026-10-04).
+pub fn decide(
+    cfg: &GovernanceConfig,
+    egress: &Egress,
+    key: Option<String>,
+    payload: &Payload,
+    actor: &Actor,
+) -> Verdict {
     let Some(url) = cfg.url.as_deref() else {
         return Verdict::Proceed("governance: not configured".into());
     };
     let Some(tool) = payload.tool_name.as_deref().filter(|t| TOOLS.contains(t)) else {
         return Verdict::Proceed("governance: tool not sent".into());
     };
-    let answer = key()
+    let answer = key
         .ok_or_else(|| {
             Error::Config(format!(
                 "no key: set {KEY_ENV} or put one in ~/.config/cyberbrain/agentguard.key"
             ))
         })
-        .and_then(|k| ask(app, cfg, url, &k, tool, payload, actor));
+        .and_then(|k| ask(egress, cfg, url, &k, tool, payload, actor));
     match (answer, cfg.mode) {
         (Ok(a), GovernanceMode::Shadow) => Verdict::Proceed(shadow_line(tool, &a)),
         (Ok(a), GovernanceMode::Enforce) => match a.permission.as_str() {
@@ -180,7 +197,7 @@ fn answer_of(v: &Value) -> Answer {
 }
 
 fn ask(
-    app: &App,
+    egress: &Egress,
     cfg: &GovernanceConfig,
     url: &str,
     key: &str,
@@ -189,10 +206,7 @@ fn ask(
     actor: &Actor,
 ) -> Result<Answer> {
     let endpoint = format!("{}/v1/tool-calls", url.trim_end_matches('/'));
-    let ticket = app
-        .policy()
-        .egress()
-        .open(actor, EgressPurpose::Governance, &endpoint)?;
+    let ticket = egress.open(actor, EgressPurpose::Governance, &endpoint)?;
     let body = json!({
         "tenant_id": cfg.tenant,
         "agent_id": cfg.agent_id,
