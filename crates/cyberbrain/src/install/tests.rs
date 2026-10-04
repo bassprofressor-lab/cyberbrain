@@ -482,3 +482,58 @@ fn the_extended_length_prefix_comes_off_a_path_that_does_not_need_it() {
         assert_eq!(without_verbatim_prefix(given).as_deref(), want, "{given}");
     }
 }
+
+#[test]
+fn with_the_plugin_installed_our_hooks_come_out_and_foreign_ones_stay() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = bare_env(tmp.path());
+    let mut o = opts(tmp.path(), env.clone());
+    o.clients = vec![Client::ClaudeCode];
+    run(&o).unwrap();
+    let file = o.project.join(".claude").join("settings.json");
+    // Somebody else's hook beside ours: it has to survive.
+    let mut v = read(&file);
+    v["hooks"]["Stop"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "matcher": "", "hooks": [{"type": "command", "command": "/usr/bin/true"}]
+        }));
+    fs::write(&file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
+    assert_eq!(read(&file)["hooks"].as_object().unwrap().len(), 6);
+
+    // Now the plugin arrives.
+    let reg = env.home.as_ref().unwrap().join(".claude").join("plugins");
+    fs::create_dir_all(&reg).unwrap();
+    fs::write(
+        reg.join("installed_plugins.json"),
+        r#"{"version":2,"plugins":{"cyberbrain@krynex-plugins":[{"scope":"user"}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(
+        plugin_installed(&env).as_deref(),
+        Some("cyberbrain@krynex-plugins")
+    );
+
+    let r = run(&o).unwrap();
+    let v = read(&file);
+    let hooks = v["hooks"].as_object().unwrap();
+    assert_eq!(hooks.len(), 1, "only the foreign Stop hook is left: {v:#}");
+    assert_eq!(hooks["Stop"][0]["hooks"][0]["command"], "/usr/bin/true");
+    let note = only(&r, Client::ClaudeCode).note.clone().unwrap();
+    assert!(note.contains("cyberbrain@krynex-plugins"), "{note}");
+}
+
+#[test]
+fn another_plugin_whose_name_starts_alike_is_not_ours() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = bare_env(tmp.path());
+    let reg = env.home.as_ref().unwrap().join(".claude").join("plugins");
+    fs::create_dir_all(&reg).unwrap();
+    fs::write(
+        reg.join("installed_plugins.json"),
+        r#"{"version":2,"plugins":{"cyberbrain-light@other":[{}]}}"#,
+    )
+    .unwrap();
+    assert_eq!(plugin_installed(&env), None);
+}

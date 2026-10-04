@@ -169,9 +169,38 @@ pub fn run(opts: &Options) -> Result<Report> {
 // ---------------------------------------------------------------------------------------
 // Claude Code: hooks, in the project.
 
+/// Whether the Cyberbrain plugin is installed for Claude Code (2026-10-04). The plugin brings
+/// its own hooks; ours in settings.json would make the harness run every event twice. Any
+/// key `cyberbrain@<marketplace>` counts, whichever marketplace it came from. A file that is
+/// missing or does not parse means "no plugin": the old behaviour, which is safe.
+pub fn plugin_installed(env: &Env) -> Option<String> {
+    let path = paths::claude_plugins(env)?;
+    let text = std::fs::read_to_string(path).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    v.get("plugins")?
+        .as_object()?
+        .keys()
+        .find(|k| k.split('@').next() == Some("cyberbrain"))
+        .cloned()
+}
+
 fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
     let path = paths::claude_code(&opts.project);
-    if opts.undo && !path.exists() {
+    // With the plugin installed, writing our hooks would double them; take ours out instead.
+    let plugin = plugin_installed(&opts.env);
+    let remove = opts.undo || plugin.is_some();
+    if remove && !path.exists() {
+        if let Some(id) = &plugin {
+            return Ok(ClientReport {
+                client: Client::ClaudeCode.name(),
+                found: true,
+                changes: Vec::new(),
+                note: Some(format!(
+                    "the plugin {id} provides the hooks; nothing to write here"
+                )),
+                snippet: None,
+            });
+        }
         return Ok(ClientReport::absent(
             Client::ClaudeCode,
             format!("{} does not exist; nothing to undo", Slash(&path)),
@@ -195,7 +224,7 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
                     let before = list.iter().find(|v| ours(v)).cloned();
                     let had = before.is_some();
                     list.retain(|v| !ours(v));
-                    if opts.undo {
+                    if remove {
                         touched |= had;
                         continue;
                     }
@@ -215,7 +244,7 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
             {
                 root.remove("hooks");
             }
-            Ok(match (opts.undo, touched, changed) {
+            Ok(match (remove, touched, changed) {
                 (true, true, _) => Action::Removed,
                 (true, false, _) => Action::NothingToUndo,
                 (false, _, true) => Action::Added,
@@ -228,7 +257,9 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
         client: Client::ClaudeCode.name(),
         found: true,
         changes: vec![change],
-        note: None,
+        note: plugin.filter(|_| !opts.undo).map(|id| {
+            format!("the plugin {id} provides the hooks, so the entries in settings.json were taken out (they would run every event twice)")
+        }),
         snippet: None,
     })
 }

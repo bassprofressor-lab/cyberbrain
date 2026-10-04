@@ -194,6 +194,17 @@ pub fn codex_config(env: &Env) -> Option<PathBuf> {
 
 /// The project-scoped settings file Claude Code reads. Always answered: unlike the desktop
 /// clients this is a file in the user's own project, and creating it is the normal case.
+/// Claude Code's record of installed plugins (`~/.claude/plugins/installed_plugins.json`).
+pub fn claude_plugins(env: &Env) -> Option<PathBuf> {
+    Some(
+        env.home
+            .as_ref()?
+            .join(".claude")
+            .join("plugins")
+            .join("installed_plugins.json"),
+    )
+}
+
 pub fn claude_code(project: &Path) -> PathBuf {
     project.join(".claude").join("settings.json")
 }

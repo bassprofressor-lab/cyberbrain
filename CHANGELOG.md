@@ -10,6 +10,20 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Ready for the Claude Code plugin (krynex-plugins), which brings its own hooks.
+
+- **One answer per event, even when the harness runs the hook twice.** Claude Code merges a
+  plugin's hooks with the ones in `settings.json`; someone who used `cyberbrain install` and
+  then added the plugin got every event twice (two injections, two verdicts). The first run
+  of an identical payload answers, the second stands down (window: two seconds; real duplicates arrive within milliseconds).
+- **`cyberbrain install` steps aside for the plugin.** With `cyberbrain@…` in Claude Code's
+  `installed_plugins.json`, it takes its own hook entries out of `settings.json` instead of
+  writing them, leaves everybody else's, and says why.
+- **Release builds for macOS on Apple silicon** (`cyberbrain-macos-aarch64`), so the plugin
+  can fetch a binary on a Mac.
+
 ## [0.7.6] — 2026-10-03
 
 Memory protection: content from outside does not become a note on an agent's word.

@@ -31,6 +31,12 @@ jobs:
           - os: windows-latest
             name: windows-x86_64
             bin: cyberbrain.exe
+          # Apple silicon. The Claude Code plugin downloads the binary for the machine it runs
+          # on, and without this asset it fails on every Mac (2026-10-04). Intel Macs are not
+          # built: no plugin user has asked, and an untested binary is worse than none.
+          - os: macos-latest
+            name: macos-aarch64
+            bin: cyberbrain
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # From v5 the action caches on its own. The lock file is in ui/, not at the root, so

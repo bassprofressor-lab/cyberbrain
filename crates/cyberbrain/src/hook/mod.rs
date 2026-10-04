@@ -33,6 +33,7 @@ use std::io::Write;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::Instant;
 
+pub mod dedupe;
 pub mod events;
 pub mod governance;
 pub mod handoff;
@@ -229,6 +230,19 @@ pub fn run_with(
             (None, Some(_)) => None,
             (None, None) => Some(why_no_app(open_error)),
         };
+        // Plugin hooks and settings.json hooks are merged by the harness: the same event can
+        // arrive twice. Only the first run answers (dedupe.rs). Off in this crate's unit tests:
+        // they replay event sequences within milliseconds on purpose; dedupe.rs tests itself
+        // and the release binary is checked end to end.
+        if let (false, None, Some(a)) = (cfg!(test), &stand_down, app)
+            && !dedupe::claim(a.root(), name, stdin, std::time::SystemTime::now())
+        {
+            let mut out = HookOutput::empty();
+            out.note(format!(
+                "hook {name}: an identical run already answered; standing down"
+            ));
+            return Ok(out);
+        }
         events::dispatch(app, stand_down, event, stdin)
     }));
 
