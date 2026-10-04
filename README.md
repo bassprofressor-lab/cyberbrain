@@ -287,7 +287,7 @@ behaviour.
 
 ## Status
 
-**v0.7.7, and young.** 903 tests, 18 browser tests, seven crates on crates.io plus the Windows launcher,
+**v0.7.8, and young.** 904 tests, 18 browser tests, seven crates on crates.io plus the Windows launcher,
 clippy and rustfmt clean. Binaries for Linux, Windows and macOS (Apple silicon) on the release page, and an
 installer beside them. It has been run against one operator's real corpus — 1,086 notes
 across five projects — and not much else. Expect rough edges, report them.

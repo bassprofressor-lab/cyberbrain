@@ -10,7 +10,7 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.7.8] — 2026-10-04
 
 - **`cyberbrain guard`: the AgentGuard check without a memory store.** The pre-tool-use hook
   has asked AgentGuard about tool calls since 0.7.0, but only inside a project with a store.
@@ -1476,7 +1476,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.7...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.8...HEAD
+[0.7.8]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.7...v0.7.8
 [0.7.7]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.4...v0.7.5
