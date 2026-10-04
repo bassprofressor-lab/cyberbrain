@@ -55,10 +55,12 @@ pub fn claim(root: &Path, event: &str, stdin: &str, now: SystemTime) -> bool {
             true
         }
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // A claim stamped after `now` is age zero: macOS and Windows keep file times finer
+            // than the `now` read before the write (CI, 2026-10-04).
             let fresh = std::fs::metadata(&path)
                 .and_then(|m| m.modified())
                 .ok()
-                .and_then(|t| now.duration_since(t).ok())
+                .map(|t| now.duration_since(t).unwrap_or(Duration::ZERO))
                 .is_some_and(|age| age < WINDOW);
             if fresh {
                 return false;
@@ -116,6 +118,21 @@ mod tests {
             r#"{"session_id":"s1","tool_use_id":"t2"}"#,
             now
         ));
+    }
+
+    #[test]
+    fn a_claim_stamped_after_now_still_blocks() {
+        // CI 2026-10-04: macOS and Windows store file times finer than Linux, so the claim
+        // file can be younger than the `now` taken before it was written. That is age zero,
+        // not "stale".
+        let tmp = tempfile::tempdir().unwrap();
+        let earlier = SystemTime::now() - Duration::from_secs(1);
+        let p = r#"{"session_id":"s1","tool_use_id":"t9"}"#;
+        assert!(claim(tmp.path(), "pre-tool-use", p, earlier));
+        assert!(
+            !claim(tmp.path(), "pre-tool-use", p, earlier),
+            "duplicate must stand down"
+        );
     }
 
     #[test]

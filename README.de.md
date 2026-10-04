@@ -301,7 +301,7 @@ kein Verhalten.
 
 ## Stand
 
-**v0.7.7, und jung.** 902 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
+**v0.7.7, und jung.** 903 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
 Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux,
 Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines
 einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist
