@@ -237,6 +237,15 @@ pub enum Command {
     /// Report dangling links, ring-cap pressure, a stale index and orphaned vectors.
     Doctor,
 
+    /// Measure the installed embedding models on this machine and say which one fits it:
+    /// query latency and full-rebuild time on a sample of this store's blocks, against a
+    /// table of measured retrieval quality. Asks the local Ollama; downloads nothing.
+    BenchEmbedding {
+        /// Blocks to embed per candidate. More is steadier and slower.
+        #[arg(long, default_value_t = 128)]
+        sample: usize,
+    },
+
     /// Store health, embedding profile, inference endpoint, compliance profile.
     Status,
 

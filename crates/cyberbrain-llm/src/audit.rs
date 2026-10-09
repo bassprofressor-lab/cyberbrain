@@ -29,6 +29,8 @@ pub enum CallKind {
     VendorStatus,
     /// No request was sent: the endpoint was validated (or refused) before any I/O.
     EndpointValidation,
+    /// `POST /api/embed` on Ollama: block or query text in, vectors out (`embed`).
+    Embedding,
 }
 
 /// How the call ended. Every variant names its side of the boundary (SPEC §14.3): `Ok`

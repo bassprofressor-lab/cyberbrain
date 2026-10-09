@@ -235,6 +235,101 @@ pub struct EmbeddingConfig {
     /// explicit consent"). Persisted rather than held in memory, because consent that is
     /// forgotten on restart gets asked for again until somebody clicks it away.
     pub model_download_consent: bool,
+    /// Who produces the vectors. `model2vec` (the default) reads the artefact under
+    /// `model_path` in process. `ollama` asks a local Ollama for them, configured under
+    /// `[embedding.ollama]`; the artefact keys above are then not read.
+    pub backend: EmbeddingBackend,
+    /// Settings for `backend = "ollama"`. Required there, ignored otherwise.
+    pub ollama: Option<OllamaEmbeddingConfig>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EmbeddingBackend {
+    /// Static token embeddings from a hash-verified artefact, in process (SPEC §6).
+    #[default]
+    Model2vec,
+    /// A transformer embedding model served by a local Ollama (`POST /api/embed`).
+    Ollama,
+}
+
+/// A transformer embedding model behind a local Ollama.
+///
+/// Measured on this project's own notes (2026-10-08, 34 questions, dense only): potion-
+/// multilingual-128M found the right note in the top three for 65 % of them,
+/// embeddinggemma:300m-qat-q4_0 for 94 %. The price is a forward pass per block: about 20 ms
+/// per query and ten minutes for a full rebuild of ~5 400 blocks on a 12-core CPU.
+///
+/// What the model2vec manifest does for the artefact, `digest` does here: the vectors are
+/// only as comparable as the weights behind a tag, and a tag can be pulled again and point
+/// at different ones. The digest is what Ollama reports for the model; a server answering
+/// with another is refused, never silently mixed into the index.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct OllamaEmbeddingConfig {
+    /// Ollama's own base URL, without `/v1`: the embedding route and the digest are not part
+    /// of the OpenAI surface. Held to the same address rules as `inference.base_url`.
+    pub base_url: String,
+    /// Model tag as Ollama lists it, e.g. `embeddinggemma:300m-qat-q4_0`.
+    pub model: String,
+    /// Digest of the weights blob Ollama loads for the model: the hex after `sha256-` in the
+    /// `FROM` line of `ollama show --modelfile <model>`. Not the digest `ollama list` shows,
+    /// which names a manifest and, since Ollama 0.40, can appear twice for one tag.
+    pub digest: String,
+    /// Vector dimension the model returns. Part of the profile; a different answer is refused.
+    pub dim: usize,
+    /// Prepended to every query. EmbeddingGemma is trained with `task: search result | query: `.
+    pub query_prefix: String,
+    /// Prepended to every block. EmbeddingGemma: `title: none | text: `.
+    pub document_prefix: String,
+    /// Context window per input, in the model's tokens. Longer blocks are truncated to it.
+    pub num_ctx: u32,
+    /// Blocks per request during a scan.
+    pub batch: usize,
+    /// Per-request timeout. A cold model load is part of the first request.
+    pub timeout_ms: u64,
+    /// How long Ollama keeps the model in memory after a request (Ollama's own syntax,
+    /// `"30m"`, `"-1"` for always). The first query after it was unloaded pays about a
+    /// second for the load; its default of five minutes made that most queries here.
+    pub keep_alive: String,
+}
+
+impl Default for OllamaEmbeddingConfig {
+    fn default() -> Self {
+        Self {
+            base_url: "http://127.0.0.1:11434".into(),
+            model: String::new(),
+            digest: String::new(),
+            dim: 0,
+            query_prefix: String::new(),
+            document_prefix: String::new(),
+            num_ctx: 512,
+            batch: 32,
+            timeout_ms: 120_000,
+            keep_alive: "30m".into(),
+        }
+    }
+}
+
+impl OllamaEmbeddingConfig {
+    /// The one identity the index stores for vectors from this model (SPEC §6.4): model,
+    /// digest, dimension and everything that changes a stored vector. The query prefix is
+    /// left out on purpose, because it changes no stored vector; editing it must not wipe
+    /// the index.
+    pub fn profile_id(&self) -> String {
+        let mut h = blake3::Hasher::new();
+        h.update(self.document_prefix.as_bytes());
+        h.update(&[0]);
+        h.update(&self.num_ctx.to_le_bytes());
+        let settings = h.finalize().to_hex();
+        let digest: String = self.digest.chars().take(12).collect();
+        format!(
+            "ollama-{}-{digest}-d{}-{}",
+            self.model,
+            self.dim,
+            &settings[..12]
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -344,6 +439,8 @@ impl Default for EmbeddingConfig {
             profile: "static-model2vec".to_string(),
             model_source: None,
             model_download_consent: false,
+            backend: EmbeddingBackend::Model2vec,
+            ollama: None,
         }
     }
 }
@@ -555,6 +652,37 @@ impl Config {
         if self.embedding.model_path.as_os_str().is_empty() {
             return Err(bad("embedding.model_path", "must not be empty".into()));
         }
+        if self.embedding.backend == EmbeddingBackend::Ollama {
+            let Some(o) = &self.embedding.ollama else {
+                return Err(bad(
+                    "embedding.ollama",
+                    "backend = \"ollama\" needs an [embedding.ollama] table".into(),
+                ));
+            };
+            if o.model.trim().is_empty() {
+                return Err(bad("embedding.ollama.model", "must not be empty".into()));
+            }
+            let hex = o.digest.strip_prefix("sha256:").unwrap_or(&o.digest);
+            if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+                return Err(bad(
+                    "embedding.ollama.digest",
+                    format!(
+                        "{:?} is not a weights digest; copy the 64 hex digits after `sha256-` \
+                         in the FROM line of `ollama show --modelfile {}`",
+                        o.digest, o.model
+                    ),
+                ));
+            }
+            if o.dim == 0 {
+                return Err(bad("embedding.ollama.dim", "must be greater than 0".into()));
+            }
+            if o.num_ctx == 0 || o.batch == 0 || o.timeout_ms == 0 {
+                return Err(bad(
+                    "embedding.ollama",
+                    "num_ctx, batch and timeout_ms must be greater than 0".into(),
+                ));
+            }
+        }
         if self.inference.timeout_ms == 0 {
             return Err(bad("inference.timeout_ms", "must be greater than 0".into()));
         }
@@ -687,6 +815,65 @@ mod tests {
 
     fn p() -> &'static Path {
         Path::new("/store/cyberbrain.toml")
+    }
+
+    const OLLAMA: &str = r#"
+[embedding]
+backend = "ollama"
+
+[embedding.ollama]
+model = "embeddinggemma:300m-qat-q4_0"
+digest = "9284ddb28f3e32696e612d3bf6bf9666c560c0aa6106f8be01f71d147d5c5cb2"
+dim = 768
+query_prefix = "task: search result | query: "
+document_prefix = "title: none | text: "
+"#;
+
+    #[test]
+    fn an_ollama_backend_parses_with_its_defaults() {
+        let cfg = Config::parse(OLLAMA, p()).unwrap();
+        assert_eq!(cfg.embedding.backend, EmbeddingBackend::Ollama);
+        let o = cfg.embedding.ollama.unwrap();
+        assert_eq!(o.base_url, "http://127.0.0.1:11434");
+        assert_eq!((o.num_ctx, o.batch), (512, 32));
+        assert!(
+            o.profile_id()
+                .starts_with("ollama-embeddinggemma:300m-qat-q4_0-9284ddb28f3e-d768-")
+        );
+    }
+
+    #[test]
+    fn an_ollama_backend_without_its_table_is_refused() {
+        let err = Config::parse("[embedding]\nbackend = \"ollama\"\n", p()).unwrap_err();
+        assert!(err.to_string().contains("embedding.ollama"), "{err}");
+    }
+
+    #[test]
+    fn a_digest_that_is_not_one_is_refused() {
+        let bad = OLLAMA.replace(
+            "9284ddb28f3e32696e612d3bf6bf9666c560c0aa6106f8be01f71d147d5c5cb2",
+            "9284ddb28f3e",
+        );
+        let err = Config::parse(&bad, p()).unwrap_err();
+        assert!(err.to_string().contains("embedding.ollama.digest"), "{err}");
+    }
+
+    #[test]
+    fn the_query_prefix_does_not_change_the_profile_but_the_document_prefix_does() {
+        let base = Config::parse(OLLAMA, p())
+            .unwrap()
+            .embedding
+            .ollama
+            .unwrap();
+        let mut q = base.clone();
+        q.query_prefix = "query: ".into();
+        assert_eq!(q.profile_id(), base.profile_id());
+        let mut d = base.clone();
+        d.document_prefix = String::new();
+        assert_ne!(d.profile_id(), base.profile_id());
+        let mut w = base.clone();
+        w.digest = "0".repeat(64);
+        assert_ne!(w.profile_id(), base.profile_id());
     }
 
     #[test]

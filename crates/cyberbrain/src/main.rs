@@ -714,6 +714,10 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let r = app.doctor()?;
             out.emit(&r, render::doctor)?;
         }
+        Command::BenchEmbedding { sample } => {
+            let r = app.bench_embedding(sample)?;
+            out.emit(&r, render::bench_embedding)?;
+        }
         Command::Status => {
             let r = runtime()?.block_on(app.status())?;
             out.emit(&r, render::status)?;

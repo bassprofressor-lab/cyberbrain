@@ -292,6 +292,31 @@ budget in §9.1. Two rules follow, and they are requirements, not optimisations:
   rather than copied. The guarantee is unchanged — any actual change to the file triggers a
   full re-hash — while the steady-state cost falls to near zero.
 
+### 6.6 Ollama as the embedding backend
+
+`[embedding] backend = "ollama"` takes vectors from a transformer embedding model behind a
+local Ollama (`POST /api/embed`) instead of the in-process artefact. It is the "external
+service" this section allows, held to the rules of the rest of the spec:
+
+- **Address and egress as §11 and §12.1.** The base URL passes the same loopback/private check
+  as the inference endpoint, the client is pinned to the validated addresses, and every
+  request asks the gate as `LocalInference` and leaves an audit row.
+- **Identity as §6.1 and §6.4.** The configuration pins the digest of the weights blob Ollama
+  loads (the `FROM` line of `/api/show`; not the digest `/api/tags` lists, which names a
+  manifest and since Ollama 0.40 can appear twice for one tag). It is compared before
+  embedding and again at most every 30 s; other weights are refused. The profile id folds in
+  model, that digest, the dimension, the document prompt and the context length. The query
+  prompt is left out: it changes no stored vector.
+- **Degenerate input as §6.3.** Blank text is the zero vector and is never sent.
+- **Hot path as §6.5.** No hook contacts Ollama. The identity comes from the configuration, so
+  `status` and `write` make no request either.
+- **Degradation as §11.** Unreachable: recall is lexical with a caveat; a scan indexes the
+  note without vectors and the next scan fills them in. An unreachable endpoint or a failed
+  digest check is remembered for 30 s, so a scan does not repeat it per note.
+
+`bench-embedding` measures the installed candidates on the machine at hand and recommends one;
+it downloads nothing.
+
 ---
 
 ## 7. Retrieval

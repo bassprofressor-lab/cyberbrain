@@ -256,6 +256,27 @@ The digests are the point of the manifest: an artefact that does not match the o
 is refused rather than loaded, because a model swapped underneath a store changes what its
 vectors mean without changing anything you can see.
 
+### Better search for the price of a forward pass: a local Ollama
+
+Static embeddings have no context and no word order. If the machine runs
+[Ollama](https://ollama.com), a transformer embedding model behind it finds noticeably more:
+on 34 questions over 1,800 German project notes, hybrid recall put the right note in the top
+three for 79 % of them with potion-multilingual-128M and for 88 % with
+`embeddinggemma:300m-qat-q4_0` (245 MB); in first place for 56 % against 71 %. The price is about 20 ms per query instead of a few, and a full re-index takes
+minutes instead of seconds (ten on the 12-vCPU server above).
+
+```console
+$ ollama pull embeddinggemma:300m-qat-q4_0   # you download it, as above
+$ cyberbrain bench-embedding                 # measures what is installed on *this* machine
+```
+
+`bench-embedding` times every installed candidate on a sample of your own blocks, query
+latency and rebuild time, and prints the `[embedding]` section for the one that fits,
+including the digest of the weights Ollama loads. That digest plays the manifest's part: if
+the weights behind the tag ever change, Cyberbrain refuses them instead of mixing their vectors
+into the index. The request goes through the same register and audit log as every inference
+call, and if Ollama does not answer, search falls back to lexical and says so.
+
 ## Built for the EU, switchable off
 
 <img src="docs/images/compliance.png" alt="The compliance screen: nothing has left this machine, and the obligation catalogue below it">

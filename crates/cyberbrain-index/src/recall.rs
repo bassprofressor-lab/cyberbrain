@@ -588,18 +588,11 @@ impl Index {
             return Ok((Vec::new(), coverage));
         }
 
-        let mut qv = embedder
-            .embed(&[query])
-            .map_err(|e| {
-                SemanticSkipped(format!(
-                    "semantic search skipped: embedding the query failed: {e}"
-                ))
-            })?
-            .into_iter()
-            .next()
-            .ok_or_else(|| {
-                SemanticSkipped("semantic search skipped: embedder returned no vector".into())
-            })?;
+        let mut qv = embedder.embed_query(query).map_err(|e| {
+            SemanticSkipped(format!(
+                "semantic search skipped: embedding the query failed: {e}"
+            ))
+        })?;
         if qv.len() != cache.dim {
             return Err(SemanticSkipped(format!(
                 "semantic search disabled: query vector has dim {} but stored vectors have {}",

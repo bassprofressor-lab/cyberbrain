@@ -461,4 +461,13 @@ pub trait Embedder: Send + Sync {
     /// A caller scoring vectors must treat an all-zero vector as "no semantic signal" and
     /// skip it rather than divide by its norm.
     fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>>;
+
+    /// The vector for a search query. Models trained with asymmetric prompts embed a query
+    /// differently from the passage it should find; for those that do not, this is `embed`.
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        self.embed(&[query])?
+            .into_iter()
+            .next()
+            .ok_or_else(|| crate::Error::Embed("the embedder returned no vector".into()))
+    }
 }

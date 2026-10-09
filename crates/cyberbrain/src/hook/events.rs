@@ -395,19 +395,30 @@ fn digest(
             "- index: cyberbrain.db is absent; `recall` has nothing to search until `cyberbrain scan` runs\n",
         ),
     }
-    let model_dir = ctx.app.config().model_dir();
-    let model_present =
-        model_dir.join("model.safetensors").is_file() && model_dir.join("tokenizer.json").is_file();
-    text.push_str(&format!(
-        "- semantic search: model artefact {} at {}{}\n",
-        if model_present { "present" } else { "absent" },
-        Slash(&model_dir),
-        if model_present {
-            " (not loaded by this hook; `recall` loads it)"
-        } else {
-            "; recall is lexical only until one is placed"
-        }
-    ));
+    let embedding = &ctx.app.config().embedding;
+    if let (cyberbrain_core::config::EmbeddingBackend::Ollama, Some(o)) =
+        (embedding.backend, embedding.ollama.as_ref())
+    {
+        text.push_str(&format!(
+            "- semantic search: {} via Ollama at {} (not contacted by this hook; `recall` asks \
+             it and falls back to lexical search if it does not answer)\n",
+            o.model, o.base_url
+        ));
+    } else {
+        let model_dir = ctx.app.config().model_dir();
+        let model_present = model_dir.join("model.safetensors").is_file()
+            && model_dir.join("tokenizer.json").is_file();
+        text.push_str(&format!(
+            "- semantic search: model artefact {} at {}{}\n",
+            if model_present { "present" } else { "absent" },
+            Slash(&model_dir),
+            if model_present {
+                " (not loaded by this hook; `recall` loads it)"
+            } else {
+                "; recall is lexical only until one is placed"
+            }
+        ));
+    }
     match state {
         Some(s) => text.push_str(&format!(
             "- session {}: source {source}, injection #{}, {} turn(s), {} compaction(s)\n",

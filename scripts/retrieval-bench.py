@@ -65,13 +65,32 @@ def env(daemon=False):
     return e
 
 
+# `--ollama FILE`: the body of an [embedding.ollama] table. Hybrid then embeds through that
+# Ollama (`backend = "ollama"`), lexical drops the backend line and points model_path nowhere,
+# exactly as without the option. Set once in main().
+OLLAMA = None
+
+
 def set_model(store, model_dir):
     cfg = Path(store) / "cyberbrain.toml"
-    lines = cfg.read_text().splitlines()
-    out = [f'model_path = "{model_dir}"' if l.startswith("model_path =") else l for l in lines]
+    text = cfg.read_text()
+    text = text.split("\n[embedding.ollama]\n")[0]  # always appended last, see below
+    lines = [l for l in text.splitlines() if not l.startswith("backend =")]
     if not any(l.startswith("model_path =") for l in lines):
         sys.exit(f"{cfg}: no model_path line to set")
-    cfg.write_text("\n".join(out) + "\n")
+    hybrid = Path(model_dir).name != "no-model"
+    out = []
+    for l in lines:
+        if l.startswith("model_path ="):
+            out.append(f'model_path = "{model_dir}"')
+            if OLLAMA and hybrid:
+                out.append('backend = "ollama"')
+        else:
+            out.append(l)
+    body = "\n".join(out).rstrip("\n") + "\n"
+    if OLLAMA and hybrid:
+        body += "\n[embedding.ollama]\n" + OLLAMA.strip() + "\n"
+    cfg.write_text(body)
 
 
 def fresh_store(binary, path, model_dir):
@@ -375,6 +394,8 @@ def main():
         p.add_argument("--unit", choices=("note", "block"), default="note")
         p.add_argument("--latency-queries", type=int, default=20)
         p.add_argument("--out", help="write the numbers as JSON here")
+        p.add_argument("--ollama", help="file with the body of an [embedding.ollama] table; hybrid "
+                       "then embeds through that Ollama instead of model2vec")
         if name == "longmemeval":
             p.add_argument("--data", required=True)
             p.add_argument("--limit", type=int, help="random sample of this many questions (seed 0)")
@@ -385,6 +406,9 @@ def main():
             p.add_argument("--keep", action="store_true")
     a = ap.parse_args()
     a.bin = str(Path(a.bin).resolve())
+    global OLLAMA
+    if a.ollama:
+        OLLAMA = Path(a.ollama).read_text()
     if not (a.model_dir / "manifest.json").exists():
         sys.exit(f"{a.model_dir}: no manifest.json — hybrid would silently run lexical")
     # <work>/lme/<question id>/daemon.sock must fit sockaddr_un (the daemon refuses > 100)

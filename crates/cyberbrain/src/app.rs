@@ -24,7 +24,7 @@ use crate::writers::{
 };
 use cyberbrain_core::Slash;
 use cyberbrain_core::blocks::{MAX_BLOCK_TOKENS, OversizedReason, blocks_of};
-use cyberbrain_core::config::DEFAULT_STORE_DIR;
+use cyberbrain_core::config::{DEFAULT_STORE_DIR, EmbeddingBackend};
 use cyberbrain_core::frontmatter;
 use cyberbrain_core::links::link_targets;
 use cyberbrain_core::provenance;
@@ -38,7 +38,7 @@ use cyberbrain_index::{
     AuditStore, EmbeddingProfile, Erased, Index, IndexStats, NoteStamp, ProfileChange,
     RecallOptions, content_hash,
 };
-use cyberbrain_llm::{LlmClient, LlmConfig, Probe};
+use cyberbrain_llm::{LlmClient, LlmConfig, OllamaEmbedConfig, OllamaEmbedder, Probe};
 use cyberbrain_policy::profile::ProfileExt;
 use cyberbrain_policy::{
     Actor, AuditAction, AuditFilter, EgressEntry, EraseReason, EraseRequest, ErasureReport,
@@ -177,6 +177,10 @@ pub struct ScanReport {
     pub links_written_back: usize,
     pub link_writeback_failed: Vec<String>,
     pub oversized_blocks: Vec<OversizedBlock>,
+    /// Notes indexed without vectors because embedding them failed; the next scan retries.
+    pub unvectorised: usize,
+    /// The first failure among those, as it was reported.
+    pub unvectorised_reason: Option<String>,
     pub embedder: EmbedderSummary,
     pub profile_change: Option<ProfileChange>,
     pub cleared: Option<Erased>,
@@ -743,6 +747,11 @@ enum EmbedderState {
         manifest: ArtefactManifest,
         paths: ModelPaths,
     },
+    /// `backend = "ollama"`: vectors from a local Ollama. Constructed without a request;
+    /// reachability and the digest are checked by the first call that embeds.
+    Remote {
+        embedder: Arc<OllamaEmbedder>,
+    },
     Absent {
         reason: String,
     },
@@ -1241,6 +1250,17 @@ impl App {
     }
 
     fn load_embedder(&self) -> EmbedderState {
+        if let Some(cfg) = self.ollama_embed_config() {
+            let audit: Arc<dyn cyberbrain_llm::AuditSink> = Arc::new(self.policy.audit().clone());
+            return match OllamaEmbedder::new(cfg, audit, self.gate.clone()) {
+                Ok(e) => EmbedderState::Remote {
+                    embedder: Arc::new(e),
+                },
+                Err(e) => EmbedderState::Absent {
+                    reason: e.to_string(),
+                },
+            };
+        }
         let (paths, manifest) = match self.model_artefact() {
             Ok(a) => a,
             Err(reason) => return EmbedderState::Absent { reason },
@@ -1255,6 +1275,31 @@ impl App {
                 reason: e.to_string(),
             },
         }
+    }
+
+    /// `[embedding.ollama]` in the shape the embedder takes, when that is the configured
+    /// backend. The address switches are the inference endpoint's: one operator decision
+    /// about which networks may see note text, not two that can disagree.
+    fn ollama_embed_config(&self) -> Option<OllamaEmbedConfig> {
+        if self.config.embedding.backend != EmbeddingBackend::Ollama {
+            return None;
+        }
+        let o = self.config.embedding.ollama.as_ref()?;
+        Some(OllamaEmbedConfig {
+            base_url: o.base_url.clone(),
+            model: o.model.clone(),
+            digest: cyberbrain_llm::embed::normalise_digest(&o.digest),
+            dim: o.dim,
+            query_prefix: o.query_prefix.clone(),
+            document_prefix: o.document_prefix.clone(),
+            num_ctx: o.num_ctx,
+            batch: o.batch,
+            timeout: std::time::Duration::from_millis(o.timeout_ms),
+            keep_alive: o.keep_alive.clone(),
+            allow_public_endpoint: self.config.inference.allow_public_endpoint,
+            allow_overlay_network: self.config.inference.allow_overlay_network,
+            profile_id: o.profile_id(),
+        })
     }
 
     /// Which model this store would embed with — profile, dimension, weights digest — without
@@ -1279,6 +1324,15 @@ impl App {
             }
             if let Some(EmbedderState::Absent { reason }) = self.embedder.get() {
                 return ModelIdentity::Absent(reason.clone());
+            }
+            // The Ollama identity is the configuration's: it pins model, digest and dimension,
+            // and whether the server still agrees is checked where vectors are made.
+            if let Some(cfg) = self.ollama_embed_config() {
+                return ModelIdentity::Ready(EmbeddingProfile {
+                    id: cfg.profile_id,
+                    dim: cfg.dim,
+                    model_hash: cfg.digest,
+                });
             }
             match self.model_artefact() {
                 Err(reason) => ModelIdentity::Absent(reason),
@@ -1358,6 +1412,7 @@ impl App {
     fn embed_blocks(&self, texts: &[&str]) -> Result<Option<Vec<Vec<f32>>>> {
         match self.embedder() {
             EmbedderState::Loaded { embedder, .. } => embedder.embed(texts).map(Some),
+            EmbedderState::Remote { embedder } => embedder.embed(texts).map(Some),
             EmbedderState::Absent { .. } => Ok(None),
         }
     }
@@ -1441,6 +1496,8 @@ impl App {
             links_written_back: 0,
             link_writeback_failed: Vec::new(),
             oversized_blocks: Vec::new(),
+            unvectorised: 0,
+            unvectorised_reason: None,
             embedder: EmbedderSummary::default(),
             profile_change: None,
             cleared: None,
@@ -1568,14 +1625,19 @@ impl App {
                 });
             }
             let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+            // A failed embedding costs the note its vectors, not its place in the index: a
+            // lexical hit is worth more than no hit, and the next scan sees the missing
+            // vectors and asks again (`NeedsVectors`). Dropping the note, as this did while
+            // the only embedder was in process and could not fail halfway, would hide every
+            // changed note from recall for as long as an Ollama was stopped.
             let vectors = match self.embed_blocks(&texts) {
                 Ok(v) => v,
                 Err(e) => {
-                    report.skipped.push(SkippedFile {
-                        path: entry.path.clone(),
-                        reason: format!("embedding failed: {e}"),
-                    });
-                    continue;
+                    if report.unvectorised == 0 {
+                        report.unvectorised_reason = Some(e.to_string());
+                    }
+                    report.unvectorised += 1;
+                    None
                 }
             };
             match w.index.upsert_note(&note, &blocks, vectors.as_deref()) {
@@ -1710,6 +1772,7 @@ impl App {
             let ix = lock_index(&self.index)?;
             let embedder: Option<&dyn Embedder> = match embedder_state {
                 EmbedderState::Loaded { embedder, .. } => Some(embedder.as_ref()),
+                EmbedderState::Remote { embedder } => Some(embedder.as_ref()),
                 EmbedderState::Absent { .. } => None,
             };
             ix.recall(query, embedder, &opts)?
@@ -4935,6 +4998,30 @@ impl ModelInventory for App {
             );
             cards.push(c);
         }
+        if let EmbedderState::Remote { embedder } = self.embedder() {
+            let cfg = embedder.config();
+            let mut c = ModelCard::new(
+                ModelRole::Embedding,
+                cfg.model.clone(),
+                format!("Ollama at {}", cfg.base_url),
+                "transformer embeddings for hybrid recall over the notes in this store",
+            );
+            c.dimension = Some(cfg.dim);
+            c.format = Some(format!(
+                "Ollama POST /api/embed, digest sha256:{}, num_ctx {}, document prefix {:?}, query prefix {:?}",
+                cfg.digest, cfg.num_ctx, cfg.document_prefix, cfg.query_prefix
+            ));
+            c.notes.push(format!(
+                "the digest is compared with what Ollama serves before embedding, at most every {} s; \
+                 a different one is refused",
+                cyberbrain_llm::embed::VERIFY_EVERY.as_secs()
+            ));
+            c.notes.push(
+                "licence and weights are those of the model in the operator's Ollama; not read by this tool"
+                    .into(),
+            );
+            cards.push(c);
+        }
         if let Some(model) = &self.config.inference.model {
             let mut c = ModelCard::new(
                 ModelRole::Inference,
@@ -5005,6 +5092,9 @@ fn normalise_link_target(name: &str) -> String {
     }
     out.trim_matches('-').to_string()
 }
+
+mod embed_bench;
+pub use embed_bench::EmbedBenchReport;
 
 #[cfg(test)]
 mod contradiction_budget_tests {

@@ -217,6 +217,8 @@ fn refuse(command: &Command) -> Option<&'static str> {
         | Command::Forget { .. }
         | Command::Doctor
         | Command::Status
+        // Reads the index and asks the local Ollama through the audited inference path.
+        | Command::BenchEmbedding { .. }
         | Command::Export { .. }
         // The review workflow belongs here more than anywhere: it is this store's own
         // business, and the window is where the person reviewing already is.

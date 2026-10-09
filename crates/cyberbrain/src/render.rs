@@ -115,6 +115,16 @@ pub fn scan(r: &ScanReport) -> String {
             o.note, o.block_idx, o.approx_tokens, o.reason
         );
     }
+    if r.unvectorised > 0 {
+        let _ = writeln!(
+            s,
+            "  {} note(s) indexed without vectors, the next scan retries: {}",
+            r.unvectorised,
+            r.unvectorised_reason
+                .as_deref()
+                .unwrap_or("embedding failed")
+        );
+    }
     let _ = writeln!(s, "{}", embedder_line(&r.embedder));
     if let Some(p) = &r.profile_change
         && p.changed
@@ -339,6 +349,93 @@ pub fn manifest(r: &crate::app::ManifestReport) -> String {
     )
 }
 
+pub fn bench_embedding(r: &crate::app::EmbedBenchReport) -> String {
+    let mut s = String::new();
+    let h = &r.hardware;
+    let yn = |b: Option<bool>| match b {
+        Some(true) => "yes",
+        Some(false) => "no",
+        None => "unknown",
+    };
+    let _ = writeln!(
+        s,
+        "machine: {} logical CPUs{}, AVX2 {}, AVX-512 {}, {} GiB RAM",
+        h.logical_cpus,
+        h.cpu_model
+            .as_deref()
+            .map(|m| format!(" ({m})"))
+            .unwrap_or_default(),
+        yn(h.avx2),
+        yn(h.avx512),
+        h.memory_gib
+            .map(|g| g.to_string())
+            .unwrap_or_else(|| "?".into())
+    );
+    let _ = writeln!(
+        s,
+        "sample: {} of {} blocks; Ollama at {}\n",
+        r.sample_blocks, r.index_blocks, r.ollama
+    );
+    let _ = writeln!(
+        s,
+        "{:<32} {:>6} {:>9} {:>9} {:>9} {:>11}  fits",
+        "model", "top-3", "query p50", "query p95", "blocks/s", "rebuild"
+    );
+    let opt = |v: Option<f64>, unit: &str| {
+        v.map(|x| format!("{x}{unit}"))
+            .unwrap_or_else(|| "-".into())
+    };
+    for c in &r.candidates {
+        let fits = if let Some(e) = &c.error {
+            format!("error: {e}")
+        } else if !c.installed {
+            "not installed".into()
+        } else if c.within_budget {
+            "yes".into()
+        } else {
+            "no".into()
+        };
+        let _ = writeln!(
+            s,
+            "{:<32} {:>5.0}% {:>9} {:>9} {:>9} {:>11}  {}",
+            c.model,
+            c.quality_r_at_3 * 100.0,
+            opt(c.query_p50_ms, " ms"),
+            opt(c.query_p95_ms, " ms"),
+            opt(c.blocks_per_s, ""),
+            opt(c.rebuild_min, " min"),
+            fits
+        );
+    }
+    let _ = writeln!(s, "\ntop-3: {}", r.quality_source);
+    for n in &r.not_installed {
+        let _ = writeln!(s, "  {n}");
+    }
+    match &r.recommendation {
+        Some(rec) if rec.already_configured => {
+            let _ = writeln!(
+                s,
+                "\nrecommended: {} ({}). This store already uses it.",
+                rec.model, rec.why
+            );
+        }
+        Some(rec) => {
+            let _ = writeln!(
+                s,
+                "\nrecommended: {} ({}). In cyberbrain.toml:\n\n{}\n",
+                rec.model, rec.why, rec.config
+            );
+        }
+        None => {
+            let _ = writeln!(s, "\nno recommendation");
+        }
+    }
+    for n in &r.notes {
+        let _ = writeln!(s, "note: {n}");
+    }
+    s
+}
+
 pub fn doctor(r: &DoctorReport) -> String {
     let mut s = String::new();
     if r.findings.is_empty() {
@@ -407,7 +504,20 @@ pub fn status(r: &StatusReport) -> String {
     );
     let _ = writeln!(s, "embedding: {}", embedder_line(&r.embedding.embedder));
     let _ = writeln!(s, "daemon: {}", r.daemon);
-    let _ = writeln!(s, "  model dir: {}", Slash(&r.embedding.model_dir));
+    let remote = r
+        .embedding
+        .embedder
+        .profile_id
+        .as_deref()
+        .is_some_and(|p| p.starts_with("ollama-"));
+    if remote {
+        let _ = writeln!(
+            s,
+            "  served by Ollama (embedding.backend); reachability and digest are checked by the first recall or scan, not here"
+        );
+    } else {
+        let _ = writeln!(s, "  model dir: {}", Slash(&r.embedding.model_dir));
+    }
     match (&r.embedding.index_profile, r.embedding.matches_index) {
         (Some(p), Some(true)) => {
             let _ = writeln!(

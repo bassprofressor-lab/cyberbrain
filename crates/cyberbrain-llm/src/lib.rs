@@ -33,13 +33,15 @@
 //!
 //! The single point where an HTTP client is constructed is [`client::build_http_client`],
 //! which takes [`EgressPurpose::LocalInference`] by value. That is the seam the policy
-//! crate's register (SPEC §12.1) hooks into. Nothing else in this crate constructs a client.
+//! crate's register (SPEC §12.1) hooks into. Nothing else in this crate constructs a client;
+//! the Ollama embedder in [`embed`] builds its client through the same function.
 
 pub mod address;
 pub mod audit;
 pub mod backend;
 pub mod client;
 pub mod degrade;
+pub mod embed;
 pub mod prompts;
 pub mod tasks;
 pub mod types;
@@ -54,4 +56,5 @@ pub use backend::{Backend, Probe};
 pub use client::{LlmClient, LlmConfig};
 pub use cyberbrain_core::{EgressPurpose, Error, Result};
 pub use degrade::{Degraded, Feature};
+pub use embed::{InstalledModel, OllamaEmbedConfig, OllamaEmbedder, ShownModel};
 pub use types::{ChatMessage, ChatRequest, ChatResponse, LoadedModel, ModelInfo, Role, Usage};

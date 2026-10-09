@@ -795,7 +795,7 @@ fn server_message(body: &str) -> String {
 }
 
 /// Map a reqwest transport error to an audit outcome and a user-facing error.
-fn transport_failure(url: &str, e: &reqwest::Error) -> (CallOutcome, Error) {
+pub(crate) fn transport_failure(url: &str, e: &reqwest::Error) -> (CallOutcome, Error) {
     if e.is_timeout() {
         (
             CallOutcome::TimedOut,

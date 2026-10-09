@@ -10,6 +10,26 @@ date, so that date has to survive somewhere more durable than a tag that can be 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- **Embeddings from a local Ollama** (`[embedding] backend = "ollama"`). A transformer
+  embedding model instead of static token vectors: on 34 questions over this project's own
+  notes the right note reached the top three for 88 % of them with
+  `embeddinggemma:300m-qat-q4_0`, against 79 % with potion-multilingual-128M (hybrid; first
+  place 71 % against 56 %). Documents and
+  queries get the model's own prompts. The weights digest is pinned in the configuration and
+  compared with what Ollama loads (`/api/show`) before embedding; other weights are refused,
+  never mixed into the index. Every request goes through the egress register and the audit
+  log. When Ollama is down, recall is lexical and says so, and a scan indexes notes without
+  vectors and fills them in on the next run.
+- **`cyberbrain bench-embedding`**: which embedding model fits this machine. Measures query
+  latency and full-rebuild time of every installed candidate on a sample of the store's own
+  blocks, and prints the configuration for the best one that fits. Downloads nothing.
+- **A failed embedding no longer drops a note from the index.** It is indexed lexically and
+  revectorised by the next scan. Before, a changed note vanished from recall until its
+  embedding succeeded, which with an in-process model never happened and with a stopped
+  Ollama would have happened to every note.
+
 ## [0.7.8] — 2026-10-04
 
 - **`cyberbrain guard`: the AgentGuard check without a memory store.** The pre-tool-use hook

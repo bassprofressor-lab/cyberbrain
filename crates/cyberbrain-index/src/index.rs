@@ -914,6 +914,23 @@ impl Index {
             })
     }
 
+    /// Up to `n` block texts spread evenly over the index, and how many blocks it holds.
+    /// The same ones every time for an unchanged index: a benchmark sample, not a search.
+    pub fn sample_block_texts(&self, n: usize) -> Result<(Vec<String>, usize)> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT text FROM blocks ORDER BY citation")
+            .ix()?;
+        let texts: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .ix()?
+            .collect::<std::result::Result<_, _>>()
+            .ix()?;
+        let total = texts.len();
+        let step = (total / n.max(1)).max(1);
+        Ok((texts.into_iter().step_by(step).take(n).collect(), total))
+    }
+
     /// Blocks of one note in index order.
     pub fn blocks_of(&self, id: &NoteId) -> Result<Vec<Block>> {
         let mut stmt = self
