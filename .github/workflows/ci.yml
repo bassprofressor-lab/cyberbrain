@@ -94,7 +94,7 @@ jobs:
 
       # The one artefact nobody here can click. Uploading it from every push is how a
       # person with a Windows machine gets to try the current state without a release.
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-installer
           path: packaging/windows/cyberbrain-setup-0.0.0-ci.exe
