@@ -273,9 +273,7 @@ fn session_start_text(
     ));
     match source {
         "compact" => {
-            let (k, turns) = state
-                .map(|s| (s.compactions, s.turns))
-                .unwrap_or((0, 0));
+            let (k, turns) = state.map(|s| (s.compactions, s.turns)).unwrap_or((0, 0));
             text.push_str(&format!(
                 "Context was just compacted (compaction #{k} of this session, {turns} turn(s) \
                  so far). Rings 0 and 1 follow again in full. Nothing else from before the \

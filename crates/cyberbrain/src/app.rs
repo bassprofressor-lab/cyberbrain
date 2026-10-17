@@ -5831,7 +5831,9 @@ mod session_start_size_tests {
         let mut body = String::new();
         let mut i = 0;
         while body.chars().count() < target.saturating_sub(base) {
-            body.push_str(&format!("Rule {i}: keep the deploy log short and dated.\n\n"));
+            body.push_str(&format!(
+                "Rule {i}: keep the deploy log short and dated.\n\n"
+            ));
             i += 1;
         }
         app.write(WriteRequest {
