@@ -210,58 +210,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         s.resident = resident::marks(&res);
     }
 
-    let mut text = String::new();
-    text.push_str("# Cyberbrain memory\n\n");
-    text.push_str(&format!(
-        "Store: `{}`. Rings 0 and 1 below are resident: they apply to everything you do in \
-         this project. Every block is prefixed with its citation; quote it when you rely on \
-         it, and expand one with `cyberbrain recall --id <citation>`.\n\n",
-        Slash(ctx.root())
-    ));
-    match source {
-        "compact" => {
-            let (k, turns) = state
-                .as_ref()
-                .map(|s| (s.compactions, s.turns))
-                .unwrap_or((0, 0));
-            text.push_str(&format!(
-                "Context was just compacted (compaction #{k} of this session, {turns} turn(s) \
-                 so far). Rings 0 and 1 follow again in full. Nothing else from before the \
-                 compaction is re-supplied here: what you learned and did not write with \
-                 `cyberbrain write` is gone from your context, and still in the store only if \
-                 you wrote it.\n\n"
-            ));
-        }
-        "resume" => {
-            if let Some(s) = &state {
-                text.push_str(&format!(
-                    "Resumed session (started {}, {} turn(s), {} compaction(s) so far).\n\n",
-                    s.started_at.as_deref().unwrap_or("at an unknown time"),
-                    s.turns,
-                    s.compactions
-                ));
-            }
-        }
-        "clear" => text.push_str("Context was cleared; this is a fresh injection.\n\n"),
-        _ => {}
-    }
-    resident::render_rings(&res, &mut text);
-    // The handoff belongs to a session's beginning. After a compaction or on resume the
-    // session has its own, newer account of where it stands, and the old handoff would
-    // only compete with it.
-    let handoff = match source {
-        "startup" | "clear" => {
-            let cfg = &ctx.app.config().handoff;
-            let h = handoff::latest(ctx.app.store(), cfg, jiff::Timestamp::now());
-            if let Some(h) = &h {
-                handoff::render(h, cfg, &mut text);
-            }
-            h
-        }
-        _ => None,
-    };
-    digest(ctx, &res, state.as_ref(), source, &mut text);
-    usage(&mut text);
+    let (text, handoff) = session_start_text(ctx.app, source, &res, state.as_ref());
     out.stdout = text;
 
     // The record: which invariants were shown to which session, when (§12.6 is the seam
@@ -299,14 +248,83 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     Ok(())
 }
 
+/// The session-start text for `source=startup`, as the hook would print it, without a
+/// session, an audit row or any state. For `doctor`'s size check.
+pub(crate) fn startup_text(app: &App) -> String {
+    let res = resident::read_checked(app);
+    session_start_text(app, "startup", &res, None).0
+}
+
+/// The text `session-start` prints on stdout, and the handoff it carried. Reads the store,
+/// writes nothing.
+fn session_start_text(
+    app: &App,
+    source: &str,
+    res: &Resident,
+    state: Option<&SessionState>,
+) -> (String, Option<handoff::Handoff>) {
+    let mut text = String::new();
+    text.push_str("# Cyberbrain memory\n\n");
+    text.push_str(&format!(
+        "Store: `{}`. Rings 0 and 1 below are resident: they apply to everything you do in \
+         this project. Every block is prefixed with its citation; quote it when you rely on \
+         it, and expand one with `cyberbrain recall --id <citation>`.\n\n",
+        Slash(app.root())
+    ));
+    match source {
+        "compact" => {
+            let (k, turns) = state
+                .map(|s| (s.compactions, s.turns))
+                .unwrap_or((0, 0));
+            text.push_str(&format!(
+                "Context was just compacted (compaction #{k} of this session, {turns} turn(s) \
+                 so far). Rings 0 and 1 follow again in full. Nothing else from before the \
+                 compaction is re-supplied here: what you learned and did not write with \
+                 `cyberbrain write` is gone from your context, and still in the store only if \
+                 you wrote it.\n\n"
+            ));
+        }
+        "resume" => {
+            if let Some(s) = state {
+                text.push_str(&format!(
+                    "Resumed session (started {}, {} turn(s), {} compaction(s) so far).\n\n",
+                    s.started_at.as_deref().unwrap_or("at an unknown time"),
+                    s.turns,
+                    s.compactions
+                ));
+            }
+        }
+        "clear" => text.push_str("Context was cleared; this is a fresh injection.\n\n"),
+        _ => {}
+    }
+    resident::render_rings(res, &mut text);
+    // The handoff belongs to a session's beginning. After a compaction or on resume the
+    // session has its own, newer account of where it stands, and the old handoff would
+    // only compete with it.
+    let handoff = match source {
+        "startup" | "clear" => {
+            let cfg = &app.config().handoff;
+            let h = handoff::latest(app.store(), cfg, jiff::Timestamp::now());
+            if let Some(h) = &h {
+                handoff::render(h, cfg, &mut text);
+            }
+            h
+        }
+        _ => None,
+    };
+    digest(app, res, state, source, &mut text);
+    usage(&mut text);
+    (text, handoff)
+}
+
 fn digest(
-    ctx: &Ctx<'_>,
+    app: &App,
     res: &Resident,
     state: Option<&SessionState>,
     source: &str,
     text: &mut String,
 ) {
-    let store = ctx.app.store();
+    let store = app.store();
     let cap = store.resident_cap();
     text.push_str("## Store digest\n\n");
     let pct = (res.tokens * 100).checked_div(cap).unwrap_or(0);
@@ -353,7 +371,7 @@ fn digest(
         ));
     }
 
-    let policy = ctx.app.policy();
+    let policy = app.policy();
     text.push_str(&format!(
         "- policy profile: {} (PII scan on writes: {})\n",
         policy.profile().as_str(),
@@ -395,7 +413,7 @@ fn digest(
             "- index: cyberbrain.db is absent; `recall` has nothing to search until `cyberbrain scan` runs\n",
         ),
     }
-    let embedding = &ctx.app.config().embedding;
+    let embedding = &app.config().embedding;
     if let (cyberbrain_core::config::EmbeddingBackend::Ollama, Some(o)) =
         (embedding.backend, embedding.ollama.as_ref())
     {
@@ -405,7 +423,7 @@ fn digest(
             o.model, o.base_url
         ));
     } else {
-        let model_dir = ctx.app.config().model_dir();
+        let model_dir = app.config().model_dir();
         let model_present = model_dir.join("model.safetensors").is_file()
             && model_dir.join("tokenizer.json").is_file();
         text.push_str(&format!(

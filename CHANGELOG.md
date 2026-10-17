@@ -12,6 +12,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+- **`cyberbrain doctor` checks the size of the session-start text.** Claude Code moves a
+  SessionStart hook's output into a file when it is longer than 10,000 characters, and the
+  model then sees only a ~2,000 character preview, so rings 0 and 1 are no longer in view.
+  `doctor` builds the text the hook prints for a fresh start (no session is created, nothing
+  is written), counts characters, warns above 8,000 and reports an error above 10,000, with
+  the advice to shorten ring 0/1 notes and the handoff note.
 - **Embeddings from a local Ollama** (`[embedding] backend = "ollama"`). A transformer
   embedding model instead of static token vectors: on 34 questions over this project's own
   notes the right note reached the top three for 88 % of them with

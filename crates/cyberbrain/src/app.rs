@@ -960,6 +960,16 @@ impl Drop for App {
 const SHARED_BLOCKS_SHOWN: usize = 50;
 const SHARED_BLOCKS_PERCENT: usize = 50;
 
+/// Claude Code hook documentation (state October 2026, from 2.1.29x): a SessionStart hook
+/// that prints more than this many characters on stdout has its text written to a file,
+/// and the model sees only a preview. Characters, not bytes.
+const SESSION_START_LIMIT_CHARS: usize = 10_000;
+/// Size of that preview, per the same documentation.
+const SESSION_START_PREVIEW_CHARS: usize = 2_000;
+/// From here `doctor` warns: the text is within a ring-1 note or two of the limit.
+/// Our choice, not the documentation's.
+const SESSION_START_WARN_CHARS: usize = 8_000;
+
 /// Ledger task names for the contradiction check. The abandoned one is separate on purpose:
 /// a call that was cut off is not a call that cost that much, and the usage page should not
 /// average the two together.
@@ -3806,6 +3816,31 @@ impl App {
             );
         }
 
+        // What the session-start hook would print for `source=startup`, measured in
+        // characters. Past the limit Claude Code keeps only a preview of it.
+        checks.push("session-start size");
+        let chars = crate::hook::events::startup_text(self).chars().count();
+        let severity = if chars > SESSION_START_LIMIT_CHARS {
+            Some("error")
+        } else if chars > SESSION_START_WARN_CHARS {
+            Some("warning")
+        } else {
+            None
+        };
+        if let Some(severity) = severity {
+            push(
+                severity,
+                "session-start size",
+                format!(
+                    "the session-start text is {chars} characters (limit {SESSION_START_LIMIT_CHARS}, \
+                     warning from {SESSION_START_WARN_CHARS}). Over the limit Claude Code moves the \
+                     text into a file and the model sees only a ~{SESSION_START_PREVIEW_CHARS} \
+                     character preview, so rings 0/1 are then no longer visible. Shorten ring 0/1 \
+                     notes and the handoff note"
+                ),
+            );
+        }
+
         checks.push("index integrity");
         for p in lock_index(&self.index)?.integrity()? {
             push("error", "index integrity", p);
@@ -5778,6 +5813,122 @@ mod duplicate_tests {
         );
         assert!(shared[0].detail.contains("(100%)"), "{}", shared[0].detail);
         assert!(r.checks_run.contains(&"shared blocks"));
+    }
+}
+
+#[cfg(test)]
+mod session_start_size_tests {
+    use super::*;
+
+    /// A store whose ring 1 holds numbered sentences until the startup text is about
+    /// `target` characters long. Returns the real length as well.
+    fn store_with_startup_text_of(target: usize) -> (tempfile::TempDir, App, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        let base = crate::hook::events::startup_text(&app).chars().count();
+        let mut body = String::new();
+        let mut i = 0;
+        while body.chars().count() < target.saturating_sub(base) {
+            body.push_str(&format!("Rule {i}: keep the deploy log short and dated.\n\n"));
+            i += 1;
+        }
+        app.write(WriteRequest {
+            ring: Ring::Protocol,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: "protokoll".into(),
+            body,
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+        })
+        .unwrap();
+        let chars = crate::hook::events::startup_text(&app).chars().count();
+        (dir, app, chars)
+    }
+
+    fn size_findings(app: &App) -> (Vec<DoctorFinding>, bool) {
+        let r = app.doctor().unwrap();
+        let listed = r.checks_run.contains(&"session-start size");
+        let f = r
+            .findings
+            .into_iter()
+            .filter(|f| f.check == "session-start size")
+            .collect();
+        (f, listed)
+    }
+
+    #[test]
+    fn a_short_startup_text_is_fine_and_the_check_is_listed() {
+        let (_d, app, chars) = store_with_startup_text_of(3_000);
+        assert!(chars <= SESSION_START_WARN_CHARS, "{chars}");
+        let (f, listed) = size_findings(&app);
+        assert!(f.is_empty(), "{f:?}");
+        assert!(listed);
+    }
+
+    #[test]
+    fn a_startup_text_near_the_limit_warns() {
+        let (_d, app, chars) = store_with_startup_text_of(9_000);
+        assert!(
+            chars > SESSION_START_WARN_CHARS && chars <= SESSION_START_LIMIT_CHARS,
+            "{chars}"
+        );
+        let (f, _) = size_findings(&app);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, "warning");
+        assert!(f[0].detail.contains(&chars.to_string()), "{}", f[0].detail);
+        assert!(f[0].detail.contains("no longer visible"), "{}", f[0].detail);
+    }
+
+    #[test]
+    fn a_startup_text_over_the_limit_is_an_error() {
+        let (_d, app, chars) = store_with_startup_text_of(11_000);
+        assert!(chars > SESSION_START_LIMIT_CHARS, "{chars}");
+        let (f, _) = size_findings(&app);
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].severity, "error");
+        assert!(f[0].detail.contains("Shorten ring 0/1"), "{}", f[0].detail);
+    }
+
+    /// Characters, not bytes: 4,000 umlauts are 8,000 bytes and still well under the limit.
+    #[test]
+    fn the_size_counts_characters_not_bytes() {
+        let (_d, app, _) = store_with_startup_text_of(0);
+        let base = crate::hook::events::startup_text(&app).chars().count();
+        let body = "ä".repeat(SESSION_START_LIMIT_CHARS - base - 1_000);
+        assert!(body.len() > body.chars().count());
+        app.write(WriteRequest {
+            ring: Ring::Invariant,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: "umlaute".into(),
+            body,
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+        })
+        .unwrap();
+        let chars = crate::hook::events::startup_text(&app).chars().count();
+        assert!(chars < SESSION_START_LIMIT_CHARS, "{chars}");
+        let (f, _) = size_findings(&app);
+        assert!(f.iter().all(|f| f.severity != "error"), "{f:?}");
     }
 }
 
