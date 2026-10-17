@@ -58,7 +58,7 @@ mod tests {
         };
         // YAML rather than JSON: the core crate has no serde_json, and the property is
         // the serialiser-independent string the adapter hands over.
-        let text = serde_yaml_ng::to_string(&r).unwrap();
+        let text = serde_norway::to_string(&r).unwrap();
         assert_eq!(text, "path: notes/r2/a.md\nmaybe: models/m\nabsent: null\n");
     }
 }

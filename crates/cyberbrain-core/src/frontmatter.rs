@@ -60,11 +60,11 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
 
     // First pass: a generic mapping, so unknown keys and the wrong top-level shape get a
     // precise message instead of serde's "missing field" for something unrelated.
-    let value: serde_yaml_ng::Value = serde_yaml_ng::from_str(head)
+    let value: serde_norway::Value = serde_norway::from_str(head)
         .map_err(|e| fail(format!("{} (in the YAML head, {})", e, head_location(&e))))?;
     let mapping = match value {
-        serde_yaml_ng::Value::Mapping(m) => m,
-        serde_yaml_ng::Value::Null => return Err(fail("the head is empty".to_string())),
+        serde_norway::Value::Mapping(m) => m,
+        serde_norway::Value::Null => return Err(fail("the head is empty".to_string())),
         other => {
             return Err(fail(format!(
                 "the head must be a mapping of key: value pairs, found {}",
@@ -74,10 +74,10 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
     };
     for (key, value) in &mapping {
         match key {
-            serde_yaml_ng::Value::String(k) if KNOWN_KEYS.contains(&k.as_str()) => {
+            serde_norway::Value::String(k) if KNOWN_KEYS.contains(&k.as_str()) => {
                 check_field(k, value).map_err(|why| fail(format!("field `{k}`: {why}")))?;
             }
-            serde_yaml_ng::Value::String(k) => {
+            serde_norway::Value::String(k) => {
                 return Err(fail(format!(
                     "unknown field `{k}`; known fields are {}",
                     KNOWN_KEYS.join(", ")
@@ -94,7 +94,7 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
 
     // Second pass: the typed struct. Every field-level error from serde already names the
     // field ("missing field `ring`", "ring 7 does not exist").
-    let front: Frontmatter = serde_yaml_ng::from_value(serde_yaml_ng::Value::Mapping(mapping))
+    let front: Frontmatter = serde_norway::from_value(serde_norway::Value::Mapping(mapping))
         .map_err(|e| fail(e.to_string()))?;
 
     validate_name(&front.name).map_err(|r| fail(format!("name `{}`: {r}", front.name)))?;
@@ -141,7 +141,7 @@ pub fn render(front: &Frontmatter, body: &str) -> Result<String> {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
         reason: r,
     })?;
-    let yaml = serde_yaml_ng::to_string(front).map_err(|e| Error::Frontmatter {
+    let yaml = serde_norway::to_string(front).map_err(|e| Error::Frontmatter {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
         reason: format!("cannot serialise: {e}"),
     })?;
@@ -316,15 +316,15 @@ fn split_fences(text: &str) -> std::result::Result<(&str, &str), &'static str> {
 }
 
 /// Deserialise one field into its type so a bad value is reported under its own name.
-/// `serde_yaml_ng::from_value` on the whole struct loses the field path for errors that
+/// `serde_norway::from_value` on the whole struct loses the field path for errors that
 /// come from inside a type's own parser (a bad timestamp says "failed to parse four
 /// digit integer as year" and nothing else).
-fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(), String> {
+fn check_field(key: &str, value: &serde_norway::Value) -> std::result::Result<(), String> {
     use crate::types::{NoteId, NoteKind, PiiState, Ring};
     fn as_<T: serde::de::DeserializeOwned>(
-        v: &serde_yaml_ng::Value,
+        v: &serde_norway::Value,
     ) -> std::result::Result<(), String> {
-        serde_yaml_ng::from_value::<T>(v.clone())
+        serde_norway::from_value::<T>(v.clone())
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -337,8 +337,8 @@ fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(
         "tags" | "links" | "supersedes" => as_::<Vec<String>>(value),
         "superseded_by" => as_::<Option<String>>(value),
         "valid_from" | "invalid_at" => match value {
-            serde_yaml_ng::Value::Null => Ok(()),
-            serde_yaml_ng::Value::String(s) => crate::types::moment::parse(s).map(|_| ()),
+            serde_norway::Value::Null => Ok(()),
+            serde_norway::Value::String(s) => crate::types::moment::parse(s).map(|_| ()),
             other => Err(format!(
                 "expected a date (YYYY-MM-DD) or an RFC 3339 timestamp, found {}",
                 yaml_kind(other)
@@ -351,7 +351,7 @@ fn check_field(key: &str, value: &serde_yaml_ng::Value) -> std::result::Result<(
     }
 }
 
-fn head_location(e: &serde_yaml_ng::Error) -> String {
+fn head_location(e: &serde_norway::Error) -> String {
     match e.location() {
         // +1: the head starts on line 2 of the file, after the opening fence.
         Some(loc) => format!("file line {}, column {}", loc.line() + 1, loc.column()),
@@ -359,15 +359,15 @@ fn head_location(e: &serde_yaml_ng::Error) -> String {
     }
 }
 
-fn yaml_kind(v: &serde_yaml_ng::Value) -> &'static str {
+fn yaml_kind(v: &serde_norway::Value) -> &'static str {
     match v {
-        serde_yaml_ng::Value::Null => "null",
-        serde_yaml_ng::Value::Bool(_) => "a boolean",
-        serde_yaml_ng::Value::Number(_) => "a number",
-        serde_yaml_ng::Value::String(_) => "a string",
-        serde_yaml_ng::Value::Sequence(_) => "a list",
-        serde_yaml_ng::Value::Mapping(_) => "a mapping",
-        serde_yaml_ng::Value::Tagged(_) => "a tagged value",
+        serde_norway::Value::Null => "null",
+        serde_norway::Value::Bool(_) => "a boolean",
+        serde_norway::Value::Number(_) => "a number",
+        serde_norway::Value::String(_) => "a string",
+        serde_norway::Value::Sequence(_) => "a list",
+        serde_norway::Value::Mapping(_) => "a mapping",
+        serde_norway::Value::Tagged(_) => "a tagged value",
     }
 }
 
@@ -427,8 +427,8 @@ Body in Markdown. Links to other notes are written [[like-this]].
         let again = parse(p(), &rendered).unwrap();
         assert_eq!(again.body, parsed.body);
         assert_eq!(
-            serde_yaml_ng::to_string(&again.front).unwrap(),
-            serde_yaml_ng::to_string(&parsed.front).unwrap()
+            serde_norway::to_string(&again.front).unwrap(),
+            serde_norway::to_string(&parsed.front).unwrap()
         );
 
         // Field order as the spec lists it.

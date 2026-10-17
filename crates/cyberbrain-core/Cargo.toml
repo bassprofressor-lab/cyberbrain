@@ -15,7 +15,7 @@ icu_normalizer = { version = "2.3.0", default-features = false, features = ["com
 ignore = "0.4.33"
 jiff = { version = "0.2.35", features = ["serde"] }
 serde = { version = "1.0.229", features = ["derive"] }
-serde_yaml_ng = "0.10.0"
+serde_norway = "0.9.42"
 thiserror = "2.0.20"
 toml = "1.1.5"
 ulid = { version = "3.0.0", features = ["serde"] }
