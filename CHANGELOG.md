@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.7.9] — 2026-10-17
+
 - **`cyberbrain doctor` checks the size of the session-start text.** Claude Code moves a
   SessionStart hook's output into a file when it is longer than 10,000 characters, and the
   model then sees only a ~2,000 character preview, so rings 0 and 1 are no longer in view.
@@ -35,6 +37,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   revectorised by the next scan. Before, a changed note vanished from recall until its
   embedding succeeded, which with an in-process model never happened and with a stopped
   Ollama would have happened to every note.
+
+- **Dependencies.** Rust 1.99.1; `cargo update` (tokio, rustls, serde_json, sha2 and others); the UI on
+  React 19.3 and Vite 8.3. YAML front matter is now read with `serde_norway` instead of `serde_yaml_ng`:
+  the latter pulled in `unsafe-libyaml`, which is unmaintained (RUSTSEC-2024-0449). `cargo deny` is clean.
 
 ## [0.7.8] — 2026-10-04
 
