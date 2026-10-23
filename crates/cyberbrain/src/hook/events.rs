@@ -142,7 +142,9 @@ pub(super) fn dispatch(
 
     if let Some(sd) = stand_down {
         match event {
-            HookEvent::SessionStart => out.stdout = sd.announce(),
+            HookEvent::SessionStart | HookEvent::SessionRings => out.stdout = sd.announce(),
+            // The first half says it; saying it twice is noise.
+            HookEvent::SessionContext => {}
             _ => out.note(format!(
                 "hook {} standing down: {}",
                 event_name(event),
@@ -162,7 +164,9 @@ pub(super) fn dispatch(
         now: now(),
     };
     match event {
-        HookEvent::SessionStart => session_start(&ctx, &mut out)?,
+        HookEvent::SessionStart => session_start(&ctx, &mut out, Part::Whole)?,
+        HookEvent::SessionRings => session_start(&ctx, &mut out, Part::Rings)?,
+        HookEvent::SessionContext => session_context(&ctx, &mut out)?,
         HookEvent::UserPromptSubmit => user_prompt_submit(&ctx, &mut out)?,
         HookEvent::PreToolUse => pre_tool_use(&ctx, &mut out)?,
         HookEvent::PostToolUse => post_tool_use(&ctx, &mut out)?,
@@ -188,7 +192,18 @@ fn ts_of(t: SystemTime) -> String {
 // ---------------------------------------------------------------------------------------
 // session-start
 
-fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+/// Which part of the session-start text a hook prints. Claude Code measures each hook's
+/// output on its own against its 10,000 character cap, so the text can be split over two
+/// hooks for the same event; the rings come first and alone, so no handoff or digest can
+/// push them past the cap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Part {
+    Whole,
+    Rings,
+    Context,
+}
+
+fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput, part: Part) -> Result<()> {
     let source = ctx.payload.source.as_deref().unwrap_or("unknown");
     let res = resident::read_checked(ctx.app);
 
@@ -210,7 +225,7 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         s.resident = resident::marks(&res);
     }
 
-    let (text, handoff) = session_start_text(ctx.app, source, &res, state.as_ref());
+    let (text, handoff) = session_start_text(ctx.app, source, &res, state.as_ref(), part);
     out.stdout = text;
 
     // The record: which invariants were shown to which session, when (§12.6 is the seam
@@ -248,11 +263,23 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     Ok(())
 }
 
+/// The second half of session start: handoff, digest, usage. Reads the store and the session
+/// state, writes nothing: the first half (`session-rings`) owns the state and the audit row,
+/// and the harness may run both at once.
+fn session_context(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+    let source = ctx.payload.source.as_deref().unwrap_or("unknown");
+    let res = resident::read_checked(ctx.app);
+    // Through `session_id`, which validates the untrusted id before it becomes a path.
+    let state = ctx.session_id(out).and_then(|id| ctx.load_state(&id, out));
+    out.stdout = session_start_text(ctx.app, source, &res, state.as_ref(), Part::Context).0;
+    Ok(())
+}
+
 /// The session-start text for `source=startup`, as the hook would print it, without a
 /// session, an audit row or any state. For `doctor`'s size check.
-pub(crate) fn startup_text(app: &App) -> String {
+pub(crate) fn startup_text(app: &App, part: Part) -> String {
     let res = resident::read_checked(app);
-    session_start_text(app, "startup", &res, None).0
+    session_start_text(app, "startup", &res, None, part).0
 }
 
 /// The text `session-start` prints on stdout, and the handoff it carried. Reads the store,
@@ -262,8 +289,28 @@ fn session_start_text(
     source: &str,
     res: &Resident,
     state: Option<&SessionState>,
+    part: Part,
 ) -> (String, Option<handoff::Handoff>) {
     let mut text = String::new();
+    // The handoff belongs to a session's beginning. After a compaction or on resume the
+    // session has its own, newer account of where it stands, and the old handoff would
+    // only compete with it. Looked up in every part: the first half audits which one the
+    // second half shows.
+    let handoff = match source {
+        "startup" | "clear" => {
+            handoff::latest(app.store(), &app.config().handoff, jiff::Timestamp::now())
+        }
+        _ => None,
+    };
+    if part == Part::Context {
+        text.push_str("# Cyberbrain memory, continued: handoff and store state\n\n");
+        if let Some(h) = &handoff {
+            handoff::render(h, &app.config().handoff, &mut text);
+        }
+        digest(app, res, state, source, &mut text);
+        usage(&mut text);
+        return (text, handoff);
+    }
     text.push_str("# Cyberbrain memory\n\n");
     text.push_str(&format!(
         "Store: `{}`. Rings 0 and 1 below are resident: they apply to everything you do in \
@@ -296,20 +343,16 @@ fn session_start_text(
         _ => {}
     }
     resident::render_rings(res, &mut text);
-    // The handoff belongs to a session's beginning. After a compaction or on resume the
-    // session has its own, newer account of where it stands, and the old handoff would
-    // only compete with it.
-    let handoff = match source {
-        "startup" | "clear" => {
-            let cfg = &app.config().handoff;
-            let h = handoff::latest(app.store(), cfg, jiff::Timestamp::now());
-            if let Some(h) = &h {
-                handoff::render(h, cfg, &mut text);
-            }
-            h
-        }
-        _ => None,
-    };
+    if part == Part::Rings {
+        text.push_str(
+            "The handoff note and the store digest follow in a second message \
+             (`session-context`).\n\n",
+        );
+        return (text, handoff);
+    }
+    if let Some(h) = &handoff {
+        handoff::render(h, &app.config().handoff, &mut text);
+    }
     digest(app, res, state, source, &mut text);
     usage(&mut text);
     (text, handoff)

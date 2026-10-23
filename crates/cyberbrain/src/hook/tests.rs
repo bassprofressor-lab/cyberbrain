@@ -171,6 +171,91 @@ fn session_start_injects_rings_0_and_1_with_citations_and_a_digest() {
     assert!(st.resident.contains_key("r0/never-copy-config"));
 }
 
+fn session_part(f: &Fixture, event: HookEvent, source: &str) -> HookOutput {
+    let app = f.open();
+    run(
+        Some(&app),
+        event,
+        &f.payload(serde_json::json!({ "hook_event_name": "SessionStart", "source": source })),
+    )
+}
+
+/// 0.7.10: session start split over two hooks, because Claude Code caps each hook's output at
+/// 10,000 characters on its own. The rings half carries rings 0/1 and nothing that could
+/// crowd them out; the context half carries the rest and touches neither state nor audit.
+#[test]
+fn session_start_in_two_halves_puts_the_rings_alone_and_the_rest_second() {
+    let f = fixture();
+    f.write(
+        Ring::Invariant,
+        "never-copy-config",
+        "Never copy config.py to S2.",
+    );
+    let rings = session_part(&f, HookEvent::SessionRings, "startup");
+    let r = &rings.stdout;
+    assert!(
+        r.contains("### r0 `never-copy-config`") && r.contains("Never copy config.py"),
+        "{r}"
+    );
+    assert!(
+        !r.contains("## Store digest") && !r.contains("## Using the store"),
+        "{r}"
+    );
+    assert!(r.contains("session-context"), "says where the rest is: {r}");
+    let app = f.open();
+    assert_eq!(
+        audit_actions(&app)
+            .iter()
+            .filter(|a| *a == "session.start")
+            .count(),
+        1
+    );
+    assert_eq!(f.state().unwrap().injections, 1);
+
+    let ctx = session_part(&f, HookEvent::SessionContext, "startup");
+    let c = &ctx.stdout;
+    assert!(
+        c.contains("## Store digest") && c.contains("cyberbrain recall"),
+        "{c}"
+    );
+    assert!(
+        !c.contains("Never copy config.py"),
+        "the rings are not repeated: {c}"
+    );
+    // Read-only: no second audit row, no second injection counted.
+    assert_eq!(
+        audit_actions(&app)
+            .iter()
+            .filter(|a| *a == "session.start")
+            .count(),
+        1
+    );
+    assert_eq!(f.state().unwrap().injections, 1);
+
+    // Together they say what the whole hook says, rings first.
+    let whole = session_start(&f, "startup").stdout;
+    for line in [
+        "### r0 `never-copy-config`",
+        "## Store digest",
+        "## Using the store",
+    ] {
+        assert!(
+            whole.contains(line) && (r.contains(line) || c.contains(line)),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn session_context_stands_down_silently_where_the_rings_half_explains() {
+    // No store: the rings half announces the stand-down, the context half says nothing more.
+    let rings = run(None, HookEvent::SessionRings, "{}");
+    let ctx = run(None, HookEvent::SessionContext, "{}");
+    assert!(!rings.stdout.is_empty());
+    assert!(ctx.stdout.is_empty(), "{}", ctx.stdout);
+    assert_eq!(ctx.exit_code, 0);
+}
+
 /// What the hook injects is read by an agent and quoted back by it; the store path in it
 /// is spelt with forward slashes on every platform, like every other rendered path.
 #[test]

@@ -40,13 +40,27 @@ macro_rules! diag {
 // After the macro, which it uses.
 pub mod http;
 
-/// The protocol revision this server implements. Tool listing and calling, with
-/// `structuredContent` and `isError` on results, is the whole surface used.
-pub const LATEST_PROTOCOL: &str = "2025-06-18";
+/// The newest handshake-based ("legacy") revision this server implements. Tool listing and
+/// calling, with `structuredContent` and `isError` on results, is the whole surface used.
+pub const LATEST_PROTOCOL: &str = "2025-11-25";
 
-/// Revisions the server will answer in. The tools surface is the same across them; what
-/// differs (batching, structured content) is handled leniently here.
-pub const SUPPORTED_PROTOCOLS: &[&str] = &["2025-06-18", "2025-03-26", "2024-11-05"];
+/// Handshake-based revisions the server will answer `initialize` in. The tools surface is the
+/// same across them; what differs (batching, structured content) is handled leniently here.
+/// Claude Code 2.1.292+ falls back to `initialize` with 2025-11-25 when `server/discover`
+/// fails, so a server without it told every session it was speaking an older revision.
+pub const SUPPORTED_PROTOCOLS: &[&str] = &["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+
+/// Stateless ("modern") revisions: no handshake, every request names its version in `_meta`,
+/// every result carries `resultType`, list results carry `ttlMs`/`cacheScope`, and
+/// `server/discover` is mandatory (MCP 2026-07-28: SEP-2575, SEP-2322, SEP-2549).
+pub const MODERN_PROTOCOLS: &[&str] = &["2026-07-28"];
+
+const META_PROTOCOL: &str = "io.modelcontextprotocol/protocolVersion";
+const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
+/// `UnsupportedProtocolVersionError` (2026-07-28, error code allocation policy).
+const UNSUPPORTED_PROTOCOL_VERSION: i64 = -32022;
+/// The tool list only changes with the binary; an hour is a hint, not a promise.
+const LIST_TTL_MS: u64 = 3_600_000;
 
 /// What the agent is told at `initialize`. MCP-only text: it describes the envelope, not
 /// the operations, which the tool descriptions cover from the CLI help.
@@ -64,8 +78,9 @@ and you must choose (see the write tool).";
 /// down. Returns when the session is over; an I/O failure on the streams is the only error.
 pub async fn serve_stdio(app: Arc<App>) -> Result<()> {
     diag!(
-        "serving on stdio; store {}; protocol {} (also {})",
+        "serving on stdio; store {}; protocol {} stateless, {} with initialize (also {})",
         Slash(app.root()),
+        MODERN_PROTOCOLS.join(", "),
         LATEST_PROTOCOL,
         SUPPORTED_PROTOCOLS[1..].join(", ")
     );
@@ -245,6 +260,16 @@ impl Session {
         method: &str,
         params: Value,
     ) -> std::result::Result<Value, RpcError> {
+        // A request that names its version in `_meta` is served statelessly (2026-07-28);
+        // `server/discover` is answered that way even without it, since it is the probe.
+        let modern = params
+            .get("_meta")
+            .and_then(|m| m.get(META_PROTOCOL))
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        if modern.is_some() || method == "server/discover" {
+            return self.modern(method, params, modern.as_deref()).await;
+        }
         if !self.initialized && !matches!(method, "initialize" | "ping") && !self.warned_before_init
         {
             self.warned_before_init = true;
@@ -270,6 +295,67 @@ impl Session {
             }
             other => Err(RpcError::method_not_found(other)),
         }
+    }
+
+    /// One stateless request. The version is checked per request; an unknown one is answered
+    /// with `UnsupportedProtocolVersionError`, which is also how a probing client learns that
+    /// this server is modern and does not fall back to `initialize`.
+    async fn modern(
+        &mut self,
+        method: &str,
+        params: Value,
+        version: Option<&str>,
+    ) -> std::result::Result<Value, RpcError> {
+        if let Some(v) = version
+            && !MODERN_PROTOCOLS.contains(&v)
+        {
+            let mut supported: Vec<&str> = MODERN_PROTOCOLS.to_vec();
+            supported.extend_from_slice(SUPPORTED_PROTOCOLS);
+            let mut e = RpcError::new(UNSUPPORTED_PROTOCOL_VERSION, "Unsupported protocol version");
+            e.data = Some(json!({ "supported": supported, "requested": v }));
+            diag!(
+                "request {method} asked for protocol {v:?}; refused, supported: {}",
+                supported.join(", ")
+            );
+            return Err(e);
+        }
+        let mut result = match method {
+            "server/discover" => {
+                let mut supported: Vec<&str> = MODERN_PROTOCOLS.to_vec();
+                supported.extend_from_slice(SUPPORTED_PROTOCOLS);
+                diag!("server/discover: answering {}", supported.join(", "));
+                json!({
+                    "supportedVersions": supported,
+                    "capabilities": { "tools": {} },
+                    "instructions": INSTRUCTIONS,
+                    "ttlMs": LIST_TTL_MS,
+                    "cacheScope": "public",
+                })
+            }
+            "tools/list" => {
+                let mut v = tools::list_value();
+                v["ttlMs"] = json!(LIST_TTL_MS);
+                v["cacheScope"] = json!("public");
+                v
+            }
+            "tools/call" => {
+                let name = params
+                    .get("name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| RpcError::invalid_params("tools/call needs a string `name`"))?;
+                let args = params.get("arguments").cloned().unwrap_or(Value::Null);
+                tools::call(&self.app, name, &args).await?
+            }
+            // Removed in 2026-07-28, but answering costs nothing and a mixed client may ask.
+            "ping" => json!({}),
+            other => return Err(RpcError::method_not_found(other)),
+        };
+        if let Some(o) = result.as_object_mut() {
+            o.insert("resultType".into(), json!("complete"));
+            let meta = o.entry("_meta").or_insert_with(|| json!({}));
+            meta[META_SERVER_INFO] = server_info();
+        }
+        Ok(result)
     }
 
     fn initialize(&mut self, params: &Value) -> Value {
@@ -306,12 +392,16 @@ impl Session {
         json!({
             "protocolVersion": version,
             "capabilities": { "tools": { "listChanged": false } },
-            "serverInfo": {
-                "name": "cyberbrain",
-                "title": "Cyberbrain",
-                "version": env!("CARGO_PKG_VERSION"),
-            },
+            "serverInfo": server_info(),
             "instructions": instructions,
         })
     }
+}
+
+fn server_info() -> Value {
+    json!({
+        "name": "cyberbrain",
+        "title": "Cyberbrain",
+        "version": env!("CARGO_PKG_VERSION"),
+    })
 }

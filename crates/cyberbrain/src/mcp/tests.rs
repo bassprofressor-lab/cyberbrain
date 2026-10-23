@@ -167,6 +167,127 @@ fn text_of(result: &Value) -> &str {
 
 // ---------------------------------------------------------------------------------------
 
+/// The probe Claude Code 2.1.292+ sends first, and the fallback it uses when the probe fails:
+/// a stateless request with `_meta`, then `initialize` with 2025-11-25.
+fn modern_meta(version: &str) -> Value {
+    json!({
+        "io.modelcontextprotocol/protocolVersion": version,
+        "io.modelcontextprotocol/clientInfo": { "name": "claude-code", "version": "2.1.309" },
+        "io.modelcontextprotocol/clientCapabilities": {},
+    })
+}
+
+#[tokio::test]
+async fn stateless_2026_07_28_discover_list_and_call_without_initialize() {
+    let (_d, _root, app) = temp_app();
+    session(app, |mut c| async move {
+        // No initialize at all: the modern client never sends one.
+        let d = c
+            .request(
+                "server/discover",
+                json!({ "_meta": modern_meta("2026-07-28") }),
+            )
+            .await;
+        let r = &d["result"];
+        assert_eq!(r["resultType"], "complete", "{d}");
+        let sup: Vec<&str> = r["supportedVersions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert!(
+            sup.contains(&"2026-07-28") && sup.contains(&"2025-11-25"),
+            "{d}"
+        );
+        assert!(r["capabilities"]["tools"].is_object(), "{d}");
+        assert_eq!(
+            r["_meta"]["io.modelcontextprotocol/serverInfo"]["name"],
+            "cyberbrain"
+        );
+        assert!(r["instructions"].as_str().unwrap().contains("caveats"));
+        assert!(
+            !r["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("protocol note")
+        );
+
+        let l = c
+            .request("tools/list", json!({ "_meta": modern_meta("2026-07-28") }))
+            .await;
+        let r = &l["result"];
+        assert_eq!(r["resultType"], "complete", "{l}");
+        assert!(r["ttlMs"].as_u64().unwrap() > 0, "{l}");
+        assert_eq!(r["cacheScope"], "public");
+        assert!(
+            r["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|t| t["name"] == "recall")
+        );
+
+        let s = c
+            .request(
+                "tools/call",
+                json!({ "name": "status", "arguments": {}, "_meta": modern_meta("2026-07-28") }),
+            )
+            .await;
+        assert_eq!(s["result"]["resultType"], "complete", "{s}");
+        assert!(s["result"]["content"].is_array(), "{s}");
+        c
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn stateless_unknown_version_is_refused_with_the_supported_list() {
+    let (_d, _root, app) = temp_app();
+    session(app, |mut c| async move {
+        let v = c
+            .request("tools/list", json!({ "_meta": modern_meta("2099-01-01") }))
+            .await;
+        assert_eq!(v["error"]["code"], -32022, "{v}");
+        assert_eq!(v["error"]["data"]["requested"], "2099-01-01");
+        let sup = v["error"]["data"]["supported"].as_array().unwrap();
+        assert!(sup.iter().any(|x| x == "2026-07-28"), "{v}");
+        // The probe itself, with a version we do not speak: a modern error, so the client
+        // learns this server is modern and retries instead of falling back.
+        let d = c
+            .request(
+                "server/discover",
+                json!({ "_meta": modern_meta("2099-01-01") }),
+            )
+            .await;
+        assert_eq!(d["error"]["code"], -32022, "{d}");
+        c
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn initialize_with_2025_11_25_needs_no_protocol_note() {
+    // Claude Code 2.1.309 falls back to exactly this when server/discover fails.
+    let (_d, _root, app) = temp_app();
+    session(app, |mut c| async move {
+        let r = c.init_with("2025-11-25").await;
+        assert_eq!(r["protocolVersion"], "2025-11-25");
+        assert!(
+            !r["instructions"]
+                .as_str()
+                .unwrap()
+                .contains("protocol note"),
+            "{r}"
+        );
+        // A legacy session gets legacy results: no resultType forced in.
+        let l = c.request("tools/list", json!({})).await;
+        assert!(l["result"].get("resultType").is_none(), "{l}");
+        c
+    })
+    .await;
+}
+
 #[tokio::test]
 async fn initialize_negotiates_and_degrades_clearly() {
     let (_d, _root, app) = temp_app();

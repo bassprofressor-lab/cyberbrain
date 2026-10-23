@@ -104,6 +104,8 @@ impl HookOutput {
 pub fn event_name(event: HookEvent) -> &'static str {
     match event {
         HookEvent::SessionStart => "session-start",
+        HookEvent::SessionRings => "session-rings",
+        HookEvent::SessionContext => "session-context",
         HookEvent::UserPromptSubmit => "user-prompt-submit",
         HookEvent::PreToolUse => "pre-tool-use",
         HookEvent::PostToolUse => "post-tool-use",
@@ -115,7 +117,9 @@ pub fn event_name(event: HookEvent) -> &'static str {
 /// The harness's own name for the event, as it must appear in `hookSpecificOutput`.
 pub fn harness_event_name(event: HookEvent) -> &'static str {
     match event {
-        HookEvent::SessionStart => "SessionStart",
+        HookEvent::SessionStart | HookEvent::SessionRings | HookEvent::SessionContext => {
+            "SessionStart"
+        }
         HookEvent::UserPromptSubmit => "UserPromptSubmit",
         HookEvent::PreToolUse => "PreToolUse",
         HookEvent::PostToolUse => "PostToolUse",
@@ -126,7 +130,9 @@ pub fn harness_event_name(event: HookEvent) -> &'static str {
 
 pub fn budget_ms(event: HookEvent) -> u128 {
     match event {
-        HookEvent::SessionStart => SESSION_START_BUDGET_MS,
+        HookEvent::SessionStart | HookEvent::SessionRings | HookEvent::SessionContext => {
+            SESSION_START_BUDGET_MS
+        }
         _ => HOT_PATH_BUDGET_MS,
     }
 }

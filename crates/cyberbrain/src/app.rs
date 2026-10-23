@@ -3816,29 +3816,56 @@ impl App {
             );
         }
 
-        // What the session-start hook would print for `source=startup`, measured in
-        // characters. Past the limit Claude Code keeps only a preview of it.
+        // What the session-start hook(s) would print for `source=startup`, measured in
+        // characters. Past the limit Claude Code keeps only a preview. Split (0.7.10) each
+        // half has its own cap; the rings half matters most, since it carries rings 0/1.
         checks.push("session-start size");
-        let chars = crate::hook::events::startup_text(self).chars().count();
-        let severity = if chars > SESSION_START_LIMIT_CHARS {
-            Some("error")
-        } else if chars > SESSION_START_WARN_CHARS {
-            Some("warning")
-        } else {
-            None
-        };
-        if let Some(severity) = severity {
-            push(
-                severity,
-                "session-start size",
-                format!(
-                    "the session-start text is {chars} characters (limit {SESSION_START_LIMIT_CHARS}, \
-                     warning from {SESSION_START_WARN_CHARS}). Over the limit Claude Code moves the \
-                     text into a file and the model sees only a ~{SESSION_START_PREVIEW_CHARS} \
-                     character preview, so rings 0/1 are then no longer visible. Shorten ring 0/1 \
-                     notes and the handoff note"
+        use crate::hook::events::{Part, startup_text};
+        let project = self.root().parent().unwrap_or(self.root());
+        let split = crate::install::session_start_split(project, &crate::install::Env::current());
+        let parts: Vec<(&str, usize)> = if split {
+            vec![
+                (
+                    "session-rings",
+                    startup_text(self, Part::Rings).chars().count(),
                 ),
-            );
+                (
+                    "session-context",
+                    startup_text(self, Part::Context).chars().count(),
+                ),
+            ]
+        } else {
+            vec![(
+                "session-start",
+                startup_text(self, Part::Whole).chars().count(),
+            )]
+        };
+        for (hook, chars) in parts {
+            let severity = if chars > SESSION_START_LIMIT_CHARS {
+                Some("error")
+            } else if chars > SESSION_START_WARN_CHARS {
+                Some("warning")
+            } else {
+                None
+            };
+            if let Some(severity) = severity {
+                let advice = if split {
+                    "Shorten ring 0/1 notes (session-rings) or the handoff note (session-context)"
+                } else {
+                    "Shorten ring 0/1 notes and the handoff note, or split session start over two \
+                     hooks (`cyberbrain install`, or the plugin from 0.2.3), which doubles the room"
+                };
+                push(
+                    severity,
+                    "session-start size",
+                    format!(
+                        "the {hook} text is {chars} characters (limit {SESSION_START_LIMIT_CHARS}, \
+                         warning from {SESSION_START_WARN_CHARS}). Over the limit Claude Code moves the \
+                         text into a file and the model sees only a ~{SESSION_START_PREVIEW_CHARS} \
+                         character preview, so rings 0/1 are then no longer visible. {advice}"
+                    ),
+                );
+            }
         }
 
         checks.push("index integrity");
@@ -5827,7 +5854,9 @@ mod session_start_size_tests {
         let root = dir.path().join("store");
         App::init(&root, &Actor::Operator).unwrap();
         let app = App::open(Some(&root), Actor::Operator).unwrap();
-        let base = crate::hook::events::startup_text(&app).chars().count();
+        let base = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
+            .chars()
+            .count();
         let mut body = String::new();
         let mut i = 0;
         while body.chars().count() < target.saturating_sub(base) {
@@ -5854,7 +5883,9 @@ mod session_start_size_tests {
             dry_run: false,
         })
         .unwrap();
-        let chars = crate::hook::events::startup_text(&app).chars().count();
+        let chars = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
+            .chars()
+            .count();
         (dir, app, chars)
     }
 
@@ -5906,7 +5937,9 @@ mod session_start_size_tests {
     #[test]
     fn the_size_counts_characters_not_bytes() {
         let (_d, app, _) = store_with_startup_text_of(0);
-        let base = crate::hook::events::startup_text(&app).chars().count();
+        let base = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
+            .chars()
+            .count();
         let body = "ä".repeat(SESSION_START_LIMIT_CHARS - base - 1_000);
         assert!(body.len() > body.chars().count());
         app.write(WriteRequest {
@@ -5927,7 +5960,9 @@ mod session_start_size_tests {
             dry_run: false,
         })
         .unwrap();
-        let chars = crate::hook::events::startup_text(&app).chars().count();
+        let chars = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
+            .chars()
+            .count();
         assert!(chars < SESSION_START_LIMIT_CHARS, "{chars}");
         let (f, _) = size_findings(&app);
         assert!(f.iter().all(|f| f.severity != "error"), "{f:?}");

@@ -66,12 +66,24 @@ fn the_hooks_land_in_the_project_and_come_back_out() {
         let entry = &hooks[event][0];
         assert_eq!(entry["matcher"], matcher, "{event}");
         assert_eq!(entry["_managedBy"], MANAGED_BY);
-        assert_eq!(entry["hooks"][0]["args"], serde_json::json!(["hook", arg]));
-        let command = entry["hooks"][0]["command"].as_str().unwrap();
-        assert!(
-            Path::new(command).is_absolute(),
-            "the client runs this from somewhere else: {command}"
+        assert_eq!(
+            entry["hooks"].as_array().unwrap().len(),
+            arg.len(),
+            "{event}"
         );
+        for (i, a) in arg.iter().enumerate() {
+            let h = &entry["hooks"][i];
+            assert_eq!(h["args"], serde_json::json!(["hook", a]));
+            assert_eq!(
+                h["timeout"], HOOK_TIMEOUT_SECS,
+                "no hook may inherit the 600 s default"
+            );
+            let command = h["command"].as_str().unwrap();
+            assert!(
+                Path::new(command).is_absolute(),
+                "the client runs this from somewhere else: {command}"
+            );
+        }
     }
     assert_eq!(
         only(&r, Client::ClaudeCode).changes[0].action,

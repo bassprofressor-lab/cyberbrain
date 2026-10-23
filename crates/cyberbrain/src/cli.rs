@@ -461,7 +461,14 @@ pub enum PolicyCommand {
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
 pub enum HookEvent {
+    /// Everything at once: rings 0/1, handoff, digest. What installs before 0.7.10 call.
     SessionStart,
+    /// Session start, first half: rings 0 and 1, the session state and the audit row.
+    SessionRings,
+    /// Session start, second half: the handoff, the store digest and how to use the store.
+    /// Claude Code caps each hook's output at 10,000 characters on its own, so two hooks
+    /// for one event double the room before rings 0/1 are cut to a preview (0.7.10).
+    SessionContext,
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
@@ -585,8 +592,9 @@ mod tests {
     }
 
     #[test]
-    fn all_six_hook_events_exist() {
-        assert_eq!(HookEvent::value_variants().len(), 6);
+    fn all_hook_events_exist() {
+        // Six harness events; session start comes whole or in two halves.
+        assert_eq!(HookEvent::value_variants().len(), 8);
     }
 }
 

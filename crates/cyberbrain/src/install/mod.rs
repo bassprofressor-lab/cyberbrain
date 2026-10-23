@@ -122,14 +122,23 @@ impl ClientReport {
 /// `the_matcher_covers_every_tool_the_hook_reads` is what says so.
 /// `matcher` is a regular expression over the tool name; empty means every call of the
 /// event, which is what the four non-tool events want.
-const EVENTS: [(&str, &str, &str); 6] = [
-    ("SessionStart", "session-start", ""),
-    ("UserPromptSubmit", "user-prompt-submit", ""),
-    ("PreToolUse", "pre-tool-use", PRE_TOOL_MATCHER),
-    ("PostToolUse", "post-tool-use", TOOL_MATCHER),
-    ("Stop", "stop", ""),
-    ("PreCompact", "pre-compact", ""),
+///
+/// Session start runs as two hooks in one entry (0.7.10): Claude Code caps each hook's output
+/// at 10,000 characters on its own, so rings 0/1 get the whole cap and the handoff and digest
+/// another one, instead of sharing one and pushing the rings into a preview.
+pub(crate) const EVENTS: [(&str, &[&str], &str); 6] = [
+    ("SessionStart", &["session-rings", "session-context"], ""),
+    ("UserPromptSubmit", &["user-prompt-submit"], ""),
+    ("PreToolUse", &["pre-tool-use"], PRE_TOOL_MATCHER),
+    ("PostToolUse", &["post-tool-use"], TOOL_MATCHER),
+    ("Stop", &["stop"], ""),
+    ("PreCompact", &["pre-compact"], ""),
 ];
+/// Seconds before the harness gives up on a hook. Without one Claude Code waits 600 s: a hook
+/// stuck on a lock would hold every edit for ten minutes. The hooks answer in milliseconds
+/// (budget_ms); 30 s leaves room for a cold disk and a slow AgentGuard, which has its own
+/// shorter timeout inside the hook.
+pub(crate) const HOOK_TIMEOUT_SECS: u64 = 30;
 const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// Pre-tool-use also reads `Bash` (2026-09-25): a shell command can do what the file tools
 /// are refused, and it is where an agent would drop `CLAUDECODE` (`hook::events::bash_verdict`).
@@ -182,6 +191,38 @@ pub fn plugin_installed(env: &Env) -> Option<String> {
         .keys()
         .find(|k| k.split('@').next() == Some("cyberbrain"))
         .cloned()
+}
+
+/// Whether session start runs as two hooks (`session-rings` + `session-context`, 0.7.10) for
+/// this project: in its `.claude/settings*.json`, or in an installed Cyberbrain plugin's
+/// `hooks/hooks.json`. `doctor` measures against the cap that applies: each half on its own
+/// when split, the whole text when not. Unreadable files count as "not split", the stricter
+/// answer.
+pub fn session_start_split(project: &Path, env: &Env) -> bool {
+    let mentions =
+        |p: &Path| std::fs::read_to_string(p).is_ok_and(|t| t.contains("\"session-rings\""));
+    let dir = project.join(".claude");
+    if mentions(&dir.join("settings.json")) || mentions(&dir.join("settings.local.json")) {
+        return true;
+    }
+    let Some(reg) = paths::claude_plugins(env) else {
+        return false;
+    };
+    let Some(v) = std::fs::read_to_string(reg)
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+    else {
+        return false;
+    };
+    let Some(plugins) = v.get("plugins").and_then(Value::as_object) else {
+        return false;
+    };
+    plugins
+        .iter()
+        .filter(|(k, _)| k.split('@').next() == Some("cyberbrain"))
+        .flat_map(|(_, list)| list.as_array().into_iter().flatten())
+        .filter_map(|i| i.get("installPath").and_then(Value::as_str))
+        .any(|p| mentions(&Path::new(p).join("hooks").join("hooks.json")))
 }
 
 fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
@@ -264,14 +305,21 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
     })
 }
 
-fn hook_entry(binary: &Path, matcher: &str, arg: &str) -> Value {
+fn hook_entry(binary: &Path, matcher: &str, args: &[&str]) -> Value {
+    let hooks: Vec<Value> = args
+        .iter()
+        .map(|arg| {
+            json!({
+                "type": "command",
+                "command": binary.display().to_string(),
+                "args": ["hook", arg],
+                "timeout": HOOK_TIMEOUT_SECS,
+            })
+        })
+        .collect();
     json!({
         "matcher": matcher,
-        "hooks": [{
-            "type": "command",
-            "command": binary.display().to_string(),
-            "args": ["hook", arg],
-        }],
+        "hooks": hooks,
         "_managedBy": MANAGED_BY,
     })
 }
