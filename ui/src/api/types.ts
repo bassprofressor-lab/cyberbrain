@@ -97,7 +97,7 @@ export interface Frontmatter {
 // ───────────────────────────────────────────────────────────────────────────── /status
 
 /** `serve::ops::backend_name` over `cyberbrain_llm::Backend`. */
-export type InferenceBackend = "ollama" | "lm-studio" | "nvidia-pair" | "unknown";
+export type InferenceBackend = "ollama" | "lm-studio" | "llama-cpp" | "vllm" | "nvidia-pair" | "unknown";
 
 /**
  * `serve::policy::endpoint_class`. The register's own `Locality` has one more class,

@@ -12,6 +12,8 @@ import { toApiError, useAsync } from "@/lib/useAsync";
 const BACKEND_LABEL: Record<InferenceBackend, string> = {
   ollama: "Ollama",
   "lm-studio": "LM Studio",
+  "llama-cpp": "llama.cpp",
+  "vllm": "vLLM",
   "nvidia-pair": "NVIDIA PAIR",
   unknown: "unknown",
 };
@@ -275,8 +277,8 @@ export function StatusScreen() {
               />
               <div className="mt-4 panel-inset px-3 py-2.5">
                 <div className="label">{t.status.inference.whichBackend}</div>
-                <div className="mt-1 flex items-center gap-2">
-                  {(["ollama", "lm-studio", "nvidia-pair", "unknown"] as InferenceBackend[]).map((b) => (
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  {(["ollama", "lm-studio", "llama-cpp", "vllm", "nvidia-pair", "unknown"] as InferenceBackend[]).map((b) => (
                     <span key={b} className={`inline-flex items-center h-6 px-2 rounded border text-xs ${d.inference.last_backend === b ? "bg-accent-soft text-accent border-accent/40 font-medium" : "text-fg-faint border-line"}`}>
                       {backendLabel(b)}
                     </span>

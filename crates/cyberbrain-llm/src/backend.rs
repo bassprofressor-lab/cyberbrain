@@ -17,7 +17,13 @@ use crate::types::ModelInfo;
 pub enum Backend {
     Ollama,
     LmStudio,
-    /// NVIDIA Personal AI Router.
+    /// llama.cpp's `llama-server`.
+    LlamaCpp,
+    Vllm,
+    /// NVIDIA Personal AI Router. Rarely seen as itself: PAIR 1.0 sits on the engines' own
+    /// ports and passes their `/models` answer through unchanged, so behind it this table
+    /// names the engine (checked against the PAIR 1.0.0 proxy source, 2026-10-23). Kept for a
+    /// response that does name it.
     Pair,
     Unknown,
 }
@@ -27,6 +33,8 @@ impl Backend {
         match self {
             Backend::Ollama => "Ollama",
             Backend::LmStudio => "LM Studio",
+            Backend::LlamaCpp => "llama.cpp",
+            Backend::Vllm => "vLLM",
             Backend::Pair => "NVIDIA PAIR",
             Backend::Unknown => "unknown",
         }
@@ -69,7 +77,11 @@ pub fn identify(headers: &[(String, String)], models: &[ModelInfo]) -> (Backend,
         if !relevant {
             continue;
         }
-        if v.contains("ollama") {
+        // llama-server sets exactly `Server: llama.cpp` (server-http.cpp, b11840). vLLM's
+        // `server: uvicorn` is uvicorn's default and names nothing, so it is not read.
+        if n == "server" && v.starts_with("llama.cpp") {
+            votes.push((Backend::LlamaCpp, format!("header {name}: {value}")));
+        } else if v.contains("ollama") {
             votes.push((Backend::Ollama, format!("header {name}: {value}")));
         } else if v.contains("lmstudio") || v.contains("lm-studio") || v.contains("lm studio") {
             votes.push((Backend::LmStudio, format!("header {name}: {value}")));
@@ -87,12 +99,17 @@ pub fn identify(headers: &[(String, String)], models: &[ModelInfo]) -> (Backend,
     owners.dedup();
     for owner in &owners {
         match owner.as_str() {
-            // Ollama's OpenAI-compatible list reports every model as owned by "library".
+            // Ollama reports the model name's namespace: "library" for a plain name like
+            // `qwen2.5:7b`, the user or host for `user/model` (openai.go, 0.40.10). Only the
+            // plain case identifies it; a store with only namespaced models reads Unknown.
             "library" => votes.push((Backend::Ollama, format!("models.owned_by = {owner:?}"))),
-            // LM Studio reports "organization_owner" (the OpenAI placeholder it copied).
-            "organization_owner" => {
+            // LM Studio reports "organization_owner" (the OpenAI placeholder it copied); one
+            // guide spells it with a hyphen, accepted too.
+            "organization_owner" | "organization-owner" => {
                 votes.push((Backend::LmStudio, format!("models.owned_by = {owner:?}")))
             }
+            "llamacpp" => votes.push((Backend::LlamaCpp, format!("models.owned_by = {owner:?}"))),
+            "vllm" => votes.push((Backend::Vllm, format!("models.owned_by = {owner:?}"))),
             o if o.contains("nvidia") || token_match(o, "pair") => {
                 votes.push((Backend::Pair, format!("models.owned_by = {owner:?}")))
             }
@@ -166,6 +183,24 @@ mod tests {
     }
 
     #[test]
+    fn llama_cpp_by_server_header_and_owner() {
+        let (b, ev) = identify(&[h("Server", "llama.cpp")], &[m("qwen", Some("llamacpp"))]);
+        assert_eq!(b, Backend::LlamaCpp, "{ev:?}");
+        let (b, _) = identify(&[], &[m("qwen", Some("llamacpp"))]);
+        assert_eq!(b, Backend::LlamaCpp);
+    }
+
+    #[test]
+    fn vllm_by_owner_not_by_uvicorn() {
+        let (b, _) = identify(&[h("server", "uvicorn")], &[m("x", Some("vllm"))]);
+        assert_eq!(b, Backend::Vllm);
+        let (b, _) = identify(&[h("server", "uvicorn")], &[]);
+        assert_eq!(b, Backend::Unknown, "uvicorn names no backend");
+    }
+
+    /// Hypothetical answers: PAIR 1.0 sets no identifying header and passes `owned_by`
+    /// through. What is tested is the rule, should a response name it.
+    #[test]
     fn pair_by_header_or_owner() {
         let (b, _) = identify(
             &[h("server", "nvidia-pair/0.1")],
@@ -185,7 +220,7 @@ mod tests {
     fn nothing_identifying_is_unknown_and_says_why() {
         let (b, ev) = identify(
             &[h("content-type", "application/json")],
-            &[m("x", Some("vllm"))],
+            &[m("x", Some("huggingface"))],
         );
         assert_eq!(b, Backend::Unknown);
         assert!(

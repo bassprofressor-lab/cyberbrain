@@ -177,6 +177,8 @@ fn backend_name(b: Backend) -> &'static str {
     match b {
         Backend::Ollama => "ollama",
         Backend::LmStudio => "lm-studio",
+        Backend::LlamaCpp => "llama-cpp",
+        Backend::Vllm => "vllm",
         Backend::Pair => "nvidia-pair",
         Backend::Unknown => "unknown",
     }
