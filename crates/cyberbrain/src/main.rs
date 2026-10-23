@@ -21,6 +21,7 @@ mod mcp;
 mod render;
 mod serve;
 mod terminal;
+mod transcript;
 mod usage;
 mod writers;
 
@@ -611,6 +612,56 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 ),
             })?;
             if matches!(outcome, app::Proposed::Held { .. }) {
+                return Ok(3);
+            }
+        }
+
+        Command::ProposeSession {
+            transcript,
+            latest,
+            dry_run,
+        } => {
+            let path = match (transcript, latest) {
+                (Some(p), _) => p,
+                (None, true) => {
+                    let home = std::env::var_os("HOME")
+                        .or_else(|| std::env::var_os("USERPROFILE"))
+                        .map(std::path::PathBuf::from)
+                        .ok_or_else(|| {
+                            Error::Config("no HOME to look for transcripts in".into())
+                        })?;
+                    let project = app.root().parent().unwrap_or(app.root()).to_path_buf();
+                    transcript::latest(&home, &project).ok_or_else(|| {
+                        Error::Config(format!(
+                            "no transcript of {} under ~/.claude/projects/{}",
+                            cyberbrain_core::Slash(&project),
+                            transcript::project_key(&project)
+                        ))
+                    })?
+                }
+                (None, false) => {
+                    return Err(Error::Config(
+                        "say which session: --transcript <path> or --latest".into(),
+                    ));
+                }
+            };
+            let who = identity::who(app.root())?;
+            let r = runtime()?.block_on(app.propose_session(&path, &who, dry_run))?;
+            out.emit(&r, |r| {
+                let mut t = format!("transcript: {}\n", r.transcript);
+                if r.omitted_start {
+                    t.push_str("the start of a long session was left out; the end was kept\n");
+                }
+                t.push_str(&match &r.proposed {
+                    app::Proposed::Written(p) => render::proposed(p),
+                    app::Proposed::Held { rendered, .. } => format!(
+                        "{rendered}Nothing was proposed: the summary contains something that \
+                         looks like personal data. Summarise by hand with `cyberbrain propose`.\n"
+                    ),
+                });
+                t
+            })?;
+            if matches!(r.proposed, app::Proposed::Held { .. }) {
                 return Ok(3);
             }
         }

@@ -280,6 +280,17 @@ pub struct Arriving {
     pub retention: Option<String>,
 }
 
+/// What `propose-session` did.
+#[derive(Debug, Serialize)]
+pub struct SessionProposal {
+    pub proposed: Proposed,
+    pub transcript: String,
+    /// The start of a long session was dropped to fit the model's input.
+    pub omitted_start: bool,
+    /// The model input was cut on top of that (should not happen; the extract fits).
+    pub model_input_truncated: bool,
+}
+
 /// What `propose` did, or what it is waiting to be told.
 #[derive(Debug, Serialize)]
 #[serde(untagged)]
@@ -2942,6 +2953,105 @@ impl App {
     // It follows that a proposal is not in the index, so `recall` and `find` cannot return
     // one. That is the intent, not a side effect: an agent that finds an unapproved
     // invariant treats it as one.
+
+    /// A session transcript, summarised by the local model, as a proposal (0.7.10).
+    ///
+    /// Nothing goes into the store by itself: the summary lands in `proposals/` like any
+    /// other proposal, through the same PII gate, and a person accepts or rejects it with
+    /// `review`. The model can be wrong, so the body says that it wrote it, from which
+    /// transcript, and what was cut. Needs `[inference]`; without it this is an error, not a
+    /// silent nothing.
+    pub async fn propose_session(
+        &self,
+        transcript: &Path,
+        who: &str,
+        dry_run: bool,
+    ) -> Result<SessionProposal> {
+        let raw = std::fs::read_to_string(transcript).map_err(|e| Error::Io {
+            path: transcript.to_path_buf(),
+            source: e,
+        })?;
+        // Leave room for the prompt around it, under the model input cap.
+        let ex = crate::transcript::extract(&raw, cyberbrain_llm::tasks::MAX_INPUT_CHARS - 2_000);
+        if ex.text.trim().is_empty() {
+            return Err(Error::Config(format!(
+                "{} holds no prompt or answer to summarise",
+                Slash(transcript)
+            )));
+        }
+        let client = match self.llm().await {
+            LlmState::Ready(c) => c,
+            LlmState::Absent(reason) => {
+                return Err(Error::Llm(format!(
+                    "a session summary needs the local model ([inference]): {reason}"
+                )));
+            }
+        };
+        let s = cyberbrain_llm::tasks::summarize_session(&client, &ex.text)
+            .await
+            .map_err(|d| Error::Llm(format!("{}: {}", d.caveat, d.cause)))?;
+        let session = transcript
+            .file_stem()
+            .map(|f| f.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let model = self.config.inference.model.clone().unwrap_or_default();
+        let mut body = format!(
+            "Proposed from session `{session}` ({} prompt(s)), summarised by the local model \
+             `{model}`. Read it before accepting: the model can be wrong, and it saw only \
+             what was said, not tool output.{}\n\n{}\n",
+            ex.prompts,
+            if ex.omitted_start {
+                " The start of a long session was left out; the end was kept."
+            } else {
+                ""
+            },
+            s.summary
+        );
+        if !s.decisions.is_empty() {
+            body.push_str("\n## Decisions\n\n");
+            for d in &s.decisions {
+                body.push_str(&format!("- {d}\n"));
+            }
+        }
+        if !s.open_items.is_empty() {
+            body.push_str("\n## Open\n\n");
+            for o in &s.open_items {
+                body.push_str(&format!("- {o}\n"));
+            }
+        }
+        let stamp = jiff::Zoned::now().strftime("%Y%m%d-%H%M").to_string();
+        let title = if s.title.is_empty() {
+            "session".to_string()
+        } else {
+            s.title.clone()
+        };
+        let mut tags = s.tags.clone();
+        tags.push("session-summary".into());
+        let req = WriteRequest {
+            ring: Ring::Session,
+            kind: NoteKind::Session,
+            name: format!("session-{stamp}-{title}"),
+            body,
+            tags,
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run,
+        };
+        let proposed = self.propose(req, who)?;
+        Ok(SessionProposal {
+            proposed,
+            transcript: Slash(transcript).to_string(),
+            omitted_start: ex.omitted_start,
+            model_input_truncated: s.input_truncated,
+        })
+    }
 
     /// Write a note into `proposals/` for somebody else to accept.
     ///

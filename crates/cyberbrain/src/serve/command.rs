@@ -223,6 +223,7 @@ fn refuse(command: &Command) -> Option<&'static str> {
         // The review workflow belongs here more than anywhere: it is this store's own
         // business, and the window is where the person reviewing already is.
         | Command::Propose { .. }
+        | Command::ProposeSession { .. }
         | Command::Review { .. } => None,
 
         // Not the whole of `policy`: one of its subcommands writes a file wherever it is

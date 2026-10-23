@@ -462,7 +462,11 @@ fn the_menu_entry_sets_up_the_project_the_launcher_has_open() {
 
     let settings = tmp.path().join(".claude").join("settings.json");
     let text = std::fs::read_to_string(&settings).expect("the hooks were written");
-    assert!(text.contains("session-start"), "{text}");
+    // 0.7.10: session start as two hooks.
+    assert!(
+        text.contains("session-rings") && text.contains("session-context"),
+        "{text}"
+    );
     // `text` is JSON, and JSON writes every backslash twice. Comparing against the raw path
     // means this can only ever hold where paths have no backslashes — it passed here and
     // failed on Windows, which is the platform the whole entry exists for.

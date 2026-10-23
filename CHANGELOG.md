@@ -12,6 +12,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+- **MCP 2026-07-28.** The server is now dual-era: a request that names its protocol version in
+  `_meta` is served statelessly (`server/discover`, `resultType`, `ttlMs`/`cacheScope` on the
+  tool list, `serverInfo` in `_meta`, `UnsupportedProtocolVersionError` for a version it does not
+  speak), and `initialize` also accepts 2025-11-25. Claude Code 2.1.292 and later probe
+  `server/discover` first; before this release they fell back to `initialize` with 2025-11-25,
+  which the server answered with a "protocol note" in the instructions of every session.
+- **Session start in two hooks.** Claude Code caps each hook's output at 10,000 characters on its
+  own and shows the model only a 2,000 character preview beyond that. `session-rings` prints
+  rings 0 and 1 (and keeps the session state and the audit row), `session-context` the handoff,
+  the digest and how to use the store, so the rings get a whole cap to themselves. `session-start`
+  still prints everything, for installs that call it. `cyberbrain install` writes the pair, and
+  `doctor` measures each half when the hooks are split, the whole text when they are not.
+- **A timeout on every hook** `cyberbrain install` writes (30 s). Without one Claude Code waits
+  600 s, so a hook stuck on a lock would have held every edit for ten minutes.
+- **`cyberbrain propose-session --transcript <path> | --latest`**: a Claude Code session,
+  summarised by the local model, filed as a proposal (ring 3, kind session) with its decisions and
+  open items. Nothing enters the store until somebody accepts it with `review`; the PII gate runs
+  as for any proposal. Only what was said is summarised: tool output and system reminders,
+  including the rings this store injected, are left out, and a long session keeps its end.
+- **llama.cpp and vLLM are recognised** on the status screen (`Server: llama.cpp`,
+  `owned_by` `llamacpp` / `vllm`). NVIDIA PAIR 1.0 passes the engine's own answer through and
+  sets no header of its own, so behind it the engine behind it is what is shown; said so.
+- **Dependencies.** `cargo update`: rustls-webpki 0.103.16 (RUSTSEC-2026-0382), webpki-root-certs
+  1.0.11 (RUSTSEC-2026-0383), ctutils 0.4.5 (RUSTSEC-2026-0385), tokio 1.54. `cargo deny` is clean.
+
 ## [0.7.9] — 2026-10-17
 
 - **`cyberbrain doctor` checks the size of the session-start text.** Claude Code moves a

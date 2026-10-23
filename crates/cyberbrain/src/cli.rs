@@ -184,6 +184,20 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Summarise a Claude Code session with the local model and file it as a proposal
+    /// (ring 3, kind session). Nothing enters the store until somebody accepts it with
+    /// `review`. Needs `[inference]`.
+    ProposeSession {
+        /// The session transcript (`~/.claude/projects/<project>/<session>.jsonl`).
+        #[arg(long, value_name = "PATH", conflicts_with = "latest")]
+        transcript: Option<std::path::PathBuf>,
+        /// The newest transcript of the project this store belongs to.
+        #[arg(long)]
+        latest: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// What is waiting, and accepting or rejecting it.
     ///
     /// A proposal cannot be reviewed by the person who made it. Who that was comes from the
