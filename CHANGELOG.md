@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.7.10] — 2026-10-23
+
 - **MCP 2026-07-28.** The server is now dual-era: a request that names its protocol version in
   `_meta` is served statelessly (`server/discover`, `resultType`, `ttlMs`/`cacheScope` on the
   tool list, `serverInfo` in `_meta`, `UnsupportedProtocolVersionError` for a version it does not
@@ -1533,7 +1535,9 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.8...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.10...HEAD
+[0.7.10]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.9...v0.7.10
+[0.7.9]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.7...v0.7.8
 [0.7.7]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.5...v0.7.6
