@@ -375,6 +375,9 @@ jobs:
         working-directory: ui
       - run: npx tsc --noEmit
         working-directory: ui
+      # Logic tests (vitest, node): routing, block positions, dialog focus, diff, error kinds.
+      - run: npm test
+        working-directory: ui
       - run: npm run build
         working-directory: ui
       # The page exists now, so this is the one place the embed and its build-script
