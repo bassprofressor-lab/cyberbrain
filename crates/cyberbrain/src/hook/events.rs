@@ -796,18 +796,38 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
     }
 }
 
+/// Record a refusal the guard is about to give, without letting the record decide it.
+///
+/// Every other audited step fails closed by not doing what it could not record. Here the
+/// step is a *refusal*, and an error out of the hook is an empty answer, which the harness
+/// reads as "no decision" and allows: a full disk or a locked `audit.db` would open the guard.
+/// So the deny stands and the missing row is said on stderr instead.
+fn record_refusal(ctx: &Ctx<'_>, out: &mut HookOutput, subject: String, detail: serde_json::Value) {
+    if let Err(e) =
+        ctx.app
+            .policy()
+            .audit()
+            .record(&ctx.actor(), AuditAction::PolicyRefusal, subject, detail)
+    {
+        out.note(format!(
+            "pre-tool-use: the refusal below stands, but it could not be recorded in the \
+             audit log: {e}"
+        ));
+    }
+}
+
 fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
     let Some(reason) = bash_verdict(cmd) else {
         out.note("pre-tool-use: Bash command does not touch guarded store files; allowing");
         return Ok(());
     };
     // The command itself is not recorded: it may carry anything, a secret included.
-    ctx.app.policy().audit().record(
-        &ctx.actor(),
-        AuditAction::PolicyRefusal,
+    record_refusal(
+        ctx,
+        out,
         "bash".to_string(),
         json!({ "tool": "Bash", "session": ctx.payload.session_id, "reason": reason }),
-    )?;
+    );
     out.note("pre-tool-use: deny Bash on guarded store files");
     out.stdout = json!({
         "hookSpecificOutput": {
@@ -929,9 +949,9 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     if decision == "deny" {
         // A refusal is the most interesting audit row there is (§12.1). Rare, so the
         // fsync it costs is paid only when something was actually stopped.
-        ctx.app.policy().audit().record(
-            &ctx.actor(),
-            AuditAction::PolicyRefusal,
+        record_refusal(
+            ctx,
+            out,
             format!("file:{rel}"),
             json!({
                 "tool": tool,
@@ -939,7 +959,7 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
                 "session": ctx.payload.session_id,
                 "reason": reason,
             }),
-        )?;
+        );
     }
     out.note(format!("pre-tool-use: {decision} {tool} on {rel}"));
     out.stdout = json!({

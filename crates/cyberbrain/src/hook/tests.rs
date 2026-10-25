@@ -633,6 +633,44 @@ fn pre_tool_use_refuses_ring_0_and_the_audit_log_and_records_the_refusal() {
     );
 }
 
+/// Make every later audit append fail, the way a full disk or a locked `audit.db` would.
+fn break_the_audit_log(f: &Fixture) {
+    let db = rusqlite::Connection::open(f.store.join("audit.db")).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER test_fail BEFORE INSERT ON audit BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+    )
+    .unwrap();
+}
+
+/// A refusal that cannot be recorded is still a refusal. The audit row came first and its `?`
+/// turned the deny into a hook failure: empty stdout, exit 0, and the harness allowed the edit
+/// the guard exists to stop, on exactly the full disk or locked database that broke the row.
+#[test]
+fn a_refusal_stands_when_the_audit_log_cannot_record_it() {
+    let f = fixture();
+    let app = f.open();
+    break_the_audit_log(&f);
+    let r0 = f.store.join("notes/r0/rule.md");
+    let out = run(
+        Some(&app),
+        HookEvent::PreToolUse,
+        &tool_payload(&f, "Edit", &r0),
+    );
+    assert_eq!(out.exit_code, 0);
+    let (d, why) = decision(&out);
+    assert_eq!(d, "deny");
+    assert!(why.contains("ring 0"), "{why}");
+
+    let bash = f.payload(serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Bash",
+        "tool_input": { "command": concat!("echo x > .cyber", "brain/notes/r0/rule.md") },
+        "tool_use_id": "toolu_02",
+    }));
+    let (d, _) = decision(&run(Some(&app), HookEvent::PreToolUse, &bash));
+    assert_eq!(d, "deny");
+}
+
 #[test]
 fn pre_tool_use_asks_about_rings_2_to_4_and_the_config() {
     let f = fixture();
