@@ -3497,7 +3497,8 @@ fn the_cursor_covers_notes_and_erasures() {
         .unwrap();
     let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
     assert_eq!((f.notes.len(), f.erased.len()), (1, 1));
-    assert_eq!(f.cursor.as_deref(), Some("#2"));
+    // The grant taking effect is counted too, then the note, then the erasure.
+    assert_eq!(f.cursor.as_deref(), Some("#3"));
 
     // And asking again from there returns nothing new.
     let f2 = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
@@ -3550,6 +3551,57 @@ fn a_note_pushed_late_still_reaches_a_device_that_pulled_in_between() {
     let second = super::fetch_notes(&hub, Some(&b_token), first.cursor.as_deref()).unwrap();
     let names: Vec<&str> = second.notes.iter().map(|n| n.name.as_str()).collect();
     assert_eq!(names, ["offline"], "the late note must not be skipped");
+}
+
+/// A device granted a bereich later gets what that bereich already held, once. Its cursor
+/// had moved past those notes while it was not allowed to see them, so a new grant used to
+/// bring only what changed after it.
+#[test]
+fn a_new_grant_brings_the_bereichs_older_notes_once() {
+    let hub = HubStore::in_memory().unwrap();
+    let (a, _) = hub.add_device("laptop", NOW).unwrap();
+    let (b, b_token) = hub.add_device("desktop", NOW).unwrap();
+    grant_in_force(&hub, "ga1", &a.id, "disposition", Direction::Both);
+    grant_in_force(&hub, "ga2", &a.id, "einkauf", Direction::Both);
+    grant_in_force(&hub, "gb1", &b.id, "disposition", Direction::Receive);
+    for (id, bereich, name) in [
+        ("01ARZ3NDEKTSV4RRFFQ69G5FAV", "einkauf", "lieferant"),
+        ("01ARZ3NDEKTSV4RRFFQ69G5FAW", "disposition", "tour"),
+    ] {
+        hub.offer_synced_note(
+            id,
+            bereich,
+            name,
+            2,
+            "knowledge",
+            "2026-09-10T09:00:00Z",
+            "fm",
+            "text",
+            None,
+            &a.id,
+            NOW,
+        )
+        .unwrap();
+    }
+    hub.erase_note("einkauf", "alt", &a.id, NOW).unwrap();
+    let first = super::fetch_notes(&hub, Some(&b_token), None).unwrap();
+    assert_eq!(first.notes.len(), 1, "only disposition so far");
+
+    grant_in_force(&hub, "gb2", &b.id, "einkauf", Direction::Receive);
+    let second = super::fetch_notes(&hub, Some(&b_token), first.cursor.as_deref()).unwrap();
+    let names: Vec<&str> = second.notes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["lieferant"],
+        "the bereich it was just granted, from the start"
+    );
+    assert_eq!(second.erased.len(), 1, "and what was withdrawn there");
+
+    let third = super::fetch_notes(&hub, Some(&b_token), second.cursor.as_deref()).unwrap();
+    assert!(
+        third.notes.is_empty() && third.erased.is_empty(),
+        "once, not every time"
+    );
 }
 
 /// A cursor from before the hub counted deliveries is a timestamp. It is not understood any

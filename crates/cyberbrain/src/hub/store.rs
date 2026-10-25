@@ -568,6 +568,15 @@ impl HubStore {
                 "machine",
                 "ALTER TABLE devices ADD COLUMN machine TEXT",
             ),
+            // Where the sync count stood when a grant took effect. A device's cursor may be past
+            // the notes of a bereich it is granted later, so a fetch delivers that bereich from
+            // the start until the cursor has passed this value. NULL on grants from before:
+            // they took effect long ago and need no second delivery.
+            (
+                "bereich_grants",
+                "effective_seq",
+                "ALTER TABLE bereich_grants ADD COLUMN effective_seq INTEGER",
+            ),
             // What the offered version was, beyond its text, so taking it takes all of it.
             // NULL on conflicts raised before; those keep the held ring and kind.
             (
@@ -1369,10 +1378,11 @@ impl HubStore {
         if g.granted_by == who.id {
             return Ok(CountersignOutcome::SamePerson);
         }
+        let seq = self.next_sync_seq()?;
         ix(self.conn.execute(
-            "UPDATE bereich_grants SET approved_by = ?, approved_at = ?
+            "UPDATE bereich_grants SET approved_by = ?, approved_at = ?, effective_seq = ?
              WHERE id = ? AND approved_at IS NULL",
-            params![who.id, now, id],
+            params![who.id, now, seq, id],
         ))?;
         self.record(
             &who.id,
@@ -1759,9 +1769,24 @@ impl HubStore {
                     super::sync_access::Direction::Receive | super::sync_access::Direction::Both
                 )
         }) {
-            out.extend(self.synced_notes_after(&g.bereich, after)?);
+            out.extend(self.synced_notes_after(&g.bereich, self.after_for(&g.id, after)?)?);
         }
         Ok(out)
+    }
+
+    /// The cursor to apply to one grant: the device's own, unless the grant took effect after
+    /// it, in which case none, so the bereich is delivered from the start once.
+    fn after_for(&self, grant: &str, after: Option<i64>) -> Result<Option<i64>> {
+        let Some(a) = after else { return Ok(None) };
+        let effective: Option<i64> = ix(self.conn.query_row(
+            "SELECT effective_seq FROM bereich_grants WHERE id = ?",
+            params![grant],
+            |r| r.get(0),
+        ))?;
+        Ok(match effective {
+            Some(e) if e > a => None,
+            _ => Some(a),
+        })
     }
 
     /// Erasures in the bereiche a device may receive. Sent alongside the notes so a puller
@@ -1790,9 +1815,10 @@ impl HubStore {
                  WHERE bereich = ? AND (?2 IS NULL OR COALESCE(sync_seq, 0) > ?2)
                  ORDER BY erased_at",
             ))?;
-            let rows = ix(stmt.query_map(params![g.bereich, after], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            }))?;
+            let rows = ix(stmt
+                .query_map(params![g.bereich, self.after_for(&g.id, after)?], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                }))?;
             for r in rows {
                 out.push(ix(r)?);
             }

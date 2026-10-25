@@ -87,6 +87,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   also on the page, which says why), and takes the offered ring and kind as well. Conflicts
   raised before this version keep the held ring and kind, since they never recorded the offered
   ones.
+- **A bereich granted later arrives whole.** A device's sync cursor could already be past the
+  notes of a bereich it was granted afterwards, so the new grant brought only what changed from
+  then on. The hub now notes where its count stood when a grant took effect (the
+  countersignature), and a fetch delivers that bereich from the start, notes and erasures, until
+  the device's cursor has passed that point: once. Grants that took effect before this version
+  are left as they are.
 
 ## [0.7.10] — 2026-10-23
 
