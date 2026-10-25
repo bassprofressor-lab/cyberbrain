@@ -279,8 +279,21 @@ pub async fn validate_endpoint(
         ));
     }
 
-    let host = match (url.domain(), url.host_str()) {
-        (Some(d), _) => d.trim_end_matches('.').to_string(),
+    let domain = url.domain().map(str::to_string);
+    let literal = url.host_str().map(str::to_string);
+    let host = match (domain.as_deref(), literal.as_deref()) {
+        (Some(d), _) => {
+            let bare = d.trim_end_matches('.').to_string();
+            // The URL has to name the host exactly as the pin does. The pin is keyed by
+            // the name without its trailing dot; a URL that kept the dot matched no pin,
+            // and reqwest asked DNS again, which is the rebinding the pin exists to stop.
+            if bare != d {
+                url.set_host(Some(&bare)).map_err(|e| {
+                    Error::Config(format!("llm.base_url host {d:?} is not usable: {e}"))
+                })?;
+            }
+            bare
+        }
         // IP literal; IPv6 comes back bracketed.
         (None, Some(h)) => h.trim_start_matches('[').trim_end_matches(']').to_string(),
         (None, None) => return Err(Error::Config("llm.base_url has no host".into())),

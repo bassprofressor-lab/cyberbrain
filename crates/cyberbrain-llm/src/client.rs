@@ -1142,6 +1142,54 @@ mod tests {
         assert_eq!(out.content, "pinned");
     }
 
+    /// Would fail if a trailing dot let the request bypass the pinned addresses. The pin
+    /// is keyed by the host without the dot; a URL that kept it was looked up in DNS again.
+    #[tokio::test]
+    async fn a_trailing_dot_does_not_unpin_the_hostname() {
+        use crate::address::Resolver;
+        struct Only(std::net::IpAddr);
+        impl Resolver for Only {
+            fn resolve<'a>(
+                &'a self,
+                host: &'a str,
+            ) -> std::pin::Pin<
+                Box<
+                    dyn std::future::Future<Output = std::io::Result<Vec<std::net::IpAddr>>>
+                        + Send
+                        + 'a,
+                >,
+            > {
+                let a = if host == "inference.invalid" {
+                    vec![self.0]
+                } else {
+                    Vec::new()
+                };
+                Box::pin(async move { Ok(a) })
+            }
+        }
+        let server =
+            MockServer::start(|_| MockResponse::json(200, &completion_json("pinned"))).await;
+        // `.invalid` never resolves (RFC 6761), so only the pin can reach the mock.
+        let c = cfg(&format!(
+            "http://inference.invalid.:{}/v1",
+            server.addr.port()
+        ));
+        let client = LlmClient::connect_with_resolver(
+            c,
+            MemoryAuditSink::new(),
+            open_gate(),
+            &Only(server.addr.ip()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(client.endpoint().host, "inference.invalid");
+        let out = client
+            .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
+            .await
+            .unwrap();
+        assert_eq!(out.content, "pinned");
+    }
+
     #[tokio::test]
     async fn environment_proxy_is_ignored() {
         // A proxy that nothing should ever reach.
