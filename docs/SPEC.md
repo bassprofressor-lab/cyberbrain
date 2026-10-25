@@ -796,7 +796,10 @@ Rules that fall out of this and are not negotiable per command:
   uninstalled, and rightly.
 - **`serve` binds loopback only.** Not configurable. There is no authentication because
   there is no remote access to authenticate, and those two facts have to stay tied
-  together.
+  together. Loopback is shared by every account on the machine, so on Linux a connection
+  opened by another account (other than root) is dropped unread: the kernel's socket table
+  names the uid that owns the client's end. Elsewhere that table is not read and the API
+  is open to every local account, as before.
 
 ## 9. Agent integration
 

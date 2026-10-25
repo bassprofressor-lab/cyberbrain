@@ -135,7 +135,7 @@ Four ways in, all from the same binary:
 | `cyberbrain <command>` | everything is reachable from the command line, `--json` on all of it |
 | `cyberbrain hook <event>` | six agent lifecycle events; measured p99 of 4 ms including process start, against a 15 ms budget |
 | `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
-| `cyberbrain serve` | the web page and the HTTP API, on loopback, with no authentication because it never leaves the machine |
+| `cyberbrain serve` | the web page and the HTTP API, on loopback, with no login because it never leaves the machine; on Linux only your own account (and root) can connect |
 
 `cyberbrain install` switches the first two on without you editing anyone's JSON: it writes
 the hooks into this project's Claude Code settings and an MCP entry into the desktop clients
