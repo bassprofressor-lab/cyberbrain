@@ -106,6 +106,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - **A "Decoys" card on the status page.** How many decoys are planted, how often one was used
   and when last, from the new `GET /api/v1/canaries` (counts, labels and fingerprints; never a
   value). A used decoy turns the card red.
+- **MCP client tokens can expire (`mcp-client add <name> --expires
+  P90D|2027-03-31|<timestamp>`).** An expired token is refused at `mcp --http` with a 401 that
+  names the client and the moment it ran out, and the refusal is in the store's audit log
+  (`policy.refusal`, subject `mcp-client:<name>`). `mcp-client list` shows the end date. A token
+  without one works as before, and a file without expiries is read and written exactly as
+  before.
+- **Hub credentials and device tokens can expire (`hub principal add --expires`, `hub add
+  --expires`, and a field on the page).** After its end a credential is refused by name, at the
+  command line and at sign-in, and sessions opened with it end; a device is refused on every
+  delivery and fetch. The hub's log records `credential.expired`, `device.token_expired` (once
+  per device) and `login.refused` with `"credential": "expired"`. `principal list`, the fleet
+  view and the page show the end, and hub alerts gain `token-expiring` (within 7 days) and
+  `token-expired`.
 
 ### Fixed
 
@@ -404,6 +417,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   an older hub binary still opens the record, and a hub whose log already forked opens without
   the index and `hub verify` names the fork. Clients need no update: the sync cursor is opaque
   to them, and the first pull after the hub upgrade delivers everything once.
+- The hub record gains `expires_at` on `devices` and `principals` (additive, NULL = no end).
+  Every credential and device token issued before keeps working as it did.
 
 ## [0.7.10] — 2026-10-23
 
