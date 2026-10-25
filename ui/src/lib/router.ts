@@ -68,6 +68,20 @@ export function landingScreen(): Screen {
   return getMode() === "simple" ? "search" : "status";
 }
 
+/**
+ * `decodeURIComponent` throws on a lone `%` or a cut-off escape, and the first render calls
+ * this with whatever the address bar holds. A link truncated by a chat client or typed by
+ * hand left a blank page; the text as written is the better answer, and the screen then says
+ * it has no such note.
+ */
+export function safeDecode(s: string): string {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
 export function parseRoute(hash: string, fallback: Screen = "status"): Route {
   const raw = hash.replace(/^#\/?/, "");
   const [pathAndQuery, anchor = null] = raw.split("#") as [string, string | undefined];
@@ -77,7 +91,7 @@ export function parseRoute(hash: string, fallback: Screen = "status"): Route {
   // typed anything, and simple mode opens on the question box.
   const [seg = "", ...rest] = path.split("/");
   const screen = (["search", "notes", "note", "graph", "usage", "compliance", "status", "console", "terminals", "team", "review"] as Screen[]).includes(seg as Screen) ? (seg as Screen) : fallback;
-  const param = rest.length ? decodeURIComponent(rest.join("/")) : null;
+  const param = rest.length ? safeDecode(rest.join("/")) : null;
   return { screen, param, query: new URLSearchParams(query), anchor };
 }
 

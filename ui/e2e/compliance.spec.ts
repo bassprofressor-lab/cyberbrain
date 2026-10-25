@@ -7,7 +7,7 @@ import { serve, type Serving } from "./serve";
  * The page was written for two egress purposes while the server sent seven. Four of those
  * name their destination in words ("not enrolled", "wherever you point it"), the server
  * classified the words as an unresolved hostname, and the overview warns about those — so a
- * fresh store said "Nothing has left this machine." under a warning colour, with the
+ * fresh store said "Nothing has gone to a public destination." under a warning colour, with the
  * sentences listed as its own network.
  */
 
@@ -20,7 +20,7 @@ test.afterAll(() => running?.stop());
 
 test("a fresh store's overview says nothing left, without a warning", async ({ page }) => {
   await page.goto(running.url.replace("#/?", "#/compliance?"));
-  const overview = page.locator(".panel").filter({ hasText: "Nothing has left this machine." });
+  const overview = page.locator(".panel").filter({ hasText: "Nothing has gone to a public destination." });
   await expect(overview).toBeVisible();
   await expect(overview).not.toHaveAttribute("style", /--warn/);
 

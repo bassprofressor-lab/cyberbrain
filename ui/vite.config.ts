@@ -1,3 +1,4 @@
+/// <reference types="vitest/config" />
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -76,4 +77,6 @@ export default defineConfig({
     },
   },
   server: { port: 5173, strictPort: false },
+  // Logic only, in node: the modules under test must not touch the document at import time.
+  test: { include: ["src/**/*.test.ts"], environment: "node" },
 });
