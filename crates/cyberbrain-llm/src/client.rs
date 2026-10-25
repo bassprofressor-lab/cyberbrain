@@ -485,17 +485,25 @@ impl LlmClient {
         let mut scanned = 0usize;
         let mut done = false;
 
+        let mut eof = false;
         loop {
-            let chunk = match resp.chunk().await {
-                Ok(Some(c)) => c,
-                Ok(None) => break,
+            match resp.chunk().await {
+                Ok(Some(c)) => buf.extend_from_slice(&c),
+                // The server closed the stream. Whatever is left in the buffer is its last
+                // event, sent without the blank line after it; it is read like any other
+                // rather than dropped.
+                Ok(None) => {
+                    eof = true;
+                    if !buf.iter().all(u8::is_ascii_whitespace) {
+                        buf.extend_from_slice(b"\n\n");
+                    }
+                }
                 Err(e) => {
                     let (outcome, err) = transport_failure(&url, &e);
                     self.record(kind, req.task, &url, &model, outcome, usage, started);
                     return Err(err);
                 }
-            };
-            buf.extend_from_slice(&chunk);
+            }
             // SSE events are separated by a blank line. Process every complete event.
             while let Some(pos) = find_event_end_from(&buf, scanned.saturating_sub(3)) {
                 scanned = 0;
@@ -556,9 +564,30 @@ impl LlmClient {
                 self.record(kind, req.task, &url, &model, outcome, usage, started);
                 return Err(err);
             }
-            if done {
+            if done || eof {
                 break;
             }
+        }
+
+        // A stream that closed without `[DONE]` and without saying why it finished broke
+        // off: what arrived is a fragment, and taking it for the answer would be recorded
+        // as a successful call. A server that sends a finish reason and then closes is done.
+        if !done && finish_reason.is_none() {
+            let msg = format!(
+                "the stream from {url} ended before it was complete (no [DONE], no finish reason) \
+                 after {} characters",
+                content.chars().count()
+            );
+            self.record(
+                kind,
+                req.task,
+                &url,
+                &model,
+                CallOutcome::BadResponse(msg.clone()),
+                usage,
+                started,
+            );
+            return Err(Error::Llm(msg));
         }
 
         self.record(
@@ -1524,6 +1553,79 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("larger than"), "{err}");
         assert!(!audit.rows().last().unwrap().outcome.is_ok());
+    }
+
+    /// Would fail if a stream that broke off were recorded and returned as complete.
+    #[tokio::test]
+    async fn a_stream_cut_short_is_not_ok() {
+        let cut = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n",
+        );
+        let server = MockServer::start(move |_| {
+            MockResponse::new(200, cut.as_bytes().to_vec())
+                .header("content-type", "text/event-stream")
+        })
+        .await;
+        let audit = MemoryAuditSink::new();
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
+            .await
+            .unwrap();
+        let err = client
+            .chat_streaming(
+                &ChatRequest::new(vec![ChatMessage::user("hi")]),
+                &mut |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("ended before"), "{err}");
+        assert!(
+            matches!(
+                audit.rows().last().unwrap().outcome,
+                CallOutcome::BadResponse(_)
+            ),
+            "{:?}",
+            audit.rows().last().unwrap().outcome
+        );
+    }
+
+    /// The last event is read even without the blank line after it, and a stream that
+    /// says why it finished is complete without `[DONE]`.
+    #[tokio::test]
+    async fn a_stream_without_a_final_blank_line_is_read_to_the_end() {
+        for body in [
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]",
+            ),
+            concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hel\"}}]}\n\n",
+                "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"},\"finish_reason\":\"stop\"}]}",
+            ),
+        ] {
+            let server = MockServer::start(move |_| {
+                MockResponse::new(200, body.as_bytes().to_vec())
+                    .header("content-type", "text/event-stream")
+            })
+            .await;
+            let client = LlmClient::connect(
+                cfg(&server.base_url("/v1")),
+                MemoryAuditSink::new(),
+                open_gate(),
+            )
+            .await
+            .unwrap();
+            let out = client
+                .chat_streaming(
+                    &ChatRequest::new(vec![ChatMessage::user("hi")]),
+                    &mut |_| {},
+                )
+                .await
+                .unwrap_or_else(|e| panic!("{body:?}: {e}"));
+            assert_eq!(out.content, "hello", "{body:?}");
+            assert_eq!(out.finish_reason.as_deref(), Some("stop"), "{body:?}");
+        }
     }
 
     #[test]
