@@ -597,7 +597,18 @@ async fn change_password(
                 }
                 Ok(hub) => hub
                     .set_setting("admin_password", &hash)
-                    .map(|()| "The password has been changed.".to_string())
+                    .map(|()| {
+                        // Every other administrator session ends with the old password. This
+                        // one stays: it has just proved the current password, and signing it
+                        // out would only ask for the new one a second later.
+                        let mine = super::admin::cookie_from(
+                            headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
+                        );
+                        state.sessions.close_admin_except(mine.as_deref());
+                        "The password has been changed. Other administrator sessions were \
+                         signed out."
+                            .to_string()
+                    })
                     .map_err(|e| e.to_string()),
             },
         }

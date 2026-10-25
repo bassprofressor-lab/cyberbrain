@@ -163,6 +163,16 @@ impl Sessions {
         Some(who)
     }
 
+    /// End every administrator session but `keep`. Called when the password changes: a
+    /// cookie opened with the old one, on another desk, was otherwise good for as long as
+    /// somebody kept using it. Principals sign in with their own credential, which did not
+    /// change, so their sessions stay.
+    pub fn close_admin_except(&self, keep: Option<&str>) {
+        if let Ok(mut open) = self.open.lock() {
+            open.retain(|token, (_, who)| *who != Who::Admin || Some(token.as_str()) == keep);
+        }
+    }
+
     pub fn close(&self, token: &str) {
         if let Ok(mut open) = self.open.lock() {
             open.remove(token);

@@ -2084,6 +2084,56 @@ async fn checking_a_password_does_not_hold_the_hub() {
     );
 }
 
+/// Changing the password ends every other administrator session. A cookie left open on
+/// another desk was good for as long as it was used, new password or not; the session that
+/// made the change stays, since it has just proved the current password.
+#[tokio::test]
+async fn a_new_password_ends_the_other_admin_sessions() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let token = |r: &axum::response::Response| {
+        cookie_of(r)
+            .split(';')
+            .next()
+            .unwrap()
+            .split_once('=')
+            .unwrap()
+            .1
+            .to_string()
+    };
+    let here =
+        token(&sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await);
+    let elsewhere =
+        token(&sign_in_from(state.clone(), "192.168.1.21:51000", "correct horse battery").await);
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/password")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", format!("{}={here}", admin::COOKIE))
+        .body(Body::from(
+            "current=correct+horse+battery&password=another+long+one&again=another+long+one",
+        ))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert!(admin::verify(
+        &state.hub.lock().unwrap(),
+        "another long one"
+    ));
+    let now = jiff::Timestamp::now();
+    assert!(
+        state.sessions.who(&elsewhere, now).is_none(),
+        "the other session must end"
+    );
+    assert!(state.sessions.who(&here, now).is_some(), "this one stays");
+}
+
 /// A wrong current password on the password form is recorded like a refused sign-in.
 #[tokio::test]
 async fn a_wrong_current_password_on_the_change_form_is_recorded() {

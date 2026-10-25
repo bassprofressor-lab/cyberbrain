@@ -61,6 +61,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   network sent held up every device's push and every page for the length of the check. The
   record is now held only to read the stored hash; checking it, and hashing a new password on
   the change form, run outside it, on a blocking thread, at most two at a time.
+- **A new hub password signs out the other administrator sessions.** Changing it left every
+  open session alone, and each use pushed its expiry out again, so a cookie left open on
+  another desk stayed good until the hub restarted. Every administrator session but the one
+  that made the change now ends with it; that one has just proved the current password.
+  Principals' sessions stay, since their credential did not change.
 
 ## [0.7.10] — 2026-10-23
 
