@@ -686,6 +686,7 @@ pub async fn deliver(
 /// rewriting it from a struct would delete every one of them. Enrolment is rare and this is
 /// the one edit it makes, so it edits text.
 pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
+    let (url, device) = (toml_string(url), toml_string(device));
     let mut out = String::with_capacity(text.len() + 128);
     let mut in_hub = false;
     let mut wrote_url = false;
@@ -697,11 +698,11 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
             // Leaving the hub section: add whatever it did not already have.
             if in_hub {
                 if !wrote_url {
-                    out.push_str(&format!("url = \"{url}\"\n"));
+                    out.push_str(&format!("url = {url}\n"));
                     wrote_url = true;
                 }
                 if !wrote_device {
-                    out.push_str(&format!("device = \"{device}\"\n"));
+                    out.push_str(&format!("device = {device}\n"));
                     wrote_device = true;
                 }
                 out.push('\n');
@@ -715,12 +716,12 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
             // A commented-out example is replaced rather than left to confuse the reader.
             let key = trimmed.trim_start_matches('#').trim_start();
             if key.starts_with("url") && key.contains('=') {
-                out.push_str(&format!("url = \"{url}\"\n"));
+                out.push_str(&format!("url = {url}\n"));
                 wrote_url = true;
                 continue;
             }
             if key.starts_with("device") && key.contains('=') {
-                out.push_str(&format!("device = \"{device}\"\n"));
+                out.push_str(&format!("device = {device}\n"));
                 wrote_device = true;
                 continue;
             }
@@ -731,24 +732,23 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
 
     if in_hub {
         if !wrote_url {
-            out.push_str(&format!("url = \"{url}\"\n"));
+            out.push_str(&format!("url = {url}\n"));
             wrote_url = true;
         }
         if !wrote_device {
-            out.push_str(&format!("device = \"{device}\"\n"));
+            out.push_str(&format!("device = {device}\n"));
             wrote_device = true;
         }
     }
     if !wrote_url || !wrote_device {
-        out.push_str(&format!(
-            "\n[hub]\nurl = \"{url}\"\ndevice = \"{device}\"\n"
-        ));
+        out.push_str(&format!("\n[hub]\nurl = {url}\ndevice = {device}\n"));
     }
     out
 }
 
 /// Same, for the inference endpoint the invitation carried.
 pub fn set_inference_url(text: &str, url: &str) -> String {
+    let url = toml_string(url);
     let mut out = String::with_capacity(text.len() + 64);
     let mut in_inference = false;
     let mut wrote = false;
@@ -756,7 +756,7 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         let trimmed = line.trim_start();
         if trimmed.starts_with('[') {
             if in_inference && !wrote {
-                out.push_str(&format!("base_url = \"{url}\"\n"));
+                out.push_str(&format!("base_url = {url}\n"));
                 wrote = true;
                 out.push('\n');
             }
@@ -768,7 +768,7 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         if in_inference {
             let key = trimmed.trim_start_matches('#').trim_start();
             if key.starts_with("base_url") && key.contains('=') {
-                out.push_str(&format!("base_url = \"{url}\"\n"));
+                out.push_str(&format!("base_url = {url}\n"));
                 wrote = true;
                 continue;
             }
@@ -777,18 +777,61 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         out.push('\n');
     }
     if in_inference && !wrote {
-        out.push_str(&format!("base_url = \"{url}\"\n"));
+        out.push_str(&format!("base_url = {url}\n"));
         wrote = true;
     }
     if !wrote {
-        out.push_str(&format!("\n[inference]\nbase_url = \"{url}\"\n"));
+        out.push_str(&format!("\n[inference]\nbase_url = {url}\n"));
     }
+    out
+}
+
+/// A value as a TOML string, quoted and escaped. The values come from an invitation file,
+/// and pasted between quotes as they were, a `"` and a line break in one wrote keys of its
+/// own into the store's configuration.
+///
+/// Always a one-line basic string, so the line-based editing above keeps working on the file
+/// it wrote.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A value from an invitation goes into the config as a TOML string, escaped. Pasted
+    /// between quotes as it was, a `"` and a line break in it wrote keys of their own into the
+    /// store's configuration.
+    #[test]
+    fn an_invitation_value_cannot_write_its_own_config_keys() {
+        let url = "https://hub.internal:7788\"\nallow_public_hub = true\nx = \"";
+        let device = "dev_1\"\n[egress]\ny = \"";
+        let text = set_inference_url(&set_hub_in_config(SAMPLE, url, device), url);
+        let parsed: toml::Table = toml::from_str(&text).unwrap();
+        let hub = parsed["hub"].as_table().unwrap();
+        assert_eq!(hub["url"].as_str(), Some(url));
+        assert_eq!(hub["device"].as_str(), Some(device));
+        assert_eq!(hub["allow_public_hub"].as_bool(), Some(false), "{text}");
+        assert!(!hub.contains_key("x"), "{text}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("url =")).count(), 1);
+        assert!(!parsed.contains_key("egress"), "{text}");
+        assert_eq!(parsed["inference"]["base_url"].as_str(), Some(url));
+    }
 
     const SAMPLE: &str = "\
 # A comment somebody wrote.
