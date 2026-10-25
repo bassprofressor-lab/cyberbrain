@@ -586,7 +586,13 @@ fn write_one(
                 ),
             });
         }
-        if n.body == c.body && n.front.kind == c.kind {
+        // Metadata the plan sets counts as much as the text: a retention added to meet an
+        // erasure duty is the one change that matters, and "unchanged" left the old one.
+        // A plan that sets nothing leaves the note's own value alone, so only a set value is
+        // compared.
+        let same_meta = (c.retention.is_none() || n.front.retention == c.retention)
+            && (c.bereich.is_none() || n.front.bereich == c.bereich);
+        if n.body == c.body && n.front.kind == c.kind && same_meta {
             return Ok(Outcome::Unchanged);
         }
         let same_source = n.front.tags.contains(&src_tag) && same_root(&n.front.tags, &c.tags);

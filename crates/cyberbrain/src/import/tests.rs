@@ -734,3 +734,45 @@ fn a_note_imported_before_roots_were_recorded_is_still_its_files() {
     );
     assert_eq!(fx.app.store().read("team").unwrap().body, "v2\n");
 }
+
+/// Same text, new retention: the run said "unchanged" and the old deletion date stayed,
+/// which for a retention set to meet an erasure duty is the one change that mattered.
+#[test]
+fn a_changed_retention_or_bereich_is_not_unchanged() {
+    let fx = fixture();
+    write(&fx.src, "kunde.md", "Kundendaten\n");
+    let g = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, g), false).unwrap();
+    let r = import(
+        &fx.app,
+        &plan(
+            &fx.src,
+            &format!("{g}retention = \"P2Y\"\nbereich = \"Vertrieb\"\n"),
+        ),
+        false,
+    )
+    .unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+    let n = fx.app.store().read("kunde").unwrap();
+    assert_eq!(n.front.retention.as_deref(), Some("P2Y"));
+    assert_eq!(n.front.bereich.as_deref(), Some("Vertrieb"));
+    // And the same plan again is unchanged.
+    let r = import(
+        &fx.app,
+        &plan(
+            &fx.src,
+            &format!("{g}retention = \"P2Y\"\nbereich = \"Vertrieb\"\n"),
+        ),
+        false,
+    )
+    .unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Unchanged),
+        "{}",
+        r.render()
+    );
+}
