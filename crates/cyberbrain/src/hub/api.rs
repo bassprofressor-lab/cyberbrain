@@ -45,7 +45,9 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/", get(page))
         .route("/claim", post(claim))
         .route("/login", get(login_page).post(login))
-        .route("/logout", get(logout))
+        // POST from the forms on the conflicts and requests pages, GET from the link on the
+        // main page. With GET alone the forms answered 405 and the session stayed open.
+        .route("/logout", get(logout).post(logout))
         .route("/password", post(change_password))
         .route("/licence", post(install_licence))
         .route("/devices", post(add_device))

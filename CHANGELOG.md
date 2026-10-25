@@ -66,6 +66,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   another desk stayed good until the hub restarted. Every administrator session but the one
   that made the change now ends with it; that one has just proved the current password.
   Principals' sessions stay, since their credential did not change.
+- **"Sign out" on the conflicts and requests pages signs out.** Those pages sign out with a POST
+  form, and `/logout` took GET only, so the button answered 405 and the session stayed open,
+  which on a shared machine is the case the button exists for. `/logout` now takes both.
 
 ## [0.7.10] — 2026-10-23
 

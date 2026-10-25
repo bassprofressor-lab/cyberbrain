@@ -2134,6 +2134,33 @@ async fn a_new_password_ends_the_other_admin_sessions() {
     assert!(state.sessions.who(&here, now).is_some(), "this one stays");
 }
 
+/// The conflicts and requests pages sign out with a POST form. The route took GET only, so
+/// the button answered 405 and the session stayed open on a shared machine.
+#[tokio::test]
+async fn signing_out_with_the_form_ends_the_session() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let token = cookie.split_once('=').unwrap().1.to_string();
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/logout")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(state.sessions.who(&token, jiff::Timestamp::now()).is_none());
+}
+
 /// A wrong current password on the password form is recorded like a refused sign-in.
 #[tokio::test]
 async fn a_wrong_current_password_on_the_change_form_is_recorded() {
