@@ -93,6 +93,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   countersignature), and a fetch delivers that bereich from the start, notes and erasures, until
   the device's cursor has passed that point: once. Grants that took effect before this version
   are left as they are.
+- **Device tokens, invitations and the MCP client list get their own ACL on Windows.** They were
+  owner-only on Unix and inherited the folder's permissions on Windows, which under
+  `C:\ProgramData` include read for `Users`. They are now created with a DACL that inherits
+  nothing and grants the local system account, the administrators group and the file's owner, as
+  the hub's private key already was (that one without the owner).
 
 ## [0.7.10] — 2026-10-23
 

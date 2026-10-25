@@ -339,7 +339,16 @@ fn save_token_in(base: &Path, hub_url: &str, device: &str, token: &str) -> Resul
 /// the descriptor stays good after a chmod. A new file beside the old one, renamed over it,
 /// leaves any such descriptor on the old contents.
 ///
-/// Windows has no mode to set; the file gets the directory's ACL, as it did before.
+/// On Windows the same is done with a DACL that inherits nothing (see `OWNER_ONLY_SDDL`).
+/// The DACL of a secret file on Windows: inherits nothing (`P`), so the read for `Users` that
+/// a folder under the profile or `C:\\ProgramData` would pass down is not there. Full access
+/// for the local system account, the administrators group and the file's owner (`OW`, the
+/// account that created it), by SID rather than by name, because the names are localised.
+/// The hub's key (`tls::write_private`) leaves the owner out; a client token has to stay
+/// readable by the person whose token it is.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const OWNER_ONLY_SDDL: &str = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)";
+
 pub(crate) fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let dir = path
@@ -362,6 +371,17 @@ pub(crate) fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
+    #[cfg(windows)]
+    let written = match super::tls::create_with_dacl(&tmp, OWNER_ONLY_SDDL, contents) {
+        Some(done) => done,
+        // The descriptor could not be built: written with the directory's ACL, as before
+        // this existed, rather than not at all.
+        None => opts.open(&tmp).and_then(|mut f| {
+            f.write_all(contents.as_bytes())?;
+            f.sync_all()
+        }),
+    };
+    #[cfg(not(windows))]
     let written = opts.open(&tmp).and_then(|mut f| {
         f.write_all(contents.as_bytes())?;
         f.sync_all()
@@ -938,6 +958,65 @@ profile = \"eu\"
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "old-token");
         save_token_in(base, hub, "dev_a", "new-token").unwrap();
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "new-token");
+    }
+
+    /// On Windows a token file inherits nothing from its folder: the folder's read for
+    /// `Users` used to come with it. Runs only on Windows (CI), where the DACL can be read
+    /// back; there is no way to show it on the machine this was written on.
+    #[cfg(windows)]
+    #[test]
+    fn a_token_file_on_windows_has_its_own_dacl() {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+            SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.token");
+        write_owner_only(&path, "secret\n").unwrap();
+        let wide: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut sd = std::ptr::null_mut();
+        let rc = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(rc, 0);
+        let mut text = std::ptr::null_mut();
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd,
+                1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(ok, 0);
+        let sddl = unsafe {
+            let mut n = 0;
+            while *text.add(n) != 0 {
+                n += 1;
+            }
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, n))
+        };
+        assert!(sddl.starts_with("D:P"), "{sddl}");
+        assert!(
+            !sddl.contains(";;;BU)") && !sddl.contains(";;;WD)"),
+            "{sddl}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret\n");
     }
 
     /// A token is never written into a file somebody else may already hold open. The old
