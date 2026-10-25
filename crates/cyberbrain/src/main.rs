@@ -1654,9 +1654,12 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 });
                 let text = serde_json::to_string_pretty(&invitation)
                     .map_err(|e| Error::Config(format!("invitation does not serialise: {e}")))?;
-                std::fs::write(path, format!("{text}\n")).map_err(|e| Error::Io {
-                    path: path.clone(),
-                    source: e,
+                // Owner-only from the start: the token is in it.
+                hub::client::write_owner_only(path, &format!("{text}\n")).map_err(|e| {
+                    Error::Io {
+                        path: path.clone(),
+                        source: e,
+                    }
                 })?;
                 out.emit(&invitation, |v| {
                     format!(

@@ -106,15 +106,12 @@ fn save(all: &[(String, String)]) -> Result<()> {
         })?;
     }
     let text: String = all.iter().map(|(n, d)| format!("{n} {d}\n")).collect();
-    std::fs::write(&p, text).map_err(|e| Error::Io {
+    // Only hashes, but owner-only from the start all the same, and replaced in one step so
+    // a reader never sees half a list.
+    crate::hub::client::write_owner_only(&p, &text).map_err(|e| Error::Io {
         path: p.clone(),
         source: e,
     })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
-    }
     Ok(())
 }
 

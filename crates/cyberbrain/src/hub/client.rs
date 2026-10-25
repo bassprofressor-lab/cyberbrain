@@ -316,22 +316,61 @@ pub fn save_token(hub_url: &str, device: &str, token: &str) -> Result<PathBuf> {
 }
 
 fn save_token_in(base: &Path, hub_url: &str, device: &str, token: &str) -> Result<PathBuf> {
-    let path = write_in(base, hub_url, Some(device), "token", &format!("{token}\n"))?;
-    restrict(&path);
+    let path = hub_file_in(base, hub_url, Some(device), "token");
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| Error::Io {
+            path: parent.to_path_buf(),
+            source: e,
+        })?;
+    }
+    write_owner_only(&path, &format!("{token}\n")).map_err(|e| Error::Io {
+        path: path.clone(),
+        source: e,
+    })?;
     Ok(path)
 }
 
-/// Owner-only, where the platform has such a thing. Best effort: a token that is readable
-/// by others is worse than one that is not, but it is not worse than no token at all, and
-/// failing the enrolment over file modes would be its own problem.
-fn restrict(path: &std::path::Path) {
+/// Write a file that holds a secret: owner-only from the moment it exists, and in place of
+/// whatever was there in one step.
+///
+/// The mode is part of creating the file, as in `tls::write_private`. Writing first and
+/// tightening the mode afterwards left a window in which the token was readable by everybody,
+/// and wrote into a file that somebody may already have had open from when it was readable;
+/// the descriptor stays good after a chmod. A new file beside the old one, renamed over it,
+/// leaves any such descriptor on the old contents.
+///
+/// Windows has no mode to set; the file gets the directory's ACL, as it did before.
+pub(crate) fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let tmp = dir.join(format!(
+        ".{name}.{}.tmp",
+        cyberbrain_core::NoteId::generate()
+    ));
+    let mut opts = std::fs::OpenOptions::new();
+    // `create_new`: never through a file or link somebody else put at that name.
+    opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
     }
-    #[cfg(not(unix))]
-    let _ = path;
+    let written = opts.open(&tmp).and_then(|mut f| {
+        f.write_all(contents.as_bytes())?;
+        f.sync_all()
+    });
+    let renamed = written.and_then(|()| std::fs::rename(&tmp, path));
+    if renamed.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    renamed
 }
 
 /// This machine's name, for the hub to count seats by: `COMPUTERNAME` on Windows, the kernel's
@@ -855,6 +894,32 @@ profile = \"eu\"
         write_in(base, hub, None, "token", "old-token\n").unwrap();
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "old-token");
         save_token_in(base, hub, "dev_a", "new-token").unwrap();
+        assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "new-token");
+    }
+
+    /// A token is never written into a file somebody else may already hold open. The old
+    /// way wrote in place and tightened the mode afterwards, so a descriptor opened while the
+    /// file was world-readable read the new token as well.
+    #[cfg(unix)]
+    #[test]
+    fn a_new_token_never_lands_in_a_file_that_was_readable_before() {
+        use std::io::Read;
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let (base, hub) = (dir.path(), "https://hub.internal:7788");
+        let path = write_in(base, hub, Some("dev_a"), "token", "old-token\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut held = std::fs::File::open(&path).unwrap();
+
+        save_token_in(base, hub, "dev_a", "new-token").unwrap();
+        let mut seen = String::new();
+        held.read_to_string(&mut seen).unwrap();
+        assert_eq!(
+            seen, "old-token\n",
+            "the open descriptor must not see the new token"
+        );
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "new-token");
     }
 

@@ -40,6 +40,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   found nothing in that, and the note was marked Reviewed with the rest of the password in
   it. Overlapping findings are now merged into one over the whole stretch, named for the
   finding that spans all of it (here the secret).
+- **Invitations and device tokens are owner-only from the moment they exist.** The
+  invitation the hub page writes (it carries the device token in the clear) and the one `hub
+  add --invite` writes were created with the default mode, on most systems readable by
+  everybody on the machine. The client's token file was written first and set to 0600
+  afterwards, so it was readable for a moment, and a reader that had opened it earlier kept
+  reading through the change. All of them, and the `mcp-clients` list, are now written into a
+  new 0600 file that is renamed over the old one (Unix; on Windows the file keeps the
+  directory's permissions, as before).
 
 ## [0.7.10] — 2026-10-23
 

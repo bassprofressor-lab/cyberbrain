@@ -637,6 +637,26 @@ async fn add_device(
     Redirect::to("/").into_response()
 }
 
+/// Write an invitation into `invitations/` next to the record and return where it went.
+fn write_invitation(
+    record: &std::path::Path,
+    device: &str,
+    text: &str,
+) -> Result<std::path::PathBuf, String> {
+    let dir = record
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("invitations");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
+    // Named after the device, not after the person's choice of name, so two machines called
+    // "laptop" do not overwrite each other's token.
+    let path = dir.join(format!("{device}.json"));
+    // Owner-only from the start: the token is in it.
+    super::client::write_owner_only(&path, &format!("{text}\n"))
+        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    Ok(path)
+}
+
 fn register(
     hub: &HubStore,
     record: &std::path::Path,
@@ -678,16 +698,7 @@ fn register(
     });
     let text = serde_json::to_string_pretty(&invitation).map_err(|e| e.to_string())?;
 
-    let dir = record
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("invitations");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot make {}: {e}", dir.display()))?;
-    // Named after the device, not after the person's choice of name, so two machines called
-    // "laptop" do not overwrite each other's token.
-    let path = dir.join(format!("{}.json", device.id));
-    std::fs::write(&path, format!("{text}\n"))
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    let path = write_invitation(record, &device.id, &text)?;
 
     Ok(format!(
         "{name} registered. Its invitation is at {} — it carries the token, so hand it over \
@@ -1557,4 +1568,20 @@ async fn countersign(
         }
     }
     Redirect::to("/requests").into_response()
+}
+
+#[cfg(test)]
+mod invitation_tests {
+    /// The invitation carries the device token in the clear. It used to be written with the
+    /// default mode, which on most systems is readable by everybody on the hub.
+    #[cfg(unix)]
+    #[test]
+    fn an_invitation_is_readable_by_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = super::write_invitation(&dir.path().join("hub.db"), "dev_1", "{}").unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}\n");
+    }
 }
