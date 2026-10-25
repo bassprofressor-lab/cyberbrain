@@ -297,7 +297,7 @@ mod tests {
         assert!(s.pii_scan_active);
         assert_eq!(
             s.egress.len(),
-            8,
+            9,
             "model download, local inference, audit sync, note sync, note erasure, hub enrolment, terminal, governance"
         );
         assert!(s.disclaimer.contains("seatbelt"));

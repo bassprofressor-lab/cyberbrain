@@ -781,7 +781,13 @@ fn policy_subcommands_work_over_a_real_store() {
     // a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 8);
+    assert_eq!(entries.len(), 9);
+    // A hub's alert path is listed in a store's register too, and closed there.
+    let alert = entries
+        .iter()
+        .find(|x| x["purpose"] == "hub-alert")
+        .unwrap();
+    assert_eq!(alert["enabled"], false, "{alert}");
     // The governance check is a path like the others, and closed until a url is set.
     let gov = entries
         .iter()

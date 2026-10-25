@@ -899,6 +899,12 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: RetentionCommand,
     },
+    /// Post what needs the hub's operators to one webhook: countersignatures waiting, the
+    /// licence ending, devices gone quiet, governance calls failing. Off until a URL is set.
+    Alerts {
+        #[command(subcommand)]
+        command: AlertsCommand,
+    },
     /// What the fleet did in a period, as state: one line per device with its row count
     /// and whether its chain holds.
     ///
@@ -957,6 +963,34 @@ pub enum InviteCommand {
     /// Withdraw a fleet invitation. What it enrolled stays; nobody further gets in.
     Revoke {
         id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AlertsCommand {
+    /// Turn alerts on, or point them at another webhook. Loopback or private range only,
+    /// unless --allow-public is given (a team chat's webhook usually is public).
+    Set {
+        url: String,
+        #[arg(long)]
+        allow_public: bool,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Turn alerts off.
+    Off {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Where alerts go, and what would be posted now.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Post everything that needs a person now, due or not: to try the webhook.
+    Test {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },

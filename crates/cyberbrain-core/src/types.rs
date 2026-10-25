@@ -361,11 +361,24 @@ pub enum EgressPurpose {
     /// only; there is no switch for a public address, because the request is made on every
     /// tool call and a public destination would be a transfer of everything the agent does.
     Governance,
+    /// A hub telling its operators that something needs them (signatures waiting, the
+    /// licence running out, devices gone quiet, governance failing), at the one webhook its
+    /// administrator set with `hub alerts set`.
+    ///
+    /// Only a hub uses it, never a store. Off until a URL is set; carries counts, kinds and
+    /// device names, never a note and never an activity row. Loopback or private range
+    /// unless the administrator allows a public address, since a team chat's webhook is
+    /// usually on the internet and that should be a decision.
+    HubAlert,
 }
 
 impl EgressPurpose {
     pub fn describe(self) -> &'static str {
         match self {
+            EgressPurpose::HubAlert => concat!(
+                "a hub posts what needs its operators (waiting signatures, licence, quiet ",
+                "devices, governance failures) to the one webhook its administrator set"
+            ),
             EgressPurpose::Governance => concat!(
                 "sends each tool call a coding agent is about to make (tool and input) to the ",
                 "governance service on your own network, which decides whether it may run"

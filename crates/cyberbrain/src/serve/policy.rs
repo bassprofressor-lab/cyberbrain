@@ -113,6 +113,8 @@ pub async fn egress(State(st): State<Arc<ServeState>>) -> ApiResult<Json<EgressR
                     .url
                     .clone()
                     .unwrap_or_else(|| "none configured".into()),
+                // A hub's path, never a store's: listed so the register is complete.
+                EgressPurpose::HubAlert => "only a hub uses this (`hub alerts set`)".to_string(),
             };
             register_text.push_str(&format!("{name}|{}|{}\n", entry.data, entry.requires));
             paths.push(EgressPath {

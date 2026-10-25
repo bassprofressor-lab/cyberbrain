@@ -814,6 +814,40 @@ impl HubStore {
         .map(|_| ())
     }
 
+    /// Every setting whose key starts with `prefix`, as (key, value).
+    pub fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = ix(self
+            .conn
+            .prepare("SELECT key, value FROM settings WHERE substr(key, 1, ?1) = ?2"))?;
+        let rows = ix(stmt.query_map(params![prefix.len() as i64, prefix], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Devices whose governance calls failed since `since`, by name, with how many. Read from
+    /// the audit rows the devices delivered: a failed call closes its egress ticket as
+    /// `egress.failed` (or `egress.abandoned`) with the subject `governance:<origin>`.
+    pub fn governance_failures_since(&self, since: &str) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT d.id, d.name, COUNT(*) FROM entries e JOIN devices d ON d.id = e.device
+             WHERE e.action IN ('egress.failed', 'egress.abandoned')
+               AND e.subject LIKE 'governance:%' AND e.ts >= ?1
+               AND d.revoked_at IS NULL
+             GROUP BY d.id, d.name ORDER BY d.name",
+        ))?;
+        let rows = ix(stmt.query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
     /// The installed licence text, if there is one.
     pub fn licence_text(&self) -> Result<Option<String>> {
         ix(self

@@ -1535,6 +1535,11 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             }
                             None => {}
                         }
+                        // Alerts: a loop that does nothing until a webhook is set.
+                        tokio::spawn(hub::alerts::run(
+                            state.clone(),
+                            env!("CARGO_PKG_VERSION").to_string(),
+                        ));
                         // With connect info, because who may set or type a password is
                         // decided by where the request came from.
                         let make = hub::api::router(state)
@@ -2412,6 +2417,102 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 )
             })?;
             Ok(if ok { 0 } else { 1 })
+        }
+
+        HubCommand::Alerts { command } => {
+            use cli::AlertsCommand;
+            let data = match command {
+                AlertsCommand::Set { data, .. }
+                | AlertsCommand::Off { data }
+                | AlertsCommand::Show { data }
+                | AlertsCommand::Test { data } => data,
+            };
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let stamp = now();
+            match command {
+                AlertsCommand::Set {
+                    url, allow_public, ..
+                } => {
+                    hub::alerts::set(&store, url, *allow_public, "cli", &stamp)?;
+                }
+                AlertsCommand::Off { .. } => hub::alerts::clear(&store, "cli", &stamp)?,
+                AlertsCommand::Show { .. } => {}
+                AlertsCommand::Test { .. } => {
+                    let settings = hub::alerts::settings(&store)?;
+                    let all = hub::alerts::collect(
+                        &store,
+                        jiff::Timestamp::now(),
+                        env!("CARGO_PKG_VERSION"),
+                    )?;
+                    // Something to see even on a hub with nothing wrong: the point is to find
+                    // out whether the webhook answers.
+                    let what = if all.is_empty() {
+                        vec![hub::alerts::Alert {
+                            kind: "test",
+                            key: "test".into(),
+                            text: "A test from `cyberbrain hub alerts test`; nothing needs you."
+                                .into(),
+                        }]
+                    } else {
+                        all
+                    };
+                    let sent = runtime()?.block_on(hub::alerts::post(&settings, "cli", &what));
+                    store.record(
+                        "cli",
+                        if sent.is_ok() {
+                            "alerts.sent"
+                        } else {
+                            "alerts.failed"
+                        },
+                        serde_json::json!({
+                            "count": what.len(), "test": true,
+                            "error": sent.as_ref().err().map(|e| e.to_string()),
+                        }),
+                        &stamp,
+                    )?;
+                    let status = sent?;
+                    out.emit(
+                        &serde_json::json!({ "posted": what.len(), "status": status }),
+                        |v| {
+                            format!(
+                                "posted {} alert(s); the webhook answered HTTP {}\n",
+                                v["posted"], v["status"]
+                            )
+                        },
+                    )?;
+                    return Ok(0);
+                }
+            }
+            let settings = hub::alerts::settings(&store)?;
+            let now_alerts =
+                hub::alerts::collect(&store, jiff::Timestamp::now(), env!("CARGO_PKG_VERSION"))?;
+            out.emit(
+                &serde_json::json!({ "settings": settings, "now": now_alerts }),
+                |v| {
+                    let mut s = match v["settings"]["url"].as_str() {
+                        None => "alerts are off\n".to_string(),
+                        Some(u) => format!(
+                            "alerts go to {u}{}\n",
+                            if v["settings"]["allow_public"].as_bool() == Some(true) {
+                                " (public address allowed)"
+                            } else {
+                                ""
+                            }
+                        ),
+                    };
+                    let list = v["now"].as_array().cloned().unwrap_or_default();
+                    if list.is_empty() {
+                        s.push_str("nothing needs a person right now\n");
+                    } else {
+                        s.push_str(&format!("{} thing(s) need a person now:\n", list.len()));
+                        for a in list {
+                            s.push_str(&format!("  {}\n", a["text"].as_str().unwrap_or_default()));
+                        }
+                    }
+                    s
+                },
+            )?;
+            Ok(0)
         }
 
         HubCommand::Retention { command } => {

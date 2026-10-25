@@ -4595,3 +4595,162 @@ async fn a_revoked_principal_is_signed_out_at_the_next_request() {
         "revoked means signed out"
     );
 }
+
+// ---- alerts ----
+
+/// A hub with one of everything an operator should hear about.
+fn hub_that_needs_people() -> (HubStore, Device) {
+    let hub = HubStore::in_memory().unwrap();
+    let (quiet, _) = hub.add_device("ws-quiet", NOW).unwrap();
+    hub.conn
+        .execute(
+            "UPDATE devices SET last_seen = '2026-09-01T00:00:00Z' WHERE id = ?1",
+            rusqlite::params![quiet.id],
+        )
+        .unwrap();
+    // Written and not countersigned.
+    hub.grant_bereich(
+        "g1",
+        &quiet.id,
+        "einkauf",
+        Direction::Receive,
+        "r",
+        "admin-1",
+        NOW,
+    )
+    .unwrap();
+    // A governance call that got no answer, as the device reported it.
+    hub.conn
+        .execute(
+            "INSERT INTO entries (device, seq, ts, actor, action, subject, detail, hash,
+                 received_at)
+             VALUES (?1, 1, '2026-09-07T11:00:00Z', 'hook:pre-tool-use', 'egress.failed',
+                 'governance:http://10.0.0.5:8080', '{}', 'h', ?2)",
+            rusqlite::params![quiet.id, NOW],
+        )
+        .unwrap();
+    (hub, quiet)
+}
+
+#[test]
+fn alerts_name_what_needs_a_person_and_nothing_else() {
+    let (hub, _) = hub_that_needs_people();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    let mut kinds: Vec<&str> = all.iter().map(|a| a.kind).collect();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        ["countersignature", "governance", "licence", "quiet-device"],
+        "{all:?}"
+    );
+    // State only: no note text, no activity row, nothing beyond names and counts.
+    let body = alerts::payload("test", &all);
+    assert!(
+        body.contains("ws-quiet") && body.contains("einkauf"),
+        "{body}"
+    );
+    assert!(!body.contains("http://10.0.0.5"), "{body}");
+}
+
+#[test]
+fn an_alert_is_posted_once_then_reminded_and_again_when_it_comes_back() {
+    let (hub, _) = hub_that_needs_people();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    assert_eq!(alerts::due(&hub, &all, now).unwrap().len(), all.len());
+    alerts::remember(&hub, &all, &all, NOW).unwrap();
+    assert!(alerts::due(&hub, &all, now).unwrap().is_empty(), "posted");
+
+    let tomorrow = now + jiff::SignedDuration::from_hours(alerts::REMIND_AFTER_HOURS);
+    assert_eq!(
+        alerts::due(&hub, &all, tomorrow).unwrap().len(),
+        all.len(),
+        "reminded a day later"
+    );
+    // Gone, then back: posted again at once.
+    alerts::remember(&hub, &[], &[], NOW).unwrap();
+    assert_eq!(alerts::due(&hub, &all, now).unwrap().len(), all.len());
+}
+
+/// Off until set, and set means that one webhook through the gate: a public address is
+/// refused unless the administrator allowed one.
+#[tokio::test]
+async fn alerts_go_only_where_they_were_told_to() {
+    let off = alerts::Settings {
+        url: None,
+        allow_public: false,
+    };
+    assert!(alerts::post(&off, "t", &[]).await.is_err());
+    let public = alerts::Settings {
+        url: Some("https://93.184.216.34/hooks/abc".into()),
+        allow_public: false,
+    };
+    let err = alerts::post(&public, "t", &[])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("allow_public_alert"), "{err}");
+}
+
+#[tokio::test]
+async fn an_alert_round_posts_to_the_webhook_and_records_it() {
+    use axum::routing::post;
+    let got = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = got.clone();
+    let app = axum::Router::new().route(
+        "/hook",
+        post(move |body: String| {
+            let sink = sink.clone();
+            async move {
+                sink.lock().unwrap().push(body);
+                "ok"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (hub, _) = hub_that_needs_people();
+    let state = state_for(hub, false);
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    // Off: nothing is looked at, nothing leaves, nothing is recorded.
+    assert_eq!(alerts::round(&state, "0.7.10", now).await.unwrap(), 0);
+    alerts::set(
+        &state.hub.lock().unwrap(),
+        &format!("http://{addr}/hook"),
+        false,
+        "cli",
+        NOW,
+    )
+    .unwrap();
+    let posted = alerts::round(&state, "0.7.10", now).await.unwrap();
+    assert_eq!(posted, 4);
+    assert_eq!(
+        alerts::round(&state, "0.7.10", now).await.unwrap(),
+        0,
+        "once"
+    );
+    let bodies = got.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 1);
+    let v: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(v["kind"], "cyberbrain.hub.alert");
+    assert!(v["text"].as_str().unwrap().contains("ws-quiet"));
+    let actions: Vec<String> = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert!(
+        actions.contains(&"alerts.configured".to_string()),
+        "{actions:?}"
+    );
+    assert!(actions.contains(&"alerts.sent".to_string()), "{actions:?}");
+}

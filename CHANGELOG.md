@@ -12,6 +12,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+- **Hub alerts to a webhook (`cyberbrain hub alerts set|show|test|off`).** A hub can post what
+  needs a person (countersignatures waiting, the licence ending or gone, devices quiet for 48 h,
+  governance calls failing) to one webhook its administrator sets. Off by default; nothing
+  leaves until a URL is set, and then only there, through the new egress path `hub-alert`
+  (loopback or private range unless `--allow-public`, no redirects). It carries states and
+  device names, never notes or activity rows. Posted when a condition appears, reminded daily,
+  every attempt in the hub's own log. The egress register now has nine entries; a store lists
+  `hub-alert` as a path only a hub uses.
+
 ### Fixed
 
 - **A note pushed late reaches every device again.** The sync cursor was the newest `updated`

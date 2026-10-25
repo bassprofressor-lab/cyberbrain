@@ -73,6 +73,8 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
         // Something a person asked for and can act on: a code that expired, a hub that is
         // not reachable. A user error, not an internal one.
         EgressPurpose::HubEnrolment => Error::Config(msg),
+        // The hub's own path; a failure is recorded in its chain and retried next round.
+        EgressPurpose::HubAlert => Error::Index(msg),
         // Unreachable by construction: the transport is only entered through `permit`, and
         // the terminal never calls it. Spelled out rather than left to a wildcard, so that
         // the day somebody does route a request through here, this line is the question.

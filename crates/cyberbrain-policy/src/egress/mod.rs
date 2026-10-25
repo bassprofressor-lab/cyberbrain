@@ -43,7 +43,7 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 8] = [
+pub const PURPOSES: [EgressPurpose; 9] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
@@ -52,6 +52,7 @@ pub const PURPOSES: [EgressPurpose; 8] = [
     EgressPurpose::HubEnrolment,
     EgressPurpose::Terminal,
     EgressPurpose::Governance,
+    EgressPurpose::HubAlert,
 ];
 
 /// One line of `cyberbrain policy egress`. Plain data so the CLI and the UI print the same
@@ -85,6 +86,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::NoteErasure => "note-erasure",
         EgressPurpose::HubEnrolment => "hub-enrolment",
         EgressPurpose::Governance => "governance",
+        EgressPurpose::HubAlert => "hub-alert",
     }
 }
 
@@ -347,6 +349,40 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                     "[governance] url in cyberbrain.toml, a key in CYBERBRAIN_AGENTGUARD_KEY or ",
                     "~/.config/cyberbrain/agentguard.key, and the hooks installed; loopback or ",
                     "private-range only"
+                ),
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
+            }
+        }
+        EgressPurpose::HubAlert => {
+            let (enabled, state) = match &cfg.alert_endpoint {
+                None => (
+                    false,
+                    "disabled: no alert webhook is set (`cyberbrain hub alerts set`)".to_string(),
+                ),
+                Some(url) => match Destination::parse(url) {
+                    Err(e) => (false, format!("disabled: alert webhook is not usable: {e}")),
+                    Ok(d) => (true, format!("enabled: {}", d.origin())),
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: cfg
+                    .alert_endpoint
+                    .as_deref()
+                    .and_then(|u| Destination::parse(u).ok())
+                    .map(|d| d.origin())
+                    .unwrap_or_else(|| "none configured (`hub alerts set`)".to_string()),
+                data: concat!(
+                    "HTTP POST of what needs the hub's operators: counts of waiting signatures, ",
+                    "the licence state, names of quiet devices and of devices whose governance ",
+                    "calls fail. No note and no activity row"
+                ),
+                carries_note_content: false,
+                requires: concat!(
+                    "a hub, and its administrator set a webhook with `cyberbrain hub alerts ",
+                    "set`; loopback or private-range unless `--allow-public` was given"
                 ),
                 permitted_by: ALL_PROFILES,
                 enabled,
@@ -954,6 +990,23 @@ impl Egress {
                     ));
                 }
             }
+            EgressPurpose::HubAlert => {
+                if via.is_some() {
+                    return Err("alerts do not follow redirects".into());
+                }
+                let Some(url) = &self.cfg.alert_endpoint else {
+                    return Err("no alert webhook is set".into());
+                };
+                let configured = Destination::parse(url)
+                    .map_err(|e| format!("the alert webhook is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the alert webhook ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
             EgressPurpose::NoteErasure => {
                 if via.is_some() {
                     return Err("erasure requests do not follow redirects".into());
@@ -1058,6 +1111,11 @@ impl Egress {
                 "the governance service",
                 "(no setting: governance is loopback or private only)",
                 false,
+            )),
+            EgressPurpose::HubAlert => Some((
+                "the alert webhook",
+                "allow_public_alert",
+                self.cfg.allow_public_alert,
             )),
             EgressPurpose::ModelDownload | EgressPurpose::Terminal => None,
         };
@@ -1489,7 +1547,8 @@ mod tests {
                 "note-erasure",
                 "hub-enrolment",
                 "terminal",
-                "governance"
+                "governance",
+                "hub-alert"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
         );
@@ -1503,7 +1562,8 @@ mod tests {
                 | EgressPurpose::NoteErasure
                 | EgressPurpose::HubEnrolment
                 | EgressPurpose::Terminal
-                | EgressPurpose::Governance => {}
+                | EgressPurpose::Governance
+                | EgressPurpose::HubAlert => {}
             }
         }
         // Audit sync is off until a store is enrolled — a path that exists is not a path
