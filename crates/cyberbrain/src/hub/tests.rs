@@ -1374,6 +1374,14 @@ fn a_request_for_a_device_the_hub_does_not_know_is_refused() {
 }
 
 #[test]
+fn an_unknown_role_lists_every_role_there_is() {
+    let err = Role::parse("boss").unwrap_err().to_string();
+    for r in ["admin", "editor", "auditor", "countersigner"] {
+        assert!(err.contains(r), "{err}");
+    }
+}
+
+#[test]
 fn another_auditor_cannot_collect_somebody_elses_approval() {
     let (hub, device, auditor, council, _) = hub_with_activity();
     let (_, second) = hub
