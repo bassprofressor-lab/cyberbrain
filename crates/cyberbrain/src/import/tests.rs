@@ -776,3 +776,26 @@ fn a_changed_retention_or_bereich_is_not_unchanged() {
         r.render()
     );
 }
+
+/// The content hash that resolves a collision went at the end of the name, and a name near
+/// the length limit was cut back at a hyphen, hash and all: the collision survived.
+#[test]
+fn a_collision_hash_survives_a_long_name() {
+    let fx = fixture();
+    let heading = "wort ".repeat(30);
+    write(
+        &fx.src,
+        "a.md",
+        &format!("## {heading}\none\n## {heading}\ntwo\n"),
+    );
+    let p = plan(
+        &fx.src,
+        "[[group]]\nname = \"g\"\npaths = [\"a.md\"]\nring = 2\nkind = \"knowledge\"\nsplit = \"heading\"\ncollisions = \"hash\"\n",
+    );
+    let r = import(&fx.app, &p, false).unwrap();
+    assert_eq!(r.items.written, 2, "{}", r.render());
+    assert_eq!(r.items.collided, 0, "{}", r.render());
+    for rec in &r.records {
+        assert!(rec.name.len() <= super::slug::MAX_NAME, "{}", rec.name);
+    }
+}

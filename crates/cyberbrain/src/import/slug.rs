@@ -51,12 +51,31 @@ pub fn slugify(text: &str) -> String {
     truncate(&out)
 }
 
+/// `name` with `-{suffix}` appended, shortening `name` rather than the suffix when the two
+/// together are over [`MAX_NAME`]. The suffix is what tells two colliding names apart, so it
+/// is the part that has to survive.
+pub fn with_suffix(name: &str, suffix: &str) -> String {
+    let suffix = slugify(suffix);
+    let room = MAX_NAME.saturating_sub(suffix.len() + 1);
+    let head = truncate_to(&slugify(name), room);
+    if head.is_empty() {
+        suffix
+    } else {
+        format!("{head}-{suffix}")
+    }
+}
+
 /// Cut at a hyphen so the name stays readable, never in the middle of a word.
 fn truncate(s: &str) -> String {
-    if s.len() <= MAX_NAME {
+    truncate_to(s, MAX_NAME)
+}
+
+fn truncate_to(s: &str, max: usize) -> String {
+    if s.len() <= max {
         return s.to_string();
     }
-    let head = &s[..MAX_NAME];
+    // A slug is ASCII, so any byte index is a character boundary.
+    let head = &s[..max];
     match head.rfind('-') {
         Some(i) if i > 0 => head[..i].to_string(),
         _ => head.trim_end_matches('-').to_string(),

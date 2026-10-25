@@ -462,7 +462,7 @@ fn resolve_collisions(plan: &ImportPlan, cands: &mut [Candidate]) {
         for &i in idxs {
             if plan.groups[cands[i].group_idx].collisions == Collisions::Hash {
                 let hash = slug::short_hash(&cands[i].body);
-                let suffixed = slug::slugify(&format!("{name}-{hash}"));
+                let suffixed = slug::with_suffix(name, &hash);
                 cands[i].notes.push(format!(
                     "name `{name}` collided with {} other item(s); suffixed with the content hash",
                     idxs.len() - 1
