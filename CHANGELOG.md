@@ -21,6 +21,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   device names, never notes or activity rows. Posted when a condition appears, reminded daily,
   every attempt in the hub's own log. The egress register now has nine entries; a store lists
   `hub-alert` as a path only a hub uses.
+- **People and fleet invitations on the hub's page.** The administrator's page lists the people
+  with a role and the fleet invitations, and does what `hub principal` and `hub invite` do: add
+  an auditor or an editor (credential shown once), withdraw a person, give an editor a bereich
+  or take it away (new), make a fleet invitation (written owner-only to `invitations/`, with the
+  certificate pin) or withdraw one. Countersigners and administrators are still made only with
+  the command at the machine, so the people who sign are not made by the person whose acts they
+  sign. New routes, all POST, administrator only: `/principals`, `/principals/{id}/revoke`,
+  `/principals/{id}/bereiche`, `/principals/{id}/bereiche/{bereich}/remove`, `/enrolment-codes`,
+  `/enrolment-codes/{id}/revoke`.
 
 ### Fixed
 

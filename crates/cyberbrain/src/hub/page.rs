@@ -55,6 +55,12 @@ pub struct View {
     /// Whether the surface this was served over is encrypted. Shown, because the operator
     /// looking at the fleet is the one person who can do something about it.
     pub encrypted: bool,
+    /// The people with a role, and for an editor the bereiche they are responsible for.
+    pub people: Vec<(super::access::Principal, Vec<String>)>,
+    /// Fleet invitations, withdrawn and used-up ones included.
+    pub codes: Vec<super::store::EnrolmentCode>,
+    /// When the page was made, to say which invitations still work.
+    pub now: String,
 }
 
 impl View {
@@ -85,7 +91,19 @@ impl View {
             .filter_map(|r| hub.grants_for_device(&r.device.id).ok())
             .flatten()
             .collect();
+        let people = hub
+            .principals()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                let b = hub.bereiche_of(&p.id).unwrap_or_default();
+                (p, b)
+            })
+            .collect();
         View {
+            people,
+            codes: hub.enrolment_codes().unwrap_or_default(),
+            now: now.to_string(),
             grants,
             names: hub.principal_names().unwrap_or_default(),
             fleet: report::fleet(hub, now, &version).unwrap_or_default(),
@@ -222,6 +240,8 @@ pub fn render(v: &View) -> String {
     h.push_str(&licence_card(v));
     h.push_str(&fleet_card(v));
     h.push_str(&grants_card(v));
+    h.push_str(&people_card(v));
+    h.push_str(&codes_card(v));
 
     h.push_str(&format!(
         "<section class=card><h2>Administration</h2>\
@@ -340,6 +360,133 @@ fn grants_card(v: &View) -> String {
     format!(
         "<section class=card><h2>Sharing</h2>\
          <table><thead><tr><th>Device<th>Bereich<th>Direction<th>Reason<th>State<th></tr></thead>\
+         <tbody>{rows}</tbody></table>{form}</section>"
+    )
+}
+
+/// Who has a role, the form to add an auditor or an editor, and an editor's bereiche.
+///
+/// Countersigners and administrators are listed and can be withdrawn here, but not made:
+/// the people who sign are made at the machine, with `hub principal add`.
+fn people_card(v: &View) -> String {
+    let form = "<details><summary>Add a person</summary>\
+         <form method=post action=\"/principals\">\
+         <label>Name <input name=name required></label>\
+         <label>Role <select name=role>\
+           <option value=editor>editor: decides conflicts in their bereiche</option>\
+           <option value=auditor>auditor: may ask to see activity</option></select></label>\
+         <button type=submit>Add</button></form>\
+         <p class=note>The credential is shown once, after adding. Countersigners and \
+         administrators are made at the hub's machine: <code>cyberbrain hub principal add \
+         --role countersigner &lt;name&gt;</code>.</p></details>";
+    if v.people.is_empty() {
+        return format!(
+            "<section class=card><h2>People</h2><p>Nobody has a role yet.</p>{form}</section>"
+        );
+    }
+    let mut rows = String::new();
+    for (p, bereiche) in &v.people {
+        let live = p.is_active();
+        let areas = if p.role == super::access::Role::Editor && live {
+            let mut s = String::new();
+            for b in bereiche {
+                s.push_str(&format!(
+                    "<form method=post action=\"/principals/{id}/bereiche/{b}/remove\" \
+                     style=\"display:inline\"><code>{b}</code> \
+                     <button type=submit>remove</button></form> ",
+                    id = esc(&p.id),
+                    b = esc(b)
+                ));
+            }
+            s.push_str(&format!(
+                "<form method=post action=\"/principals/{}/bereiche\" style=\"display:inline\">\
+                 <input name=bereich required placeholder=\"disposition\" size=12> \
+                 <button type=submit>assign</button></form>",
+                esc(&p.id)
+            ));
+            s
+        } else {
+            bereiche
+                .iter()
+                .map(|b| esc(b))
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        rows.push_str(&format!(
+            // A person reads as their name, as signatures do elsewhere on this page; the id is
+            // only in the form actions.
+            "<tr class={cls}><td>{name}<td>{role}<td>{areas}<td>{action}</tr>",
+            cls = if live { "ok" } else { "off" },
+            name = esc(&p.name),
+            role = esc(p.role.as_str()),
+            action = if live {
+                format!(
+                    "<form method=post action=\"/principals/{}/revoke\">\
+                     <button type=submit>Withdraw</button></form>",
+                    esc(&p.id)
+                )
+            } else {
+                "withdrawn".to_string()
+            },
+        ));
+    }
+    format!(
+        "<section class=card><h2>People</h2>\
+         <table><thead><tr><th>Name<th>Role<th>Bereiche<th></tr></thead>\
+         <tbody>{rows}</tbody></table>{form}</section>"
+    )
+}
+
+/// Fleet invitations: one file that enrols many projects. Made here or with `hub invite
+/// create`; the page says where the file went and never shows the code.
+fn codes_card(v: &View) -> String {
+    let form = format!(
+        "<details><summary>Make a fleet invitation</summary>\
+         <form method=post action=\"/enrolment-codes\">\
+         <label>Label <input name=label required placeholder=\"Rollout Disposition\"></label>\
+         <label>Projects <input name=max_uses type=number min=1 value=10 required></label>\
+         <label>Valid for <input name=expires value=P14D required></label>\
+         <label>Hub address <input name=hub_url value=\"{}\"></label>\
+         <button type=submit>Make it</button></form></details>",
+        esc(&v.suggested_url)
+    );
+    if v.codes.is_empty() {
+        return format!(
+            "<section class=card><h2>Fleet invitations</h2><p>None.</p>{form}</section>"
+        );
+    }
+    let mut rows = String::new();
+    for c in &v.codes {
+        let (cls, state) = if c.revoked_at.is_some() {
+            ("off", "withdrawn".to_string())
+        } else if c.expires_at.as_str() <= v.now.as_str() {
+            ("off", "expired".to_string())
+        } else if c.uses >= c.max_uses {
+            ("off", "used up".to_string())
+        } else {
+            ("ok", format!("works until {}", esc(&c.expires_at)))
+        };
+        let action = if cls == "ok" {
+            format!(
+                "<form method=post action=\"/enrolment-codes/{}/revoke\">\
+                 <button type=submit>Withdraw</button></form>",
+                esc(&c.id)
+            )
+        } else {
+            String::new()
+        };
+        rows.push_str(&format!(
+            "<tr class={cls}><td>{label}<td><code>{id}</code><td>{uses}/{max}<td>{state}\
+             <td>{action}</tr>",
+            label = esc(&c.label),
+            id = esc(&c.id),
+            uses = c.uses,
+            max = c.max_uses,
+        ));
+    }
+    format!(
+        "<section class=card><h2>Fleet invitations</h2>\
+         <table><thead><tr><th>Label<th>Id<th>Used<th>State<th></tr></thead>\
          <tbody>{rows}</tbody></table>{form}</section>"
     )
 }

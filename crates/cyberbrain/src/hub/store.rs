@@ -1871,6 +1871,15 @@ impl HubStore {
         Ok(())
     }
 
+    /// Take a bereich away from a person. Whether there was one to take.
+    pub fn unassign_bereich(&self, principal: &str, bereich: &str) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "DELETE FROM principal_bereiche WHERE principal = ? AND bereich = ?",
+            params![principal, bereich],
+        ))?;
+        Ok(n > 0)
+    }
+
     /// The bereiche a person is responsible for.
     pub fn bereiche_of(&self, principal: &str) -> Result<Vec<String>> {
         let mut stmt = ix(self.conn.prepare(

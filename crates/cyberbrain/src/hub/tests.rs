@@ -1051,6 +1051,22 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
         signing.contains("Bob"),
         "the log names who signed: {signing}"
     );
+    // What a person reads, not the markup: the people card names principals in its form
+    // actions, which nobody reads.
+    let visible = |html: &str| {
+        let mut out = String::new();
+        let mut in_tag = false;
+        for c in html.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => out.push(c),
+                _ => {}
+            }
+        }
+        out
+    };
+    let (operator, signing) = (visible(&operator), visible(&signing));
     for (page, body) in [("operator", &operator), ("signing", &signing)] {
         for id in ids {
             assert!(
@@ -1737,6 +1753,9 @@ fn a_collecting_hub_shows_the_seats() {
     // a test that skips itself when the key is absent is a test that passes by agreeing
     // with itself on every machine but one.
     let v = View {
+        people: Vec::new(),
+        codes: Vec::new(),
+        now: NOW.into(),
         grants: Vec::new(),
         names: Default::default(),
         version: "0.3.0".into(),
@@ -1768,6 +1787,9 @@ fn a_collecting_hub_shows_the_seats() {
 #[test]
 fn a_licence_about_to_run_out_says_it_on_the_page() {
     let v = View {
+        people: Vec::new(),
+        codes: Vec::new(),
+        now: NOW.into(),
         grants: Vec::new(),
         names: Default::default(),
         version: "0.3.0".into(),
@@ -4753,4 +4775,238 @@ async fn an_alert_round_posts_to_the_webhook_and_records_it() {
         "{actions:?}"
     );
     assert!(actions.contains(&"alerts.sent".to_string()), "{actions:?}");
+}
+
+// ---- people and fleet invitations on the administrator's page (F24) ----
+
+/// A signed-in administrator, and the directory the record (and its invitations) lives in.
+async fn admin_on_page() -> (Arc<super::api::HubState>, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(super::api::HubState {
+        hub: std::sync::Mutex::new(hub_with_password("correct horse battery")),
+        record: dir.path().join("hub.db"),
+        port: 7788,
+        sessions: Default::default(),
+        flash: std::sync::Mutex::new(None),
+        encrypted: true,
+        enrol_attempts: Default::default(),
+        sign_in_refusals: Default::default(),
+    });
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    (state, cookie, dir)
+}
+
+async fn form_post(
+    state: &Arc<super::api::HubState>,
+    cookie: &str,
+    uri: &str,
+    body: &str,
+) -> axum::response::Response {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", cookie)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap()
+}
+
+fn flash_of(state: &Arc<super::api::HubState>) -> Option<std::result::Result<String, String>> {
+    state.flash.lock().unwrap().take()
+}
+
+#[tokio::test]
+async fn people_are_added_assigned_and_withdrawn_from_the_page() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    let r = form_post(&state, &cookie, "/principals", "name=E.+Kraus&role=editor").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let shown = flash_of(&state).unwrap().unwrap();
+    assert!(
+        shown.contains("cbp_"),
+        "the credential is shown once: {shown}"
+    );
+    let editor = state.hub.lock().unwrap().principals().unwrap()[0].clone();
+    assert_eq!(editor.role, Role::Editor);
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche", editor.id),
+        "bereich=disposition",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.hub.lock().unwrap().bereiche_of(&editor.id).unwrap(),
+        ["disposition"]
+    );
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche/disposition/remove", editor.id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .bereiche_of(&editor.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/revoke", editor.id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(!state.hub.lock().unwrap().principals().unwrap()[0].is_active());
+
+    let actions: Vec<String> = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    for a in ["role.granted", "principal.assigned", "principal.unassigned"] {
+        assert!(actions.iter().any(|x| x == a), "{a} in {actions:?}");
+    }
+}
+
+/// The people who sign are not made from the page: a countersigner or a second
+/// administrator minted by the person whose acts they sign would make the two-person rule
+/// one person with two names. That stays at the machine, with the command.
+#[tokio::test]
+async fn the_page_does_not_make_signers_or_give_bereiche_to_non_editors() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    for role in ["countersigner", "admin"] {
+        let r = form_post(
+            &state,
+            &cookie,
+            "/principals",
+            &format!("name=X&role={role}"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{role}");
+    }
+    assert!(state.hub.lock().unwrap().principals().unwrap().is_empty());
+    form_post(&state, &cookie, "/principals", "name=A.+Udit&role=auditor").await;
+    let auditor = state.hub.lock().unwrap().principals().unwrap()[0].clone();
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche", auditor.id),
+        "bereich=disposition",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // And nobody signed out gets to do any of it.
+    let r = form_post(
+        &state,
+        "cyberbrain_hub=nope",
+        "/principals",
+        "name=Y&role=editor",
+    )
+    .await;
+    assert_ne!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.hub.lock().unwrap().principals().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_fleet_invitation_is_made_and_withdrawn_from_the_page() {
+    let (state, cookie, dir) = admin_on_page().await;
+    let r = form_post(
+        &state,
+        &cookie,
+        "/enrolment-codes",
+        "label=Rollout+Disposition&max_uses=3&expires=P14D&hub_url=https%3A%2F%2Fhub.internal%3A7788",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let shown = flash_of(&state).unwrap().unwrap();
+    let codes = state.hub.lock().unwrap().enrolment_codes().unwrap();
+    assert_eq!(codes.len(), 1);
+    assert_eq!(codes[0].max_uses, 3);
+    let file = dir
+        .path()
+        .join("invitations")
+        .join(format!("{}.json", codes[0].id));
+    assert!(shown.contains(&file.display().to_string()), "{shown}");
+    let inv: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(inv["kind"], super::client::FLEET_INVITATION_KIND);
+    assert_eq!(inv["hub_url"], "https://hub.internal:7788");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/enrolment-codes/{}/revoke", codes[0].id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state.hub.lock().unwrap().enrolment_codes().unwrap()[0]
+            .revoked_at
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn the_administrators_page_lists_people_and_fleet_invitations() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    form_post(&state, &cookie, "/principals", "name=E.+Kraus&role=editor").await;
+    form_post(
+        &state,
+        &cookie,
+        "/enrolment-codes",
+        "label=Rollout&max_uses=2&expires=P7D&hub_url=",
+    )
+    .await;
+    let mut req = Request::builder()
+        .uri("/")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let page = String::from_utf8_lossy(&b);
+    assert!(page.contains("<h2>People</h2>"), "{page}");
+    assert!(page.contains("E. Kraus"));
+    assert!(page.contains("<h2>Fleet invitations</h2>"));
+    assert!(page.contains("Rollout"));
+    assert!(!page.contains("cbp_"), "a credential is never on the page");
 }

@@ -585,6 +585,15 @@ $ cyberbrain hub principal assign R. Berger --bereich disposition
 Credentials are shown once and stored as a hash, like device tokens. Granting a role is
 itself an entry in the hub's log.
 
+The administrator's page does the same for auditors and editors: add a person (the credential
+is shown once, after adding), withdraw one, give an editor a bereich or take it away, and make
+or withdraw fleet invitations (the file is written to `invitations/` next to the record,
+readable by its owner only). Countersigners and administrators are not made from the page: the
+people who sign would otherwise be made by the person whose acts they sign, from anywhere on
+the network. That stays with `hub principal add`, at the machine. Every step is in the hub's
+log (`role.granted`, `role.revoked`, `principal.assigned`, `principal.unassigned`,
+`invitation.created`, `invitation.revoked`).
+
 ### One request, two people
 
 ```console
