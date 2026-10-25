@@ -24,6 +24,11 @@ llm = ["dep:cyberbrain-llm"]
 cyberbrain-core.workspace = true
 cyberbrain-llm = { workspace = true, optional = true }
 blake3 = "1.8.7"
+# Signing new audit rows and bundles with the store's key (F2). The same library the hub's
+# licence check uses, so the tree carries one Ed25519 implementation, in pure Rust.
+ed25519-dalek = "3.0.0"
+# Only for making a key. Already in the tree through the binary.
+getrandom = "0.4.3"
 jiff = { version = "0.2.35", features = ["serde"] }
 regex = "1.13.1"
 serde = { version = "1.0.229", features = ["derive"] }

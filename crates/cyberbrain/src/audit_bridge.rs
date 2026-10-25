@@ -27,6 +27,61 @@ use std::sync::{Mutex, MutexGuard};
 /// but not this one; see the report.
 pub const AUDIT_DB_FILE: &str = "audit.db";
 
+/// The store's audit key (F2), relative to the store root. In a directory of its own, so the
+/// `.gitignore` written next to it keeps it out of a repository the store happens to sit in.
+pub const AUDIT_KEY_FILE: &str = "keys/audit.ed25519";
+
+/// The store's audit key, if it has one.
+///
+/// A key file that exists but cannot be read is an error, not "no key": the log would go on
+/// unsigned, and the next check would report every new row as a stripped signature. Saying
+/// so now, at the command that would have written the first of them, is cheaper.
+pub fn load_audit_key(root: &std::path::Path) -> Result<Option<cyberbrain_policy::AuditKey>> {
+    let path = root.join(AUDIT_KEY_FILE);
+    match std::fs::read_to_string(&path) {
+        Ok(text) => cyberbrain_policy::AuditKey::from_hex(&text)
+            .map(Some)
+            .map_err(|e| Error::Config(format!("{}: {e}", path.display()))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(Error::Io { path, source: e }),
+    }
+}
+
+/// Make the store's audit key. Refuses when there is one: replacing a key silently would
+/// leave every row signed so far pointing at a key nobody holds any more.
+pub fn create_audit_key(root: &std::path::Path) -> Result<cyberbrain_policy::AuditKey> {
+    let path = root.join(AUDIT_KEY_FILE);
+    if path.exists() {
+        return Err(Error::Config(format!(
+            "{} already exists; this store has an audit key, and replacing it would orphan \
+             every row signed with it",
+            path.display()
+        )));
+    }
+    let dir = path.parent().expect("the key file has a directory");
+    std::fs::create_dir_all(dir).map_err(|e| Error::Io {
+        path: dir.to_path_buf(),
+        source: e,
+    })?;
+    let ignore = dir.join(".gitignore");
+    if !ignore.exists() {
+        std::fs::write(&ignore, "# Private keys. Never commit these.\n*\n").map_err(|e| {
+            Error::Io {
+                path: ignore.clone(),
+                source: e,
+            }
+        })?;
+    }
+    let key = cyberbrain_policy::AuditKey::generate()?;
+    crate::hub::client::write_owner_only(&path, &format!("{}\n", key.secret_hex())).map_err(
+        |e| Error::Io {
+            path: path.clone(),
+            source: e,
+        },
+    )?;
+    Ok(key)
+}
+
 pub struct StoreAuditSink {
     store: Mutex<AuditStore>,
 }

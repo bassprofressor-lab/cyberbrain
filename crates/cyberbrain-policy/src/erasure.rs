@@ -251,6 +251,162 @@ pub fn render(r: &ErasureReport) -> String {
     s
 }
 
+/// A report of one erasure that somebody else can check (F9): what went, whether the WAL
+/// was emptied, which audit rows record it, and — when the store has an audit key — a
+/// signature over all of it.
+///
+/// # Format
+///
+/// One JSON object. The signature is Ed25519 over the domain tag
+/// `cyberbrain.erasure.report.v1\n` followed by the object **without** its `sig` key,
+/// serialised as compact JSON with sorted keys — the same canonical form the audit hash uses
+/// for `detail`, so a checker in another language needs one rule, not two.
+pub mod receipt {
+    use super::ErasureReport;
+    use crate::audit_key::{
+        AuditKey, ERASURE_DOMAIN, fingerprint_of, key_matches, verify_signature,
+    };
+    use cyberbrain_core::{Error, Result};
+    use serde::{Deserialize, Serialize};
+
+    pub const KIND: &str = "cyberbrain.erasure.report";
+    pub const VERSION: u32 = 1;
+
+    /// An audit row the erasure left, named by its chain hash so the report can be tied to
+    /// the log (and to any audit bundle that holds the row).
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct AuditRef {
+        pub action: String,
+        pub hash: String,
+        pub at: String,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+    pub struct Receipt {
+        pub kind: String,
+        pub version: u32,
+        pub tool: String,
+        pub written_at: String,
+        pub erasure: ErasureReport,
+        /// Pre-erasure pages may still be on disk. The same answer as `erasure.scrub`,
+        /// lifted to the top because it is the one line a reader must not miss. `true`
+        /// also when the scrub could not be checked at all.
+        pub residue: bool,
+        pub audit: Vec<AuditRef>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub key: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub sig: Option<String>,
+    }
+
+    impl Receipt {
+        pub fn new(erasure: ErasureReport, audit: Vec<AuditRef>, tool: &str, now: &str) -> Self {
+            // No scrub on a real erasure means nobody looked, and "nothing left" would be a
+            // claim nobody checked. A dry run erased nothing and leaves nothing.
+            let residue = match erasure.scrub {
+                Some(s) => s.residue,
+                None => !erasure.dry_run,
+            };
+            Receipt {
+                kind: KIND.to_string(),
+                version: VERSION,
+                tool: tool.to_string(),
+                written_at: now.to_string(),
+                erasure,
+                residue,
+                audit,
+                key: None,
+                sig: None,
+            }
+        }
+
+        /// Sign with the store's key. The public key goes into the signed content, so it
+        /// cannot be swapped without breaking the signature.
+        pub fn sign(&mut self, key: &AuditKey) -> Result<()> {
+            self.sig = None;
+            self.key = Some(key.public_hex());
+            let body = canonical(self)?;
+            self.sig = Some(key.sign(ERASURE_DOMAIN, body.as_bytes()));
+            Ok(())
+        }
+    }
+
+    fn canonical(r: &Receipt) -> Result<String> {
+        let mut v = serde_json::to_value(r)
+            .map_err(|e| Error::Index(format!("erasure report does not serialise: {e}")))?;
+        if let serde_json::Value::Object(m) = &mut v {
+            m.remove("sig");
+        }
+        Ok(v.to_string())
+    }
+
+    /// What a check of a report found.
+    #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+    pub struct Checked {
+        pub receipt: Receipt,
+        /// Fingerprint of the key the signature holds for; `None` for an unsigned report.
+        pub signed_by: Option<String>,
+    }
+
+    /// Check a report on its own: shape, version, and the signature when there is one.
+    pub fn verify(text: &str) -> Result<Checked> {
+        let bad = |m: String| Error::Index(format!("erasure report: {m}"));
+        let r: Receipt =
+            serde_json::from_str(text).map_err(|e| bad(format!("not an erasure report: {e}")))?;
+        if r.kind != KIND {
+            return Err(bad(format!("kind is {:?}, expected {KIND:?}", r.kind)));
+        }
+        if r.version != VERSION {
+            return Err(bad(format!(
+                "format version {} is not {VERSION}; use a reader that knows it",
+                r.version
+            )));
+        }
+        // The top-level line must agree with the detail it summarises; otherwise an edit to
+        // the one a reader looks at first would go unnoticed in an unsigned report.
+        if let Some(s) = r.erasure.scrub
+            && s.residue != r.residue
+        {
+            return Err(bad("`residue` contradicts `erasure.scrub.residue`".into()));
+        }
+        let signed_by = match (&r.key, &r.sig) {
+            (None, None) => None,
+            (Some(key), Some(sig)) => {
+                verify_signature(key, ERASURE_DOMAIN, canonical(&r)?.as_bytes(), sig)
+                    .map_err(|e| bad(format!("{e}; the report was changed after it was signed")))?;
+                Some(fingerprint_of(key)?)
+            }
+            (Some(_), None) => {
+                return Err(bad(
+                    "it names a signing key but carries no signature; it was removed".into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(bad("it carries a signature but names no key".into()));
+            }
+        };
+        Ok(Checked {
+            receipt: r,
+            signed_by,
+        })
+    }
+
+    /// [`verify`], and the report must be signed with the key `expected` names.
+    pub fn verify_expecting(text: &str, expected: &str) -> Result<Checked> {
+        let c = verify(text)?;
+        match &c.receipt.key {
+            Some(k) if key_matches(expected, k) => Ok(c),
+            Some(_) => Err(Error::Index(format!(
+                "erasure report: signed with key {}, not with the expected {expected}",
+                c.signed_by.as_deref().unwrap_or("?")
+            ))),
+            None => Err(Error::Index(format!(
+                "erasure report: not signed, and key {expected} was expected"
+            ))),
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -419,5 +575,76 @@ pub(crate) mod tests {
         assert_eq!(sink.rows()[0].detail["dry_run"], true);
         assert!(render(&r).starts_with("[dry run] "));
         assert!(render(&r).contains("audit rows: kept"));
+    }
+
+    // ---- the checkable report (F9) ----
+
+    fn receipt_of(report: ErasureReport) -> receipt::Receipt {
+        receipt::Receipt::new(
+            report,
+            vec![receipt::AuditRef {
+                action: "note.erase.completed".into(),
+                hash: "ab".repeat(32),
+                at: "2026-10-25T00:00:00Z".into(),
+            }],
+            "test",
+            "2026-10-25T00:00:01Z",
+        )
+    }
+
+    #[test]
+    fn a_signed_erasure_report_verifies_and_an_edit_does_not() {
+        let key = crate::AuditKey::generate().unwrap();
+        let mut r = receipt_of(ErasureReport {
+            scrub: Some(ScrubStatus {
+                residue: true,
+                wal: Some(WalStatus {
+                    busy: true,
+                    log_frames: 9,
+                    checkpointed_frames: 3,
+                }),
+            }),
+            ..full()
+        });
+        assert!(r.residue);
+        r.sign(&key).unwrap();
+        let text = serde_json::to_string_pretty(&r).unwrap();
+        let c = receipt::verify_expecting(&text, &key.fingerprint()).unwrap();
+        assert_eq!(c.signed_by.as_deref(), Some(key.fingerprint().as_str()));
+
+        // The line somebody would most like to change.
+        let edited = text
+            .replace("\"residue\": true", "\"residue\": false")
+            .replace("\"busy\": true", "\"busy\": false");
+        let err = receipt::verify(&edited).unwrap_err().to_string();
+        assert!(err.contains("signature"), "{err}");
+        let other = crate::AuditKey::generate().unwrap();
+        assert!(receipt::verify_expecting(&text, &other.fingerprint()).is_err());
+    }
+
+    #[test]
+    fn an_unsigned_report_verifies_but_not_against_a_key() {
+        let r = receipt_of(full());
+        assert!(
+            r.residue,
+            "no scrub recorded on a real erasure is not a clean bill"
+        );
+        let text = serde_json::to_string(&r).unwrap();
+        let c = receipt::verify(&text).unwrap();
+        assert_eq!(c.signed_by, None);
+        assert!(receipt::verify_expecting(&text, "00").is_err());
+        let contradicted = serde_json::to_string(&receipt::Receipt {
+            residue: false,
+            erasure: ErasureReport {
+                scrub: Some(ScrubStatus {
+                    residue: true,
+                    wal: None,
+                }),
+                ..full()
+            },
+            ..r
+        })
+        .unwrap();
+        assert!(receipt::verify(&contradicted).is_err());
     }
 }

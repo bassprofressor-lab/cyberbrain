@@ -38,7 +38,19 @@ pub struct PolicyStatus {
 
 impl Policy {
     pub fn new(cfg: PolicyConfig, sink: Arc<dyn AuditSink>, actor: Actor) -> Self {
-        let audit = AuditLog::new(sink);
+        Self::with_audit_key(cfg, sink, actor, None)
+    }
+
+    /// [`new`](Self::new), with the store's audit key: every row appended through this
+    /// policy, the gate's included, is then signed (F2). The key goes in here, before the
+    /// log is handed to the gate, so no clone of the log can write unsigned rows.
+    pub fn with_audit_key(
+        cfg: PolicyConfig,
+        sink: Arc<dyn AuditSink>,
+        actor: Actor,
+        key: Option<crate::AuditKey>,
+    ) -> Self {
+        let audit = AuditLog::new(sink).with_key(key);
         let egress = Egress::new(cfg.clone(), audit.clone(), actor.clone());
         Self {
             cfg,
@@ -205,8 +217,23 @@ impl Policy {
         self.audit.export_bundle(&self.actor, filter, tool)
     }
 
+    /// [`export_audit_bundle`](Self::export_audit_bundle), signed when `signed`.
+    pub fn export_audit_bundle_with(
+        &self,
+        filter: &AuditFilter,
+        tool: &str,
+        signed: bool,
+    ) -> Result<String> {
+        self.audit
+            .export_bundle_with(&self.actor, filter, tool, signed)
+    }
+
     pub fn verify_audit(&self) -> Result<usize> {
         self.audit.verify()
+    }
+
+    pub fn verify_audit_report(&self) -> Result<crate::ChainReport> {
+        self.audit.verify_report()
     }
 
     pub fn model_cards(&self, inventories: &[&dyn ModelInventory]) -> Vec<ModelCard> {

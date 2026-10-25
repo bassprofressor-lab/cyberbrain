@@ -28,11 +28,21 @@
 //! command, which logs a hash of the identifier, not the identifier. And token counts an
 //! endpoint did not report stay absent: an estimate in an audit log reads as a measurement.
 
+use crate::audit_key::{AuditKey, ROW_DOMAIN, fingerprint_of, verify_signature};
 use cyberbrain_core::{Error, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fmt;
 use std::sync::{Arc, Mutex};
+
+/// The chain format of a row signed with the store's key: `_chain.v` is 2, the hash is over
+/// length-prefixed fields (see [`AuditEvent::chain_version`]), and `_chain.key` and
+/// `_chain.sig` carry the public key and the signature. Rows without `v` are format 1 and
+/// keep the rule they were written with.
+pub const CHAIN_V2: u64 = 2;
+
+/// The first field of every format-2 hash, so it can never equal a hash of anything else.
+const HASH_V2_DOMAIN: &str = "cyberbrain.audit.v2";
 
 /// Who did the thing. Stored as text (`actor` column) via [`fmt::Display`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +170,31 @@ impl AuditEvent {
         self.detail.get("_chain")?.get("at")?.as_str()
     }
 
+    /// Which hash rule the row was written with.
+    ///
+    /// 1, the original, separates the fields with a newline. Since a field may itself hold a
+    /// newline, moving a boundary — `actor "a\nb", action "c"` against `actor "a", action
+    /// "b\nc"` — gives the same hash (K1). That was harmless while anybody could recompute
+    /// the chain anyway; with signatures it would let a signed row say something else, so
+    /// format 2 prefixes every field with its length. Rows of format 1 are checked by their
+    /// own rule for ever: changing it would turn every existing log into a forgery.
+    pub fn chain_version(&self) -> u64 {
+        self.detail
+            .get("_chain")
+            .and_then(|c| c.get("v"))
+            .and_then(Value::as_u64)
+            .unwrap_or(1)
+    }
+
+    /// The public key (hex) a format-2 row was signed with.
+    pub fn chain_key(&self) -> Option<&str> {
+        self.detail.get("_chain")?.get("key")?.as_str()
+    }
+
+    pub fn chain_sig(&self) -> Option<&str> {
+        self.detail.get("_chain")?.get("sig")?.as_str()
+    }
+
     /// The detail without the chain block, for display and for hashing.
     pub fn detail_without_chain(&self) -> Value {
         let mut d = self.detail.clone();
@@ -179,6 +214,26 @@ impl AuditEvent {
         // serde_json's Value::Object is a BTreeMap without `preserve_order`, so this
         // serialisation is canonical for our purposes.
         h.update(self.detail_without_chain().to_string().as_bytes());
+        h.finalize().to_hex().to_string()
+    }
+
+    /// The format-2 hash: every field, the domain tag first, as an 8-byte little-endian
+    /// length and then its bytes. No separator can be forged, because there is none.
+    fn compute_hash_v2(&self, prev: &str, at: &str) -> String {
+        let detail = self.detail_without_chain().to_string();
+        let mut h = blake3::Hasher::new();
+        for part in [
+            HASH_V2_DOMAIN,
+            prev,
+            at,
+            &self.actor,
+            &self.action,
+            &self.subject,
+            &detail,
+        ] {
+            h.update(&(part.len() as u64).to_le_bytes());
+            h.update(part.as_bytes());
+        }
         h.finalize().to_hex().to_string()
     }
 }
@@ -348,6 +403,9 @@ pub struct AuditLog {
     sink: Arc<dyn AuditSink>,
     /// Serialises `last` + `append` within this process so the chain cannot fork here.
     write_lock: Arc<Mutex<()>>,
+    /// The store's key, when it has one. Every row appended through this log is then signed
+    /// and written in chain format 2; without one, rows stay in format 1 as before.
+    key: Option<Arc<AuditKey>>,
 }
 
 impl AuditLog {
@@ -355,7 +413,19 @@ impl AuditLog {
         Self {
             sink,
             write_lock: Arc::new(Mutex::new(())),
+            key: None,
         }
+    }
+
+    /// Sign every row appended from now on with `key`. Set before the log is cloned: the
+    /// egress gate and the write gate each hold a clone, and they must sign alike.
+    pub fn with_key(mut self, key: Option<AuditKey>) -> Self {
+        self.key = key.map(Arc::new);
+        self
+    }
+
+    pub fn key(&self) -> Option<&AuditKey> {
+        self.key.as_deref()
     }
 
     pub fn in_memory() -> (Self, Arc<MemoryAuditSink>) {
@@ -427,13 +497,27 @@ impl AuditLog {
                 subject: subject.clone(),
                 detail: detail.clone(),
             };
-            let hash = event.compute_hash(&prev, &at);
+            let chain = match &self.key {
+                None => {
+                    let hash = event.compute_hash(&prev, &at);
+                    json!({ "prev": prev, "hash": hash, "at": at })
+                }
+                Some(key) => {
+                    let hash = event.compute_hash_v2(&prev, &at);
+                    let sig = key.sign(ROW_DOMAIN, hash.as_bytes());
+                    json!({
+                        "prev": prev,
+                        "hash": hash,
+                        "at": at,
+                        "v": CHAIN_V2,
+                        "key": key.public_hex(),
+                        "sig": sig,
+                    })
+                }
+            };
             let mut chained = detail.clone();
             if let Value::Object(m) = &mut chained {
-                m.insert(
-                    "_chain".into(),
-                    json!({ "prev": prev, "hash": hash, "at": at }),
-                );
+                m.insert("_chain".into(), chain);
             }
             event.detail = chained;
             match self.sink.append(&event) {
@@ -492,8 +576,13 @@ impl AuditLog {
 
     /// Walk the whole log and check the chain. `Ok(n)` is the number of rows verified.
     pub fn verify(&self) -> Result<usize> {
+        self.verify_report().map(|r| r.rows)
+    }
+
+    /// [`verify`](Self::verify), and what it found about signatures.
+    pub fn verify_report(&self) -> Result<ChainReport> {
         let rows = self.sink.read(&AuditFilter::default())?;
-        verify_chain(&rows)
+        verify_chain_report(GENESIS, &rows)
     }
 
     /// A period of the log as a self-checking bundle: header with the anchor, the rows, a
@@ -502,6 +591,30 @@ impl AuditLog {
     /// Recorded like the plain export, and for the same reason — an extract is an access,
     /// and an access that leaves no trace is the one nobody can ask about later.
     pub fn export_bundle(&self, actor: &Actor, filter: &AuditFilter, tool: &str) -> Result<String> {
+        self.export_bundle_with(actor, filter, tool, false)
+    }
+
+    /// [`export_bundle`](Self::export_bundle), signed with the store's key when `signed`.
+    /// Asking for a signature without a key is an error, not an unsigned file: somebody who
+    /// asked for one is about to hand the file on as signed.
+    pub fn export_bundle_with(
+        &self,
+        actor: &Actor,
+        filter: &AuditFilter,
+        tool: &str,
+        signed: bool,
+    ) -> Result<String> {
+        let key = match (signed, self.key()) {
+            (false, _) => None,
+            (true, Some(k)) => Some(k),
+            (true, None) => {
+                return Err(Error::Config(
+                    "this store has no audit key to sign with; create one with \
+                     `cyberbrain policy audit-key --init`"
+                        .into(),
+                ));
+            }
+        };
         let rows = self.sink.read(filter)?;
         let out = bundle::render_with(
             &rows,
@@ -511,13 +624,14 @@ impl AuditLog {
                 tool: tool.to_string(),
                 exported_at: jiff::Timestamp::now().to_string(),
                 selection: bundle::Selection::of(filter),
+                key,
             },
         );
         self.record(
             actor,
             AuditAction::AuditExport,
             "audit",
-            json!({ "rows": rows.len(), "format": "bundle" }),
+            json!({ "rows": rows.len(), "format": "bundle", "signed": key.is_some() }),
         )?;
         Ok(out)
     }
@@ -564,7 +678,13 @@ impl AuditLog {
 /// whatever language is normal by then. `scripts/verify-audit-export.py` is that check,
 /// written once as proof it can be.
 pub mod bundle {
-    use super::{AuditEvent, AuditFilter, GENESIS, verify_chain_from, verify_each};
+    use super::{
+        AuditEvent, AuditFilter, CHAIN_V2, ChainReport, GENESIS, verify_chain_report,
+        verify_each_report,
+    };
+    use crate::audit_key::{
+        AuditKey, BUNDLE_DOMAIN, fingerprint_of, key_matches, verify_signature,
+    };
     use cyberbrain_core::{Error, Result};
     use serde::{Deserialize, Serialize};
 
@@ -573,7 +693,9 @@ pub mod bundle {
     /// The format every bundle had before selections and signatures, and still the one
     /// written when a bundle needs neither, so a reader that only knows it keeps working.
     pub const VERSION: u32 = 1;
-    /// Adds the selection (`filter` in the header). Written only when a bundle uses it.
+    /// Adds the selection (`filter` in the header), the signature (`key` in the header,
+    /// `sig` in the footer) and rows of chain format 2. Written only when a bundle uses one
+    /// of them.
     pub const VERSION_2: u32 = 2;
 
     /// Which rows of the period a bundle holds, when it is not all of them.
@@ -630,12 +752,14 @@ pub mod bundle {
 
     /// Everything about a bundle that is not its rows.
     #[derive(Debug, Clone, Default)]
-    pub struct Spec {
+    pub struct Spec<'k> {
         pub from: Option<String>,
         pub to: Option<String>,
         pub tool: String,
         pub exported_at: String,
         pub selection: Option<Selection>,
+        /// Sign the bundle with this key.
+        pub key: Option<&'k AuditKey>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -657,6 +781,9 @@ pub mod bundle {
         /// Present when the bundle holds a selection rather than the whole period.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub filter: Option<Selection>,
+        /// The public key (hex) the footer's signature was made with. Present when signed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub key: Option<String>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -667,6 +794,9 @@ pub mod bundle {
         pub first_hash: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         pub last_hash: Option<String>,
+        /// Ed25519 over the domain tag and every byte of the file before this line.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub sig: Option<String>,
     }
 
     /// What a check found. `rows` is what it verified, not what the file claimed.
@@ -687,6 +817,14 @@ pub mod bundle {
         /// rows were then checked one by one; gaps between them are expected.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub filter: Option<Selection>,
+        /// The public key the bundle is signed with, when it is. The signature holds; whether
+        /// this is the key you expected is [`verify_expecting`]'s question.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub key: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub fingerprint: Option<String>,
+        /// Signed and unsigned rows, and the keys of the signed ones.
+        pub chain: ChainReport,
     }
 
     /// Render rows as a bundle. `tool` names the writer, `exported_at` is its own timestamp.
@@ -705,6 +843,7 @@ pub mod bundle {
                 tool: tool.to_string(),
                 exported_at: exported_at.to_string(),
                 selection: None,
+                key: None,
             },
         )
     }
@@ -720,7 +859,10 @@ pub mod bundle {
             .to_string();
         // The lowest version that can say what this bundle says. A plain period stays at 1,
         // so a reader written against 1 checks it as before.
-        let version = if spec.selection.is_some() {
+        let version = if spec.selection.is_some()
+            || spec.key.is_some()
+            || rows.iter().any(|r| r.chain_version() >= CHAIN_V2)
+        {
             VERSION_2
         } else {
             VERSION
@@ -735,12 +877,14 @@ pub mod bundle {
             anchor,
             rows: rows.len(),
             filter: spec.selection.clone(),
+            key: spec.key.map(AuditKey::public_hex),
         };
-        let footer = Footer {
+        let mut footer = Footer {
             kind: KIND_END.to_string(),
             rows: rows.len(),
             first_hash: rows.first().and_then(|r| r.chain_hash()).map(str::to_owned),
             last_hash: rows.last().and_then(|r| r.chain_hash()).map(str::to_owned),
+            sig: None,
         };
 
         let mut s = serde_json::to_string(&header).expect("header serialises");
@@ -749,6 +893,9 @@ pub mod bundle {
             s.push_str(&serde_json::to_string(r).expect("AuditEvent serialises"));
             s.push('\n');
         }
+        // The signature covers the bytes as written, not a re-serialisation: a checker in
+        // another language then needs no JSON rules to check it, only the file.
+        footer.sig = spec.key.map(|k| k.sign(BUNDLE_DOMAIN, s.as_bytes()));
         s.push_str(&serde_json::to_string(&footer).expect("footer serialises"));
         s.push('\n');
         s
@@ -792,6 +939,11 @@ pub mod bundle {
                 "a version 1 file carries a selection, which version 1 cannot express".into(),
             ));
         }
+        if header.version == VERSION && header.key.is_some() {
+            return Err(bad(
+                "a version 1 file carries a signing key, which version 1 cannot express".into(),
+            ));
+        }
 
         let rest: Vec<&str> = lines.collect();
         let (footer_line, row_lines) = rest
@@ -829,8 +981,34 @@ pub mod bundle {
                 rows.len()
             )));
         }
-        let verified = match &header.filter {
-            None => verify_chain_from(&header.anchor, &rows)?,
+        // The signature first: if it fails, nothing else in the file is worth reporting.
+        match (&header.key, &footer.sig) {
+            (None, None) => {}
+            (Some(key), Some(sig)) => {
+                let body_end =
+                    text.trim_end().rfind('\n').map(|i| i + 1).ok_or_else(|| {
+                        bad("a signed file needs a footer line of its own".into())
+                    })?;
+                verify_signature(key, BUNDLE_DOMAIN, &text.as_bytes()[..body_end], sig)
+                    .map_err(|e| bad(format!("{e}; the file was changed after it was signed")))?;
+            }
+            (Some(_), None) => {
+                return Err(bad(
+                    "the header names a signing key, but the footer carries no signature; it \
+                     was removed"
+                        .into(),
+                ));
+            }
+            (None, Some(_)) => {
+                return Err(bad(
+                    "the footer carries a signature, but the header names no key to check it with"
+                        .into(),
+                ));
+            }
+        }
+
+        let chain = match &header.filter {
+            None => verify_chain_report(&header.anchor, &rows)?,
             Some(sel) => {
                 let first_prev = rows.first().and_then(|r| r.chain_prev()).unwrap_or(GENESIS);
                 if first_prev != header.anchor {
@@ -844,9 +1022,10 @@ pub mod bundle {
                         i + 1
                     )));
                 }
-                verify_each(&rows)?
+                verify_each_report(&rows)?
             }
         };
+        let verified = chain.rows;
 
         let last_hash = rows.last().and_then(|r| r.chain_hash()).map(str::to_owned);
         if footer.last_hash != last_hash {
@@ -867,9 +1046,41 @@ pub mod bundle {
                 exported_at: header.exported_at,
                 version: header.version,
                 filter: header.filter,
+                fingerprint: header.key.as_deref().and_then(|k| fingerprint_of(k).ok()),
+                key: header.key,
+                chain,
             },
             rows,
         ))
+    }
+
+    /// [`verify`], and the file must be signed with the key `expected` names — its
+    /// fingerprint or the whole public key — and so must every signed row in it.
+    ///
+    /// This is the check that makes a signature worth something. Without an expected key,
+    /// a signature only shows that *somebody* signed; a forger signs too.
+    pub fn verify_expecting(text: &str, expected: &str) -> Result<Report> {
+        let report = verify(text)?;
+        let bad = |m: String| Error::Index(format!("audit export: {m}"));
+        let Some(key) = &report.key else {
+            return Err(bad(format!(
+                "the file is not signed, and key {expected} was expected"
+            )));
+        };
+        if !key_matches(expected, key) {
+            return Err(bad(format!(
+                "the file is signed with key {}, not with the expected {expected}",
+                report.fingerprint.as_deref().unwrap_or(key)
+            )));
+        }
+        for (k, fp) in report.chain.keys.iter().zip(report.chain.fingerprints()) {
+            if !key_matches(expected, k) {
+                return Err(bad(format!(
+                    "rows in the file are signed with key {fp}, not with the expected {expected}"
+                )));
+            }
+        }
+        Ok(report)
     }
 }
 
@@ -931,41 +1142,126 @@ pub fn verify_chain(rows: &[AuditEvent]) -> Result<usize> {
 /// limit: it proves the extract is internally intact and starts where it says it does. That
 /// the anchor itself belongs to the real history is a question only the full log answers.
 pub fn verify_chain_from(anchor: &str, rows: &[AuditEvent]) -> Result<usize> {
+    verify_chain_report(anchor, rows).map(|r| r.rows)
+}
+
+/// What a check found beyond "it holds": how many rows were signed, how many were written
+/// before the store had a key, and with which keys.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct ChainReport {
+    pub rows: usize,
+    /// Format-1 rows: written before signing began, or in a store without a key. Not a
+    /// fault — the chain still covers them — but nobody's signature does.
+    pub unsigned: usize,
+    /// Format-2 rows, each with a signature that holds.
+    pub signed: usize,
+    /// The public keys (hex) the signed rows carry, in the order they first appear. One,
+    /// normally. Whether it is the *right* one is for the caller to decide against a key it
+    /// trusts; a row can only prove which key signed it.
+    pub keys: Vec<String>,
+}
+
+impl ChainReport {
+    /// Fingerprints of [`keys`](Self::keys), for people.
+    pub fn fingerprints(&self) -> Vec<String> {
+        self.keys
+            .iter()
+            .map(|k| fingerprint_of(k).unwrap_or_else(|_| k.clone()))
+            .collect()
+    }
+}
+
+/// [`verify_chain_from`], with what it found about signatures.
+pub fn verify_chain_report(anchor: &str, rows: &[AuditEvent]) -> Result<ChainReport> {
+    let mut walk = Walk::default();
     let mut prev = anchor.to_string();
     for (i, row) in rows.iter().enumerate() {
         // The reader counts from one, and so does every listing this number is compared
         // against; a zero-based index here sent someone looking at the wrong row.
-        prev = check_row(&prev, row, i + 1)?.to_string();
+        prev = walk.row(&prev, row, i + 1)?.to_string();
     }
-    Ok(rows.len())
+    Ok(walk.report)
 }
 
-/// One row against the hash it must follow. Returns the row's own hash, which the next row
-/// must name.
-fn check_row<'r>(prev: &str, row: &'r AuditEvent, row_no: usize) -> Result<&'r str> {
-    // Not named `at` in the message: that is already the chain's own timestamp.
-    let (Some(p), Some(h), Some(at)) = (row.chain_prev(), row.chain_hash(), row.chain_at()) else {
-        return Err(Error::Index(format!(
-            "audit chain broken at row {row_no} ({} {} {}): row carries no _chain",
-            row.ts, row.action, row.subject
-        )));
-    };
-    if p != prev {
-        return Err(Error::Index(format!(
-            "audit chain broken at row {row_no} ({} {} {}): prev does not match the row \
-             before it; a row was removed, reordered or inserted",
-            row.ts, row.action, row.subject
-        )));
+/// The state a check carries from row to row.
+#[derive(Default)]
+struct Walk {
+    report: ChainReport,
+    /// The first signed row seen. After it, an unsigned row is a stripped signature.
+    first_signed: Option<usize>,
+}
+
+impl Walk {
+    /// One row against the hash it must follow. Returns the row's own hash, which the next
+    /// row must name.
+    fn row<'r>(&mut self, prev: &str, row: &'r AuditEvent, row_no: usize) -> Result<&'r str> {
+        let broken = |why: &str| {
+            Error::Index(format!(
+                "audit chain broken at row {row_no} ({} {} {}): {why}",
+                row.ts, row.action, row.subject
+            ))
+        };
+        // Not named `at` in the message: that is already the chain's own timestamp.
+        let (Some(p), Some(h), Some(at)) = (row.chain_prev(), row.chain_hash(), row.chain_at())
+        else {
+            return Err(broken("row carries no _chain"));
+        };
+        if p != prev {
+            return Err(broken(
+                "prev does not match the row before it; a row was removed, reordered or inserted",
+            ));
+        }
+        match row.chain_version() {
+            1 => {
+                // Once the log is signed it stays signed. An unsigned row after a signed one
+                // is either a signature somebody removed — and recomputed the old-style hash
+                // for — or a writer without the key, such as an older binary still running.
+                // Both are worth a person's attention; neither may pass as "pre-signing".
+                if let Some(first) = self.first_signed {
+                    return Err(broken(&format!(
+                        "row is unsigned, but row {first} before it was signed; a signature was \
+                         removed, or a process without the store's key (an older cyberbrain \
+                         still running?) appended it"
+                    )));
+                }
+                if h != row.compute_hash(prev, at) {
+                    return Err(broken(
+                        "content does not match its hash; the row was edited",
+                    ));
+                }
+                self.report.unsigned += 1;
+            }
+            CHAIN_V2 => {
+                let (Some(key), Some(sig)) = (row.chain_key(), row.chain_sig()) else {
+                    return Err(broken(
+                        "row is in the signed format but carries no signature",
+                    ));
+                };
+                if h != row.compute_hash_v2(prev, at) {
+                    return Err(broken(
+                        "content does not match its hash; the row was edited",
+                    ));
+                }
+                verify_signature(key, ROW_DOMAIN, h.as_bytes(), sig).map_err(|e| {
+                    broken(&format!(
+                        "{e}; the row was re-hashed by somebody without the key that signed it"
+                    ))
+                })?;
+                self.report.signed += 1;
+                if !self.report.keys.iter().any(|k| k == key) {
+                    self.report.keys.push(key.to_string());
+                }
+                self.first_signed.get_or_insert(row_no);
+            }
+            v => {
+                return Err(broken(&format!(
+                    "chain format {v} is newer than this reader; use a newer cyberbrain"
+                )));
+            }
+        }
+        self.report.rows += 1;
+        Ok(h)
     }
-    let expect = row.compute_hash(prev, at);
-    if h != expect {
-        return Err(Error::Index(format!(
-            "audit chain broken at row {row_no} ({} {} {}): content does not match its hash; \
-             the row was edited",
-            row.ts, row.action, row.subject
-        )));
-    }
-    Ok(h)
 }
 
 /// Check rows that are a selection rather than a stretch of the chain: each one against the
@@ -974,6 +1270,13 @@ fn check_row<'r>(prev: &str, row: &'r AuditEvent, row_no: usize) -> Result<&'r s
 /// Proves that every row is as it was written. It does not prove that nothing between them
 /// is missing, because missing rows are what a selection is.
 pub fn verify_each(rows: &[AuditEvent]) -> Result<usize> {
+    verify_each_report(rows).map(|r| r.rows)
+}
+
+/// [`verify_each`], with what it found about signatures. The order of the selection is the
+/// order of the log, so an unsigned row after a signed one is refused here as well.
+pub fn verify_each_report(rows: &[AuditEvent]) -> Result<ChainReport> {
+    let mut walk = Walk::default();
     for (i, row) in rows.iter().enumerate() {
         let Some(prev) = row.chain_prev() else {
             return Err(Error::Index(format!(
@@ -984,9 +1287,9 @@ pub fn verify_each(rows: &[AuditEvent]) -> Result<usize> {
                 row.subject
             )));
         };
-        check_row(prev, row, i + 1)?;
+        walk.row(prev, row, i + 1)?;
     }
-    Ok(rows.len())
+    Ok(walk.report)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1549,5 +1852,207 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("version 1"), "{err}");
+    }
+
+    // ---- signed rows (F2, K1) ----
+
+    fn signed_log() -> (AuditLog, Arc<MemoryAuditSink>, AuditKey) {
+        let key = AuditKey::generate().unwrap();
+        let sink = Arc::new(MemoryAuditSink::new());
+        (
+            AuditLog::new(sink.clone()).with_key(Some(key.clone())),
+            sink,
+            key,
+        )
+    }
+
+    /// K1: in format 1 a newline inside one field and a moved boundary give the same hash,
+    /// so a signed row could be made to say something else and keep its signature.
+    /// Calibrated against format 2 still hashing with the newline rule: the shifted row
+    /// verified, and this test failed on the `is_err`.
+    #[test]
+    fn moving_a_field_boundary_breaks_a_signed_row() {
+        let (log, sink, _) = signed_log();
+        log.record_raw("agent:a\nnote.write", "x", "s", json!({}))
+            .unwrap();
+        let mut rows = sink.rows();
+        rows[0].actor = "agent:a".into();
+        rows[0].action = "note.write\nx".into();
+        let err = verify_chain(&rows);
+        assert!(err.is_err(), "a moved boundary kept its hash and signature");
+    }
+
+    #[test]
+    fn signed_rows_verify_and_name_their_key() {
+        let (log, sink, key) = signed_log();
+        for s in ["a", "b"] {
+            log.record(&Actor::Operator, AuditAction::NoteWrite, s, json!({}))
+                .unwrap();
+        }
+        let rows = sink.rows();
+        assert_eq!(rows[0].chain_version(), CHAIN_V2);
+        let r = verify_chain_report(GENESIS, &rows).unwrap();
+        assert_eq!((r.rows, r.signed, r.unsigned), (2, 2, 0));
+        assert_eq!(r.keys, vec![key.public_hex()]);
+        assert_eq!(r.fingerprints(), vec![key.fingerprint()]);
+    }
+
+    /// The rows a store wrote before it had a key keep verifying under their own rule, and
+    /// are counted as such rather than reported as a fault.
+    #[test]
+    fn rows_from_before_the_key_verify_as_pre_signing() {
+        let sink = Arc::new(MemoryAuditSink::new());
+        let old = AuditLog::new(sink.clone());
+        old.record(&Actor::Operator, AuditAction::NoteWrite, "a", json!({}))
+            .unwrap();
+        old.record(&Actor::Operator, AuditAction::NoteWrite, "b", json!({}))
+            .unwrap();
+        let new = AuditLog::new(sink.clone()).with_key(Some(AuditKey::generate().unwrap()));
+        new.record(&Actor::Operator, AuditAction::NoteWrite, "c", json!({}))
+            .unwrap();
+        let r = new.verify_report().unwrap();
+        assert_eq!((r.rows, r.unsigned, r.signed), (3, 2, 1));
+    }
+
+    /// Somebody without the key edits a signed row and recomputes its hash, and the chain
+    /// after it: the hashes hold, the signature does not.
+    #[test]
+    fn a_rehashed_signed_row_fails_on_its_signature() {
+        let (log, sink, _) = signed_log();
+        log.record(&Actor::Operator, AuditAction::NoteWrite, "a", json!({}))
+            .unwrap();
+        let mut rows = sink.rows();
+        rows[0].subject = "b".into();
+        let at = rows[0].chain_at().unwrap().to_string();
+        let hash = rows[0].compute_hash_v2(GENESIS, &at);
+        rows[0].detail["_chain"]["hash"] = json!(hash);
+        let err = verify_chain(&rows).unwrap_err().to_string();
+        assert!(err.contains("signature does not match"), "{err}");
+    }
+
+    /// Stripping the signature and recomputing the old-style hash makes the row look like
+    /// one from before the key. After a signed row, that is refused.
+    #[test]
+    fn an_unsigned_row_after_a_signed_one_is_refused() {
+        let (log, sink, _) = signed_log();
+        for s in ["a", "b"] {
+            log.record(&Actor::Operator, AuditAction::NoteWrite, s, json!({}))
+                .unwrap();
+        }
+        let mut rows = sink.rows();
+        let prev = rows[1].chain_prev().unwrap().to_string();
+        let at = rows[1].chain_at().unwrap().to_string();
+        let hash = rows[1].compute_hash(&prev, &at);
+        rows[1].detail["_chain"] = json!({ "prev": prev, "hash": hash, "at": at });
+        let err = verify_chain(&rows).unwrap_err().to_string();
+        assert!(err.contains("row 2") && err.contains("unsigned"), "{err}");
+    }
+
+    #[test]
+    fn a_chain_format_from_the_future_is_refused_rather_than_guessed() {
+        let (log, sink, _) = signed_log();
+        log.record(&Actor::Operator, AuditAction::NoteWrite, "a", json!({}))
+            .unwrap();
+        let mut rows = sink.rows();
+        rows[0].detail["_chain"]["v"] = json!(9);
+        let err = verify_chain(&rows).unwrap_err().to_string();
+        assert!(err.contains("format 9"), "{err}");
+    }
+
+    // ---- signed bundles ----
+
+    fn signed_bundle() -> (String, AuditKey) {
+        let (log, _, key) = signed_log();
+        for s in ["a", "b", "c"] {
+            log.record(&Actor::Operator, AuditAction::NoteWrite, s, json!({}))
+                .unwrap();
+        }
+        let text = log
+            .export_bundle_with(&Actor::Operator, &AuditFilter::default(), "test", true)
+            .unwrap();
+        (text, key)
+    }
+
+    #[test]
+    fn a_signed_bundle_verifies_against_the_expected_key() {
+        let (text, key) = signed_bundle();
+        let r = bundle::verify_expecting(&text, &key.fingerprint()).unwrap();
+        assert_eq!(r.version, bundle::VERSION_2);
+        assert_eq!(r.fingerprint.as_deref(), Some(key.fingerprint().as_str()));
+        assert_eq!((r.chain.signed, r.chain.unsigned), (3, 0));
+    }
+
+    /// A forger signs too. Only the expected key tells the two apart.
+    #[test]
+    fn a_bundle_resigned_by_another_key_fails_the_expectation() {
+        let (text, key) = signed_bundle();
+        let forger = AuditKey::generate().unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut header: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+        header["key"] = json!(forger.public_hex());
+        let mut body = format!("{header}\n");
+        for l in &lines[1..lines.len() - 1] {
+            body.push_str(l);
+            body.push('\n');
+        }
+        let mut footer: serde_json::Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
+        footer["sig"] = json!(forger.sign(crate::audit_key::BUNDLE_DOMAIN, body.as_bytes()));
+        let forged = format!("{body}{footer}\n");
+        assert!(
+            bundle::verify(&forged).is_ok(),
+            "self-consistent, as forgeries are"
+        );
+        let err = bundle::verify_expecting(&forged, &key.fingerprint())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not with the expected"), "{err}");
+    }
+
+    #[test]
+    fn a_signed_bundle_with_a_row_removed_from_the_end_fails_its_signature() {
+        let (text, _) = signed_bundle();
+        let lines: Vec<&str> = text.lines().collect();
+        let footer = lines[lines.len() - 1].replace("\"rows\":3", "\"rows\":2");
+        let mut cut: Vec<String> = lines[..lines.len() - 2]
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        cut[0] = cut[0].replace("\"rows\":3", "\"rows\":2");
+        cut.push(footer);
+        let err = bundle::verify(&(cut.join("\n") + "\n"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("signature"), "{err}");
+    }
+
+    #[test]
+    fn a_signature_stripped_from_a_bundle_is_noticed() {
+        let (text, _) = signed_bundle();
+        let lines: Vec<&str> = text.lines().collect();
+        let mut footer: serde_json::Value = serde_json::from_str(lines[lines.len() - 1]).unwrap();
+        footer.as_object_mut().unwrap().remove("sig");
+        let stripped = format!("{}\n{footer}\n", lines[..lines.len() - 1].join("\n"));
+        let err = bundle::verify(&stripped).unwrap_err().to_string();
+        assert!(err.contains("no signature"), "{err}");
+    }
+
+    #[test]
+    fn asking_for_a_signature_without_a_key_is_an_error() {
+        let (log, _) = AuditLog::in_memory();
+        let err = log
+            .export_bundle_with(&Actor::Operator, &AuditFilter::default(), "t", true)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("audit-key --init"), "{err}");
+    }
+
+    /// An unsigned period of an unsigned log is still version 1, so a reader that only knows
+    /// version 1 keeps reading what it always read.
+    #[test]
+    fn a_plain_unsigned_bundle_stays_version_one() {
+        let (rows, _) = three_rows();
+        assert!(
+            bundle_of(&rows).starts_with("{\"kind\":\"cyberbrain.audit.export\",\"version\":1,")
+        );
     }
 }

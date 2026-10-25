@@ -502,6 +502,9 @@ pub fn status(r: &StatusReport) -> String {
             Err(e) => format!("BROKEN: {e}"),
         }
     );
+    if let Some(fp) = &r.audit.key {
+        let _ = writeln!(s, "audit key: {fp} (new rows are signed)");
+    }
     let _ = writeln!(s, "embedding: {}", embedder_line(&r.embedding.embedder));
     let _ = writeln!(s, "daemon: {}", r.daemon);
     let remote = r
@@ -788,12 +791,111 @@ pub fn verify_export(r: &cyberbrain_policy::bundle::Report) -> String {
         s.push_str(&format!("last row: {h}\n"));
     }
     s.push_str(&format!("written:  {} by {}\n", r.exported_at, r.tool));
+    match &r.fingerprint {
+        Some(fp) => s.push_str(&format!("signed:   by key {fp}, and the signature holds\n")),
+        None => s.push_str("signed:   no\n"),
+    }
+    s.push_str(&signing_line(&r.chain));
     s.push_str(
         "\nThis says the file is internally intact and starts where it says it does.\n\
          Whether the anchor belongs to that machine's real history is a question only the\n\
          full log answers.\n",
     );
     s
+}
+
+/// How many rows are signed, and by whom. Rows from before the store had a key are counted
+/// as such: they are covered by the chain, not by a signature, and that is not a fault.
+pub fn signing_line(c: &cyberbrain_policy::ChainReport) -> String {
+    let mut s = String::new();
+    if c.signed > 0 {
+        let _ = writeln!(
+            s,
+            "rows:     {} signed by key {}",
+            c.signed,
+            c.fingerprints().join(", ")
+        );
+    }
+    if c.unsigned > 0 {
+        let _ = writeln!(
+            s,
+            "rows:     {} unsigned (written before the store had an audit key; the chain covers them)",
+            c.unsigned
+        );
+    }
+    s
+}
+
+/// `verify-export` on an erasure report (`forget --report`).
+pub fn verify_receipt(c: &cyberbrain_policy::erasure::receipt::Checked) -> String {
+    let r = &c.receipt;
+    let e = &r.erasure;
+    let mut s = String::new();
+    let _ = writeln!(
+        s,
+        "erasure report for {} ({}){}",
+        e.name,
+        e.note_id,
+        if e.dry_run { ", a dry run" } else { "" }
+    );
+    let _ = writeln!(
+        s,
+        "removed:  file {}, {} block(s), {} fts row(s), {} vector(s), {} outbound link(s)",
+        if e.file_removed { "yes" } else { "no" },
+        e.blocks,
+        e.fts_rows,
+        e.vectors,
+        e.links_out
+    );
+    let _ = writeln!(
+        s,
+        "residue:  {}",
+        if r.residue {
+            "YES, pre-erasure pages may remain in the WAL (or the scrub was not checked)"
+        } else {
+            "none, the WAL was emptied"
+        }
+    );
+    for a in &r.audit {
+        let _ = writeln!(s, "audit:    {} {} at {}", a.action, a.hash, a.at);
+    }
+    let _ = writeln!(s, "written:  {} by {}", r.written_at, r.tool);
+    match &c.signed_by {
+        Some(fp) => {
+            let _ = writeln!(s, "signed:   by key {fp}, and the signature holds");
+        }
+        None => {
+            let _ = writeln!(
+                s,
+                "signed:   no; this file shows what somebody wrote, not who wrote it"
+            );
+        }
+    }
+    s
+}
+
+/// `policy audit-key`.
+pub fn audit_key(r: &crate::app::AuditKeyReport) -> String {
+    match (&r.fingerprint, &r.public_key) {
+        (Some(fp), Some(pk)) => format!(
+            "{}audit key: {fp}\npublic key: {pk}\nfile: {}\n\n\
+             New audit rows, `policy audit --export --signed` and `forget --report --sign` are\n\
+             signed with it. Give the fingerprint to whoever will check them, somewhere this\n\
+             machine cannot change it; they check with `verify-export --expect-key {fp}`.\n{}",
+            if r.created { "created " } else { "" },
+            Slash(&r.path),
+            if r.created {
+                "Restart `serve`, `mcp` and the daemon, so they sign as well.\n"
+            } else {
+                ""
+            }
+        ),
+        _ => format!(
+            "this store has no audit key; nothing is signed.\n\
+             `cyberbrain policy audit-key --init` makes one at {}\n",
+            Slash(&r.path)
+        ),
+    }
 }
 
 /// `install`. The shape of it is one block per client, because the question a person has

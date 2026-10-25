@@ -15,7 +15,7 @@
 //! Steps 3 and 4 both happen inside `Policy::new`, which is why it is constructed exactly
 //! once here and handed the sink from step 2.
 
-use crate::audit_bridge::{AUDIT_DB_FILE, StoreAuditSink};
+use crate::audit_bridge::{AUDIT_DB_FILE, AUDIT_KEY_FILE, StoreAuditSink};
 use crate::hostload;
 use crate::usage;
 use crate::writers::{
@@ -515,6 +515,9 @@ pub struct AuditSummary {
     pub schema_version: u32,
     /// `Ok(rows verified)` or the first break.
     pub chain: std::result::Result<usize, String>,
+    /// Fingerprint of the store's audit key, when it has one (F2).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -562,7 +565,25 @@ pub struct StatusReport {
 pub struct AuditView {
     pub rows: usize,
     pub verified: Option<std::result::Result<usize, String>>,
+    /// With `--verify` and an intact chain: how many rows are signed, how many predate the
+    /// key, and by which key.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chain: Option<cyberbrain_policy::ChainReport>,
     pub rendered: String,
+}
+
+/// `policy audit-key`: the store's signing key, as far as it may be shown.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditKeyReport {
+    #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
+    pub path: PathBuf,
+    pub present: bool,
+    /// Made by this call.
+    pub created: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub public_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<String>,
 }
 
 /// `policy obligations`, one profile's whole catalogue.
@@ -1080,8 +1101,14 @@ impl App {
         let audit_sink = Arc::new(StoreAuditSink::new(AuditStore::open(
             &root.join(AUDIT_DB_FILE),
         )?));
-        // 3 + 4. The only audit writer, and the gate built from it.
-        let policy = Policy::new(policy_config(&config), audit_sink.clone(), actor.clone());
+        // 3 + 4. The only audit writer, and the gate built from it. With the store's key,
+        // when it has one, so every row from here on is signed (F2).
+        let policy = Policy::with_audit_key(
+            policy_config(&config),
+            audit_sink.clone(),
+            actor.clone(),
+            crate::audit_bridge::load_audit_key(&root)?,
+        );
         let gate = policy.gate();
         // 5. The cache.
         let index = Index::open(&root.join(DB_FILE))?;
@@ -4022,7 +4049,7 @@ impl App {
         }
 
         checks.push("audit chain");
-        if let Err(e) = self.policy.verify_audit() {
+        if let Err(e) = self.verify_audit_chain() {
             push("error", "audit chain", e.to_string());
         }
 
@@ -4106,7 +4133,11 @@ impl App {
                 path: self.root.join(AUDIT_DB_FILE),
                 rows: self.audit_sink.count()?,
                 schema_version: self.audit_sink.schema_version()?,
-                chain: self.policy.verify_audit().map_err(|e| e.to_string()),
+                chain: self
+                    .verify_audit_chain()
+                    .map(|r| r.rows)
+                    .map_err(|e| e.to_string()),
+                key: self.policy.audit().key().map(|k| k.fingerprint()),
             },
             embedding: EmbeddingStatus {
                 manifest_present: model_dir.join(MANIFEST_FILE).is_file(),
@@ -4933,8 +4964,125 @@ impl App {
     /// depends on it, which is the point — a file that only this version can verify would
     /// not survive the retention period it exists for.
     pub fn export_audit_bundle(&self, filter: &AuditFilter) -> Result<String> {
+        self.export_audit_bundle_with(filter, false)
+    }
+
+    /// [`export_audit_bundle`](Self::export_audit_bundle), signed with the store's key when
+    /// `signed` (F2).
+    pub fn export_audit_bundle_with(&self, filter: &AuditFilter, signed: bool) -> Result<String> {
         let tool = concat!("cyberbrain ", env!("CARGO_PKG_VERSION"));
-        self.policy.export_audit_bundle(filter, tool)
+        self.policy.export_audit_bundle_with(filter, tool, signed)
+    }
+
+    /// The whole chain, and every signature in it against this store's own key.
+    ///
+    /// A row only proves which key signed it. Here the store knows which key that should be,
+    /// so a row signed by any other — or signed rows in a store whose key has gone — is a
+    /// break, not a curiosity.
+    pub fn verify_audit_chain(&self) -> Result<cyberbrain_policy::ChainReport> {
+        let report = self.policy.verify_audit_report()?;
+        let own = self.policy.audit().key().map(|k| k.public_hex());
+        for (k, fp) in report.keys.iter().zip(report.fingerprints()) {
+            match &own {
+                Some(o) if o == k => {}
+                Some(_) => {
+                    return Err(Error::Index(format!(
+                        "audit rows are signed with key {fp}, which is not this store's key; \
+                         they were not written here, or the key was replaced"
+                    )));
+                }
+                None => {
+                    return Err(Error::Index(format!(
+                        "audit rows are signed with key {fp}, but this store has no key at {}; \
+                         restore the key file, or check the rows against that fingerprint \
+                         with an export and `verify-export --expect-key`",
+                        AUDIT_KEY_FILE
+                    )));
+                }
+            }
+        }
+        Ok(report)
+    }
+
+    /// Whether a signature asked for now would have no key to be made with.
+    pub fn policy_audit_key_missing(&self) -> bool {
+        self.policy.audit().key().is_none()
+    }
+
+    /// `policy audit-key`: show the store's key, or make one with `init`.
+    pub fn audit_key(&self, init: bool) -> Result<AuditKeyReport> {
+        let path = self.root.join(AUDIT_KEY_FILE);
+        let (key, created) = match crate::audit_bridge::load_audit_key(&self.root)? {
+            Some(k) => (Some(k), false),
+            None if init => {
+                let k = crate::audit_bridge::create_audit_key(&self.root)?;
+                // Into the log it goes, with the fingerprint: the first signed row is then
+                // the one that says which key signs from here on. It is written by a log
+                // that already holds the key, so it is that first signed row.
+                let signed = cyberbrain_policy::AuditLog::new(self.audit_sink.clone())
+                    .with_key(Some(k.clone()));
+                signed.record_raw(
+                    &self.actor.to_string(),
+                    "audit.key.created",
+                    "audit",
+                    json!({ "fingerprint": k.fingerprint(), "public_key": k.public_hex() }),
+                )?;
+                (Some(k), true)
+            }
+            None => (None, false),
+        };
+        Ok(AuditKeyReport {
+            path,
+            present: key.is_some(),
+            created,
+            public_key: key.as_ref().map(|k| k.public_hex()),
+            fingerprint: key.as_ref().map(|k| k.fingerprint()),
+        })
+    }
+
+    /// A checkable report of one erasure (F9), tied to the audit rows that record it, and
+    /// signed with the store's key when `sign`.
+    pub fn erasure_receipt(
+        &self,
+        report: &ErasureReport,
+        sign: bool,
+    ) -> Result<cyberbrain_policy::erasure::receipt::Receipt> {
+        use cyberbrain_policy::erasure::receipt::{AuditRef, Receipt};
+        let mut audit = Vec::new();
+        if !report.dry_run {
+            let rows = self.policy.audit().read(&AuditFilter {
+                subject: Some(format!("note:{}", report.note_id)),
+                ..Default::default()
+            })?;
+            // The last of each: a note forgotten, restored and forgotten again has two pairs,
+            // and this report is about the latest.
+            for action in ["note.erase.requested", "note.erase.completed"] {
+                if let Some(r) = rows.iter().rev().find(|r| r.action == action) {
+                    audit.push(AuditRef {
+                        action: action.to_string(),
+                        hash: r.chain_hash().unwrap_or_default().to_string(),
+                        at: r.chain_at().unwrap_or_default().to_string(),
+                    });
+                }
+            }
+        }
+        let mut receipt = Receipt::new(
+            report.clone(),
+            audit,
+            concat!("cyberbrain ", env!("CARGO_PKG_VERSION")),
+            &jiff::Timestamp::now().to_string(),
+        );
+        if sign {
+            let key = self.policy.audit().key().ok_or_else(|| {
+                Error::Config(
+                    "this store has no audit key to sign with; create one with \
+                     `cyberbrain policy audit-key --init`"
+                        .into(),
+                )
+            })?;
+            receipt.sign(key)?;
+        }
+        Ok(receipt)
     }
 
     pub fn policy_audit(
@@ -4943,7 +5091,11 @@ impl App {
         verify: bool,
         format: ExportFormat,
     ) -> Result<AuditView> {
-        let verified = verify.then(|| self.policy.verify_audit().map_err(|e| e.to_string()));
+        let checked = verify.then(|| self.verify_audit_chain().map_err(|e| e.to_string()));
+        let verified = checked
+            .as_ref()
+            .map(|c| c.as_ref().map(|r| r.rows).map_err(Clone::clone));
+        let chain = checked.and_then(|c| c.ok());
         let rows = self.policy.audit().read(filter)?.len();
 
         // An `--action` that matches nothing is refused, not answered with an empty table.
@@ -4980,6 +5132,7 @@ impl App {
         Ok(AuditView {
             rows,
             verified,
+            chain,
             rendered,
         })
     }

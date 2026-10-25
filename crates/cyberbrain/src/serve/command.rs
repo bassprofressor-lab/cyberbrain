@@ -208,6 +208,15 @@ fn cut(bytes: Vec<u8>) -> (String, bool) {
 /// a list like this stays true.
 fn refuse(command: &Command) -> Option<&'static str> {
     match command {
+        // Before the arm that lets `forget` through: the report is a path, and a path is the
+        // one argument this surface does not take, for the reason `policy audit --export` is
+        // refused below.
+        Command::Forget {
+            report: Some(_), ..
+        } => Some(
+            "`forget --report` writes a file wherever it is pointed, and this surface has no \
+             authentication. Forget without it, or write the report at a prompt.",
+        ),
         // Fine here: they read or change this store, which is what this window is.
         Command::Scan { .. }
         | Command::Recall { .. }
@@ -298,11 +307,16 @@ fn refuse_policy(command: &crate::cli::PolicyCommand) -> Option<&'static str> {
             "`policy audit --export` writes a file wherever it is pointed, and this surface \
              has no authentication. Read the log without it, or export it at a prompt.",
         ),
+        P::AuditKey { init: true } => Some(
+            "`policy audit-key --init` makes the key every later audit row is signed with, and \
+             this surface cannot tell who is asking. Run it in your own terminal.",
+        ),
         P::Attest { .. } => Some(
             "`policy attest` declares whatever lies in rings 0 and 1 to be the operator's, and \
              this surface cannot tell who is asking. Run it in your own terminal.",
         ),
         P::Audit { .. }
+        | P::AuditKey { init: false }
         | P::Egress
         | P::Obligations
         | P::Subject { .. }
