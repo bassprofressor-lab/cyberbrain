@@ -26,6 +26,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   the stamp, so a note edited by hand without touching `updated` was taken for the version it
   already held and dropped without a word. It now compares frontmatter and body as well; a
   true re-send is still quiet, and anything else is kept as a conflict like any other.
+- **The governance fallback no longer waves writing commands through as reads.** With
+  AgentGuard unreachable in enforce mode, a Bash call went ahead without asking if it looked
+  like reading, and several did not only read: `` echo `rm -rf x` `` (backticks were not
+  split), `sort -o f`, `uniq in out`, `find -fprint f`, `git branch -D x`, `git diff
+  --output=f`, `sed -n 'w f'`. The check is now fail-closed: command substitution is refused
+  outright, `sort`, `uniq`, `git branch` and `sed` pass only with flags and scripts it knows to
+  read, `find` and `git log/show/diff` are refused with any writing option, as are `tree -o`,
+  `date -s` and `rg --pre`. What it cannot take apart asks, as every other call does then.
 
 ## [0.7.10] — 2026-10-23
 

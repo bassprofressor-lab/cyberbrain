@@ -273,6 +273,11 @@ const READERS: [&str; 32] = [
 ];
 
 /// For an unreachable service in enforce mode: may this call go ahead without asking?
+///
+/// Fail-closed: a yes needs every part of the command to be understood as looking only. A
+/// flag this does not know, on a program that has writing ones, is a no, and so is anything
+/// it cannot take apart, which is why command substitution is refused outright rather than
+/// split.
 fn reads_only(tool: &str, payload: &Payload) -> bool {
     if tool != "Bash" {
         return false; // file tools write; WebFetch leaves the machine
@@ -280,6 +285,11 @@ fn reads_only(tool: &str, payload: &Payload) -> bool {
     let Some(cmd) = payload.bash_command() else {
         return false;
     };
+    // `` `…` `` and `$(…)` run a second command inside the first. Splitting at `(` caught
+    // the second form; nothing caught the backticks, so `echo `rm -rf x`` read as `echo`.
+    if cmd.contains('`') || cmd.contains("$(") {
+        return false;
+    }
     let redirects = cmd.match_indices('>').any(|(i, _)| {
         let rest = cmd[i + 1..].trim_start_matches(['>', '&']).trim_start();
         !(rest.starts_with("/dev/null") || rest.starts_with(|c: char| c.is_ascii_digit()))
@@ -292,22 +302,272 @@ fn reads_only(tool: &str, payload: &Payload) -> bool {
         .filter(|w| !w.is_empty())
         .all(|w| {
             let prog = w[0].rsplit('/').next().unwrap_or(w[0]);
+            let args = &w[1..];
             match prog {
-                "git" => matches!(
-                    w.get(1).copied(),
-                    Some("status" | "log" | "diff" | "show" | "branch" | "rev-parse")
-                ),
-                "sed" => w.contains(&"-n") && !w.iter().any(|a| a.starts_with("-i")),
-                "find" => !w
+                "git" => match args.first().copied() {
+                    Some("status" | "rev-parse") => true,
+                    // `--output` is a diff option, and `log` and `show` take it too.
+                    Some("log" | "diff" | "show") => {
+                        !args.iter().any(|a| a.starts_with("--output"))
+                    }
+                    Some("branch") => git_branch_lists(&args[1..]),
+                    _ => false,
+                },
+                "sed" => sed_prints_only(args),
+                // Every action GNU find has that writes or runs something.
+                "find" => !args.iter().any(|a| {
+                    ["-delete", "-exec", "-ok", "-fprint", "-fls"]
+                        .iter()
+                        .any(|p| a.starts_with(p))
+                }),
+                "sort" => sort_reads(args),
+                "uniq" => uniq_reads(args),
+                "tree" => !args.iter().any(|a| *a == "-o" || a.starts_with("-o")),
+                "date" => !args
                     .iter()
-                    .any(|a| matches!(*a, "-delete" | "-exec" | "-execdir")),
+                    .any(|a| a.starts_with("-s") || a.starts_with("--set")),
+                "rg" => !args.iter().any(|a| a.starts_with("--pre")),
                 "cyberbrain" => matches!(
-                    w.get(1).copied(),
+                    args.first().copied(),
                     Some("recall" | "find" | "status" | "doctor")
                 ),
                 p => READERS.contains(&p),
             }
         })
+}
+
+/// `git branch` lists only with no operand, or with `--list`/`-l`, where an operand is a
+/// pattern. Otherwise an operand is a branch to create, and `-D`, `-m`, `-c` and the like
+/// change branches; anything outside the listing flags is a no.
+fn git_branch_lists(args: &[&str]) -> bool {
+    let listing = args.iter().any(|a| matches!(*a, "--list" | "-l"));
+    args.iter().all(|a| {
+        if !a.starts_with('-') {
+            return listing;
+        }
+        matches!(
+            *a,
+            "-a" | "-r"
+                | "-v"
+                | "-vv"
+                | "-l"
+                | "-i"
+                | "--list"
+                | "--all"
+                | "--remotes"
+                | "--verbose"
+                | "--show-current"
+                | "--ignore-case"
+                | "--no-color"
+                | "--no-column"
+        ) || [
+            "--color",
+            "--column",
+            "--sort=",
+            "--format=",
+            "--contains",
+            "--no-contains",
+            "--merged",
+            "--no-merged",
+            "--points-at",
+        ]
+        .iter()
+        .any(|p| a.starts_with(p))
+    })
+}
+
+/// `sort` reads unless told to write (`-o`, `--output`) or to run a program
+/// (`--compress-program`). Short flags are checked letter by letter, so `-uo f` is caught;
+/// `k` and `t` take the rest of the word, or the next one, as their argument.
+fn sort_reads(args: &[&str]) -> bool {
+    const SHORT: &str = "bcCdfghiMnrRsuVz";
+    const LONG: [&str; 18] = [
+        "--reverse",
+        "--numeric-sort",
+        "--unique",
+        "--key",
+        "--field-separator",
+        "--human-numeric-sort",
+        "--version-sort",
+        "--ignore-case",
+        "--stable",
+        "--general-numeric-sort",
+        "--month-sort",
+        "--random-sort",
+        "--zero-terminated",
+        "--check",
+        "--dictionary-order",
+        "--ignore-leading-blanks",
+        "--ignore-nonprinting",
+        "--help",
+    ];
+    let mut takes_next = false;
+    for a in args {
+        if takes_next {
+            takes_next = false;
+            continue;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            let name = long.split('=').next().unwrap_or(long);
+            if !LONG.contains(&format!("--{name}").as_str()) {
+                return false;
+            }
+            takes_next = matches!(name, "key" | "field-separator") && !long.contains('=');
+            continue;
+        }
+        let Some(short) = a.strip_prefix('-').filter(|s| !s.is_empty()) else {
+            continue; // an input file
+        };
+        for (i, c) in short.char_indices() {
+            if c == 'k' || c == 't' {
+                takes_next = i + 1 == short.len();
+                break;
+            }
+            if !SHORT.contains(c) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// `uniq [OPTION]... [INPUT [OUTPUT]]`: a second operand is a file it writes.
+fn uniq_reads(args: &[&str]) -> bool {
+    const SHORT: &str = "cdDiuz";
+    const LONG: [&str; 11] = [
+        "--count",
+        "--repeated",
+        "--all-repeated",
+        "--ignore-case",
+        "--unique",
+        "--zero-terminated",
+        "--skip-fields",
+        "--skip-chars",
+        "--check-chars",
+        "--group",
+        "--help",
+    ];
+    let mut operands = 0;
+    let mut takes_next = false;
+    for a in args {
+        if takes_next {
+            takes_next = false;
+            continue;
+        }
+        if let Some(long) = a.strip_prefix("--") {
+            let name = long.split('=').next().unwrap_or(long);
+            if !LONG.contains(&format!("--{name}").as_str()) {
+                return false;
+            }
+            takes_next =
+                matches!(name, "skip-fields" | "skip-chars" | "check-chars") && !long.contains('=');
+            continue;
+        }
+        match a.strip_prefix('-').filter(|s| !s.is_empty()) {
+            None => operands += 1,
+            Some(short) => {
+                for (i, c) in short.char_indices() {
+                    if matches!(c, 'f' | 's' | 'w') {
+                        takes_next = i + 1 == short.len();
+                        break;
+                    }
+                    if !SHORT.contains(c) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    operands <= 1
+}
+
+/// `sed` reads only with `-n` and a script made of print commands. A script can write
+/// (`w`, `W`, the `w` flag of `s`) or run a shell (`e`), and telling those apart in general
+/// means parsing sed, so anything but an address followed by `p`, `P`, `=`, `l`, `q` or `Q`
+/// is a no. So are `-i` in any spelling, `-f` (a script this cannot see) and a script split
+/// over several words.
+fn sed_prints_only(args: &[&str]) -> bool {
+    let mut quiet = false;
+    let mut scripts = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        match a {
+            "-n" | "--quiet" | "--silent" => quiet = true,
+            "-E" | "-r" | "-s" | "-u" | "-z" | "--posix" | "--regexp-extended" => {}
+            "-e" => {
+                let Some(s) = args.get(i + 1) else {
+                    return false;
+                };
+                scripts.push(*s);
+                i += 1;
+            }
+            _ if a.starts_with('-') => return false,
+            _ => {
+                // The first operand is the script unless `-e` gave one; the rest are files.
+                if scripts.is_empty() {
+                    scripts.push(a);
+                }
+            }
+        }
+        i += 1;
+    }
+    quiet && !scripts.is_empty() && scripts.iter().all(|s| sed_script_prints(s))
+}
+
+/// One sed script word: quoted whole or not at all, and every command in it an address and
+/// a print command.
+fn sed_script_prints(word: &str) -> bool {
+    let script = match word.chars().next() {
+        Some(q @ ('\'' | '"')) => {
+            if word.len() < 2 || !word.ends_with(q) {
+                return false;
+            }
+            &word[1..word.len() - 1]
+        }
+        _ => word,
+    };
+    if script.contains(['\'', '"']) {
+        return false;
+    }
+    script.split([';', '\n']).all(|cmd| {
+        let rest = skip_sed_address(cmd.trim());
+        matches!(rest.trim(), "p" | "P" | "=" | "l" | "q" | "Q")
+    })
+}
+
+/// What follows the address of a sed command: line numbers, `$`, `,`, `~`, `+`, `!` and
+/// `/regex/`. A regex that does not close leaves nothing, which no print command matches.
+fn skip_sed_address(cmd: &str) -> &str {
+    let mut rest = cmd;
+    loop {
+        let Some(c) = rest.chars().next() else {
+            return rest;
+        };
+        if c.is_ascii_digit() || matches!(c, '$' | ',' | '~' | '+' | '!' | ' ') {
+            rest = &rest[c.len_utf8()..];
+        } else if c == '/' {
+            let body = &rest[1..];
+            let mut escaped = false;
+            let mut end = None;
+            for (i, ch) in body.char_indices() {
+                if escaped {
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '/' {
+                    end = Some(i);
+                    break;
+                }
+            }
+            match end {
+                Some(i) => rest = &body[i + 1..],
+                None => return "",
+            }
+        } else {
+            return rest;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -348,6 +608,58 @@ mod tests {
         }
         let write = Payload::parse(r#"{"tool_name":"Write","tool_input":{"file_path":"/x"}}"#);
         assert!(!reads_only("Write", &write));
+    }
+
+    /// Commands that look like reading and write anyway. Each of these went through while
+    /// AgentGuard was unreachable; the fallback has to say no when it cannot tell.
+    #[test]
+    fn writing_through_a_reader_is_not_a_read() {
+        for cmd in [
+            "echo `rm -rf x`",
+            "ls `touch f`",
+            "echo $(rm -rf x)",
+            "sort -o f a",
+            "sort -uo f a",
+            "sort --output=f a",
+            "sort --compress-program=sh a",
+            "uniq in out",
+            "uniq -c in out",
+            "find . -fprint f",
+            "find . -fprintf f %p",
+            "find . -fls f",
+            "find . -ok rm {} ;",
+            "git branch -D x",
+            "git branch new-branch",
+            "git branch -m a b",
+            "git diff --output=f",
+            "git log -p --output=f",
+            "sed -n 'w f' x",
+            "sed -n '1w f' x",
+            "sed -n 's/a/b/w f' x",
+            "sed -n '1 w f' x",
+            "sed -n -f script x",
+            "sed -ni 1p x",
+            "tree -o f",
+            "date -s 2000-01-01",
+            "rg --pre sh x",
+        ] {
+            assert!(!reads_only("Bash", &bash(cmd)), "{cmd}");
+        }
+        for cmd in [
+            "sort a | uniq -c",
+            "sort -k2,2 -t, -rn a",
+            "uniq -c a",
+            "git branch",
+            "git branch -a -v",
+            "git branch --list 'feat*'",
+            "git branch --show-current",
+            "sed -n '1,20p' x",
+            "sed -n '/^fn/,/^}/p' x",
+            "sed -n -e 1p -e '$p' x",
+            "find . -name '*.rs' -print",
+        ] {
+            assert!(reads_only("Bash", &bash(cmd)), "{cmd}");
+        }
     }
 
     /// An AgentGuard from before 27.09. sends no `shadow_*` fields: the line is what it
