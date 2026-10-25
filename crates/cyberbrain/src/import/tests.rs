@@ -680,3 +680,57 @@ fn a_symlinked_file_is_reported_not_followed() {
         "the target was imported"
     );
 }
+
+/// The `src:` tag names the file relative to its root, so two source trees with the same
+/// layout claimed each other's notes: importing the second with `overwrite` replaced the
+/// notes the first one wrote.
+#[test]
+fn another_source_tree_with_the_same_layout_does_not_overwrite() {
+    let fx = fixture();
+    let other = fx.src.parent().unwrap().join("other");
+    write(&fx.src, "team.md", "from the first tree\n");
+    write(&other, "team.md", "from the second tree\n");
+    let body = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    let r = import(&fx.app, &plan(&other, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Exists { .. }),
+        "{}",
+        r.render()
+    );
+    assert_eq!(
+        fx.app.store().read("team").unwrap().body,
+        "from the first tree\n"
+    );
+    // The first tree is still recognised as the note's own source.
+    write(&fx.src, "team.md", "from the first tree, changed\n");
+    let r = import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+}
+
+/// A note imported before the source root was recorded still belongs to its file: the
+/// upgrade must not turn every earlier import into "not imported from this file".
+#[test]
+fn a_note_imported_before_roots_were_recorded_is_still_its_files() {
+    let fx = fixture();
+    write(&fx.src, "team.md", "v1\n");
+    let body = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    let mut n = fx.app.store().read("team").unwrap();
+    n.front
+        .tags
+        .retain(|t| !t.starts_with(super::SOURCE_ROOT_TAG_PREFIX));
+    fx.app.store().write(&n).unwrap();
+    write(&fx.src, "team.md", "v2\n");
+    let r = import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+    assert_eq!(fx.app.store().read("team").unwrap().body, "v2\n");
+}
