@@ -585,6 +585,15 @@ $ cyberbrain hub principal assign R. Berger --bereich disposition
 Credentials are shown once and stored as a hash, like device tokens. Granting a role is
 itself an entry in the hub's log.
 
+The administrator's page does the same for auditors and editors: add a person (the credential
+is shown once, after adding), withdraw one, give an editor a bereich or take it away, and make
+or withdraw fleet invitations (the file is written to `invitations/` next to the record,
+readable by its owner only). Countersigners and administrators are not made from the page: the
+people who sign would otherwise be made by the person whose acts they sign, from anywhere on
+the network. That stays with `hub principal add`, at the machine. Every step is in the hub's
+log (`role.granted`, `role.revoked`, `principal.assigned`, `principal.unassigned`,
+`invitation.created`, `invitation.revoked`).
+
 ### One request, two people
 
 ```console
@@ -759,6 +768,31 @@ show that.
 **Backups keep what was purged.** A copy taken before a purge still holds those rows. If the
 period is a promise to the people whose activity this is, the backups have to be rotated
 within the same period.
+
+## Telling people when something needs them
+
+A hub posts what needs a person to one webhook, if its administrator sets one. Nothing is sent
+before that, and nothing goes anywhere else.
+
+```sh
+cyberbrain hub alerts set https://chat.example.internal/hooks/…   # loopback or private range
+cyberbrain hub alerts set https://hooks.slack.com/… --allow-public # a public address, on purpose
+cyberbrain hub alerts show                                         # where, and what needs people now
+cyberbrain hub alerts test                                         # post now, to try the webhook
+cyberbrain hub alerts off
+```
+
+What is posted: grants, access requests and purges waiting for a countersignature, the licence
+ending, expired, missing or invalid, devices that have not delivered for 48 hours, and devices
+whose governance calls (AgentGuard) failed in the last 24 hours. Counts, ids, kinds and device
+names; never a note and never an activity row. The body is JSON with a `text` field, which is
+what Slack, Mattermost and Teams incoming webhooks show.
+
+The running hub looks every 15 minutes. A condition is posted when it appears and reminded
+once a day while it lasts. The request is the egress path `hub-alert`: that URL only, no
+redirects, no proxy. Every attempt is in the hub's own log (`alerts.sent`, `alerts.failed`),
+and so is every change of the setting (`alerts.configured`, `alerts.off`), with the
+destination's origin and not its path, which in a chat webhook is usually the secret.
 
 ## A report for a period
 

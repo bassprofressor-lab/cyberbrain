@@ -184,8 +184,12 @@ impl ProfileExt for Profile {
 }
 
 /// A statutory time limit, kept structured so the UI can render a countdown.
+///
+/// Adjacently tagged (`{"kind": "hours", "value": 72}`; a unit variant is the tag alone).
+/// Internally tagged, which it was, serde cannot serialise `Hours(72)` at all: a number has
+/// no field to put the tag next to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 pub enum Deadline {
     Hours(u32),
     Days(u32),
@@ -467,6 +471,33 @@ mod tests {
         assert_eq!(parse_profile("off").unwrap(), Profile::Off);
         assert!(parse_profile("de").is_err());
         assert!(parse_profile("").is_err());
+    }
+
+    #[test]
+    fn every_deadline_and_breach_rule_serialises_and_reads_back() {
+        // An internally tagged enum cannot serialise a newtype variant holding a number,
+        // so `Hours(72)` failed the moment anything tried to render it as JSON.
+        for d in [
+            Deadline::Hours(72),
+            Deadline::Days(30),
+            Deadline::OneMonth,
+            Deadline::AsSoonAsPossible,
+            Deadline::None,
+        ] {
+            let v = serde_json::to_value(d).unwrap_or_else(|e| panic!("{d:?}: {e}"));
+            assert_eq!(serde_json::from_value::<Deadline>(v).unwrap(), d);
+        }
+        assert_eq!(
+            serde_json::to_value(Deadline::Hours(72)).unwrap(),
+            serde_json::json!({ "kind": "hours", "value": 72 })
+        );
+        assert_eq!(
+            serde_json::to_value(Deadline::OneMonth).unwrap(),
+            serde_json::json!({ "kind": "one-month" })
+        );
+        for p in [Profile::Eu, Profile::Ch, Profile::Off] {
+            serde_json::to_value(p.breach_rule()).unwrap_or_else(|e| panic!("{p:?}: {e}"));
+        }
     }
 
     #[test]

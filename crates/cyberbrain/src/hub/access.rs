@@ -70,7 +70,7 @@ impl Role {
             "auditor" => Ok(Role::Auditor),
             "countersigner" => Ok(Role::Countersigner),
             other => Err(Error::Config(format!(
-                "unknown role {other:?}; one of admin, auditor, countersigner"
+                "unknown role {other:?}; one of admin, editor, auditor, countersigner"
             ))),
         }
     }

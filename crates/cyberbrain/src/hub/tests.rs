@@ -1028,6 +1028,7 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
 
     let signing = page::signing_page(&page::SigningView {
         name: "Betriebsrat",
+        id: "who_betriebsrat",
         role: Role::Countersigner,
         requests: Vec::new(),
         grants: hub
@@ -1050,6 +1051,22 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
         signing.contains("Bob"),
         "the log names who signed: {signing}"
     );
+    // What a person reads, not the markup: the people card names principals in its form
+    // actions, which nobody reads.
+    let visible = |html: &str| {
+        let mut out = String::new();
+        let mut in_tag = false;
+        for c in html.chars() {
+            match c {
+                '<' => in_tag = true,
+                '>' => in_tag = false,
+                c if !in_tag => out.push(c),
+                _ => {}
+            }
+        }
+        out
+    };
+    let (operator, signing) = (visible(&operator), visible(&signing));
     for (page, body) in [("operator", &operator), ("signing", &signing)] {
         for id in ids {
             assert!(
@@ -1325,6 +1342,88 @@ fn an_approved_request_opens_a_window_that_closes_itself() {
         report::disclose(&hub, Some(&auditor), &req.id, dir.path(), later, "test").unwrap_err();
     assert!(matches!(err, Denied::WindowClosed(_)), "{err:?}");
     assert!(err.to_string().contains("Make a new request"), "{err}");
+}
+
+/// A disclosure that cannot be recorded does not happen. The rows used to be written first
+/// and the record attempted afterwards with its error thrown away, so a reading could take
+/// place without a trace, which is the one thing this procedure exists to prevent.
+#[test]
+fn a_disclosure_that_cannot_be_recorded_writes_nothing() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let signer = hub
+        .principal_for(Some(&council), Role::Countersigner)
+        .unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    hub.approve_request(&req.id, &signer, "2099-01-01T00:00:00Z", NOW)
+        .unwrap();
+    hub.conn
+        .execute_batch(
+            "CREATE TRIGGER no_disclosure BEFORE INSERT ON hub_audit
+             WHEN NEW.action = 'access.disclosed'
+             BEGIN SELECT raise(ABORT, 'the record is full'); END;",
+        )
+        .unwrap();
+    let dir = tmpdir();
+    let out = report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test");
+    assert!(out.is_err(), "{out:?}");
+    let written: Vec<_> = std::fs::read_dir(dir.path())
+        .map(|d| d.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(written.is_empty(), "{written:?}");
+}
+
+/// A request names a device the hub knows. The id becomes a file name in `disclose`, and an
+/// unchecked `../x` would have been written outside the chosen directory.
+#[test]
+fn a_request_for_a_device_the_hub_does_not_know_is_refused() {
+    let (hub, _, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    for bad in ["../outside", "dev_does_not_exist"] {
+        let err = hub
+            .create_request(&who, Some(bad), None, None, "a reason", NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no device"), "{bad}: {err}");
+    }
+}
+
+#[test]
+fn an_unknown_role_lists_every_role_there_is() {
+    let err = Role::parse("boss").unwrap_err().to_string();
+    for r in ["admin", "editor", "auditor", "countersigner"] {
+        assert!(err.contains(r), "{err}");
+    }
+}
+
+/// The signing page offers no approve button on a request the viewer made. It compared the
+/// requester's id with the viewer's name, which never matched. Not red against the old code
+/// in any reachable way (only auditors make requests, and the server refuses a self-approval
+/// on its own), so this pins the page's half of the rule.
+#[test]
+fn the_signing_page_does_not_offer_your_own_request() {
+    let (hub, device, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    let state = req.state(now_ts());
+    let page = page::signing_page(&page::SigningView {
+        name: &who.name,
+        id: &who.id,
+        role: Role::Countersigner,
+        requests: vec![(req, state)],
+        grants: Vec::new(),
+        purges: Vec::new(),
+        names: hub.principal_names().unwrap(),
+        log: Vec::new(),
+        devices: Vec::new(),
+        flash: None,
+    });
+    assert!(page.contains("you asked for this one"), "{page}");
+    assert!(!page.contains("Approve for 7 days"));
 }
 
 #[test]
@@ -1654,6 +1753,9 @@ fn a_collecting_hub_shows_the_seats() {
     // a test that skips itself when the key is absent is a test that passes by agreeing
     // with itself on every machine but one.
     let v = View {
+        people: Vec::new(),
+        codes: Vec::new(),
+        now: NOW.into(),
         grants: Vec::new(),
         names: Default::default(),
         version: "0.3.0".into(),
@@ -1685,6 +1787,9 @@ fn a_collecting_hub_shows_the_seats() {
 #[test]
 fn a_licence_about_to_run_out_says_it_on_the_page() {
     let v = View {
+        people: Vec::new(),
+        codes: Vec::new(),
+        now: NOW.into(),
         grants: Vec::new(),
         names: Default::default(),
         version: "0.3.0".into(),
@@ -2132,6 +2237,33 @@ async fn a_new_password_ends_the_other_admin_sessions() {
         "the other session must end"
     );
     assert!(state.sessions.who(&here, now).is_some(), "this one stays");
+}
+
+/// The conflicts and requests pages sign out with a POST form. The route took GET only, so
+/// the button answered 405 and the session stayed open on a shared machine.
+#[tokio::test]
+async fn signing_out_with_the_form_ends_the_session() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let token = cookie.split_once('=').unwrap().1.to_string();
+    let mut req = Request::builder()
+        .method("POST")
+        .uri("/logout")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(state.sessions.who(&token, jiff::Timestamp::now()).is_none());
 }
 
 /// A wrong current password on the password form is recorded like a refused sign-in.
@@ -2971,6 +3103,91 @@ fn the_same_stamp_with_other_text_is_a_conflict_not_a_resend() {
     assert_eq!(hub.synced_notes("disposition").unwrap()[0].body, "text");
 }
 
+/// Settling a conflict for the offered version replaces what was held when the conflict was
+/// raised, not whatever is held by the time somebody decides. A newer version that arrived
+/// meanwhile used to be overwritten by the older decision without a word.
+#[test]
+fn a_conflict_decided_late_does_not_overwrite_a_newer_held_version() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("laptop", NOW).unwrap();
+    let offer = |updated: &str, body: &str, based_on: Option<&str>| {
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "disposition",
+            "regel",
+            2,
+            "knowledge",
+            updated,
+            "fm",
+            body,
+            based_on,
+            &d.id,
+            NOW,
+        )
+        .unwrap()
+    };
+    offer("2026-09-10T10:00:00Z", "v1", None);
+    let store::NoteOutcome::Conflict { id, .. } = offer("2026-09-10T11:00:00Z", "v2", None) else {
+        panic!("expected a conflict")
+    };
+    // Somebody continues the held version before the conflict is looked at.
+    offer("2026-09-10T12:00:00Z", "v3", Some("2026-09-10T10:00:00Z"));
+
+    let r = hub.resolve_conflict(&id, true, NOW);
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(hub.synced_notes("disposition").unwrap()[0].body, "v3");
+    assert_eq!(
+        hub.open_conflicts("disposition").unwrap().len(),
+        1,
+        "still open"
+    );
+}
+
+/// Taking the offered version takes all of it, ring and kind included.
+#[test]
+fn taking_the_offered_version_takes_its_ring_and_kind() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("laptop", NOW).unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "regel",
+        2,
+        "knowledge",
+        "2026-09-10T10:00:00Z",
+        "fm",
+        "held",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    let store::NoteOutcome::Conflict { id, .. } = hub
+        .offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "disposition",
+            "regel",
+            3,
+            "decision",
+            "2026-09-10T11:00:00Z",
+            "fm",
+            "offered",
+            None,
+            &d.id,
+            NOW,
+        )
+        .unwrap()
+    else {
+        panic!("expected a conflict")
+    };
+    assert!(hub.resolve_conflict(&id, true, NOW).unwrap());
+    let held = &hub.synced_notes("disposition").unwrap()[0];
+    assert_eq!(
+        (held.body.as_str(), held.ring, held.kind.as_str()),
+        ("offered", 3, "decision")
+    );
+}
+
 // ---- cut 3: two machines that did not see each other ----
 
 /// The failure this cut exists for. Two devices edit the same note from the same starting
@@ -3302,7 +3519,8 @@ fn the_cursor_covers_notes_and_erasures() {
         .unwrap();
     let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
     assert_eq!((f.notes.len(), f.erased.len()), (1, 1));
-    assert_eq!(f.cursor.as_deref(), Some("#2"));
+    // The grant taking effect is counted too, then the note, then the erasure.
+    assert_eq!(f.cursor.as_deref(), Some("#3"));
 
     // And asking again from there returns nothing new.
     let f2 = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
@@ -3355,6 +3573,57 @@ fn a_note_pushed_late_still_reaches_a_device_that_pulled_in_between() {
     let second = super::fetch_notes(&hub, Some(&b_token), first.cursor.as_deref()).unwrap();
     let names: Vec<&str> = second.notes.iter().map(|n| n.name.as_str()).collect();
     assert_eq!(names, ["offline"], "the late note must not be skipped");
+}
+
+/// A device granted a bereich later gets what that bereich already held, once. Its cursor
+/// had moved past those notes while it was not allowed to see them, so a new grant used to
+/// bring only what changed after it.
+#[test]
+fn a_new_grant_brings_the_bereichs_older_notes_once() {
+    let hub = HubStore::in_memory().unwrap();
+    let (a, _) = hub.add_device("laptop", NOW).unwrap();
+    let (b, b_token) = hub.add_device("desktop", NOW).unwrap();
+    grant_in_force(&hub, "ga1", &a.id, "disposition", Direction::Both);
+    grant_in_force(&hub, "ga2", &a.id, "einkauf", Direction::Both);
+    grant_in_force(&hub, "gb1", &b.id, "disposition", Direction::Receive);
+    for (id, bereich, name) in [
+        ("01ARZ3NDEKTSV4RRFFQ69G5FAV", "einkauf", "lieferant"),
+        ("01ARZ3NDEKTSV4RRFFQ69G5FAW", "disposition", "tour"),
+    ] {
+        hub.offer_synced_note(
+            id,
+            bereich,
+            name,
+            2,
+            "knowledge",
+            "2026-09-10T09:00:00Z",
+            "fm",
+            "text",
+            None,
+            &a.id,
+            NOW,
+        )
+        .unwrap();
+    }
+    hub.erase_note("einkauf", "alt", &a.id, NOW).unwrap();
+    let first = super::fetch_notes(&hub, Some(&b_token), None).unwrap();
+    assert_eq!(first.notes.len(), 1, "only disposition so far");
+
+    grant_in_force(&hub, "gb2", &b.id, "einkauf", Direction::Receive);
+    let second = super::fetch_notes(&hub, Some(&b_token), first.cursor.as_deref()).unwrap();
+    let names: Vec<&str> = second.notes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(
+        names,
+        ["lieferant"],
+        "the bereich it was just granted, from the start"
+    );
+    assert_eq!(second.erased.len(), 1, "and what was withdrawn there");
+
+    let third = super::fetch_notes(&hub, Some(&b_token), second.cursor.as_deref()).unwrap();
+    assert!(
+        third.notes.is_empty() && third.erased.is_empty(),
+        "once, not every time"
+    );
 }
 
 /// A cursor from before the hub counted deliveries is a timestamp. It is not understood any
@@ -4347,4 +4616,436 @@ async fn a_revoked_principal_is_signed_out_at_the_next_request() {
         StatusCode::SEE_OTHER,
         "revoked means signed out"
     );
+}
+
+// ---- alerts ----
+
+/// A hub with one of everything an operator should hear about.
+fn hub_that_needs_people() -> (HubStore, Device) {
+    let hub = HubStore::in_memory().unwrap();
+    let (quiet, _) = hub.add_device("ws-quiet", NOW).unwrap();
+    hub.conn
+        .execute(
+            "UPDATE devices SET last_seen = '2026-09-01T00:00:00Z' WHERE id = ?1",
+            rusqlite::params![quiet.id],
+        )
+        .unwrap();
+    // Written and not countersigned.
+    hub.grant_bereich(
+        "g1",
+        &quiet.id,
+        "einkauf",
+        Direction::Receive,
+        "r",
+        "admin-1",
+        NOW,
+    )
+    .unwrap();
+    // A governance call that got no answer, as the device reported it.
+    hub.conn
+        .execute(
+            "INSERT INTO entries (device, seq, ts, actor, action, subject, detail, hash,
+                 received_at)
+             VALUES (?1, 1, '2026-09-07T11:00:00Z', 'hook:pre-tool-use', 'egress.failed',
+                 'governance:http://10.0.0.5:8080', '{}', 'h', ?2)",
+            rusqlite::params![quiet.id, NOW],
+        )
+        .unwrap();
+    (hub, quiet)
+}
+
+#[test]
+fn alerts_name_what_needs_a_person_and_nothing_else() {
+    let (hub, _) = hub_that_needs_people();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    let mut kinds: Vec<&str> = all.iter().map(|a| a.kind).collect();
+    kinds.sort();
+    assert_eq!(
+        kinds,
+        ["countersignature", "governance", "licence", "quiet-device"],
+        "{all:?}"
+    );
+    // State only: no note text, no activity row, nothing beyond names and counts.
+    let body = alerts::payload("test", &all);
+    assert!(
+        body.contains("ws-quiet") && body.contains("einkauf"),
+        "{body}"
+    );
+    assert!(!body.contains("http://10.0.0.5"), "{body}");
+}
+
+#[test]
+fn an_alert_is_posted_once_then_reminded_and_again_when_it_comes_back() {
+    let (hub, _) = hub_that_needs_people();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    assert_eq!(alerts::due(&hub, &all, now).unwrap().len(), all.len());
+    alerts::remember(&hub, &all, &all, NOW).unwrap();
+    assert!(alerts::due(&hub, &all, now).unwrap().is_empty(), "posted");
+
+    let tomorrow = now + jiff::SignedDuration::from_hours(alerts::REMIND_AFTER_HOURS);
+    assert_eq!(
+        alerts::due(&hub, &all, tomorrow).unwrap().len(),
+        all.len(),
+        "reminded a day later"
+    );
+    // Gone, then back: posted again at once.
+    alerts::remember(&hub, &[], &[], NOW).unwrap();
+    assert_eq!(alerts::due(&hub, &all, now).unwrap().len(), all.len());
+}
+
+/// Off until set, and set means that one webhook through the gate: a public address is
+/// refused unless the administrator allowed one.
+#[tokio::test]
+async fn alerts_go_only_where_they_were_told_to() {
+    let off = alerts::Settings {
+        url: None,
+        allow_public: false,
+    };
+    assert!(alerts::post(&off, "t", &[]).await.is_err());
+    let public = alerts::Settings {
+        url: Some("https://93.184.216.34/hooks/abc".into()),
+        allow_public: false,
+    };
+    let err = alerts::post(&public, "t", &[])
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("allow_public_alert"), "{err}");
+}
+
+#[tokio::test]
+async fn an_alert_round_posts_to_the_webhook_and_records_it() {
+    use axum::routing::post;
+    let got = Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let sink = got.clone();
+    let app = axum::Router::new().route(
+        "/hook",
+        post(move |body: String| {
+            let sink = sink.clone();
+            async move {
+                sink.lock().unwrap().push(body);
+                "ok"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let (hub, _) = hub_that_needs_people();
+    let state = state_for(hub, false);
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    // Off: nothing is looked at, nothing leaves, nothing is recorded.
+    assert_eq!(alerts::round(&state, "0.7.10", now).await.unwrap(), 0);
+    alerts::set(
+        &state.hub.lock().unwrap(),
+        &format!("http://{addr}/hook"),
+        false,
+        "cli",
+        NOW,
+    )
+    .unwrap();
+    let posted = alerts::round(&state, "0.7.10", now).await.unwrap();
+    assert_eq!(posted, 4);
+    assert_eq!(
+        alerts::round(&state, "0.7.10", now).await.unwrap(),
+        0,
+        "once"
+    );
+    let bodies = got.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 1);
+    let v: serde_json::Value = serde_json::from_str(&bodies[0]).unwrap();
+    assert_eq!(v["kind"], "cyberbrain.hub.alert");
+    assert!(v["text"].as_str().unwrap().contains("ws-quiet"));
+    let actions: Vec<String> = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    assert!(
+        actions.contains(&"alerts.configured".to_string()),
+        "{actions:?}"
+    );
+    assert!(actions.contains(&"alerts.sent".to_string()), "{actions:?}");
+}
+
+// ---- people and fleet invitations on the administrator's page (F24) ----
+
+/// A signed-in administrator, and the directory the record (and its invitations) lives in.
+async fn admin_on_page() -> (Arc<super::api::HubState>, String, tempfile::TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let state = Arc::new(super::api::HubState {
+        hub: std::sync::Mutex::new(hub_with_password("correct horse battery")),
+        record: dir.path().join("hub.db"),
+        port: 7788,
+        sessions: Default::default(),
+        flash: std::sync::Mutex::new(None),
+        encrypted: true,
+        enrol_attempts: Default::default(),
+        sign_in_refusals: Default::default(),
+    });
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    (state, cookie, dir)
+}
+
+async fn form_post(
+    state: &Arc<super::api::HubState>,
+    cookie: &str,
+    uri: &str,
+    body: &str,
+) -> axum::response::Response {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("cookie", cookie)
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap()
+}
+
+fn flash_of(state: &Arc<super::api::HubState>) -> Option<std::result::Result<String, String>> {
+    state.flash.lock().unwrap().take()
+}
+
+#[tokio::test]
+async fn people_are_added_assigned_and_withdrawn_from_the_page() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    let r = form_post(&state, &cookie, "/principals", "name=E.+Kraus&role=editor").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let shown = flash_of(&state).unwrap().unwrap();
+    assert!(
+        shown.contains("cbp_"),
+        "the credential is shown once: {shown}"
+    );
+    let editor = state.hub.lock().unwrap().principals().unwrap()[0].clone();
+    assert_eq!(editor.role, Role::Editor);
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche", editor.id),
+        "bereich=disposition",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        state.hub.lock().unwrap().bereiche_of(&editor.id).unwrap(),
+        ["disposition"]
+    );
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche/disposition/remove", editor.id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .bereiche_of(&editor.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/revoke", editor.id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(!state.hub.lock().unwrap().principals().unwrap()[0].is_active());
+
+    let actions: Vec<String> = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .map(|e| e.action)
+        .collect();
+    for a in ["role.granted", "principal.assigned", "principal.unassigned"] {
+        assert!(actions.iter().any(|x| x == a), "{a} in {actions:?}");
+    }
+}
+
+/// The people who sign are not made from the page: a countersigner or a second
+/// administrator minted by the person whose acts they sign would make the two-person rule
+/// one person with two names. That stays at the machine, with the command.
+#[tokio::test]
+async fn the_page_does_not_make_signers_or_give_bereiche_to_non_editors() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    for role in ["countersigner", "admin"] {
+        let r = form_post(
+            &state,
+            &cookie,
+            "/principals",
+            &format!("name=X&role={role}"),
+        )
+        .await;
+        assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{role}");
+    }
+    assert!(state.hub.lock().unwrap().principals().unwrap().is_empty());
+    form_post(&state, &cookie, "/principals", "name=A.+Udit&role=auditor").await;
+    let auditor = state.hub.lock().unwrap().principals().unwrap()[0].clone();
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche", auditor.id),
+        "bereich=disposition",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    // And nobody signed out gets to do any of it.
+    let r = form_post(
+        &state,
+        "cyberbrain_hub=nope",
+        "/principals",
+        "name=Y&role=editor",
+    )
+    .await;
+    assert_ne!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(state.hub.lock().unwrap().principals().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn a_fleet_invitation_is_made_and_withdrawn_from_the_page() {
+    let (state, cookie, dir) = admin_on_page().await;
+    let r = form_post(
+        &state,
+        &cookie,
+        "/enrolment-codes",
+        "label=Rollout+Disposition&max_uses=3&expires=P14D&hub_url=https%3A%2F%2Fhub.internal%3A7788",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let shown = flash_of(&state).unwrap().unwrap();
+    let codes = state.hub.lock().unwrap().enrolment_codes().unwrap();
+    assert_eq!(codes.len(), 1);
+    assert_eq!(codes[0].max_uses, 3);
+    let file = dir
+        .path()
+        .join("invitations")
+        .join(format!("{}.json", codes[0].id));
+    assert!(shown.contains(&file.display().to_string()), "{shown}");
+    let inv: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(inv["kind"], super::client::FLEET_INVITATION_KIND);
+    assert_eq!(inv["hub_url"], "https://hub.internal:7788");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/enrolment-codes/{}/revoke", codes[0].id),
+        "",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        state.hub.lock().unwrap().enrolment_codes().unwrap()[0]
+            .revoked_at
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn the_administrators_page_lists_people_and_fleet_invitations() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    form_post(&state, &cookie, "/principals", "name=E.+Kraus&role=editor").await;
+    form_post(
+        &state,
+        &cookie,
+        "/enrolment-codes",
+        "label=Rollout&max_uses=2&expires=P7D&hub_url=",
+    )
+    .await;
+    let mut req = Request::builder()
+        .uri("/")
+        .header("cookie", &cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let b = axum::body::to_bytes(r.into_body(), 1 << 20).await.unwrap();
+    let page = String::from_utf8_lossy(&b);
+    assert!(page.contains("<h2>People</h2>"), "{page}");
+    assert!(page.contains("E. Kraus"));
+    assert!(page.contains("<h2>Fleet invitations</h2>"));
+    assert!(page.contains("Rollout"));
+    assert!(!page.contains("cbp_"), "a credential is never on the page");
+}
+
+/// A selection verifies row by row since K10, and gaps between its rows are what a selection
+/// is. A hub that took one would store a device's chain with holes in it, so a delivery has to
+/// be a whole stretch of the log.
+#[test]
+fn a_selection_is_not_a_delivery() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client
+        .log
+        .record(
+            &Actor::Operator,
+            AuditAction::PolicyRefusal,
+            "x",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    client.act("b");
+    let filter = cyberbrain_policy::AuditFilter {
+        action: Some("note.write".into()),
+        ..Default::default()
+    };
+    let selection = client
+        .log
+        .export_bundle(&Actor::Operator, &filter, "test-client")
+        .unwrap();
+    assert!(
+        bundle::verify(&selection).is_ok(),
+        "the file itself is sound"
+    );
+
+    let refused = ingest(&mut hub, &collecting(), Some(&token), &selection, None, NOW);
+    assert!(
+        matches!(&refused, Err(Refusal::BadBundle(m)) if m.contains("selection")),
+        "{refused:?}"
+    );
+    assert_eq!(hub.total_entries().unwrap(), 0);
 }

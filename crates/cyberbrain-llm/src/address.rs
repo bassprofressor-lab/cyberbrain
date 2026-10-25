@@ -262,6 +262,20 @@ pub async fn validate_endpoint(
     policy: &EndpointPolicy,
     resolver: &dyn Resolver,
 ) -> Result<ValidatedEndpoint> {
+    // An IPv6 zone (`[fe80::1%25eth0]`) is not part of URL syntax, and the URL parser's
+    // answer, "invalid IPv6 address", sends the operator looking for a typo. Say what it
+    // is instead. A link-local address needs its zone to be reachable at all, and carrying
+    // one through to a pinned connection is not supported, so this stays a refusal.
+    if let Some((_, rest)) = base_url.trim().split_once("://")
+        && let Some(v6) = rest.strip_prefix('[')
+        && v6.split(']').next().is_some_and(|a| a.contains('%'))
+    {
+        return Err(Error::Config(format!(
+            "llm.base_url {base_url:?} names an IPv6 zone (the part after %); zones are not \
+             supported. Use a routable or unique-local address (fd00::/8) of that machine, \
+             or a host name"
+        )));
+    }
     let mut url = Url::parse(base_url.trim())
         .map_err(|e| Error::Config(format!("llm.base_url {base_url:?} is not a URL: {e}")))?;
 
@@ -279,8 +293,21 @@ pub async fn validate_endpoint(
         ));
     }
 
-    let host = match (url.domain(), url.host_str()) {
-        (Some(d), _) => d.trim_end_matches('.').to_string(),
+    let domain = url.domain().map(str::to_string);
+    let literal = url.host_str().map(str::to_string);
+    let host = match (domain.as_deref(), literal.as_deref()) {
+        (Some(d), _) => {
+            let bare = d.trim_end_matches('.').to_string();
+            // The URL has to name the host exactly as the pin does. The pin is keyed by
+            // the name without its trailing dot; a URL that kept the dot matched no pin,
+            // and reqwest asked DNS again, which is the rebinding the pin exists to stop.
+            if bare != d {
+                url.set_host(Some(&bare)).map_err(|e| {
+                    Error::Config(format!("llm.base_url host {d:?} is not usable: {e}"))
+                })?;
+            }
+            bare
+        }
         // IP literal; IPv6 comes back bracketed.
         (None, Some(h)) => h.trim_start_matches('[').trim_end_matches(']').to_string(),
         (None, None) => return Err(Error::Config("llm.base_url has no host".into())),
@@ -577,6 +604,26 @@ mod tests {
 
     /// The narrow switch opens the narrow door and nothing else. A Tailscale endpoint works;
     /// a genuinely public one still does not.
+    /// An IPv6 zone is refused with a reason that names it, not with the URL parser's
+    /// "invalid IPv6 address", which reads like a typo.
+    #[tokio::test]
+    async fn an_ipv6_zone_is_refused_by_name() {
+        for url in [
+            "http://[fe80::1%25eth0]:11434/v1",
+            "http://[fe80::1%eth0]:11434/v1",
+        ] {
+            let err = validate_endpoint(
+                url,
+                &EndpointPolicy::default(),
+                &StaticResolver(HashMap::new()),
+            )
+            .await
+            .unwrap_err();
+            assert!(matches!(err, Error::Config(_)), "{url}: {err}");
+            assert!(err.to_string().contains("zone"), "{url}: {err}");
+        }
+    }
+
     #[tokio::test]
     async fn allow_overlay_network_permits_cgnat_and_nothing_more() {
         let p = EndpointPolicy {

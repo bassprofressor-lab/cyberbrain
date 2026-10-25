@@ -139,11 +139,43 @@ fn normalise(platform: Platform, s: &str) -> Normal {
     Normal { prefix, parts }
 }
 
+/// `C:x`: a drive letter and no separator after it.
+fn is_drive_relative(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 2
+        && b[0].is_ascii_alphabetic()
+        && b[1] == b':'
+        && !matches!(b.get(2), Some(b'\\' | b'/'))
+}
+
 /// Make `target` absolute against `cwd` when it is relative. Both are strings from the
 /// harness or the CLI; no file system is touched.
+///
+/// Windows has two relative forms that are not relative to `cwd`: `\x` is rooted on the
+/// drive (or share) `cwd` is on, and `C:x` is relative to drive C's own current directory.
+/// That directory is `cwd` when `cwd` is on C; for another drive it is not known here, and
+/// the drive's root is the guess.
 fn absolutise(platform: Platform, cwd: &str, target: &str) -> Normal {
     if is_absolute(platform, target) {
         normalise(platform, target)
+    } else if platform == Platform::Windows && is_drive_relative(target) {
+        let (drive, rest) = target.split_at(2);
+        if cwd.get(..2).is_some_and(|d| d.eq_ignore_ascii_case(drive)) {
+            normalise(platform, &format!("{cwd}\\{rest}"))
+        } else {
+            normalise(platform, &format!("{drive}\\{rest}"))
+        }
+    } else if platform == Platform::Windows && target.starts_with(['\\', '/']) {
+        let base = normalise(platform, cwd);
+        let rooted = normalise(platform, target);
+        // A share's root is `\\server\share`, two components below the prefix.
+        let keep = if base.prefix == r"\\" { 2 } else { 0 };
+        let mut parts: Vec<String> = base.parts.into_iter().take(keep).collect();
+        parts.extend(rooted.parts);
+        Normal {
+            prefix: base.prefix,
+            parts,
+        }
     } else {
         let sep = if platform == Platform::Windows {
             '\\'

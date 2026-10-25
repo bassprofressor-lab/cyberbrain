@@ -27,6 +27,7 @@
 //! and is not a compliance setting. Under `off` the hot path costs one enum comparison.
 
 pub mod audit;
+pub mod audit_key;
 pub mod config;
 pub mod egress;
 pub mod erasure;
@@ -39,12 +40,14 @@ pub mod subject;
 pub mod write_gate;
 
 pub use audit::{
-    Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, AuditSink, ExportFormat,
-    MemoryAuditSink, bundle, verify_chain_from,
+    Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, AuditSink, ChainReport, ExportFormat,
+    MemoryAuditSink, bundle, verify_chain_from, verify_chain_report, verify_each,
+    verify_each_report,
 };
+pub use audit_key::AuditKey;
 pub use config::PolicyConfig;
 pub use egress::{Egress, EgressEntry, EgressTicket, Locality};
-pub use erasure::{EraseReason, EraseRequest, Eraser, ErasureReport};
+pub use erasure::{EraseReason, EraseRequest, Eraser, ErasureReport, ScrubStatus, WalStatus};
 pub use model_card::{ModelCard, ModelInventory, ModelRole};
 pub use pii::{Finding, PiiKind};
 pub use policy::{Policy, PolicyStatus};

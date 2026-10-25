@@ -55,6 +55,14 @@ pub struct PolicyConfig {
     /// means `Governance` is disabled. Loopback or private range only, with no switch.
     pub governance_endpoint: Option<String>,
 
+    /// The hub's alert webhook (`hub alerts set`). `None` means `HubAlert` is disabled. Only a
+    /// hub sets it; a store never does.
+    pub alert_endpoint: Option<String>,
+
+    /// The alert webhook may be on a public address. Off by default, like every other
+    /// destination off the premises.
+    pub allow_public_alert: bool,
+
     /// Where model artefacts come from. `None` means `ModelDownload` is disabled: there is
     /// nowhere registered to fetch from.
     pub model_source: Option<String>,
@@ -75,6 +83,8 @@ impl Default for PolicyConfig {
             allow_public_hub: false,
             allow_note_sync: false,
             governance_endpoint: None,
+            alert_endpoint: None,
+            allow_public_alert: false,
             model_source: None,
             model_download_consent: false,
         }

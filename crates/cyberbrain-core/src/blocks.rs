@@ -71,6 +71,9 @@ pub enum OversizedReason {
     CodeFence,
     /// A single run of non-whitespace characters longer than the limit.
     UnbreakableRun,
+    /// Consecutive headings with nothing between them, together longer than the limit.
+    /// A heading is never split from the next one, so they stand alone as one block.
+    Headings,
 }
 
 /// A block that exceeds the limit, reported rather than silently split or dropped.
@@ -377,6 +380,8 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
             if approx > self.limit {
                 let reason = if self.cur.iter().any(|s| s.kind == Kind::Fence) {
                     OversizedReason::CodeFence
+                } else if !self.has_content() {
+                    OversizedReason::Headings
                 } else {
                     OversizedReason::UnbreakableRun
                 };
@@ -426,6 +431,18 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
             Kind::Para => {
                 if p.has_content() && p.cur_tokens + s.tokens > limit {
                     p.flush();
+                }
+                // Headings alone that leave no room for the paragraph's first word go out
+                // as a block of their own. Glued on, the word would push the block over
+                // the limit and it would be reported as an unbreakable run it is not.
+                if !p.cur.is_empty() && !p.has_content() {
+                    let first_word = body[s.start..s.end]
+                        .split_whitespace()
+                        .next()
+                        .map_or(0, approx_tokens);
+                    if p.cur_tokens + first_word > limit {
+                        p.flush();
+                    }
                 }
                 let avail = limit.saturating_sub(p.cur_tokens);
                 if s.tokens <= avail {
@@ -562,6 +579,30 @@ mod tests {
         let s = split(body, 5);
         // "## H" is 3 tokens (two `#`, one word), leaving room for two words.
         assert_eq!(texts(&s), ["## H\n\na b", "c d e f"]);
+    }
+
+    #[test]
+    fn headings_that_fill_the_limit_are_a_block_of_their_own() {
+        // Consecutive headings gather with nothing between them. When they already fill
+        // the limit, the paragraph after them used to be glued on, and the block was
+        // reported as an unbreakable run although every word in it is short.
+        let body = "# one two\n## three four\n\na b c d";
+        let s = split(body, 5);
+        assert!(
+            s.oversized
+                .iter()
+                .all(|o| o.reason != OversizedReason::UnbreakableRun),
+            "{s:?}"
+        );
+        assert_eq!(texts(&s).last(), Some(&"a b c d"));
+        assert_eq!(
+            s.oversized,
+            [Oversized {
+                block_idx: 0,
+                approx_tokens: approx_tokens("# one two\n## three four"),
+                reason: OversizedReason::Headings
+            }]
+        );
     }
 
     #[test]

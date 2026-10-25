@@ -322,7 +322,17 @@ impl OllamaEmbeddingConfig {
         h.update(&[0]);
         h.update(&self.num_ctx.to_le_bytes());
         let settings = h.finalize().to_hex();
-        let digest: String = self.digest.chars().take(12).collect();
+        // Normalised the way the digest check compares it, so the same weights written as
+        // `sha256:ABC…` and `abc…` are one profile. Raw, the prefix ate seven of the twelve
+        // characters, left five hex digits to tell models apart and rebuilt the index for
+        // a spelling change.
+        let digest = self.digest.trim();
+        let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
+        let digest: String = digest
+            .chars()
+            .take(12)
+            .collect::<String>()
+            .to_ascii_lowercase();
         format!(
             "ollama-{}-{digest}-d{}-{}",
             self.model,
@@ -688,7 +698,35 @@ impl Config {
         }
         let host = endpoint_host(&self.inference.base_url)
             .map_err(|why| bad("inference.base_url", why.to_string()))?;
-        if !self.inference.allow_public_endpoint && !host_is_local(&host) {
+        // The LLM layer refuses an IPv6 zone, which it cannot pin a connection to. Said
+        // here by name, because read as an address it is "not a private range", which
+        // points at the wrong setting.
+        if host.contains('%') {
+            return Err(bad(
+                "inference.base_url",
+                format!(
+                    "host `{host}` carries an IPv6 zone (the part after %); zones are not \
+                     supported. Use a routable or unique-local address (fd00::/8) of that \
+                     machine, or a host name"
+                ),
+            ));
+        }
+        // The overlay switch admits 100.64/10 literals and nothing else. The address
+        // check in the LLM layer and the egress gate already honour it; without it here,
+        // `parse` refused the endpoint first and the only way through was
+        // `allow_public_endpoint`, the wider consent this switch exists to spare.
+        let overlay_ok = self.inference.allow_overlay_network && host_is_overlay(&host);
+        if !self.inference.allow_public_endpoint && !overlay_ok && host_is_overlay(&host) {
+            return Err(bad(
+                "inference.base_url",
+                format!(
+                    "host `{host}` is in 100.64.0.0/10, which is carrier-grade NAT and also \
+                     what overlay networks such as Tailscale hand out. Set \
+                     inference.allow_overlay_network = true if this endpoint is yours"
+                ),
+            ));
+        }
+        if !self.inference.allow_public_endpoint && !overlay_ok && !host_is_local(&host) {
             return Err(bad(
                 "inference.base_url",
                 format!(
@@ -809,6 +847,22 @@ pub fn host_is_local(host: &str) -> bool {
     }
 }
 
+/// An IP literal in `100.64.0.0/10` (RFC 6598 shared address space), also as an
+/// IPv4-mapped IPv6 address. Judged from the literal only, like [`host_is_local`]: a host
+/// name is never taken for an overlay address, whatever it resolves to.
+pub fn host_is_overlay(host: &str) -> bool {
+    use std::net::{IpAddr, Ipv4Addr};
+    let shared = |v4: Ipv4Addr| {
+        let [a, b, _, _] = v4.octets();
+        a == 100 && (b & 0b1100_0000) == 0b0100_0000
+    };
+    match host.parse::<IpAddr>() {
+        Ok(IpAddr::V4(v4)) => shared(v4),
+        Ok(IpAddr::V6(v6)) => v6.to_ipv4_mapped().is_some_and(shared),
+        Err(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -856,6 +910,21 @@ document_prefix = "title: none | text: "
         );
         let err = Config::parse(&bad, p()).unwrap_err();
         assert!(err.to_string().contains("embedding.ollama.digest"), "{err}");
+    }
+
+    #[test]
+    fn the_digest_counts_the_same_with_or_without_its_sha256_prefix() {
+        let base = Config::parse(OLLAMA, p())
+            .unwrap()
+            .embedding
+            .ollama
+            .unwrap();
+        let mut prefixed = base.clone();
+        prefixed.digest = format!("sha256:{}", base.digest);
+        assert_eq!(prefixed.profile_id(), base.profile_id());
+        let mut upper = base.clone();
+        upper.digest = format!("sha256:{}", base.digest.to_ascii_uppercase());
+        assert_eq!(upper.profile_id(), base.profile_id());
     }
 
     #[test]
@@ -1029,6 +1098,52 @@ document_prefix = "title: none | text: "
         }
         expect_config_error("[inference]\nbase_url = \"11434\"\n", "not a URL");
         expect_config_error("[inference]\nbase_url = \"ftp://127.0.0.1/\"\n", "scheme");
+    }
+
+    #[test]
+    fn allow_overlay_network_admits_an_overlay_endpoint_and_nothing_else() {
+        // Without the switch a 100.64/10 endpoint is refused, and the refusal names the
+        // switch that would admit it rather than the wider public one.
+        let err = Config::parse(
+            "[inference]\nbase_url = \"http://100.101.102.103:11434/v1\"\n",
+            p(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("allow_overlay_network"), "{err}");
+        for overlay in [
+            "http://100.101.102.103:11434/v1",
+            "http://100.64.0.1/v1",
+            "http://100.127.255.254/v1",
+            "http://[::ffff:100.100.1.1]/v1",
+        ] {
+            let c = Config::parse(
+                &format!("[inference]\nbase_url = \"{overlay}\"\nallow_overlay_network = true\n"),
+                p(),
+            )
+            .unwrap_or_else(|e| panic!("{overlay} should be accepted: {e}"));
+            assert!(!c.inference.allow_public_endpoint);
+        }
+        // The overlay switch opens 100.64/10 and nothing next to it.
+        for public in [
+            "http://100.128.0.1/v1",
+            "http://100.63.255.255/v1",
+            "http://8.8.8.8/v1",
+            "http://gpu.tailnet.ts.net/v1",
+        ] {
+            expect_config_error(
+                &format!("[inference]\nbase_url = \"{public}\"\nallow_overlay_network = true\n"),
+                "inference.base_url",
+            );
+        }
+    }
+
+    #[test]
+    fn an_ipv6_zone_in_the_base_url_is_named_as_such() {
+        expect_config_error(
+            "[inference]\nbase_url = \"http://[fe80::1%25eth0]:11434/v1\"\n",
+            "zone",
+        );
     }
 
     #[test]

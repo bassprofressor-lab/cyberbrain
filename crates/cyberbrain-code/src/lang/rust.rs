@@ -36,7 +36,8 @@ fn is_doc_or_attr(l: &str) -> bool {
     t.starts_with("///") || (t.starts_with("#[") && !t.starts_with("#!["))
 }
 
-/// Skip a balanced `<...>` at the start of `s`.
+/// Skip a balanced `<...>` at the start of `s`. The `>` of `->` in a bound such as
+/// `F: Fn() -> U` is an arrow, not a closing bracket.
 fn skip_generics(s: &str) -> &str {
     let b = s.as_bytes();
     if b.first() != Some(&b'<') {
@@ -46,6 +47,7 @@ fn skip_generics(s: &str) -> &str {
     for (i, &c) in b.iter().enumerate() {
         match c {
             b'<' => depth += 1,
+            b'>' if i > 0 && b[i - 1] == b'-' => {}
             b'>' => {
                 depth -= 1;
                 if depth == 0 {
@@ -66,6 +68,7 @@ fn split_for(s: &str) -> Option<(&str, &str)> {
     while i < b.len() {
         match b[i] {
             b'<' => depth += 1,
+            b'>' if i > 0 && b[i - 1] == b'-' => {}
             b'>' => depth = depth.saturating_sub(1),
             b'{' => return None,
             b'f' if depth == 0
@@ -108,6 +111,11 @@ pub(crate) fn extract(lines: &[&str], out: &mut Vec<Def>) {
     for (i, &line) in lines.iter().enumerate() {
         while scopes.last().is_some_and(|s| s.0 < i) {
             scopes.pop();
+        }
+        // A line that begins inside a multi-line string or comment is text: a docstring
+        // or a commented-out block may well contain what looks like a definition.
+        if lx.open_before(i) {
+            continue;
         }
         let scope = scopes.last();
 

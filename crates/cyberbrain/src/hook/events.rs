@@ -723,6 +723,39 @@ fn bash_verdict(cmd: &str) -> Option<String> {
     ))
 }
 
+/// Whether one argument of `sed` or `perl` asks for in-place editing.
+///
+/// `-i` bundles with other short options (`sed -ni`, `perl -pi`, `perl -0777 -pi`), so a short
+/// cluster is read letter by letter until a letter that takes an argument: after that, the
+/// rest of the cluster is that argument (`perl -Mstrict` names a module, not `-i`).
+fn edits_in_place(prog: &str, arg: &str) -> bool {
+    if arg == "--in-place" || arg.starts_with("--in-place=") {
+        return true;
+    }
+    let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
+        return false;
+    };
+    for c in cluster.chars() {
+        if c == 'i' {
+            return true;
+        }
+        // The letters that take an argument differ: `sed -E` is a flag, `perl -E` a script.
+        let takes_argument = match prog {
+            "sed" => matches!(c, 'e' | 'f' | 'l'),
+            _ => {
+                matches!(
+                    c,
+                    'e' | 'E' | 'M' | 'm' | 'I' | 'l' | 'x' | 'C' | 'd' | 'D' | 'F'
+                ) || c.is_ascii_digit()
+            }
+        };
+        if takes_argument {
+            return false;
+        }
+    }
+    false
+}
+
 /// The arguments of one simple command that it writes to, deletes or replaces.
 ///
 /// Leading assignments and wrappers (`sudo`, `env`, `nohup`, …) are skipped to reach the
@@ -750,7 +783,7 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
             paths().collect()
         }
         "cp" | "rsync" | "install" | "ln" => paths().next_back().into_iter().collect(),
-        "sed" | "perl" if args.iter().any(|a| a.starts_with("-i")) => paths().collect(),
+        "sed" | "perl" if args.iter().any(|a| edits_in_place(prog, a)) => paths().collect(),
         "dd" => args.iter().filter_map(|a| a.strip_prefix("of=")).collect(),
         "tar"
             if args.iter().any(|a| {
@@ -763,18 +796,38 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
     }
 }
 
+/// Record a refusal the guard is about to give, without letting the record decide it.
+///
+/// Every other audited step fails closed by not doing what it could not record. Here the
+/// step is a *refusal*, and an error out of the hook is an empty answer, which the harness
+/// reads as "no decision" and allows: a full disk or a locked `audit.db` would open the guard.
+/// So the deny stands and the missing row is said on stderr instead.
+fn record_refusal(ctx: &Ctx<'_>, out: &mut HookOutput, subject: String, detail: serde_json::Value) {
+    if let Err(e) =
+        ctx.app
+            .policy()
+            .audit()
+            .record(&ctx.actor(), AuditAction::PolicyRefusal, subject, detail)
+    {
+        out.note(format!(
+            "pre-tool-use: the refusal below stands, but it could not be recorded in the \
+             audit log: {e}"
+        ));
+    }
+}
+
 fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
     let Some(reason) = bash_verdict(cmd) else {
         out.note("pre-tool-use: Bash command does not touch guarded store files; allowing");
         return Ok(());
     };
     // The command itself is not recorded: it may carry anything, a secret included.
-    ctx.app.policy().audit().record(
-        &ctx.actor(),
-        AuditAction::PolicyRefusal,
+    record_refusal(
+        ctx,
+        out,
         "bash".to_string(),
         json!({ "tool": "Bash", "session": ctx.payload.session_id, "reason": reason }),
-    )?;
+    );
     out.note("pre-tool-use: deny Bash on guarded store files");
     out.stdout = json!({
         "hookSpecificOutput": {
@@ -896,9 +949,9 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     if decision == "deny" {
         // A refusal is the most interesting audit row there is (§12.1). Rare, so the
         // fsync it costs is paid only when something was actually stopped.
-        ctx.app.policy().audit().record(
-            &ctx.actor(),
-            AuditAction::PolicyRefusal,
+        record_refusal(
+            ctx,
+            out,
             format!("file:{rel}"),
             json!({
                 "tool": tool,
@@ -906,7 +959,7 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
                 "session": ctx.payload.session_id,
                 "reason": reason,
             }),
-        )?;
+        );
     }
     out.note(format!("pre-tool-use: {decision} {tool} on {rel}"));
     out.stdout = json!({
@@ -1050,6 +1103,30 @@ mod bash_tests {
             "dd if=/dev/zero of=.cyberbrain/audit.db bs=1 count=1",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// In-place editing hides in bundled short options as often as it stands alone:
+    /// `sed -ni`, `perl -pi -e`, `perl -0777 -pi`, `sed --in-place`. Only `-i` was seen.
+    #[test]
+    fn in_place_edits_in_bundled_options_are_refused() {
+        for cmd in [
+            "sed -ni 's/a/b/p' .cyberbrain/notes/r1/engine.md",
+            "sed -Ei.bak 's/a/b/' .cyberbrain/notes/r0/a.md",
+            "sed --in-place 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "sed --in-place=.bak 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "perl -pi -e 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "perl -0777 -pi -e 's/a/b/' .cyberbrain/notes/r1/engine.md",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        // Reading with options that merely contain an `i` after an argument letter.
+        for cmd in [
+            "sed -n 's/a/b/p' .cyberbrain/notes/r1/engine.md",
+            "sed -e 's/i/j/' .cyberbrain/notes/r1/engine.md",
+            "perl -Mstrict -ne 'print' .cyberbrain/notes/r1/engine.md",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
     }
 

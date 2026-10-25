@@ -41,6 +41,18 @@ use walk::{Class, Found};
 /// Tag prefix that ties a note to the file it was cut from. Re-import recognition and the
 /// stale check both key on it.
 pub const SOURCE_TAG_PREFIX: &str = "src:";
+/// Tag prefix that names the source tree a note came from, as a short hash of its absolute
+/// path. `src:` alone is relative to the root, so two trees with the same layout claimed
+/// each other's notes. A note without this tag was imported before it existed and is
+/// matched on `src:` alone, as it always was.
+pub const SOURCE_ROOT_TAG_PREFIX: &str = "src-root:";
+
+/// The `src-root:` tag of a source tree.
+fn root_tag(root: &std::path::Path) -> String {
+    let abs = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let hash = blake3::hash(Slash(&abs).to_string().as_bytes());
+    format!("{SOURCE_ROOT_TAG_PREFIX}{}", &hash.to_hex()[..16])
+}
 
 /// Run the plan against the store. `dry_run` swaps the writers, not the path.
 pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportReport> {
@@ -82,8 +94,22 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
     // ---- items: cut every mapped file into candidates -------------------------------
     let mut file_failures = Vec::new();
     let mut cands: Vec<Candidate> = Vec::new();
+    let root_tag = root_tag(&root);
     for (f, gi) in &mapped {
         let group = &plan.groups[*gi];
+        // Not followed, the way the code index never follows one either: a link in a foreign
+        // export can name any file this account can read, and reading through it would
+        // import that file under the source tree's name.
+        if f.link {
+            file_failures.push(FileFailure {
+                path: f.rel.clone(),
+                group: group.name.clone(),
+                reason: "a symbolic link; import does not follow links out of the source \
+                         tree. Copy the file in, or skip it by rule"
+                    .into(),
+            });
+            continue;
+        }
         let text = match std::fs::read(&f.abs) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(t) => t,
@@ -108,7 +134,7 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
                 continue;
             }
         };
-        let (bytes_read, bytes_in_items) = cut(plan, *gi, f, &text, &mut cands);
+        let (bytes_read, bytes_in_items) = cut(plan, *gi, f, &root_tag, &text, &mut cands);
         if bytes_read == 0 {
             files.empty.push(f.rel.clone());
         } else if bytes_read != bytes_in_items {
@@ -174,7 +200,7 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
     }
 
     // ---- stale: earlier imports of these files that nothing produced now --------------
-    let stale = stale_notes(app, &mapped, &produced)?;
+    let stale = stale_notes(app, &mapped, &root_tag, &produced)?;
 
     let mut report = ImportReport {
         dry_run,
@@ -266,6 +292,7 @@ fn cut(
     plan: &ImportPlan,
     group_idx: usize,
     f: &Found,
+    root_tag: &str,
     text: &str,
     out: &mut Vec<Candidate>,
 ) -> (usize, usize) {
@@ -285,7 +312,7 @@ fn cut(
         .iter()
         .chain(group.tags.iter())
         .cloned()
-        .chain([src_tag])
+        .chain([src_tag, root_tag.to_string()])
         .collect();
 
     let (mode, default_template) = match group.split {
@@ -435,7 +462,7 @@ fn resolve_collisions(plan: &ImportPlan, cands: &mut [Candidate]) {
         for &i in idxs {
             if plan.groups[cands[i].group_idx].collisions == Collisions::Hash {
                 let hash = slug::short_hash(&cands[i].body);
-                let suffixed = slug::slugify(&format!("{name}-{hash}"));
+                let suffixed = slug::with_suffix(name, &hash);
                 cands[i].notes.push(format!(
                     "name `{name}` collided with {} other item(s); suffixed with the content hash",
                     idxs.len() - 1
@@ -559,15 +586,21 @@ fn write_one(
                 ),
             });
         }
-        if n.body == c.body && n.front.kind == c.kind {
+        // Metadata the plan sets counts as much as the text: a retention added to meet an
+        // erasure duty is the one change that matters, and "unchanged" left the old one.
+        // A plan that sets nothing leaves the note's own value alone, so only a set value is
+        // compared.
+        let same_meta = (c.retention.is_none() || n.front.retention == c.retention)
+            && (c.bereich.is_none() || n.front.bereich == c.bereich);
+        if n.body == c.body && n.front.kind == c.kind && same_meta {
             return Ok(Outcome::Unchanged);
         }
-        let same_source = n.front.tags.contains(&src_tag);
+        let same_source = n.front.tags.contains(&src_tag) && same_root(&n.front.tags, &c.tags);
         match (group.existing, same_source) {
             (Existing::Overwrite, true) => updating = true,
             (Existing::Overwrite, false) => {
                 return Ok(Outcome::Exists {
-                    why: "exists with different content and was not imported from this file (no matching src: tag); not overwritten".into(),
+                    why: "exists with different content and was not imported from this file (no matching src: tag for this file in this source tree); not overwritten".into(),
                 });
             }
             (Existing::Keep, true) => {
@@ -621,10 +654,26 @@ fn write_one(
     })
 }
 
-/// Notes tagged with a mapped file's `src:` tag whose name no current item produced.
+/// Whether a note's `src-root:` tag, if it has one, names the tree a candidate comes from.
+/// No tag is a note from before the tag existed, which keeps the old `src:`-only match.
+fn same_root(note_tags: &[String], cand_tags: &[String]) -> bool {
+    let root_of = |tags: &[String]| {
+        tags.iter()
+            .find(|t| t.starts_with(SOURCE_ROOT_TAG_PREFIX))
+            .cloned()
+    };
+    match root_of(note_tags) {
+        None => true,
+        Some(r) => root_of(cand_tags).as_ref() == Some(&r),
+    }
+}
+
+/// Notes tagged with a mapped file's `src:` tag, from this tree, whose name no current item
+/// produced.
 fn stale_notes(
     app: &App,
     mapped: &[(Found, usize)],
+    root_tag: &str,
     produced: &HashSet<String>,
 ) -> Result<Vec<StaleNote>> {
     let tags: HashMap<String, String> = mapped
@@ -638,7 +687,7 @@ fn stale_notes(
         let Ok(n) = store.read_path(&e.path) else {
             continue;
         };
-        if produced.contains(&n.front.name) {
+        if produced.contains(&n.front.name) || !same_root(&n.front.tags, &[root_tag.to_string()]) {
             continue;
         }
         if let Some(src) = n.front.tags.iter().find_map(|t| tags.get(t)) {

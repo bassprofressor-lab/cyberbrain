@@ -125,7 +125,7 @@ impl<'o> Walk<'o> {
         matchers: &mut Vec<Matcher>,
     ) -> Result<usize> {
         let mut added = 0;
-        // Git first, cyberbrain second: the later one is checked first.
+        // The order here no longer decides precedence; `ignored_by` checks by tier.
         for (file, source) in [
             (".gitignore", Source::Git),
             (IGNORE_FILE, Source::Cyberbrain),
@@ -154,15 +154,20 @@ impl<'o> Walk<'o> {
         Ok(added)
     }
 
-    /// The first matcher, nearest directory first, with an opinion about `path`.
+    /// The first matcher with an opinion about `path`: every `.cyberbrainignore`, nearest
+    /// directory first, then every `.gitignore` the same way. The tiers are the module's
+    /// promise; going by directory alone let a `!x.py` in a nested `.gitignore` bring back
+    /// what a `.cyberbrainignore` further up kept out.
     fn ignored_by(matchers: &[Matcher], path: &Path, is_dir: bool) -> Option<Source> {
-        for m in matchers.iter().rev() {
-            let r = m.gi.matched(path, is_dir);
-            if r.is_ignore() {
-                return Some(m.source);
-            }
-            if r.is_whitelist() {
-                return None;
+        for tier in [Source::Cyberbrain, Source::Git] {
+            for m in matchers.iter().rev().filter(|m| m.source == tier) {
+                let r = m.gi.matched(path, is_dir);
+                if r.is_ignore() {
+                    return Some(m.source);
+                }
+                if r.is_whitelist() {
+                    return None;
+                }
             }
         }
         None

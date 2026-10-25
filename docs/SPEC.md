@@ -165,6 +165,7 @@ full — the grant, its direction, and the countersignature it takes to have any
   cyberbrain.toml            # configuration
   models/                    # model artefacts, content-addressed
   sessions/                  # per-session hook state. Neither notes nor cache.
+  keys/audit.ed25519         # optional: the store's audit key (§12.6.1). Owner-only. Secret.
 ```
 
 `sessions/` holds what a hook must remember between the events of one session: which
@@ -378,7 +379,8 @@ cyberbrain invalidate <name> [--at D] [--by NAME] [--clear] [--dry-run]
                                       declare a note no longer holding; one audit row
 cyberbrain propose --ring R --kind K --name N        offer a note for somebody to accept (§8.0.3)
 cyberbrain review [<name> --accept|--reject --reason] what is waiting, and deciding it
-cyberbrain forget <name|id> [--dry-run]   erase note, blocks, vectors, links, and say what went
+cyberbrain forget <name|id> [--dry-run] [--report FILE [--sign]]
+                                      erase note, blocks, vectors, links, and say what went
 cyberbrain manifest [--path DIR]      record the digests a model artefact is checked against
 cyberbrain doctor                     dangling links, ring cap, stale index, orphan vectors
 cyberbrain status [--json]            store health, model, backend, compliance profile
@@ -390,7 +392,9 @@ cyberbrain mcp                        MCP server over stdio (§9)
 cyberbrain install [--client C] [--undo]   write this binary into a client's config (§8.0.2)
 cyberbrain policy <subcommand>        compliance operations (§12)
 cyberbrain hub <subcommand>           the fleet collector, its licence and its service
-cyberbrain verify-export <file>       check an audit export, with no store and no network
+cyberbrain verify-export <file> [--expect-key FP]
+                                      check an audit export or an erasure report, with no
+                                      store and no network
 ```
 
 Exit codes: `0` success, `1` user error, `2` internal error, `3` policy refusal.
@@ -792,7 +796,10 @@ Rules that fall out of this and are not negotiable per command:
   uninstalled, and rightly.
 - **`serve` binds loopback only.** Not configurable. There is no authentication because
   there is no remote access to authenticate, and those two facts have to stay tied
-  together.
+  together. Loopback is shared by every account on the machine, so on Linux a connection
+  opened by another account (other than root) is dropped unread: the kernel's socket table
+  names the uid that owns the client's end. Elsewhere that table is not read and the API
+  is open to every local account, as before.
 
 ## 9. Agent integration
 
@@ -1108,7 +1115,17 @@ intent (§13).
 
 **Audit rows are exempt from erasure.** An erasure record naming what was erased is itself a
 trace, and it is kept deliberately: evidence that the erasure happened is what makes the
-erasure demonstrable. This is stated here so that nobody later "fixes" it. Deleting a Markdown file while its vector stays in the index is the
+erasure demonstrable. This is stated here so that nobody later "fixes" it.
+
+**What is left on disk is reported, not assumed.** After every erasure the index is scrubbed:
+FTS segments are merged and `wal_checkpoint(TRUNCATE)` carries the result into the main file
+and empties the WAL. A process holding a read transaction (`serve`, `mcp`, the daemon) keeps the
+checkpoint from finishing, and the pre-erasure pages then stay in `cyberbrain.db-wal`. The report
+carries SQLite's answer as `scrub.{residue, wal.{busy, log_frames, checkpointed_frames}}` and
+says in words when pages may remain. `forget --report FILE` writes the same as a standalone
+erasure report (kind `cyberbrain.erasure.report`) tied to the chain hashes of its
+`note.erase.requested` and `note.erase.completed` rows, and `--sign` signs it with the store's
+audit key (§12.6.1). `verify-export` checks it. Deleting a Markdown file while its vector stays in the index is the
 obvious silent failure of this design and must be covered by a test that asserts the vector
 is gone, not merely that the file is.
 
@@ -1138,6 +1155,29 @@ Append-only table recording writes, erasures, model downloads, inference calls, 
 refusals and egress attempts, with timestamp, actor and subject. `cyberbrain policy audit`
 exports it. This is the evidence an AI Act conformity discussion asks for, and it is the
 integration seam for AgentGuard.
+
+#### 12.6.1 The audit key
+
+The hash chain shows *that* a row changed; anybody who can write `audit.db` can recompute it.
+`cyberbrain policy audit-key --init` gives the store an Ed25519 key (`keys/audit.ed25519`,
+owner-only, with a `.gitignore` beside it) and prints its fingerprint: the first 32 hex digits
+of blake3 over the public key. From then on every row is written in **chain format 2**:
+`_chain.v = 2`, the hash is over length-prefixed fields (each field an 8-byte little-endian
+length and its bytes, the first field the literal `cyberbrain.audit.v2`), and `_chain.key` and
+`_chain.sig` carry the public key and an Ed25519 signature over
+`cyberbrain.audit.row.v2\n` + hash. Format 1, the newline-separated rule, stays the rule for every
+row written without a key, for ever.
+
+Verification rules: a format-1 row before the first signed row is **pre-signing** — counted as
+unsigned, not a fault. A format-1 row after a signed row is a break (a stripped signature, or a
+writer without the key). A signed row whose signature does not hold is a break. In a store,
+signed rows must carry the store's own key; a recipient of an export checks them against the
+fingerprint they were given (`verify-export --expect-key`). The first signed row of a store is
+`audit.key.created`, naming the fingerprint.
+
+There is no key by default, and without one nothing changes. Once a store signs, every binary
+that writes or verifies its log — and a hub it delivers to — has to know format 2; an older one
+reports the signed rows as edited.
 
 ### 12.7 Model transparency (EU AI Act)
 

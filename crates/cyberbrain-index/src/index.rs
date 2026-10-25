@@ -91,6 +91,37 @@ pub struct Erased {
     pub links_in_unresolved: usize,
 }
 
+/// SQLite's answer to `PRAGMA wal_checkpoint(TRUNCATE)`, kept as it came.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct WalCheckpoint {
+    /// The checkpoint could not finish because another connection held the database.
+    pub busy: bool,
+    /// Frames in the WAL when the checkpoint ran; `-1` when the file is not in WAL mode.
+    pub log_frames: i64,
+    /// Frames of those that reached the main file.
+    pub checkpointed_frames: i64,
+}
+
+impl WalCheckpoint {
+    /// Everything in the WAL reached the main file and the WAL was reset.
+    pub fn complete(&self) -> bool {
+        !self.busy && self.log_frames == self.checkpointed_frames
+    }
+}
+
+/// What [`Index::scrub`] found. `wal` is `None` for an in-memory index, which has no WAL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct Scrubbed {
+    pub wal: Option<WalCheckpoint>,
+}
+
+impl Scrubbed {
+    /// Pre-erasure pages may still be in `cyberbrain.db-wal`.
+    pub fn residue(&self) -> bool {
+        self.wal.is_some_and(|w| !w.complete())
+    }
+}
+
 /// What `delete_note` removed and whose it was, so the caller can log the erasure with
 /// the same facts the index knew (SPEC §12.2). The index writes no audit row itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -669,16 +700,31 @@ impl Index {
     /// freed (and zeroed). The checkpoint then carries that into the main file and truncates
     /// the WAL, which otherwise still holds the pre-erasure pages. Costs a rewrite of the
     /// full-text index, which is why it runs after an erasure and not after every delete.
-    pub fn scrub(&self) -> Result<()> {
+    ///
+    /// The checkpoint's answer is returned, not swallowed. A reader in another process
+    /// (`serve`, `mcp`, the daemon) holding a read transaction keeps the checkpoint from
+    /// resetting the WAL; SQLite then reports `busy` and leaves frames behind, and those
+    /// frames are the pre-erasure pages. Saying "erased" over that would be the one false
+    /// statement an erasure report must not make.
+    pub fn scrub(&self) -> Result<Scrubbed> {
         self.conn
             .execute("INSERT INTO blocks_fts(blocks_fts) VALUES ('optimize')", [])
             .ix()?;
-        if self.path.is_some() {
-            self.conn
-                .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
-                .ix()?;
-        }
-        Ok(())
+        let wal = match self.path {
+            Some(_) => Some(
+                self.conn
+                    .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |r| {
+                        Ok(WalCheckpoint {
+                            busy: r.get::<_, i64>(0)? != 0,
+                            log_frames: r.get(1)?,
+                            checkpointed_frames: r.get(2)?,
+                        })
+                    })
+                    .ix()?,
+            ),
+            None => None,
+        };
+        Ok(Scrubbed { wal })
     }
 
     pub fn delete_note(&mut self, id: &NoteId) -> Result<Erasure> {

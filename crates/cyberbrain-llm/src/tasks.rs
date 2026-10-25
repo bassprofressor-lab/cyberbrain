@@ -382,8 +382,10 @@ fn truncate(s: &str) -> (&str, bool) {
     (&s[..end], true)
 }
 
-/// Find the JSON object in a model reply: strip code fences, take from the first `{` to
-/// its matching `}`. Small models often add a sentence before or after.
+/// Find the JSON object in a model reply: strip code fences, then take each `{` in turn to
+/// its matching `}` until one parses as `T`. Small models often add a sentence before or
+/// after, and a sentence can hold braces of its own (`given {x}`); the first `{` alone made
+/// such a reply fail although the object was right there.
 pub(crate) fn parse_json<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T, Error> {
     let text = reply.trim();
     let text = text
@@ -392,19 +394,50 @@ pub(crate) fn parse_json<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T,
         .map(|t| t.trim_end_matches("```"))
         .unwrap_or(text)
         .trim();
-    let start = text.find('{').ok_or_else(|| {
-        Error::Llm(format!(
+    if !text.contains('{') {
+        return Err(Error::Llm(format!(
             "model reply contained no JSON object: {:?}",
             head(text)
-        ))
-    })?;
-    // Walk to the matching brace, honouring strings.
-    let bytes = text.as_bytes();
+        )));
+    }
+    // The error of the first balanced object is the one reported: it is the likeliest to
+    // be the answer, malformed.
+    //
+    // A failed object is skipped whole, never searched inside: an object nested in the
+    // wrong answer is not the right answer, even when its shape happens to fit.
+    let mut first_err: Option<serde_json::Error> = None;
+    let mut next = 0;
+    for (start, _) in text.match_indices('{') {
+        if start < next {
+            continue;
+        }
+        let Some(end) = matching_brace(text, start) else {
+            continue;
+        };
+        match serde_json::from_str(&text[start..end]) {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                first_err.get_or_insert(e);
+                next = end;
+            }
+        }
+    }
+    Err(match first_err {
+        Some(e) => Error::Llm(format!("model reply is not the expected JSON shape: {e}")),
+        None => Error::Llm(format!(
+            "model reply has an unterminated JSON object: {:?}",
+            head(text)
+        )),
+    })
+}
+
+/// The end (exclusive) of the object that opens at `start`, honouring strings; `None`
+/// when it is never closed.
+fn matching_brace(text: &str, start: usize) -> Option<usize> {
     let mut depth = 0i32;
     let mut in_str = false;
     let mut esc = false;
-    let mut end = None;
-    for (i, &c) in bytes.iter().enumerate().skip(start) {
+    for (i, &c) in text.as_bytes().iter().enumerate().skip(start) {
         if in_str {
             if esc {
                 esc = false;
@@ -421,21 +454,13 @@ pub(crate) fn parse_json<T: for<'de> Deserialize<'de>>(reply: &str) -> Result<T,
             b'}' => {
                 depth -= 1;
                 if depth == 0 {
-                    end = Some(i + 1);
-                    break;
+                    return Some(i + 1);
                 }
             }
             _ => {}
         }
     }
-    let end = end.ok_or_else(|| {
-        Error::Llm(format!(
-            "model reply has an unterminated JSON object: {:?}",
-            head(text)
-        ))
-    })?;
-    serde_json::from_str(&text[start..end])
-        .map_err(|e| Error::Llm(format!("model reply is not the expected JSON shape: {e}")))
+    None
 }
 
 fn head(s: &str) -> String {
@@ -565,6 +590,19 @@ mod tests {
         assert_eq!(
             parse_json::<T>(r#"{"a":4,"s":"has } brace \" and \\"}"#).unwrap(),
             T { a: 4 }
+        );
+        // Braces in the prose before the object are not the object.
+        assert_eq!(
+            parse_json::<T>("Given {x} and {y: z}, the answer is:\n{\"a\": 5}").unwrap(),
+            T { a: 5 }
+        );
+        assert_eq!(
+            parse_json::<T>("Note {\"b\": 1} first, then {\"a\": 6}").unwrap(),
+            T { a: 6 }
+        );
+        assert!(
+            parse_json::<T>("{\"wrong\": {\"a\": 7}}").is_err(),
+            "an object inside the wrong answer is not the answer"
         );
         assert!(parse_json::<T>("no json here").is_err());
         assert!(parse_json::<T>("{\"a\": 1").is_err());

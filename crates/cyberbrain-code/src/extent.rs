@@ -216,8 +216,12 @@ fn rust_char_literal_end(b: &[u8], at: usize) -> Option<usize> {
         return None;
     }
     if b[at + 1] == b'\\' {
-        // '\n', '\'', '\u{1F600}'
-        let end = memchr::memchr(b'\'', &b[at + 2..]).map(|j| at + 2 + j)?;
+        // '\n', '\'', '\u{1F600}'. The byte after the backslash is the escaped character
+        // and never the closing quote, even when it is a quote itself (`'\''`).
+        if at + 3 >= n {
+            return None;
+        }
+        let end = memchr::memchr(b'\'', &b[at + 3..]).map(|j| at + 3 + j)?;
         return (end - at <= 12).then_some(end);
     }
     // One (possibly multi-byte) character then a quote.
@@ -333,6 +337,12 @@ pub(crate) fn item_extent(
 ) -> usize {
     let mut depth: usize = 0;
     let mut body = false;
+    // A TypeScript return type (`f(): { a: A } {`) is open: a `:` straight after the
+    // parameter list. In it, a `{` that follows an operator (`:`, `|`, `<`, …) starts an
+    // object type; only one after a complete type (a name, `}`, `>`, …) opens the body.
+    let mut return_type = false;
+    // The last code character that was not whitespace, across lines.
+    let mut prev = 0u8;
     let last = lines.len().saturating_sub(1);
     let stop = (start + MAX_EXTENT_LINES).min(last);
     let mut i = start;
@@ -341,11 +351,16 @@ pub(crate) fn item_extent(
             return start;
         }
         for &c in lx.code(i) {
+            let before = prev;
+            if !c.is_ascii_whitespace() {
+                prev = c;
+            }
             match c {
                 b'(' | b'[' => depth += 1,
                 b')' | b']' => depth = depth.saturating_sub(1),
+                b':' if depth == 0 && !body && before == b')' => return_type = true,
                 b'{' => {
-                    if depth == 0 {
+                    if depth == 0 && !(return_type && !ends_a_type(before)) {
                         body = true;
                     }
                     depth += 1;
@@ -373,6 +388,12 @@ pub(crate) fn item_extent(
         i += 1;
     }
     if body { stop } else { start }
+}
+
+/// Whether a type can end in `c`, so that a `{` after it opens a body rather than an
+/// object type.
+fn ends_a_type(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || matches!(c, b'_' | b'$' | b'}' | b']' | b')' | b'>')
 }
 
 fn continues_after(c: u8) -> bool {
@@ -539,6 +560,13 @@ mod tests {
             "fn f<'a>(x: &'a str) {"
         );
         assert_eq!(code("let c = '{';", Style::Rust), "let c = ;");
+        // An escaped quote is the character, not the end of the literal.
+        assert_eq!(code(r"let q = '\''; f(x)", Style::Rust), "let q = ; f(x)");
+        assert_eq!(code(r"let b = '\\'; f(x)", Style::Rust), "let b = ; f(x)");
+        assert_eq!(
+            code(r"let u = '\u{7D}'; f(x)", Style::Rust),
+            "let u = ; f(x)"
+        );
         assert_eq!(code("let s = `a{b}`;", Style::CLike), "let s = ;");
         // An apostrophe in JSX text does not swallow the closing brace.
         assert_eq!(code("<p>don't</p> }", Style::CLike), "<p>don't</p> }");
@@ -621,6 +649,40 @@ mod tests {
                 &never
             ),
             9
+        );
+    }
+
+    #[test]
+    fn a_typescript_object_return_type_is_not_the_body() {
+        let src = concat!(
+            "function f(): { a: number } {\n",           // 0
+            "  return { a: 1 };\n",                      // 1
+            "}\n",                                       // 2
+            "function g(x: T): { a: A } | { b: B } {\n", // 3
+            "  return x;\n",                             // 4
+            "}\n",                                       // 5
+            "async function h(): Promise<{ a: 1 }> {\n", // 6
+            "  return h2();\n",                          // 7
+            "}\n",                                       // 8
+            "function k(): Foo {\n",                     // 9
+            "  return k2();\n",                          // 10
+            "}\n",                                       // 11
+            "const v = (a) ? b : { c: 1 };\n",           // 12
+        );
+        let lines: Vec<&str> = src.lines().collect();
+        let l = lx(&lines, Style::CLike);
+        let t = Terminator::SemicolonOrNewline;
+        assert_eq!(item_extent(&lines, &l, 0, t, &never), 2);
+        assert_eq!(item_extent(&lines, &l, 3, t, &never), 5);
+        assert_eq!(item_extent(&lines, &l, 6, t, &never), 8);
+        assert_eq!(item_extent(&lines, &l, 9, t, &never), 11);
+        assert_eq!(item_extent(&lines, &l, 12, t, &never), 12);
+        // Rust: a where clause has a `:` after `)` too, and its body still opens.
+        let rs = "fn f<T>(x: T) -> u8\nwhere\n    T: Clone {\n    1\n}\n";
+        let rl: Vec<&str> = rs.lines().collect();
+        assert_eq!(
+            item_extent(&rl, &lx(&rl, Style::Rust), 0, Terminator::Semicolon, &never),
+            4
         );
     }
 

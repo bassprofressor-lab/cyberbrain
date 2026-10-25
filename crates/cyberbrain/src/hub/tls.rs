@@ -264,70 +264,83 @@ fn write_private(path: &Path, contents: &str) -> std::io::Result<()> {
         opts.mode(0o600);
     }
 
+    // `D:P` is a DACL that inherits nothing, which is the whole point: what it would inherit
+    // is the read for Users. Then full access for the local system account and the
+    // administrators group, by SID and not by name — the names are localised and this has to
+    // work on a German Windows.
     #[cfg(windows)]
-    {
-        use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
-        use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
-
-        // `D:P` is a DACL that inherits nothing, which is the whole point: what it would
-        // inherit is the read for Users. Then full access for the local system account and
-        // the administrators group, by SID and not by name — the names are localised and
-        // this has to work on a German Windows.
-        let sddl: Vec<u16> = "D:P(A;;FA;;;SY)(A;;FA;;;BA)\0".encode_utf16().collect();
-        let mut descriptor = std::ptr::null_mut();
-        let built = unsafe {
-            ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                sddl.as_ptr(),
-                1, // SDDL_REVISION_1
-                &mut descriptor,
-                std::ptr::null_mut(),
-            )
-        };
-        // The descriptor is never freed: windows-sys 0.61 no longer binds LocalFree, and
-        // this is a few hundred bytes once, in a process that generates one key and then
-        // runs for months. Said out loud rather than left to be discovered.
-        if built != 0 {
-            use std::os::windows::ffi::OsStrExt;
-            use std::os::windows::io::FromRawHandle;
-            use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
-            use windows_sys::Win32::Storage::FileSystem::{
-                CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
-            };
-
-            // `std`'s own OpenOptions has no way to pass security attributes — the extension
-            // trait offers flags and access modes and nothing for a descriptor — so the file
-            // is created through the API that takes one. This is the only reason the write
-            // is not four lines.
-            let attributes = SECURITY_ATTRIBUTES {
-                nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
-                lpSecurityDescriptor: descriptor,
-                bInheritHandle: 0,
-            };
-            let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
-            let handle = unsafe {
-                CreateFileW(
-                    wide.as_ptr(),
-                    FILE_GENERIC_WRITE,
-                    0, // shared with nobody while it is being written
-                    &attributes,
-                    CREATE_NEW,
-                    FILE_ATTRIBUTE_NORMAL,
-                    std::ptr::null_mut(),
-                )
-            };
-            if handle == INVALID_HANDLE_VALUE {
-                return Err(std::io::Error::last_os_error());
-            }
-            let mut f = unsafe { std::fs::File::from_raw_handle(handle as _) };
-            return f.write_all(contents.as_bytes());
-        }
-        // If the descriptor could not be built the file is still written below, with the
-        // inherited ACL. A hub that refuses to start over a file mode helps nobody, and
-        // `hub cert show` is where that gap belongs.
+    if let Some(done) = create_with_dacl(path, "D:P(A;;FA;;;SY)(A;;FA;;;BA)", contents) {
+        return done;
     }
+    // If the descriptor could not be built the file is still written below, with the
+    // inherited ACL. A hub that refuses to start over a file mode helps nobody, and
+    // `hub cert show` is where that gap belongs.
 
     let mut f = opts.open(path)?;
     f.write_all(contents.as_bytes())
+}
+
+/// Create `path` (it must not exist) with the DACL `sddl` and write `contents` into it.
+/// `None` when the descriptor could not be built, so the caller can fall back; otherwise the
+/// result of creating and writing.
+///
+/// `std`'s own OpenOptions has no way to pass security attributes — the extension trait
+/// offers flags and access modes and nothing for a descriptor — so the file is created
+/// through the API that takes one.
+#[cfg(windows)]
+pub(crate) fn create_with_dacl(
+    path: &Path,
+    sddl: &str,
+    contents: &str,
+) -> Option<std::io::Result<()>> {
+    use std::io::Write;
+    use std::os::windows::ffi::OsStrExt;
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Security::Authorization::ConvertStringSecurityDescriptorToSecurityDescriptorW;
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::{
+        CREATE_NEW, CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_GENERIC_WRITE,
+    };
+
+    let sddl: Vec<u16> = sddl.encode_utf16().chain(Some(0)).collect();
+    let mut descriptor = std::ptr::null_mut();
+    let built = unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            1, // SDDL_REVISION_1
+            &mut descriptor,
+            std::ptr::null_mut(),
+        )
+    };
+    // The descriptor is never freed: windows-sys 0.61 no longer binds LocalFree, and this is
+    // a few hundred bytes per secret file written. Said out loud rather than left to be
+    // discovered.
+    if built == 0 {
+        return None;
+    }
+    let attributes = SECURITY_ATTRIBUTES {
+        nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: descriptor,
+        bInheritHandle: 0,
+    };
+    let wide: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let handle = unsafe {
+        CreateFileW(
+            wide.as_ptr(),
+            FILE_GENERIC_WRITE,
+            0, // shared with nobody while it is being written
+            &attributes,
+            CREATE_NEW,
+            FILE_ATTRIBUTE_NORMAL,
+            std::ptr::null_mut(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        return Some(Err(std::io::Error::last_os_error()));
+    }
+    let mut f = unsafe { std::fs::File::from_raw_handle(handle as _) };
+    Some(f.write_all(contents.as_bytes()).and_then(|()| f.sync_all()))
 }
 
 /// The name the hub's own certificate is kept under, beside the record.

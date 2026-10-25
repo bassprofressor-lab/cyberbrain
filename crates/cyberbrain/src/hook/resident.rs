@@ -94,15 +94,11 @@ pub fn read(store: &Store) -> Resident {
         }
         paths.sort();
         for path in paths {
-            let fingerprint = match Fingerprint::of(&path) {
-                Ok(f) => f,
-                Err(e) => {
-                    r.unreadable.push((path, e.to_string()));
-                    continue;
-                }
-            };
-            match store.read_path(&path) {
-                Ok(note) => {
+            // One read for both: the attestation compares this fingerprint, and the text
+            // injected has to be the text that was compared, not a second read of a file
+            // that may have been replaced in between.
+            match store.read_path_fingerprinted(&path) {
+                Ok((note, fingerprint)) => {
                     if note.front.ring != ring {
                         // read_path already rejects this, but the cost of stating it is
                         // one comparison.

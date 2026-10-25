@@ -1144,8 +1144,8 @@ async fn policy_routes_read_the_register_the_log_retention_models_and_subjects()
     let paths = e["paths"].as_array().unwrap();
     assert_eq!(
         paths.len(),
-        8,
-        "model download, local inference, audit sync, note sync, note erasure, hub enrolment, terminal, governance"
+        9,
+        "model download, local inference, audit sync, note sync, note erasure, hub enrolment, terminal, governance, hub alert"
     );
     assert_eq!(paths[0]["purpose"], "model-download");
     // Audit sync is in the register whether or not the store is enrolled, and says which
@@ -2048,4 +2048,39 @@ async fn the_review_routes_list_decide_and_record_a_quarantined_proposal() {
     assert_eq!(h[0]["accepted"], true);
     assert_eq!(h[0]["proposed_by"], "agent:mcp:seo");
     assert_ne!(h[0]["by"], "agent:mcp:seo");
+}
+
+/// A new note held for PII, and meanwhile somebody else (an agent over MCP, another tab)
+/// creates a note of that name. Answering the hold re-ran the write with no existence check
+/// and replaced the other note: the check `POST` makes held only when it was first asked.
+#[tokio::test]
+async fn resolving_a_held_creation_does_not_replace_a_note_made_meanwhile() {
+    let fx = Fx::new();
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/notes",
+            Some(json!({
+                "body": "reach bob@corp.example.org",
+                "front": { "name": "contact", "ring": 3, "kind": "knowledge" }
+            })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    let hold_id = err_of(&v)["hold"]["hold_id"].as_str().unwrap().to_string();
+
+    fx.create(3, "contact", "Written by somebody else meanwhile.")
+        .await;
+
+    let (s, v) = fx
+        .call(
+            Method::POST,
+            &format!("/api/v1/holds/{hold_id}"),
+            Some(json!({ "action": "redact" })),
+        )
+        .await;
+    assert_eq!(s, StatusCode::CONFLICT, "{v}");
+    assert_eq!(err_of(&v)["code"], "write-conflict");
+    let text = std::fs::read_to_string(fx.note_path(3, "contact")).unwrap();
+    assert!(text.contains("somebody else"), "{text}");
 }

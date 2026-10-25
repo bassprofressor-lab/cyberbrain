@@ -43,7 +43,7 @@ use url::Url;
 
 /// The complete list. If a variant is missing here the exhaustive match in `describe`
 /// fails to compile, and the test below fails if this list and the match disagree.
-pub const PURPOSES: [EgressPurpose; 8] = [
+pub const PURPOSES: [EgressPurpose; 9] = [
     EgressPurpose::ModelDownload,
     EgressPurpose::LocalInference,
     EgressPurpose::AuditSync,
@@ -52,6 +52,7 @@ pub const PURPOSES: [EgressPurpose; 8] = [
     EgressPurpose::HubEnrolment,
     EgressPurpose::Terminal,
     EgressPurpose::Governance,
+    EgressPurpose::HubAlert,
 ];
 
 /// One line of `cyberbrain policy egress`. Plain data so the CLI and the UI print the same
@@ -85,6 +86,7 @@ pub fn purpose_name(p: EgressPurpose) -> &'static str {
         EgressPurpose::NoteErasure => "note-erasure",
         EgressPurpose::HubEnrolment => "hub-enrolment",
         EgressPurpose::Governance => "governance",
+        EgressPurpose::HubAlert => "hub-alert",
     }
 }
 
@@ -353,6 +355,40 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
                 state,
             }
         }
+        EgressPurpose::HubAlert => {
+            let (enabled, state) = match &cfg.alert_endpoint {
+                None => (
+                    false,
+                    "disabled: no alert webhook is set (`cyberbrain hub alerts set`)".to_string(),
+                ),
+                Some(url) => match Destination::parse(url) {
+                    Err(e) => (false, format!("disabled: alert webhook is not usable: {e}")),
+                    Ok(d) => (true, format!("enabled: {}", d.origin())),
+                },
+            };
+            EgressEntry {
+                purpose,
+                destination: cfg
+                    .alert_endpoint
+                    .as_deref()
+                    .and_then(|u| Destination::parse(u).ok())
+                    .map(|d| d.origin())
+                    .unwrap_or_else(|| "none configured (`hub alerts set`)".to_string()),
+                data: concat!(
+                    "HTTP POST of what needs the hub's operators: counts of waiting signatures, ",
+                    "the licence state, names of quiet devices and of devices whose governance ",
+                    "calls fail. No note and no activity row"
+                ),
+                carries_note_content: false,
+                requires: concat!(
+                    "a hub, and its administrator set a webhook with `cyberbrain hub alerts ",
+                    "set`; loopback or private-range unless `--allow-public` was given"
+                ),
+                permitted_by: ALL_PROFILES,
+                enabled,
+                state,
+            }
+        }
         EgressPurpose::HubEnrolment => EgressEntry {
             purpose,
             destination: concat!(
@@ -586,28 +622,32 @@ impl Destination {
     /// Accepts `scheme://host[:port]/path`, `host:port`, `[v6]:port`.
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
+        // Every message below goes into the refusal reason, which the gate writes to the
+        // audit, and audit sync can carry it to a hub. So it names the destination without
+        // whatever credentials or query the caller put in it.
+        let shown = shown_destination(s);
         if s.contains("://") {
-            let u = Url::parse(s).map_err(|e| Error::Config(format!("{s:?}: {e}")))?;
+            let u = Url::parse(s).map_err(|e| Error::Config(format!("{shown:?}: {e}")))?;
             let scheme = u.scheme().to_ascii_lowercase();
             if scheme != "http" && scheme != "https" {
                 return Err(Error::Config(format!(
-                    "{s:?}: scheme {scheme} is not http or https"
+                    "{shown:?}: scheme {scheme} is not http or https"
                 )));
             }
             if !u.username().is_empty() || u.password().is_some() {
                 return Err(Error::Config(format!(
-                    "{s:?}: credentials in the URL are not permitted"
+                    "{shown:?}: credentials in the URL are not permitted"
                 )));
             }
             let host = u
                 .host_str()
-                .ok_or_else(|| Error::Config(format!("{s:?}: no host")))?
+                .ok_or_else(|| Error::Config(format!("{shown:?}: no host")))?
                 .trim_matches(|c| c == '[' || c == ']')
                 .trim_end_matches('.')
                 .to_ascii_lowercase();
             let port = u
                 .port_or_known_default()
-                .ok_or_else(|| Error::Config(format!("{s:?}: no port")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: no port")))?;
             return Ok(Self {
                 scheme,
                 host,
@@ -620,27 +660,34 @@ impl Destination {
         let (host, port) = if let Some(rest) = s.strip_prefix('[') {
             let (h, p) = rest
                 .split_once(']')
-                .ok_or_else(|| Error::Config(format!("{s:?}: unterminated [")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: unterminated [")))?;
             let p = p
                 .strip_prefix(':')
-                .ok_or_else(|| Error::Config(format!("{s:?}: expected [host]:port")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: expected [host]:port")))?;
             (h.to_string(), p)
         } else {
             let (h, p) = s
                 .rsplit_once(':')
-                .ok_or_else(|| Error::Config(format!("{s:?}: expected host:port or a URL")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: expected host:port or a URL")))?;
             if h.contains(':') {
                 return Err(Error::Config(format!(
-                    "{s:?}: bracket an IPv6 literal as [addr]:port"
+                    "{shown:?}: bracket an IPv6 literal as [addr]:port"
                 )));
             }
             (h.to_string(), p)
         };
         let port: u16 = port
             .parse()
-            .map_err(|_| Error::Config(format!("{s:?}: port {port:?} is not a number")))?;
+            .map_err(|_| Error::Config(format!("{shown:?}: the port is not a number")))?;
         if host.is_empty() {
-            return Err(Error::Config(format!("{s:?}: no host")));
+            return Err(Error::Config(format!("{shown:?}: no host")));
+        }
+        // `user@host:port` is not a host: the name would go to the resolver and into the
+        // audit as given. Refused like credentials in a URL.
+        if host.contains('@') {
+            return Err(Error::Config(format!(
+                "{shown:?}: credentials in the destination are not permitted"
+            )));
         }
         Ok(Self {
             scheme: "tcp".into(),
@@ -653,7 +700,7 @@ impl Destination {
 
     /// Locality without touching the resolver: known for IP literals and `localhost`.
     pub fn literal_locality(&self) -> Option<Locality> {
-        if self.host == "localhost" {
+        if is_localhost_name(&self.host) {
             return Some(Locality::Loopback);
         }
         self.host.parse::<IpAddr>().ok().map(locality)
@@ -676,6 +723,35 @@ impl Destination {
     }
 }
 
+/// A destination as given, fit for an error message or an audit row: query and fragment
+/// cut off, and anything before the last `@` in it replaced, since that is where a user name
+/// and password sit. Works on the raw text rather than a parsed URL, because it is also what
+/// a refusal shows for text that does not parse, and it errs on hiding too much.
+pub(crate) fn shown_destination(s: &str) -> String {
+    let s = s.trim();
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, s),
+    };
+    let rest = match rest.rfind('@') {
+        Some(at) => format!("\u{2026}@{}", &rest[at + 1..]),
+        None => rest.to_string(),
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    match scheme {
+        Some(scheme) => format!("{scheme}://{rest}"),
+        None => rest.to_string(),
+    }
+}
+
+/// `localhost` and every name under it. RFC 6761 reserves them for loopback, and the core
+/// config already counts them as local; answered here without the OS resolver, so the gate
+/// agrees with the config on every machine rather than only where the resolver knows the
+/// rule. The answer is the loopback addresses, which is all the connection is pinned to.
+fn is_localhost_name(host: &str) -> bool {
+    host == "localhost" || host.ends_with(".localhost")
+}
+
 /// Name resolution seam so the gate can be tested without DNS. The OS resolver is the
 /// default and is itself declared in the register text.
 pub trait Resolver: Send + Sync {
@@ -689,7 +765,7 @@ impl Resolver for OsResolver {
         if let Ok(ip) = host.parse::<IpAddr>() {
             return Ok(vec![ip]);
         }
-        if host == "localhost" {
+        if is_localhost_name(host) {
             return Ok(vec![
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 IpAddr::V6(Ipv6Addr::LOCALHOST),
@@ -807,7 +883,11 @@ impl Egress {
             Err(e) => {
                 return self.refuse(
                     actor,
-                    &format!("{}:{destination}", purpose_name(purpose)),
+                    &format!(
+                        "{}:{}",
+                        purpose_name(purpose),
+                        shown_destination(destination)
+                    ),
                     purpose,
                     &e.to_string(),
                 );
@@ -954,6 +1034,23 @@ impl Egress {
                     ));
                 }
             }
+            EgressPurpose::HubAlert => {
+                if via.is_some() {
+                    return Err("alerts do not follow redirects".into());
+                }
+                let Some(url) = &self.cfg.alert_endpoint else {
+                    return Err("no alert webhook is set".into());
+                };
+                let configured = Destination::parse(url)
+                    .map_err(|e| format!("the alert webhook is unusable: {e}"))?;
+                if !dest.same_endpoint(&configured) {
+                    return Err(format!(
+                        "{} is not the alert webhook ({})",
+                        dest.origin(),
+                        configured.origin()
+                    ));
+                }
+            }
             EgressPurpose::NoteErasure => {
                 if via.is_some() {
                     return Err("erasure requests do not follow redirects".into());
@@ -1058,6 +1155,11 @@ impl Egress {
                 "the governance service",
                 "(no setting: governance is loopback or private only)",
                 false,
+            )),
+            EgressPurpose::HubAlert => Some((
+                "the alert webhook",
+                "allow_public_alert",
+                self.cfg.allow_public_alert,
             )),
             EgressPurpose::ModelDownload | EgressPurpose::Terminal => None,
         };
@@ -1489,7 +1591,8 @@ mod tests {
                 "note-erasure",
                 "hub-enrolment",
                 "terminal",
-                "governance"
+                "governance",
+                "hub-alert"
             ],
             "the register is the whole list; adding a purpose is a decision, not a detail"
         );
@@ -1503,7 +1606,8 @@ mod tests {
                 | EgressPurpose::NoteErasure
                 | EgressPurpose::HubEnrolment
                 | EgressPurpose::Terminal
-                | EgressPurpose::Governance => {}
+                | EgressPurpose::Governance
+                | EgressPurpose::HubAlert => {}
             }
         }
         // Audit sync is off until a store is enrolled — a path that exists is not a path
@@ -1786,6 +1890,56 @@ mod tests {
                 .unwrap()
                 .contains("consent")
         );
+    }
+
+    /// Would fail if a refused URL carried its credentials or query into the audit, where
+    /// audit sync can take them to the hub.
+    #[test]
+    fn a_refused_url_leaves_its_secrets_out_of_the_audit() {
+        let (g, sink) = gate(cfg());
+        for url in [
+            "http://alice:hunter2@127.0.0.1:11434/v1",
+            "ftp://alice:hunter2@127.0.0.1/x?token=hunter2",
+            "http://alice:hunter2@[::1/v1",
+            "alice:hunter2@127.0.0.1:11434",
+            "alice@127.0.0.1:11434",
+        ] {
+            let err = g.permit(EgressPurpose::LocalInference, url).unwrap_err();
+            assert!(matches!(err, Error::PolicyRefusal { .. }), "{url}: {err}");
+            assert!(!err.to_string().contains("hunter2"), "{url}: {err}");
+            assert!(!err.to_string().contains("alice"), "{url}: {err}");
+        }
+        for row in sink.rows() {
+            let text = format!("{} {}", row.subject, row.detail);
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("alice"), "{text}");
+        }
+        assert_eq!(sink.rows().len(), 5);
+    }
+
+    /// Would fail if the gate disagreed with the config about `*.localhost`. The config
+    /// takes it as local (RFC 6761: it is loopback); the gate asked the OS resolver and
+    /// refused it wherever that had no answer.
+    #[test]
+    fn a_localhost_subdomain_is_loopback_without_asking_the_resolver() {
+        let lo = OsResolver.resolve("gpu.localhost", 11434).unwrap();
+        assert!(!lo.is_empty());
+        assert!(lo.iter().all(|a| a.is_loopback()), "{lo:?}");
+        let d = Destination::parse("http://gpu.localhost:11434/v1").unwrap();
+        assert_eq!(d.literal_locality(), Some(Locality::Loopback));
+        let (log, sink) = AuditLog::in_memory();
+        let g = Egress::new(PolicyConfig::default(), log, Actor::Cli);
+        g.permit(
+            EgressPurpose::LocalInference,
+            "http://gpu.localhost:11434/v1",
+        )
+        .unwrap();
+        assert_eq!(sink.actions(), ["egress.permitted"]);
+        // Only the label `localhost` itself counts, not a name that merely ends in it.
+        let evil = Destination::parse("http://evil-localhost:1/").unwrap();
+        assert_eq!(evil.literal_locality(), None);
+        let evil = Destination::parse("http://localhost.evil.example:1/").unwrap();
+        assert_eq!(evil.literal_locality(), None);
     }
 
     /// Would fail if the gate said `Ok` when it could not write the row.

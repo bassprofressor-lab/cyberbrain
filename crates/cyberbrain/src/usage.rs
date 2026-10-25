@@ -177,7 +177,28 @@ pub fn day_axis(days: usize) -> Vec<String> {
         .collect()
 }
 
-/// `2026-09-05T21:38:53Z` -> `2026-09-05`. Anything shorter is not a date and is dropped.
+/// `2026-09-05T21:38:53Z` -> `2026-09-05`. Anything shorter is not a date and is dropped, and
+/// so is anything whose tenth byte falls inside a character: slicing there would panic, and a
+/// damaged line must cost that line rather than the whole view.
 pub fn day_of(ts: &str) -> Option<&str> {
-    (ts.len() >= 10).then(|| &ts[..10])
+    ts.get(..10)
+}
+
+#[cfg(test)]
+mod day_of_tests {
+    use super::day_of;
+
+    #[test]
+    fn a_timestamp_gives_its_date() {
+        assert_eq!(day_of("2026-09-05T21:38:53Z"), Some("2026-09-05"));
+        assert_eq!(day_of("2026-09"), None);
+    }
+
+    /// The file is ours, but a line in it that was damaged or edited by hand must cost that
+    /// line, not the whole `usage` view: byte 10 inside a multi-byte character used to panic.
+    #[test]
+    fn a_damaged_timestamp_is_dropped_rather_than_panicking() {
+        assert_eq!(day_of("2026-09-0ä…"), None);
+        assert_eq!(day_of("2026-09-05ä"), Some("2026-09-05"));
+    }
 }

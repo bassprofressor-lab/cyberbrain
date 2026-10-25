@@ -568,6 +568,27 @@ impl HubStore {
                 "machine",
                 "ALTER TABLE devices ADD COLUMN machine TEXT",
             ),
+            // Where the sync count stood when a grant took effect. A device's cursor may be past
+            // the notes of a bereich it is granted later, so a fetch delivers that bereich from
+            // the start until the cursor has passed this value. NULL on grants from before:
+            // they took effect long ago and need no second delivery.
+            (
+                "bereich_grants",
+                "effective_seq",
+                "ALTER TABLE bereich_grants ADD COLUMN effective_seq INTEGER",
+            ),
+            // What the offered version was, beyond its text, so taking it takes all of it.
+            // NULL on conflicts raised before; those keep the held ring and kind.
+            (
+                "note_conflicts",
+                "offered_ring",
+                "ALTER TABLE note_conflicts ADD COLUMN offered_ring INTEGER",
+            ),
+            (
+                "note_conflicts",
+                "offered_kind",
+                "ALTER TABLE note_conflicts ADD COLUMN offered_kind TEXT",
+            ),
             // NULL on rows from before the count. They are older than every cursor the
             // count ever hands out, and the first fetch after the upgrade sends them anyway,
             // because the cursor it brings is a timestamp the hub no longer reads.
@@ -791,6 +812,40 @@ impl HubStore {
             .conn
             .execute("DELETE FROM settings WHERE key = ?", params![key]))
         .map(|_| ())
+    }
+
+    /// Every setting whose key starts with `prefix`, as (key, value).
+    pub fn settings_with_prefix(&self, prefix: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = ix(self
+            .conn
+            .prepare("SELECT key, value FROM settings WHERE substr(key, 1, ?1) = ?2"))?;
+        let rows = ix(stmt.query_map(params![prefix.len() as i64, prefix], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Devices whose governance calls failed since `since`, by name, with how many. Read from
+    /// the audit rows the devices delivered: a failed call closes its egress ticket as
+    /// `egress.failed` (or `egress.abandoned`) with the subject `governance:<origin>`.
+    pub fn governance_failures_since(&self, since: &str) -> Result<Vec<(String, String, i64)>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT d.id, d.name, COUNT(*) FROM entries e JOIN devices d ON d.id = e.device
+             WHERE e.action IN ('egress.failed', 'egress.abandoned')
+               AND e.subject LIKE 'governance:%' AND e.ts >= ?1
+               AND d.revoked_at IS NULL
+             GROUP BY d.id, d.name ORDER BY d.name",
+        ))?;
+        let rows = ix(stmt.query_map(params![since], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
     }
 
     /// The installed licence text, if there is one.
@@ -1357,10 +1412,11 @@ impl HubStore {
         if g.granted_by == who.id {
             return Ok(CountersignOutcome::SamePerson);
         }
+        let seq = self.next_sync_seq()?;
         ix(self.conn.execute(
-            "UPDATE bereich_grants SET approved_by = ?, approved_at = ?
+            "UPDATE bereich_grants SET approved_by = ?, approved_at = ?, effective_seq = ?
              WHERE id = ? AND approved_at IS NULL",
-            params![who.id, now, id],
+            params![who.id, now, seq, id],
         ))?;
         self.record(
             &who.id,
@@ -1547,8 +1603,8 @@ impl HubStore {
                     "INSERT INTO note_conflicts
                         (id, bereich, name, held_updated, held_from_device, offered_updated,
                          offered_from_device, offered_frontmatter, offered_body, based_on,
-                         detected_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         detected_at, offered_ring, offered_kind)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         cid,
                         bereich,
@@ -1560,7 +1616,9 @@ impl HubStore {
                         frontmatter,
                         body,
                         based_on,
-                        now
+                        now,
+                        ring,
+                        kind
                     ],
                 ))?;
                 Ok(NoteOutcome::Conflict {
@@ -1745,9 +1803,24 @@ impl HubStore {
                     super::sync_access::Direction::Receive | super::sync_access::Direction::Both
                 )
         }) {
-            out.extend(self.synced_notes_after(&g.bereich, after)?);
+            out.extend(self.synced_notes_after(&g.bereich, self.after_for(&g.id, after)?)?);
         }
         Ok(out)
+    }
+
+    /// The cursor to apply to one grant: the device's own, unless the grant took effect after
+    /// it, in which case none, so the bereich is delivered from the start once.
+    fn after_for(&self, grant: &str, after: Option<i64>) -> Result<Option<i64>> {
+        let Some(a) = after else { return Ok(None) };
+        let effective: Option<i64> = ix(self.conn.query_row(
+            "SELECT effective_seq FROM bereich_grants WHERE id = ?",
+            params![grant],
+            |r| r.get(0),
+        ))?;
+        Ok(match effective {
+            Some(e) if e > a => None,
+            _ => Some(a),
+        })
     }
 
     /// Erasures in the bereiche a device may receive. Sent alongside the notes so a puller
@@ -1776,9 +1849,10 @@ impl HubStore {
                  WHERE bereich = ? AND (?2 IS NULL OR COALESCE(sync_seq, 0) > ?2)
                  ORDER BY erased_at",
             ))?;
-            let rows = ix(stmt.query_map(params![g.bereich, after], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
-            }))?;
+            let rows = ix(stmt
+                .query_map(params![g.bereich, self.after_for(&g.id, after)?], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                }))?;
             for r in rows {
                 out.push(ix(r)?);
             }
@@ -1795,6 +1869,15 @@ impl HubStore {
             params![principal, bereich, now],
         ))?;
         Ok(())
+    }
+
+    /// Take a bereich away from a person. Whether there was one to take.
+    pub fn unassign_bereich(&self, principal: &str, bereich: &str) -> Result<bool> {
+        let n = ix(self.conn.execute(
+            "DELETE FROM principal_bereiche WHERE principal = ? AND bereich = ?",
+            params![principal, bereich],
+        ))?;
+        Ok(n > 0)
     }
 
     /// The bereiche a person is responsible for.
@@ -1886,40 +1969,90 @@ impl HubStore {
     /// turned away; otherwise the held version stands. Either way the conflict is closed
     /// with a note of which way it went, so the decision is not folded into the data.
     pub fn resolve_conflict(&self, id: &str, take_offered: bool, now: &str) -> Result<bool> {
-        let c: Option<NoteConflict> = ix(self
+        // One transaction: the check that the held version is still the one the conflict was
+        // about, the replacement, and the closing. Two separate statements let a delivery in
+        // between be overwritten by a decision made about the version before it.
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let done = self.resolve_conflict_in_tx(id, take_offered, now);
+        match done {
+            Ok(v) => {
+                ix(self.conn.execute_batch("COMMIT"))?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    fn resolve_conflict_in_tx(&self, id: &str, take_offered: bool, now: &str) -> Result<bool> {
+        let c: Option<(NoteConflict, Option<i64>, Option<String>)> = ix(self
             .conn
             .query_row(
                 "SELECT id, bereich, name, held_updated, held_from_device, offered_updated,
                         offered_from_device, offered_frontmatter, offered_body, based_on,
-                        detected_at
+                        detected_at, offered_ring, offered_kind
                  FROM note_conflicts WHERE id = ? AND resolved_at IS NULL",
                 params![id],
                 |r| {
-                    Ok(NoteConflict {
-                        id: r.get(0)?,
-                        bereich: r.get(1)?,
-                        name: r.get(2)?,
-                        held_updated: r.get(3)?,
-                        held_from_device: r.get(4)?,
-                        offered_updated: r.get(5)?,
-                        offered_from_device: r.get(6)?,
-                        offered_frontmatter: r.get(7)?,
-                        offered_body: r.get(8)?,
-                        based_on: r.get(9)?,
-                        detected_at: r.get(10)?,
-                    })
+                    Ok((
+                        NoteConflict {
+                            id: r.get(0)?,
+                            bereich: r.get(1)?,
+                            name: r.get(2)?,
+                            held_updated: r.get(3)?,
+                            held_from_device: r.get(4)?,
+                            offered_updated: r.get(5)?,
+                            offered_from_device: r.get(6)?,
+                            offered_frontmatter: r.get(7)?,
+                            offered_body: r.get(8)?,
+                            based_on: r.get(9)?,
+                            detected_at: r.get(10)?,
+                        },
+                        r.get(11)?,
+                        r.get(12)?,
+                    ))
                 },
             )
             .optional())?;
-        let Some(c) = c else { return Ok(false) };
+        let Some((c, offered_ring, offered_kind)) = c else {
+            return Ok(false);
+        };
         if take_offered {
+            let held: Option<String> = ix(self
+                .conn
+                .query_row(
+                    "SELECT updated FROM synced_notes WHERE bereich = ? AND name = ?",
+                    params![c.bereich, c.name],
+                    |r| r.get(0),
+                )
+                .optional())?;
+            match held {
+                None => {
+                    return Err(Error::Config(format!(
+                        "{}: the hub no longer holds {} in {}, so there is nothing to replace",
+                        c.id, c.name, c.bereich
+                    )));
+                }
+                Some(h) if h != c.held_updated => {
+                    // Taking the offered version now would replace a version nobody decided
+                    // about. The conflict stays open, to be looked at against what is held.
+                    return Err(Error::Config(format!(
+                        "{}: {} changed since this conflict was raised (held {} then, {} now); \
+                         look at it again before deciding",
+                        c.id, c.name, c.held_updated, h
+                    )));
+                }
+                Some(_) => {}
+            }
             // A new number, or the devices that already pulled the held version would never
             // be told it was replaced.
             let seq = self.next_sync_seq()?;
             ix(self.conn.execute(
                 "UPDATE synced_notes
                  SET updated = ?, frontmatter = ?, body = ?, from_device = ?, received_at = ?,
-                     sync_seq = ?
+                     sync_seq = ?, ring = COALESCE(?, ring), kind = COALESCE(?, kind)
                  WHERE bereich = ? AND name = ?",
                 params![
                     c.offered_updated,
@@ -1928,6 +2061,8 @@ impl HubStore {
                     c.offered_from_device,
                     now,
                     seq,
+                    offered_ring,
+                    offered_kind,
                     c.bereich,
                     c.name
                 ],
@@ -2264,6 +2399,16 @@ impl HubStore {
         reason: &str,
         now: &str,
     ) -> Result<AccessRequest> {
+        // The device is one the hub knows. Its id becomes a file name when the request is
+        // disclosed, and an unchecked one (`../x`) would be written outside the directory the
+        // auditor chose.
+        if let Some(d) = device
+            && !self.devices()?.iter().any(|known| known.id == d)
+        {
+            return Err(Error::Config(format!(
+                "there is no device {d:?} on this hub; `cyberbrain hub fleet` lists them"
+            )));
+        }
         let id = format!("req_{}", cyberbrain_core::NoteId::generate());
         ix(self.conn.execute(
             "INSERT INTO access_requests (id, requester, device, from_ts, to_ts, reason, created_at)
@@ -2366,17 +2511,29 @@ impl HubStore {
 
     /// Note that rows were handed out under a request.
     pub fn note_disclosure(&self, id: &str, by: &str, rows: usize, now: &str) -> Result<()> {
-        ix(self.conn.execute(
-            "UPDATE access_requests SET disclosures = disclosures + 1 WHERE id = ?",
-            params![id],
-        ))?;
-        self.record(
-            by,
-            "access.disclosed",
-            serde_json::json!({ "request": id, "rows": rows }),
-            now,
-        )?;
-        Ok(())
+        // The count and the chain row together or neither: a count that says a disclosure
+        // happened with no row saying who made it is the gap this record exists to close.
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let done = (|| -> Result<()> {
+            ix(self.conn.execute(
+                "UPDATE access_requests SET disclosures = disclosures + 1 WHERE id = ?",
+                params![id],
+            ))?;
+            self.record(
+                by,
+                "access.disclosed",
+                serde_json::json!({ "request": id, "rows": rows }),
+                now,
+            )?;
+            Ok(())
+        })();
+        match done {
+            Ok(()) => ix(self.conn.execute_batch("COMMIT")),
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 }
 

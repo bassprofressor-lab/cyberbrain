@@ -27,7 +27,8 @@
 //!
 //! Path patterns: `*` matches within one path segment, `**` any number of segments, `?`
 //! one character. A pattern without `/` is matched against the file name at any depth; a
-//! pattern with `/` against the whole path relative to `root`.
+//! pattern with `/` against the whole path relative to `root`; a leading `/` anchors it there
+//! (`/*.md` is the files directly in `root`).
 
 use cyberbrain_core::frontmatter::validate_retention;
 use cyberbrain_core::{Error, NoteKind, Result, Ring, slash};

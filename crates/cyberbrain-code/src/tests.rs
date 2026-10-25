@@ -635,6 +635,24 @@ fn nested_ignore_files_and_whitelists() {
     );
 }
 
+/// `.cyberbrainignore` is the first tier and `.gitignore` the second, whatever directory
+/// each sits in: a whitelist in a nested `.gitignore` does not bring back what the
+/// operator's `.cyberbrainignore` keeps out, and the reverse holds too.
+#[test]
+fn cyberbrainignore_outranks_a_nearer_gitignore() {
+    let t = TempTree::new();
+    t.write(IGNORE_FILE, "*.py\n");
+    t.write("sub/.gitignore", "!kept_out.py\n");
+    t.write("sub/kept_out.py", "def kept_out():\n    pass\n");
+    t.write(".gitignore", "*.rs\n");
+    t.write("deep/.cyberbrainignore", "!wanted.rs\n");
+    t.write("deep/wanted.rs", "pub fn wanted() {}\n");
+    let r = find(t.path(), "kept_out", 10, &FindOptions::default()).unwrap();
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
+    let r = find(t.path(), "wanted", 10, &FindOptions::default()).unwrap();
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+}
+
 #[test]
 fn excluded_store_and_gitignore_switch() {
     let t = fixture();
@@ -741,4 +759,50 @@ fn bench_scan_of_a_real_tree() {
         times[times.len() / 2],
         times[times.len() - 1]
     );
+}
+
+/// A definition written inside a docstring or a block comment is text, not a symbol.
+/// Before, only the body of a module-level assignment was skipped, so a module docstring
+/// with `def fake():` in it produced a function `fake`.
+#[test]
+fn definitions_inside_docstrings_and_block_comments_are_not_symbols() {
+    let cases: [(Language, &str); 4] = [
+        (
+            Language::Python,
+            "\"\"\"Module.\n\ndef fake():\n    pass\n\nclass Fake:\n\"\"\"\n\ndef real():\n    pass\n",
+        ),
+        (
+            Language::JavaScript,
+            "/*\nfunction fake() {\n}\nclass Fake {}\n*/\nfunction real() {\n}\n",
+        ),
+        (
+            Language::Go,
+            "package x\n\n/*\nfunc fake() {\n}\n*/\nfunc real() {\n}\n",
+        ),
+        (
+            Language::Rust,
+            "/*\nfn fake() {\n}\nstruct Fake;\n*/\nfn real() {\n}\n",
+        ),
+    ];
+    for (lang, src) in cases {
+        let names: Vec<String> = crate::lang::defs(lang, src)
+            .into_iter()
+            .map(|d| d.1)
+            .collect();
+        assert_eq!(names, ["real"], "{lang:?}");
+    }
+}
+
+/// The `>` of `->` in a generic bound does not close the generics: the impl is named for
+/// its type, not for whatever follows the arrow.
+#[test]
+fn an_arrow_in_impl_generics_does_not_end_them() {
+    let src =
+        "impl<F: Fn() -> U, U> Holder<F> {\n}\nimpl<F: Fn(u8) -> u8> Apply for Wrapper<F> {\n}\n";
+    let impls: Vec<String> = crate::lang::defs(Language::Rust, src)
+        .into_iter()
+        .filter(|d| d.0 == DefKind::Impl)
+        .map(|d| d.1)
+        .collect();
+    assert_eq!(impls, ["Holder", "Wrapper"]);
 }

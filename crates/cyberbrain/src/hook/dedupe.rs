@@ -57,21 +57,40 @@ pub fn claim(root: &Path, event: &str, stdin: &str, now: SystemTime) -> bool {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // A claim stamped after `now` is age zero: macOS and Windows keep file times finer
             // than the `now` read before the write (CI, 2026-10-04).
-            let fresh = std::fs::metadata(&path)
-                .and_then(|m| m.modified())
-                .ok()
+            let stamped = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+            let fresh = stamped
                 .map(|t| now.duration_since(t).unwrap_or(Duration::ZERO))
                 .is_some_and(|age| age < WINDOW);
             if fresh {
                 return false;
             }
-            // Stale: the same payload long ago. Take it over and go ahead.
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::OpenOptions::new()
+            // Stale: the same payload long ago. Only one of the duplicates that found it may
+            // take it over. Removing and recreating it let every one of them go ahead, so the
+            // takeover is itself a claim, named after the stale stamp: every run that saw the
+            // same old claim races for the same name, and `create_new` lets exactly one win.
+            let Some(stamp) = stamped.and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            else {
+                return true;
+            };
+            let mut takeover = path.clone().into_os_string();
+            takeover.push(format!(".{}", stamp.as_nanos()));
+            match std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
-                .open(&path);
-            true
+                .open(&takeover)
+            {
+                Ok(_) => {
+                    // Fresh again, so a duplicate that arrives after this one stands down on
+                    // the ordinary path above.
+                    let _ = std::fs::File::options()
+                        .write(true)
+                        .open(&path)
+                        .and_then(|f| f.set_modified(SystemTime::now()));
+                    true
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => false,
+                Err(_) => true,
+            }
         }
         Err(_) => true,
     }
@@ -147,6 +166,47 @@ mod tests {
         ));
         let later = SystemTime::now() + WINDOW + Duration::from_secs(1);
         assert!(claim(tmp.path(), "user-prompt-submit", p, later));
+    }
+
+    /// Two duplicates that both find an old claim must not both take it over. The takeover was
+    /// remove-then-create with the second create's failure ignored, so both went ahead.
+    #[test]
+    fn two_duplicates_racing_for_a_stale_claim_run_once() {
+        for round in 0..50 {
+            let tmp = tempfile::tempdir().unwrap();
+            let p = format!(r#"{{"session_id":"s1","tool_use_id":"race{round}"}}"#);
+            assert!(claim(tmp.path(), "pre-tool-use", &p, SystemTime::now()));
+            // The same payload long ago: age the claim instead of moving the clock, so that a
+            // claim taken over during the race is as fresh as it would really be.
+            let file = std::fs::read_dir(claims_dir(tmp.path()))
+                .unwrap()
+                .flatten()
+                .next()
+                .unwrap()
+                .path();
+            std::fs::File::options()
+                .write(true)
+                .open(&file)
+                .unwrap()
+                .set_modified(SystemTime::now() - WINDOW - Duration::from_secs(5))
+                .unwrap();
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(6));
+            let runs: Vec<_> = (0..6)
+                .map(|_| {
+                    let (root, p, barrier) = (tmp.path().to_path_buf(), p.clone(), barrier.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        claim(&root, "pre-tool-use", &p, SystemTime::now())
+                    })
+                })
+                .collect();
+            let went = runs
+                .into_iter()
+                .map(|h| h.join().unwrap())
+                .filter(|went| *went)
+                .count();
+            assert_eq!(went, 1, "round {round}: {went} duplicates ran");
+        }
     }
 
     #[test]

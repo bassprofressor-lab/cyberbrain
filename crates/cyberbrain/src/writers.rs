@@ -80,9 +80,9 @@ pub trait IndexWriter: Send + Sync {
     fn delete_note(&self, id: &NoteId) -> Result<Erasure>;
     fn clear(&self) -> Result<Erased>;
     /// After erasures: nothing of the erased text left in the database file. A dry run has
-    /// erased nothing and has nothing to scrub.
-    fn scrub(&self) -> Result<()> {
-        Ok(())
+    /// erased nothing and has nothing to scrub, and answers `None`.
+    fn scrub(&self) -> Result<Option<cyberbrain_policy::ScrubStatus>> {
+        Ok(None)
     }
 }
 
@@ -124,8 +124,16 @@ impl IndexWriter for SqliteIndexWriter {
         lock_index(&self.index)?.clear()
     }
 
-    fn scrub(&self) -> Result<()> {
-        lock_index(&self.index)?.scrub()
+    fn scrub(&self) -> Result<Option<cyberbrain_policy::ScrubStatus>> {
+        let done = lock_index(&self.index)?.scrub()?;
+        Ok(Some(cyberbrain_policy::ScrubStatus {
+            residue: done.residue(),
+            wal: done.wal.map(|w| cyberbrain_policy::WalStatus {
+                busy: w.busy,
+                log_frames: w.log_frames,
+                checkpointed_frames: w.checkpointed_frames,
+            }),
+        }))
     }
 }
 

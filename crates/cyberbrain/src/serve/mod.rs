@@ -9,6 +9,9 @@
 //! - **Loopback only, not configurable** ([`serve`]). There is no authentication because
 //!   there is no remote access to authenticate; the two facts are tied together by the
 //!   absence of any bind-address parameter.
+//! - **This account only** ([`peer`]): on Linux a connection opened by another account on
+//!   the machine is dropped before it is read, because loopback is shared by every user of
+//!   the machine and the API would otherwise be theirs too (2026-10-25).
 //! - **Only under its own name** ([`origin::host_guard`]): a `Host` other than
 //!   `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>` is refused with 421 on every
 //!   route. Loopback alone does not stop a browser that was pointed here by DNS rebinding.
@@ -30,6 +33,7 @@ mod holds;
 mod notes;
 mod ops;
 pub(crate) mod origin;
+mod peer;
 mod policy;
 mod proposals;
 mod wire;
@@ -234,8 +238,15 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
         Some(t) => format!("http://{bound}/#/?t={}", t.token),
         None => format!("http://{bound}/"),
     };
+    // The URL stays first on this line and is followed by whitespace: the desktop launcher
+    // takes the first `http://` up to the next space.
     println!(
-        "cyberbrain serve: http://{bound}/  (loopback only, no authentication; API at /api/v1)"
+        "cyberbrain serve: http://{bound}/  (loopback only, {}; API at /api/v1)",
+        if peer::ENFORCED {
+            "this account only"
+        } else {
+            "no authentication"
+        }
     );
     if terminal.is_some() {
         println!(
@@ -251,7 +262,7 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
         open_browser(&url);
     }
     axum::serve(
-        listener,
+        peer::own_user_only(listener),
         router_with(
             app,
             std::env::current_exe().unwrap_or_default(),

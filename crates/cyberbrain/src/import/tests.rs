@@ -650,3 +650,152 @@ fn the_default_plan_maps_a_tree_of_the_expected_shape_with_nothing_unmapped() {
         "abc  PREREG_va_2026-08-25.md\n"
     );
 }
+
+/// A link in a foreign export (a wiki dump, an Obsidian vault) can point anywhere on the
+/// machine, and reading through it imported whatever it named. The source tree is what was
+/// asked for; a link out of it is reported, not followed.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_file_is_reported_not_followed() {
+    let fx = fixture();
+    let outside = fx.src.parent().unwrap().join("outside-secret.md");
+    fs::write(&outside, "the contents of somebody's home directory\n").unwrap();
+    std::os::unix::fs::symlink(&outside, fx.src.join("link.md")).unwrap();
+    write(&fx.src, "ok.md", "fine\n");
+    let p = plan(
+        &fx.src,
+        "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\n",
+    );
+    let r = import(&fx.app, &p, false).unwrap();
+    assert!(r.is_balanced(), "{}", r.render());
+    assert_eq!(r.file_failures.len(), 1, "{}", r.render());
+    assert_eq!(r.file_failures[0].path, "link.md");
+    assert!(
+        r.file_failures[0].reason.contains("link"),
+        "{}",
+        r.file_failures[0].reason
+    );
+    assert!(
+        fx.app.store().read("link").is_err(),
+        "the target was imported"
+    );
+}
+
+/// The `src:` tag names the file relative to its root, so two source trees with the same
+/// layout claimed each other's notes: importing the second with `overwrite` replaced the
+/// notes the first one wrote.
+#[test]
+fn another_source_tree_with_the_same_layout_does_not_overwrite() {
+    let fx = fixture();
+    let other = fx.src.parent().unwrap().join("other");
+    write(&fx.src, "team.md", "from the first tree\n");
+    write(&other, "team.md", "from the second tree\n");
+    let body = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    let r = import(&fx.app, &plan(&other, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Exists { .. }),
+        "{}",
+        r.render()
+    );
+    assert_eq!(
+        fx.app.store().read("team").unwrap().body,
+        "from the first tree\n"
+    );
+    // The first tree is still recognised as the note's own source.
+    write(&fx.src, "team.md", "from the first tree, changed\n");
+    let r = import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+}
+
+/// A note imported before the source root was recorded still belongs to its file: the
+/// upgrade must not turn every earlier import into "not imported from this file".
+#[test]
+fn a_note_imported_before_roots_were_recorded_is_still_its_files() {
+    let fx = fixture();
+    write(&fx.src, "team.md", "v1\n");
+    let body = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    let mut n = fx.app.store().read("team").unwrap();
+    n.front
+        .tags
+        .retain(|t| !t.starts_with(super::SOURCE_ROOT_TAG_PREFIX));
+    fx.app.store().write(&n).unwrap();
+    write(&fx.src, "team.md", "v2\n");
+    let r = import(&fx.app, &plan(&fx.src, body), false).unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+    assert_eq!(fx.app.store().read("team").unwrap().body, "v2\n");
+}
+
+/// Same text, new retention: the run said "unchanged" and the old deletion date stayed,
+/// which for a retention set to meet an erasure duty is the one change that mattered.
+#[test]
+fn a_changed_retention_or_bereich_is_not_unchanged() {
+    let fx = fixture();
+    write(&fx.src, "kunde.md", "Kundendaten\n");
+    let g = "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\nexisting = \"overwrite\"\n";
+    import(&fx.app, &plan(&fx.src, g), false).unwrap();
+    let r = import(
+        &fx.app,
+        &plan(
+            &fx.src,
+            &format!("{g}retention = \"P2Y\"\nbereich = \"Vertrieb\"\n"),
+        ),
+        false,
+    )
+    .unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Updated { .. }),
+        "{}",
+        r.render()
+    );
+    let n = fx.app.store().read("kunde").unwrap();
+    assert_eq!(n.front.retention.as_deref(), Some("P2Y"));
+    assert_eq!(n.front.bereich.as_deref(), Some("Vertrieb"));
+    // And the same plan again is unchanged.
+    let r = import(
+        &fx.app,
+        &plan(
+            &fx.src,
+            &format!("{g}retention = \"P2Y\"\nbereich = \"Vertrieb\"\n"),
+        ),
+        false,
+    )
+    .unwrap();
+    assert!(
+        matches!(&r.records[0].outcome, Outcome::Unchanged),
+        "{}",
+        r.render()
+    );
+}
+
+/// The content hash that resolves a collision went at the end of the name, and a name near
+/// the length limit was cut back at a hyphen, hash and all: the collision survived.
+#[test]
+fn a_collision_hash_survives_a_long_name() {
+    let fx = fixture();
+    let heading = "wort ".repeat(30);
+    write(
+        &fx.src,
+        "a.md",
+        &format!("## {heading}\none\n## {heading}\ntwo\n"),
+    );
+    let p = plan(
+        &fx.src,
+        "[[group]]\nname = \"g\"\npaths = [\"a.md\"]\nring = 2\nkind = \"knowledge\"\nsplit = \"heading\"\ncollisions = \"hash\"\n",
+    );
+    let r = import(&fx.app, &p, false).unwrap();
+    assert_eq!(r.items.written, 2, "{}", r.render());
+    assert_eq!(r.items.collided, 0, "{}", r.render());
+    for rec in &r.records {
+        assert!(rec.name.len() <= super::slug::MAX_NAME, "{}", rec.name);
+    }
+}

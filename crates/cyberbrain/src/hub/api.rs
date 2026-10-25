@@ -45,12 +45,23 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/", get(page))
         .route("/claim", post(claim))
         .route("/login", get(login_page).post(login))
-        .route("/logout", get(logout))
+        // POST from the forms on the conflicts and requests pages, GET from the link on the
+        // main page. With GET alone the forms answered 405 and the session stayed open.
+        .route("/logout", get(logout).post(logout))
         .route("/password", post(change_password))
         .route("/licence", post(install_licence))
         .route("/devices", post(add_device))
         .route("/grants", post(add_grant))
         .route("/grants/{id}/revoke", post(revoke_grant))
+        .route("/principals", post(add_principal))
+        .route("/principals/{id}/revoke", post(revoke_principal))
+        .route("/principals/{id}/bereiche", post(assign_bereich))
+        .route(
+            "/principals/{id}/bereiche/{bereich}/remove",
+            post(unassign_bereich),
+        )
+        .route("/enrolment-codes", post(add_enrolment_code))
+        .route("/enrolment-codes/{id}/revoke", post(revoke_enrolment_code))
         .route("/health", get(health))
         .route("/api/v1/ingest", post(post_ingest))
         .route("/api/v1/enrol", post(post_enrol))
@@ -704,6 +715,29 @@ async fn add_device(
     Redirect::to("/").into_response()
 }
 
+/// The invitation the page hands out for a device registered there.
+///
+/// Version 2 with the pin, as `hub add --invite` and the fleet invitations write it. This one
+/// was version 1 without, so a hub serving its own certificate could not be reached from a
+/// machine invited through the page. A client of either version reads a version 2 file.
+fn web_invitation(
+    hub: &HubStore,
+    device: &super::store::Device,
+    token: &str,
+    hub_url: &str,
+) -> serde_json::Value {
+    json!({
+        "kind": "cyberbrain.hub.invitation",
+        "version": 2,
+        "device": device.id,
+        "name": device.name,
+        "token": token,
+        "hub_url": if hub_url.is_empty() { serde_json::Value::Null } else { json!(hub_url) },
+        "inference_url": serde_json::Value::Null,
+        "hub_cert_sha256": super::pin_to_offer(hub),
+    })
+}
+
 /// Write an invitation into `invitations/` next to the record and return where it went.
 fn write_invitation(
     record: &std::path::Path,
@@ -754,15 +788,7 @@ fn register(
     let (device, token) = hub
         .add_device(name, &jiff::Timestamp::now().to_string())
         .map_err(|e| e.to_string())?;
-    let invitation = json!({
-        "kind": "cyberbrain.hub.invitation",
-        "version": 1,
-        "device": device.id,
-        "name": device.name,
-        "token": token,
-        "hub_url": if hub_url.is_empty() { serde_json::Value::Null } else { json!(hub_url) },
-        "inference_url": serde_json::Value::Null,
-    });
+    let invitation = web_invitation(hub, &device, &token, hub_url);
     let text = serde_json::to_string_pretty(&invitation).map_err(|e| e.to_string())?;
 
     let path = write_invitation(record, &device.id, &text)?;
@@ -883,6 +909,267 @@ async fn add_grant(
     }
 }
 
+// ---- people and fleet invitations (F24) ---------------------------------------------------
+//
+// What `hub principal` and `hub invite` do, from the administrator's page, with the same
+// rights: an administrator, and every step in the hub's own log. One difference, on purpose:
+// the page makes auditors and editors only. A countersigner or another administrator made
+// from the page would be made by the person whose acts they are there to sign, from
+// anywhere on the network; that stays with the command, at the machine.
+
+#[derive(serde::Deserialize)]
+pub struct PrincipalForm {
+    name: String,
+    role: String,
+}
+
+/// Answer a form on the administrator's page: back to the page with what happened, or a 400
+/// with why not, as the grant form does.
+fn page_outcome(state: &HubState, outcome: Result<String, String>) -> Response {
+    match outcome {
+        Ok(text) => {
+            if let Ok(mut f) = state.flash.lock() {
+                *f = Some(Ok(text));
+            }
+            Redirect::to("/").into_response()
+        }
+        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+    }
+}
+
+async fn add_principal(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<PrincipalForm>,
+) -> Response {
+    use super::access::Role;
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let role = Role::parse(form.role.trim()).map_err(|e| e.to_string())?;
+        if !matches!(role, Role::Auditor | Role::Editor) {
+            return Err(format!(
+                "A {} is not made from this page. The people who sign are made at the hub's \
+                 machine: `cyberbrain hub principal add --role {} <name>`.",
+                role.as_str(),
+                role.as_str()
+            ));
+        }
+        let name = form.name.trim();
+        if name.is_empty() {
+            return Err("A person needs a name.".into());
+        }
+        let hub = state.hub()?;
+        let (p, token) = hub
+            .add_principal(name, role, &jiff::Timestamp::now().to_string())
+            .map_err(|e| e.to_string())?;
+        // The credential once, here, the way the command prints it once. The record keeps a
+        // hash; the page never shows it again.
+        Ok(format!(
+            "{} registered as {} ({}). Credential, shown once: {token}",
+            p.name,
+            p.role.as_str(),
+            p.id
+        ))
+    })();
+    page_outcome(&state, outcome)
+}
+
+async fn revoke_principal(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let hub = state.hub()?;
+        if hub
+            .revoke_principal(&id, &jiff::Timestamp::now().to_string())
+            .map_err(|e| e.to_string())?
+        {
+            Ok(format!("{id} may no longer act."))
+        } else {
+            Err(format!("{id} is unknown or was already withdrawn."))
+        }
+    })();
+    page_outcome(&state, outcome)
+}
+
+#[derive(serde::Deserialize)]
+pub struct BereichForm {
+    bereich: String,
+}
+
+async fn assign_bereich(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    Form(form): Form<BereichForm>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let bereich = form.bereich.trim();
+        cyberbrain_core::frontmatter::validate_bereich(bereich)
+            .map_err(|r| format!("bereich `{bereich}`: {r}"))?;
+        let hub = state.hub()?;
+        // The same rule as the command: only an editor is given bereiche, because reading
+        // note text is not part of the other roles.
+        match hub
+            .principals()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .find(|p| p.id == id)
+        {
+            None => return Err(format!("no person {id}")),
+            Some(p) if !p.is_active() => return Err(format!("{} was withdrawn", p.name)),
+            Some(p) if p.role != super::access::Role::Editor => {
+                return Err(format!(
+                    "{} is {}, not an editor. Only an editor is given bereiche.",
+                    p.name,
+                    p.role.as_str()
+                ));
+            }
+            Some(_) => {}
+        }
+        let now = jiff::Timestamp::now().to_string();
+        hub.assign_bereich(&id, bereich, &now)
+            .map_err(|e| e.to_string())?;
+        hub.record(
+            "hub-page",
+            "principal.assigned",
+            json!({ "principal": id, "bereich": bereich }),
+            &now,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(format!("{id} now sees conflicts in {bereich}."))
+    })();
+    page_outcome(&state, outcome)
+}
+
+async fn unassign_bereich(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path((id, bereich)): axum::extract::Path<(String, String)>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let hub = state.hub()?;
+        let now = jiff::Timestamp::now().to_string();
+        if !hub
+            .unassign_bereich(&id, &bereich)
+            .map_err(|e| e.to_string())?
+        {
+            return Err(format!("{id} was not responsible for {bereich}."));
+        }
+        hub.record(
+            "hub-page",
+            "principal.unassigned",
+            json!({ "principal": id, "bereich": bereich }),
+            &now,
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(format!("{id} no longer sees conflicts in {bereich}."))
+    })();
+    page_outcome(&state, outcome)
+}
+
+#[derive(serde::Deserialize)]
+pub struct EnrolmentCodeForm {
+    label: String,
+    max_uses: i64,
+    /// A period, as `hub invite create --expires` takes it: P14D, P2M.
+    expires: String,
+    #[serde(default)]
+    hub_url: String,
+}
+
+/// A fleet invitation from the page, written next to the record like a device invitation:
+/// the file is the credential for every project it enrols, so it is a file, owner-only, and
+/// the page says where it is rather than showing the code.
+async fn add_enrolment_code(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    Form(form): Form<EnrolmentCodeForm>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let hub = state.hub()?;
+        let (row, code) = hub
+            .create_enrolment_code(
+                form.label.trim(),
+                form.max_uses,
+                form.expires.trim(),
+                "hub-page",
+                &jiff::Timestamp::now().to_string(),
+            )
+            .map_err(|e| e.to_string())?;
+        let hub_url = form.hub_url.trim();
+        let invitation = json!({
+            "kind": super::client::FLEET_INVITATION_KIND,
+            "version": 1,
+            "code": code,
+            "label": row.label,
+            "hub_url": if hub_url.is_empty() { serde_json::Value::Null } else { json!(hub_url) },
+            "inference_url": serde_json::Value::Null,
+            "hub_cert_sha256": super::pin_to_offer(&hub),
+            "expires_at": row.expires_at,
+        });
+        let text = serde_json::to_string_pretty(&invitation).map_err(|e| e.to_string())?;
+        let path = write_invitation(&state.record, &row.id, &text)?;
+        Ok(format!(
+            "Fleet invitation {} ({}) is at {}. It enrols up to {} project(s) until {}; hand \
+             it out the way you would a password and withdraw it once the rollout is done.",
+            row.id,
+            row.label,
+            path.display(),
+            row.max_uses,
+            row.expires_at
+        ))
+    })();
+    page_outcome(&state, outcome)
+}
+
+async fn revoke_enrolment_code(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    ConnectInfo(from): ConnectInfo<std::net::SocketAddr>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    if !matches!(who(&state, &headers, &from), Who::Admin) {
+        return html(super::page::login_page(None));
+    }
+    let outcome = (|| -> Result<String, String> {
+        let hub = state.hub()?;
+        if hub
+            .revoke_enrolment_code(&id, "hub-page", &jiff::Timestamp::now().to_string())
+            .map_err(|e| e.to_string())?
+        {
+            Ok(format!(
+                "{id} withdrawn. The projects it enrolled stay; nobody further gets in with it."
+            ))
+        } else {
+            Err(format!(
+                "{id}: no such invitation, or it was already withdrawn."
+            ))
+        }
+    })();
+    page_outcome(&state, outcome)
+}
+
 async fn revoke_grant(
     State(state): State<Arc<HubState>>,
     headers: HeaderMap,
@@ -982,10 +1269,22 @@ async fn post_conflict(
         _ => return Redirect::to("/conflicts").into_response(),
     }
     let take_offered = form.take == "offered";
-    if hub
-        .resolve_conflict(&cid, take_offered, &now)
-        .unwrap_or(false)
-    {
+    let resolved = match hub.resolve_conflict(&cid, take_offered, &now) {
+        Ok(done) => done,
+        // Said, not swallowed: the usual reason is that the held version changed since the
+        // conflict was raised, and the person has to look again before deciding.
+        Err(e) => {
+            return (
+                StatusCode::CONFLICT,
+                Html(format!(
+                    "<p>{}</p><p><a href=\"/conflicts\">Back to the conflicts</a></p>",
+                    super::page::esc(&e.to_string())
+                )),
+            )
+                .into_response();
+        }
+    };
+    if resolved {
         let _ = hub.record(
             &pid,
             "conflict.resolved",
@@ -1277,6 +1576,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
     let flash = state.flash.lock().ok().and_then(|mut f| f.take());
     let view = super::page::SigningView {
         name: &name,
+        id: &id,
         role,
         requests,
         grants,
@@ -1639,6 +1939,21 @@ async fn countersign(
 
 #[cfg(test)]
 mod invitation_tests {
+    /// An invitation from the page pins the certificate the hub serves, as the command and
+    /// the fleet invitations do. Without it a hub with its own certificate was unreachable
+    /// from a machine invited through the page: the connection failed rather than trusting
+    /// a certificate nobody had told it to expect.
+    #[test]
+    fn an_invitation_from_the_page_carries_the_pin() {
+        let hub = super::HubStore::in_memory().unwrap();
+        super::super::remember_pin(&hub, Some("AB:CD")).unwrap();
+        let (device, token) = hub.add_device("laptop", "2026-10-25T00:00:00Z").unwrap();
+        let inv = super::web_invitation(&hub, &device, &token, "https://hub.internal:7788");
+        assert_eq!(inv["hub_cert_sha256"], "AB:CD");
+        let parsed = super::super::client::parse_invitation(&inv.to_string()).unwrap();
+        assert_eq!(parsed.hub_cert_sha256.as_deref(), Some("AB:CD"));
+    }
+
     /// The invitation carries the device token in the clear. It used to be written with the
     /// default mode, which on most systems is readable by everybody on the hub.
     #[cfg(unix)]

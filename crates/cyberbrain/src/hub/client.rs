@@ -339,7 +339,16 @@ fn save_token_in(base: &Path, hub_url: &str, device: &str, token: &str) -> Resul
 /// the descriptor stays good after a chmod. A new file beside the old one, renamed over it,
 /// leaves any such descriptor on the old contents.
 ///
-/// Windows has no mode to set; the file gets the directory's ACL, as it did before.
+/// On Windows the same is done with a DACL that inherits nothing (see `OWNER_ONLY_SDDL`).
+/// The DACL of a secret file on Windows: inherits nothing (`P`), so the read for `Users` that
+/// a folder under the profile or `C:\\ProgramData` would pass down is not there. Full access
+/// for the local system account, the administrators group and the file's owner (`OW`, the
+/// account that created it), by SID rather than by name, because the names are localised.
+/// The hub's key (`tls::write_private`) leaves the owner out; a client token has to stay
+/// readable by the person whose token it is.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub(crate) const OWNER_ONLY_SDDL: &str = "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;OW)";
+
 pub(crate) fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
     let dir = path
@@ -362,6 +371,17 @@ pub(crate) fn write_owner_only(path: &Path, contents: &str) -> std::io::Result<(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
+    #[cfg(windows)]
+    let written = match super::tls::create_with_dacl(&tmp, OWNER_ONLY_SDDL, contents) {
+        Some(done) => done,
+        // The descriptor could not be built: written with the directory's ACL, as before
+        // this existed, rather than not at all.
+        None => opts.open(&tmp).and_then(|mut f| {
+            f.write_all(contents.as_bytes())?;
+            f.sync_all()
+        }),
+    };
+    #[cfg(not(windows))]
     let written = opts.open(&tmp).and_then(|mut f| {
         f.write_all(contents.as_bytes())?;
         f.sync_all()
@@ -686,6 +706,7 @@ pub async fn deliver(
 /// rewriting it from a struct would delete every one of them. Enrolment is rare and this is
 /// the one edit it makes, so it edits text.
 pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
+    let (url, device) = (toml_string(url), toml_string(device));
     let mut out = String::with_capacity(text.len() + 128);
     let mut in_hub = false;
     let mut wrote_url = false;
@@ -697,11 +718,11 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
             // Leaving the hub section: add whatever it did not already have.
             if in_hub {
                 if !wrote_url {
-                    out.push_str(&format!("url = \"{url}\"\n"));
+                    out.push_str(&format!("url = {url}\n"));
                     wrote_url = true;
                 }
                 if !wrote_device {
-                    out.push_str(&format!("device = \"{device}\"\n"));
+                    out.push_str(&format!("device = {device}\n"));
                     wrote_device = true;
                 }
                 out.push('\n');
@@ -715,12 +736,12 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
             // A commented-out example is replaced rather than left to confuse the reader.
             let key = trimmed.trim_start_matches('#').trim_start();
             if key.starts_with("url") && key.contains('=') {
-                out.push_str(&format!("url = \"{url}\"\n"));
+                out.push_str(&format!("url = {url}\n"));
                 wrote_url = true;
                 continue;
             }
             if key.starts_with("device") && key.contains('=') {
-                out.push_str(&format!("device = \"{device}\"\n"));
+                out.push_str(&format!("device = {device}\n"));
                 wrote_device = true;
                 continue;
             }
@@ -731,24 +752,23 @@ pub fn set_hub_in_config(text: &str, url: &str, device: &str) -> String {
 
     if in_hub {
         if !wrote_url {
-            out.push_str(&format!("url = \"{url}\"\n"));
+            out.push_str(&format!("url = {url}\n"));
             wrote_url = true;
         }
         if !wrote_device {
-            out.push_str(&format!("device = \"{device}\"\n"));
+            out.push_str(&format!("device = {device}\n"));
             wrote_device = true;
         }
     }
     if !wrote_url || !wrote_device {
-        out.push_str(&format!(
-            "\n[hub]\nurl = \"{url}\"\ndevice = \"{device}\"\n"
-        ));
+        out.push_str(&format!("\n[hub]\nurl = {url}\ndevice = {device}\n"));
     }
     out
 }
 
 /// Same, for the inference endpoint the invitation carried.
 pub fn set_inference_url(text: &str, url: &str) -> String {
+    let url = toml_string(url);
     let mut out = String::with_capacity(text.len() + 64);
     let mut in_inference = false;
     let mut wrote = false;
@@ -756,7 +776,7 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         let trimmed = line.trim_start();
         if trimmed.starts_with('[') {
             if in_inference && !wrote {
-                out.push_str(&format!("base_url = \"{url}\"\n"));
+                out.push_str(&format!("base_url = {url}\n"));
                 wrote = true;
                 out.push('\n');
             }
@@ -768,7 +788,7 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         if in_inference {
             let key = trimmed.trim_start_matches('#').trim_start();
             if key.starts_with("base_url") && key.contains('=') {
-                out.push_str(&format!("base_url = \"{url}\"\n"));
+                out.push_str(&format!("base_url = {url}\n"));
                 wrote = true;
                 continue;
             }
@@ -777,18 +797,61 @@ pub fn set_inference_url(text: &str, url: &str) -> String {
         out.push('\n');
     }
     if in_inference && !wrote {
-        out.push_str(&format!("base_url = \"{url}\"\n"));
+        out.push_str(&format!("base_url = {url}\n"));
         wrote = true;
     }
     if !wrote {
-        out.push_str(&format!("\n[inference]\nbase_url = \"{url}\"\n"));
+        out.push_str(&format!("\n[inference]\nbase_url = {url}\n"));
     }
+    out
+}
+
+/// A value as a TOML string, quoted and escaped. The values come from an invitation file,
+/// and pasted between quotes as they were, a `"` and a line break in one wrote keys of its
+/// own into the store's configuration.
+///
+/// Always a one-line basic string, so the line-based editing above keeps working on the file
+/// it wrote.
+fn toml_string(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('"');
+    for c in value.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A value from an invitation goes into the config as a TOML string, escaped. Pasted
+    /// between quotes as it was, a `"` and a line break in it wrote keys of their own into the
+    /// store's configuration.
+    #[test]
+    fn an_invitation_value_cannot_write_its_own_config_keys() {
+        let url = "https://hub.internal:7788\"\nallow_public_hub = true\nx = \"";
+        let device = "dev_1\"\n[egress]\ny = \"";
+        let text = set_inference_url(&set_hub_in_config(SAMPLE, url, device), url);
+        let parsed: toml::Table = toml::from_str(&text).unwrap();
+        let hub = parsed["hub"].as_table().unwrap();
+        assert_eq!(hub["url"].as_str(), Some(url));
+        assert_eq!(hub["device"].as_str(), Some(device));
+        assert_eq!(hub["allow_public_hub"].as_bool(), Some(false), "{text}");
+        assert!(!hub.contains_key("x"), "{text}");
+        assert_eq!(text.lines().filter(|l| l.starts_with("url =")).count(), 1);
+        assert!(!parsed.contains_key("egress"), "{text}");
+        assert_eq!(parsed["inference"]["base_url"].as_str(), Some(url));
+    }
 
     const SAMPLE: &str = "\
 # A comment somebody wrote.
@@ -895,6 +958,65 @@ profile = \"eu\"
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "old-token");
         save_token_in(base, hub, "dev_a", "new-token").unwrap();
         assert_eq!(token_in(base, hub, Some("dev_a")).unwrap(), "new-token");
+    }
+
+    /// On Windows a token file inherits nothing from its folder: the folder's read for
+    /// `Users` used to come with it. Runs only on Windows (CI), where the DACL can be read
+    /// back; there is no way to show it on the machine this was written on.
+    #[cfg(windows)]
+    #[test]
+    fn a_token_file_on_windows_has_its_own_dacl() {
+        use windows_sys::Win32::Security::Authorization::{
+            ConvertSecurityDescriptorToStringSecurityDescriptorW, GetNamedSecurityInfoW,
+            SE_FILE_OBJECT,
+        };
+        use windows_sys::Win32::Security::DACL_SECURITY_INFORMATION;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("t.token");
+        write_owner_only(&path, "secret\n").unwrap();
+        let wide: Vec<u16> = path
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let mut sd = std::ptr::null_mut();
+        let rc = unsafe {
+            GetNamedSecurityInfoW(
+                wide.as_ptr(),
+                SE_FILE_OBJECT,
+                DACL_SECURITY_INFORMATION,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut sd,
+            )
+        };
+        assert_eq!(rc, 0);
+        let mut text = std::ptr::null_mut();
+        let ok = unsafe {
+            ConvertSecurityDescriptorToStringSecurityDescriptorW(
+                sd,
+                1,
+                DACL_SECURITY_INFORMATION,
+                &mut text,
+                std::ptr::null_mut(),
+            )
+        };
+        assert_ne!(ok, 0);
+        let sddl = unsafe {
+            let mut n = 0;
+            while *text.add(n) != 0 {
+                n += 1;
+            }
+            String::from_utf16_lossy(std::slice::from_raw_parts(text, n))
+        };
+        assert!(sddl.starts_with("D:P"), "{sddl}");
+        assert!(
+            !sddl.contains(";;;BU)") && !sddl.contains(";;;WD)"),
+            "{sddl}"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "secret\n");
     }
 
     /// A token is never written into a file somebody else may already hold open. The old

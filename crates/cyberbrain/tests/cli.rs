@@ -781,7 +781,13 @@ fn policy_subcommands_work_over_a_real_store() {
     // a path this gate does not mediate rather than left out.
     let e = cb.ok(&["policy", "egress"]);
     let entries = e.as_array().unwrap();
-    assert_eq!(entries.len(), 8);
+    assert_eq!(entries.len(), 9);
+    // A hub's alert path is listed in a store's register too, and closed there.
+    let alert = entries
+        .iter()
+        .find(|x| x["purpose"] == "hub-alert")
+        .unwrap();
+    assert_eq!(alert["enabled"], false, "{alert}");
     // The governance check is a path like the others, and closed until a url is set.
     let gov = entries
         .iter()
@@ -1489,6 +1495,259 @@ fn the_independent_python_checker_agrees() {
         "the independent checker rejected a bundle this binary wrote:\n{stdout}"
     );
     assert!(stdout.contains("chain holds over 4 row(s)"), "{stdout}");
+}
+
+/// K10: an export narrowed by `--action` wrote its file, then failed its own check, because
+/// the rows of one action are not consecutive in the chain. Now the file says it is a
+/// selection, verifies row by row, and the independent checker agrees.
+#[test]
+fn an_export_narrowed_by_action_verifies_here_and_in_python() {
+    let cb = Cb::new();
+    cb.write("2", "eins", "erste notiz");
+    cb.write("2", "zwei", "zweite notiz");
+    cb.ok(&["forget", "eins"]);
+    cb.write("2", "drei", "dritte notiz");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("writes.jsonl");
+    let out = cb.run(&[
+        "policy",
+        "audit",
+        "--action",
+        "note.write",
+        "--export",
+        file.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let check = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
+    let said = text(&check);
+    assert!(check.status.success(), "{said}");
+    assert!(said.contains("selected row(s)"), "{said}");
+
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/verify-audit-export.py");
+    match Command::new("python3")
+        .args(["-c", "import blake3"])
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let py = Command::new("python3")
+                .arg(&script)
+                .arg(&file)
+                .output()
+                .unwrap();
+            assert!(py.status.success(), "python disagrees: {}", text(&py));
+        }
+        _ => eprintln!("SKIPPED the python half: no python3 with blake3 here"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------
+// The store's audit key (F2) and the checkable erasure report (F9).
+
+fn python_with(modules: &str) -> bool {
+    Command::new("python3")
+        .args(["-c", &format!("import {modules}")])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// A store that existed before signing — its audit.db has no notion of keys — opens, keeps
+/// verifying, and after `audit-key --init` signs what comes next. The old rows are reported
+/// as unsigned, not as a fault.
+#[test]
+fn a_store_from_before_signing_keeps_verifying_and_signs_from_the_key_on() {
+    let cb = Cb::new();
+    cb.write("2", "alt", "vor dem schluessel");
+    let before = cb.ok(&["policy", "audit-key"]);
+    assert_eq!(before["present"], false, "{before}");
+
+    let k = cb.ok(&["policy", "audit-key", "--init"]);
+    assert_eq!(k["created"], true, "{k}");
+    let fp = k["fingerprint"].as_str().unwrap().to_string();
+    assert_eq!(fp.len(), 32);
+    let key_file = cb.store.join("keys").join("audit.ed25519");
+    assert!(key_file.is_file());
+    assert!(cb.store.join("keys").join(".gitignore").is_file());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&key_file).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the private key is the owner's alone");
+    }
+    // Asking again shows the same key rather than making a second one.
+    let again = cb.ok(&["policy", "audit-key", "--init"]);
+    assert_eq!(again["created"], false);
+    assert_eq!(again["fingerprint"], fp.as_str());
+
+    cb.write("2", "neu", "nach dem schluessel");
+    let v = cb.ok(&["policy", "audit", "--verify"]);
+    assert!(v["verified"]["Ok"].is_number(), "{v}");
+    assert!(v["chain"]["unsigned"].as_u64().unwrap() >= 2, "{v}");
+    assert!(v["chain"]["signed"].as_u64().unwrap() >= 2, "{v}");
+    let st = cb.ok(&["status"]);
+    assert_eq!(st["audit"]["key"], fp.as_str(), "{st}");
+
+    // Without the key, the signed rows have nothing to be checked against here.
+    std::fs::remove_file(&key_file).unwrap();
+    let (v, code, _) = cb.json(&["policy", "audit", "--verify"]);
+    assert_eq!(code, 1, "{v}");
+    assert!(
+        v["verified"]["Err"].as_str().unwrap().contains("no key"),
+        "{v}"
+    );
+}
+
+#[test]
+fn a_signed_export_verifies_against_its_fingerprint_and_no_other() {
+    let cb = Cb::new();
+    cb.write("2", "vorher", "unsigniert");
+    let fp = cb.ok(&["policy", "audit-key", "--init"])["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    cb.write("2", "nachher", "signiert");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("signed.jsonl");
+    let out = cb.run(&[
+        "policy",
+        "audit",
+        "--export",
+        file.to_str().unwrap(),
+        "--signed",
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(text(&out).contains(&fp), "{}", text(&out));
+
+    let ok = Cb::bin()
+        .args(["verify-export", "--expect-key", &fp])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "{}", text(&ok));
+    assert!(
+        text(&ok).contains("unsigned (written before"),
+        "{}",
+        text(&ok)
+    );
+
+    let wrong = Cb::bin()
+        .args(["verify-export", "--expect-key", &"0".repeat(32)])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(!wrong.status.success(), "{}", text(&wrong));
+
+    if python_with("blake3, cryptography") {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/verify-audit-export.py");
+        let py = Command::new("python3")
+            .arg(&script)
+            .arg(&file)
+            .args(["--expect-key", &fp])
+            .output()
+            .unwrap();
+        assert!(py.status.success(), "python disagrees: {}", text(&py));
+        let py = Command::new("python3")
+            .arg(&script)
+            .arg(&file)
+            .args(["--expect-key", &"0".repeat(32)])
+            .output()
+            .unwrap();
+        assert!(!py.status.success(), "python accepted the wrong key");
+    } else {
+        eprintln!(
+            "SKIPPED the python half: needs python3 with blake3 and cryptography \
+             (pip install blake3 cryptography)"
+        );
+    }
+
+    // Without a key there is nothing to sign with, and the export says so instead of
+    // writing an unsigned file the caller would pass on as signed.
+    let plain = Cb::new();
+    let (_, code, err) = plain.json(&[
+        "policy",
+        "audit",
+        "--export",
+        dir.path().join("x.jsonl").to_str().unwrap(),
+        "--signed",
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("audit-key --init"), "{err}");
+}
+
+#[test]
+fn forget_writes_a_signed_report_that_verifies_and_breaks_when_edited() {
+    let cb = Cb::new();
+    cb.write("2", "weg", "das soll weg");
+    let fp = cb.ok(&["policy", "audit-key", "--init"])["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("erasure.json");
+    let f = cb.ok(&[
+        "forget",
+        "weg",
+        "--report",
+        file.to_str().unwrap(),
+        "--sign",
+    ]);
+    assert_eq!(f["scrub"]["residue"], false, "{f}");
+
+    let report: Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(report["kind"], "cyberbrain.erasure.report");
+    assert_eq!(report["residue"], false);
+    assert_eq!(report["erasure"]["name"], "weg");
+    let actions: Vec<&str> = report["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(actions, ["note.erase.requested", "note.erase.completed"]);
+
+    let ok = Cb::bin()
+        .args(["verify-export", "--expect-key", &fp])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(ok.status.success(), "{}", text(&ok));
+    assert!(text(&ok).contains("signature holds"), "{}", text(&ok));
+
+    let edited = dir.path().join("edited.json");
+    std::fs::write(
+        &edited,
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .replace("\"blocks\": 1", "\"blocks\": 0"),
+    )
+    .unwrap();
+    let bad = Cb::bin()
+        .arg("verify-export")
+        .arg(&edited)
+        .output()
+        .unwrap();
+    assert!(!bad.status.success(), "an edited report verified");
+
+    // --sign on a store without a key stops before anything is erased.
+    let plain = Cb::new();
+    plain.write("2", "bleibt", "noch da");
+    let (_, code, err) = plain.json(&[
+        "forget",
+        "bleibt",
+        "--report",
+        dir.path().join("y.json").to_str().unwrap(),
+        "--sign",
+    ]);
+    assert_ne!(code, 0);
+    assert!(err.contains("audit-key --init"), "{err}");
+    assert!(
+        plain.note_path("2", "bleibt").exists(),
+        "nothing was erased"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -3998,6 +4257,40 @@ fn forget_leaves_no_trace_of_the_text_in_the_database_file() {
         String::from_utf8_lossy(&out.stdout).contains("bleibt"),
         "the other note is untouched"
     );
+}
+
+/// B5: `scrub` threw the result of `wal_checkpoint(TRUNCATE)` away. With another process
+/// holding a read transaction on the index (`serve`, `mcp`, the daemon), the checkpoint
+/// cannot reset the WAL, the pre-erasure pages stay in `cyberbrain.db-wal`, and `forget`
+/// still reported a clean erasure. Calibrated against the state before the fix: the report
+/// had no `scrub` block and no note, so the first assertion failed on `null`.
+#[test]
+fn forget_says_when_a_reader_kept_the_wal_from_being_emptied() {
+    let cb = Cb::new();
+    cb.write("2", "doomed", "unique marker text");
+    let reader = rusqlite::Connection::open(cb.store.join("cyberbrain.db")).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+
+    let f = cb.ok(&["forget", "doomed"]);
+    assert_eq!(f["scrub"]["residue"], true, "{f}");
+    assert_eq!(f["scrub"]["wal"]["busy"], true, "{f}");
+    assert!(
+        f["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("WAL")),
+        "the reader is told, in words, that pages may remain: {f}"
+    );
+    drop(reader);
+
+    // Without the reader the same erasure leaves nothing behind, and says so.
+    cb.write("2", "doomed-too", "another marker");
+    let f = cb.ok(&["forget", "doomed-too"]);
+    assert_eq!(f["scrub"]["residue"], false, "{f}");
 }
 
 /// 2026-09-29: tags skipped the PII gate. An e-mail address in `--tags` was written with

@@ -249,8 +249,10 @@ pub fn to_plan(s: &Survey) -> String {
         } else {
             &g.dir
         };
+        // Anchored at the root: `*.md` alone matches a file name at any depth, and this group
+        // comes first, so it took every subfolder's files away from their own groups.
         let paths = if g.dir.is_empty() {
-            "\"*.md\", \"*.markdown\"".to_string()
+            "\"/*.md\", \"/*.markdown\"".to_string()
         } else {
             format!("\"{}/*.md\", \"{}/*.markdown\"", g.dir, g.dir)
         };
@@ -389,6 +391,38 @@ mod tests {
             "catch-all skip is back"
         );
         assert!(plan.contains(r#""**/*.pdf""#));
+    }
+
+    /// The top-level group used `*.md`, which matches a file name at any depth, and it comes
+    /// first: `HR/personen.md` landed there with the top level's kind and no bereich, and the
+    /// `HR` group never matched anything.
+    #[test]
+    fn the_top_level_group_takes_only_top_level_files() {
+        let s = Survey {
+            root: "/x".into(),
+            groups: vec![
+                Proposed {
+                    dir: String::new(),
+                    files: 1,
+                    bytes: 10,
+                    kind: NoteKind::Knowledge,
+                    bereich: None,
+                },
+                Proposed {
+                    dir: "HR".into(),
+                    files: 1,
+                    bytes: 10,
+                    kind: NoteKind::Knowledge,
+                    bereich: Some("HR".into()),
+                },
+            ],
+            skipped: Default::default(),
+            total_files: 2,
+        };
+        let plan = crate::import::ImportPlan::parse(&to_plan(&s), "test").unwrap();
+        use crate::import::walk::{Class, classify};
+        assert_eq!(classify(&plan, "README.md"), Class::Group(0));
+        assert_eq!(classify(&plan, "HR/personen.md"), Class::Group(1));
     }
 
     /// Everything lands in ring 2. A folder nobody has read is not where invariants live.

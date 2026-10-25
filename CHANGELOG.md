@@ -61,6 +61,37 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   the note's first heading; Back from a note returns to the question.
 - Tests: `npm test` (vitest, node) runs in the `ui` job.
 
+### Added
+- **Hub alerts to a webhook (`cyberbrain hub alerts set|show|test|off`).** A hub can post what
+  needs a person (countersignatures waiting, the licence ending or gone, devices quiet for 48 h,
+  governance calls failing) to one webhook its administrator sets. Off by default; nothing
+  leaves until a URL is set, and then only there, through the new egress path `hub-alert`
+  (loopback or private range unless `--allow-public`, no redirects). It carries states and
+  device names, never notes or activity rows. Posted when a condition appears, reminded daily,
+  every attempt in the hub's own log. The egress register now has nine entries; a store lists
+  `hub-alert` as a path only a hub uses.
+- **People and fleet invitations on the hub's page.** The administrator's page lists the people
+  with a role and the fleet invitations, and does what `hub principal` and `hub invite` do: add
+  an auditor or an editor (credential shown once), withdraw a person, give an editor a bereich
+  or take it away (new), make a fleet invitation (written owner-only to `invitations/`, with the
+  certificate pin) or withdraw one. Countersigners and administrators are still made only with
+  the command at the machine, so the people who sign are not made by the person whose acts they
+  sign. New routes, all POST, administrator only: `/principals`, `/principals/{id}/revoke`,
+  `/principals/{id}/bereiche`, `/principals/{id}/bereiche/{bereich}/remove`, `/enrolment-codes`,
+  `/enrolment-codes/{id}/revoke`.
+- **A store can sign its audit log.** The hash chain showed that a row changed, but anybody
+  who could write `audit.db` could recompute every hash after an edit, and an export proved
+  only that it was self-consistent. `cyberbrain policy audit-key --init` gives the store an
+  Ed25519 key (`keys/audit.ed25519`, owner-only) and prints its fingerprint. From then on every
+  new row is signed, `policy audit --export FILE --signed` writes a signed bundle, and
+  `cyberbrain verify-export FILE --expect-key FINGERPRINT` checks the bundle and every signed
+  row in it against the key the recipient was given. `status` shows the fingerprint,
+  `policy audit --verify` counts signed rows and those written before the key. Without a key
+  nothing changes.
+- **`forget --report FILE [--sign]` writes an erasure report somebody else can check:** what
+  was removed, whether the WAL was emptied, and the chain hashes of the two audit rows that
+  record it, signed with the store's key when asked. `verify-export` checks it.
+
 ### Fixed
 
 - **A note pushed late reaches every device again.** The sync cursor was the newest `updated`
@@ -115,6 +146,249 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   another desk stayed good until the hub restarted. Every administrator session but the one
   that made the change now ends with it; that one has just proved the current password.
   Principals' sessions stay, since their credential did not change.
+- **"Sign out" on the conflicts and requests pages signs out.** Those pages sign out with a POST
+  form, and `/logout` took GET only, so the button answered 405 and the session stayed open,
+  which on a shared machine is the case the button exists for. `/logout` now takes both.
+- **A disclosure that cannot be recorded no longer happens.** `hub disclose` wrote the rows
+  first and recorded the disclosure afterwards, discarding any error, so a reading could take
+  place without a trace in the hub's chain. The rows are now gathered, the disclosure recorded
+  (count and chain row in one transaction), and only then written; if the record fails, nothing
+  is written. A request also has to name a device the hub knows: the id becomes a file name, and
+  `../x` was written outside the chosen directory.
+- **An invitation made on the hub page pins the hub's certificate.** `hub add --invite` and
+  fleet invitations carried the fingerprint, the page wrote a version 1 file without it, so a
+  hub serving its own certificate could not be reached from a machine invited through the page.
+  The page now writes version 2 with the pin, which clients since 0.4.0 read.
+- **Deciding a hub conflict no longer overwrites a newer version, and takes all of the offered
+  one.** Taking the offered version replaced whatever the hub held at that moment, also a
+  version that arrived after the conflict was raised, in two separate statements; ring and kind
+  stayed those of the held version. It is now one transaction that first checks the held version
+  is still the one the conflict was about (otherwise it refuses and the conflict stays open,
+  also on the page, which says why), and takes the offered ring and kind as well. Conflicts
+  raised before this version keep the held ring and kind, since they never recorded the offered
+  ones.
+- **A bereich granted later arrives whole.** A device's sync cursor could already be past the
+  notes of a bereich it was granted afterwards, so the new grant brought only what changed from
+  then on. The hub now notes where its count stood when a grant took effect (the
+  countersignature), and a fetch delivers that bereich from the start, notes and erasures, until
+  the device's cursor has passed that point: once. Grants that took effect before this version
+  are left as they are.
+- **Device tokens, invitations and the MCP client list get their own ACL on Windows.** They were
+  owner-only on Unix and inherited the folder's permissions on Windows, which under
+  `C:\ProgramData` include read for `Users`. They are now created with a DACL that inherits
+  nothing and grants the local system account, the administrators group and the file's owner, as
+  the hub's private key already was (that one without the owner).
+- **`forget` says when the erased text may still be on disk.** The scrub after an erasure ran
+  `wal_checkpoint(TRUNCATE)` and threw the answer away. With `serve`, `mcp` or the daemon
+  holding a read transaction on the index, the checkpoint cannot reset the WAL, the
+  pre-erasure pages stay in `cyberbrain.db-wal`, and `forget` still reported a clean erasure
+  (B5). The report now carries `scrub.residue` and SQLite's own numbers
+  (`scrub.wal.busy`, `log_frames`, `checkpointed_frames`), and says in words when pages may
+  remain and how to get rid of them. `policy retention --apply` reports the same.
+- **An audit export narrowed by `--action` or `--subject` verifies.** The file was written,
+  and then its own check refused it, because the rows of one action are not neighbours in the
+  chain (K10). Such a file is now format version 2, names its selection in the header, and is
+  checked row by row: every row is as it was written and belongs to the selection. It cannot
+  show that the selection is complete, and the output says so. A plain period is still
+  version 1, byte for byte. A hub refuses a selection as a delivery.
+- **Signed audit rows hash every field with its length.** The original rule separated actor,
+  action and subject with a newline, and a field may contain one, so moving a boundary kept
+  the hash (K1). Rows signed with a store key use length-prefixed fields (chain format 2,
+  `_chain.v = 2`); every row written before keeps its own rule and verifies as before.
+- **A note that is a symbolic link is no longer followed.** The walker stayed out of linked
+  directories but listed a linked `.md` file inside a ring and read wherever it pointed, so
+  write access to the store was enough to have any readable file indexed. Such a link is now
+  reported as skipped by `list` and refused by every note and proposal read.
+- **`inference.allow_overlay_network` works.** The switch was honoured by the address check
+  and the egress gate, but loading the config refused a `100.64.0.0/10` endpoint as public
+  before either was reached, so a Tailscale GPU box needed `allow_public_endpoint`, the very
+  consent the switch was made to avoid. The config now accepts a 100.64/10 address literal
+  when the switch is set, and nothing else; without it the refusal names the switch.
+- **An Ollama digest with the `sha256:` prefix names the same profile as without.** The
+  profile id took the first twelve characters as written, so the prefix used up seven of
+  them, five hex digits were left to tell models apart, and changing only the spelling
+  rebuilt the index. The digest is now read without the prefix and in lower case.
+- **A note that cannot be read back is no longer written.** Writing a note checked its name
+  and validity window, reading it also the `bereich`, `retention` and supersession names.
+  A client that skipped those checks (MCP `write` did not check the `bereich`) could store a
+  note the next read refused. Writing and reading now apply the same checks.
+- **Headings that fill the block limit are a block of their own.** A run of headings with
+  nothing between them took the first words of the next paragraph along, went over the limit
+  and was reported as "a single run of characters longer than the limit", which it was not.
+  They now stand alone, and when they alone exceed the limit the report says so. Only notes
+  with such a run of headings are split differently, and their blocks are re-embedded once.
+- **A refused or failed request no longer writes credentials or a query into the audit.**
+  A URL with `user:password@` was refused, but the refusal reason quoted it whole and the
+  `policy.refusal` row carried it, which audit sync can send to a hub; a failed download or
+  hub request quoted its full URL, query included, in the row that closes it. Both now show
+  the address without user name, password, query or fragment, and `user@host:port` is
+  refused as credentials rather than looked up as a host name.
+- **A slow or oversized answer can no longer hold a request open or fill memory.** The
+  transport for model downloads, hub sync, enrolment and governance had a connect and a read
+  timeout, but the read timeout restarts with every byte, and any body was read whole. Each
+  request now has an overall deadline (one hour for a model download, ten minutes otherwise)
+  and a body limit (2 GiB for a model artefact, 256 MiB otherwise).
+- **A statutory deadline can be written out as JSON.** `Deadline::Hours(72)`, the EU breach
+  deadline, could not be serialised at all, so neither could the breach rule holding it.
+  Nothing renders one yet; the next thing that does would have failed. A deadline is now
+  `{"kind": "hours", "value": 72}`, and one without a number is `{"kind": "one-month"}` as
+  before.
+- **`*.localhost` is loopback for the egress gate too.** The config accepted
+  `http://gpu.localhost` as local, while the gate asked the system resolver and refused it on
+  any machine where that had no answer. The gate now answers names under `.localhost` with
+  the loopback addresses itself (RFC 6761), and the connection is pinned to them.
+- **A client limited to some bereiche no longer sees notes outside them through recall.**
+  The scope was checked once at the start of a recall; a note moved into a foreign bereich
+  while the recall ran was still returned. And `superseded_by` named the replacing note
+  even when it lay outside the scope, which `newer_links` already avoided. The scope is now
+  checked again when hits are read, and a successor outside it is not named: the hit is
+  still marked down as replaced, and a caveat says that its successor is not shown.
+- **Embedding load options are part of the profile.** `max_tokens` and `unk_token` change the
+  vectors a static model produces but did not change its profile id, so vectors made with
+  different settings could have been mixed in one index. They now count when set. Loaded
+  with the defaults, as the binary does, the id is unchanged, and existing indexes stay valid.
+- **A trailing dot in the inference host no longer bypasses the address pin.** The checked
+  addresses were pinned for `gpu.lan`, but requests went to `gpu.lan.`, which the pin did
+  not cover, so the name was looked up again when connecting. Requests now go to the host
+  without the dot, to the addresses that were checked.
+- **An IPv6 zone in the inference URL is refused with a reason that says so.**
+  `http://[fe80::1%25eth0]:11434/v1` was rejected as "not a private range" or as an
+  "invalid IPv6 address". Zones are still not supported, and the refusal now says that and
+  suggests a unique-local address or a host name instead.
+- **An inference or embedding endpoint can no longer fill memory with its answer.**
+  Completions, model lists and embedding answers were read whole, and a stream buffered an
+  event for as long as it lasted. Answers are now read up to 16 MiB, a stream event and a
+  streamed text are held to the same limit, and error bodies to 64 KiB. A larger answer is
+  refused and recorded as a bad response.
+- **A streamed answer that breaks off is reported, not taken as complete.** A stream that
+  closed without `[DONE]` was recorded as a successful call, and its last event was dropped
+  if no blank line followed it. The last event is now read, and a stream that ends with
+  neither `[DONE]` nor a finish reason is an error and is recorded as a bad response.
+- **A model reply with braces in its prose is still understood.** Only the first `{` was
+  read as the answer, so "given {x}, here it is: {...}" failed on `{x}`. Each object in the
+  reply is now tried in turn; one nested inside a wrong answer is never taken for it.
+- **`find` no longer lists definitions that are only text in a docstring or comment.** A
+  Python docstring with `def fake():` in it, or a commented-out function between `/* */` in
+  JavaScript, Go or Rust, showed up as a symbol. Lines inside a multi-line string or comment
+  are now skipped.
+- **The Rust character literal `'\''` is read whole.** The code lexer ended it at the escaped
+  quote and read the real closing quote as a lifetime. It now closes where it should.
+- **A TypeScript function with an object return type is found whole.** In
+  `function f(): { a: number } {` the return type was taken for the body, and `find` returned
+  the first line alone. The body is now the brace after the return type.
+- **A Rust impl with a closure bound is named for its type.** In
+  `impl<F: Fn() -> U, U> Holder<F>` the arrow ended the generics, and `find` listed the impl
+  as `U`. It is now `Holder`.
+- **`.cyberbrainignore` wins over `.gitignore` wherever the two sit.** A whitelist such as
+  `!x.py` in a subdirectory's `.gitignore` brought back a file the root `.cyberbrainignore`
+  excluded. The `.cyberbrainignore` files are now consulted first, then the `.gitignore`
+  files, as documented.
+- **A damaged line in `usage.jsonl` no longer takes the usage view down.** The date was cut
+  from the timestamp at byte 10, which panicked when that byte fell inside a multi-byte
+  character. Such a line is now skipped like any other without a date.
+- **The approval lookup encodes what it puts into the URL.** `approval_status` placed the
+  action id and the tenant into the governance service's URL as they were, so a `/`, `?`, `&`
+  or `#` in either chose another route or added a parameter. Both are now percent-encoded.
+- **The store guard sees `sed -ni`, `perl -pi` and `sed --in-place`.** A shell edit counted as
+  in-place only when an argument began with `-i`, so the same option bundled with others
+  changed ring 0/1 notes, waiting proposals and the audit log past the guard. Short option
+  clusters are now read letter by letter, and `--in-place` counts.
+- **The store guard stays closed when the audit log cannot be written.** A refusal was
+  recorded before it was given, and a failed append turned the whole hook into "no
+  decision", which the harness allows. With a full disk or a locked `audit.db` the guard on
+  rings 0/1, proposals and the audit log was open. The deny now stands and the missing row
+  is reported on stderr.
+- **A resident note is attested and injected from the same read.** The session hooks
+  fingerprinted a ring 0/1 file and then read it a second time for the text, so a file
+  swapped in between passed the operator's attestation with somebody else's text. Both now
+  come from one read.
+- **Duplicate hook runs that find an old claim no longer both go ahead.** When the same
+  payload had been claimed more than two seconds earlier, every duplicate removed and
+  recreated the claim and ran. Taking over an old claim is now itself an exclusive claim, so
+  exactly one of them runs.
+- **Windows: `\x` and `C:x` are placed where Windows places them.** The store guard joined
+  every non-absolute path onto the working directory, so a rooted path (`\proj\.cyberbrain\…`)
+  or a drive-relative one (`C:..\.cyberbrain\…`) aimed at the store was classified as
+  somewhere else. Rooted paths now resolve on the working directory's drive or share, and
+  drive-relative ones against the working directory when it is on that drive.
+- **`propose-session` keeps the end of an oversized last message.** When the newest message
+  alone was larger than the size cap, the extract stopped before it and proposed nothing
+  but "[earlier part of the session omitted]". It now keeps the end of that message.
+- **`import --suggest` no longer puts every subfolder into the top-level group.** The
+  top-level group was proposed as `*.md`, which matches a file name at any depth, and it is
+  checked first, so `HR/personen.md` was imported with the wrong kind and without its
+  bereich. Plan patterns may now start with `/` to anchor at the root, and the suggestion
+  uses `/*.md`. Plans written by an earlier `--suggest` still carry `*.md`: change the
+  top-level group's paths to `"/*.md", "/*.markdown"` before running them again.
+- **`import` no longer reads through symbolic links.** A link in the source tree was taken
+  for a file and read, so a link in a foreign export (a wiki dump, a vault) imported
+  whatever it pointed to. Links are now listed and reported as files not imported.
+- **Two source trees with the same layout no longer overwrite each other's notes.** An
+  imported note was tied to its file only by the path relative to the source root, so
+  `existing = "overwrite"` on a second tree replaced notes the first had written. Imported
+  notes now also carry a `src-root:` tag (a hash of the absolute source path).
+- **Re-importing with a new retention or bereich applies it.** An item whose text and kind
+  were the same counted as "already imported", so a retention period added to the plan to
+  meet an erasure duty was never written, and the run reported success. A retention or
+  bereich the plan sets is now compared as well, and a difference is an update.
+- **`collisions = "hash"` works for long names.** The content hash went on the end of the
+  name and the length limit cut it straight off again, so long colliding headings still
+  collided and were not imported. The name is now shortened instead of the hash.
+- **`install` no longer replaces or removes somebody else's MCP server named `cyberbrain`.**
+  The Claude Desktop entry has no marker, so the name alone decided, and `--undo` deleted a
+  foreign entry of that name. An entry now counts as ours only when it starts cyberbrain's
+  MCP server; anything else is left as it is, reported as `not-ours`, with a hint to choose
+  another name with `--name`.
+- **Closing a terminal ends the background jobs started in it.** On Unix only the shell's
+  process group was killed, and a shell with job control gives every background job a group
+  of its own, so those kept running and held the terminal open. Every process of the
+  terminal's session is now ended (Linux and macOS). On Windows only the shell was
+  terminated; the shell now runs in a job object, and closing the terminal ends the job.
+- **Answering a PII hold on a new note no longer overwrites a note created meanwhile.**
+  Creating a note over HTTP refuses an existing name, but a creation held for PII was
+  written later without that check, so a note of the same name made in the meantime (by an
+  agent over MCP, in another tab) was replaced. The answer to the hold is now refused with
+  409 `write-conflict` instead.
+- **On Linux, `cyberbrain serve` answers only its own account.** The API asks for no
+  credentials because it binds loopback, but loopback is shared by every account on the
+  machine, so on a shared server any user could read, change and erase the store (and run
+  commands) through `/api/v1`. Each connection's owner is now looked up in the kernel's
+  socket table, and a connection from another account (root excepted) is dropped before it
+  is read. The page, the desktop app and scripts run as the same user are unaffected. On
+  macOS and Windows the API is still open to every local account; the startup line says
+  which applies.
+- **Values from an invitation are written into the store's config escaped.** Enrolment pasted
+  the hub address and device id between quotes, so a quote and a line break in an invitation
+  wrote configuration keys of their own. They are now TOML strings.
+
+### Upgrading
+
+- Nothing changes until `policy audit-key --init` is run. Existing `audit.db` files need no
+  migration: the signature lives in the row's `detail`, and rows from before the key verify
+  as "unsigned (written before the store had an audit key)".
+- **Once a store signs, every binary that touches it must be this version or newer**, and so
+  must a hub it delivers to. An older binary reports the first signed row as edited, and
+  an older binary still writing (a daemon, `serve`, `mcp` that was not restarted) appends
+  unsigned rows that the new check reports as a break. Restart them after `--init`.
+- Signed bundles, selections (`--action`/`--subject`) and bundles holding signed rows are
+  format version 2. A plain unsigned period is still version 1. `scripts/verify-audit-export.py`
+  reads both; it needs `pip install cryptography` for signed files.
+- A store whose `embedding.ollama.digest` is written with `sha256:` or in upper case gets a
+  new profile id once, and its vectors are rebuilt on the next scan. A digest written as 64
+  lower-case hex digits, as `ollama show --modelfile` prints it, keeps its id.
+- Notes imported before this release have no `src-root:` tag and are still matched by
+  `src:` alone; the tag is added the next time such a note is updated. A source tree that
+  moves to another path is a different tree from then on: an `overwrite` import from the new
+  place reports its notes as existing instead of replacing them.
+- `import --suggest` plans written before this release use `*.md` for the top-level group,
+  which still matches files in every subfolder. Change it to `"/*.md", "/*.markdown"`.
+- `cyberbrain install` now reports `not-ours` for an MCP entry of the chosen name that does
+  not start cyberbrain, and leaves it alone; use `--name` for a second entry.
+- The hub record gains columns and a table on first start (`sync_seq`, `sync_clock`,
+  `effective_seq`, `offered_ring`/`offered_kind`, a unique index on the hub log). All additive;
+  an older hub binary still opens the record, and a hub whose log already forked opens without
+  the index and `hub verify` names the fork. Clients need no update: the sync cursor is opaque
+  to them, and the first pull after the hub upgrade delivers everything once.
 
 ## [0.7.10] — 2026-10-23
 

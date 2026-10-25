@@ -233,6 +233,13 @@ pub enum Command {
         target: String,
         #[arg(long)]
         dry_run: bool,
+        /// Also write a report of the erasure somebody else can check with `verify-export`:
+        /// what went, whether the WAL was emptied, and the audit rows that record it.
+        #[arg(long, value_name = "PATH")]
+        report: Option<PathBuf>,
+        /// Sign that report with the store's audit key (`policy audit-key --init`).
+        #[arg(long, requires = "report")]
+        sign: bool,
     },
 
     /// Write the `manifest.json` that a model artefact needs, from the files themselves.
@@ -407,8 +414,14 @@ pub enum Command {
     /// Needs no store, no configuration and no network: everything the check uses is in the
     /// file. Exits non-zero when the chain does not hold.
     VerifyExport {
+        /// An audit bundle (`policy audit --export`) or an erasure report (`forget --report`).
         #[arg(value_name = "PATH")]
         path: PathBuf,
+        /// The key the file must be signed with: its fingerprint, as `policy audit-key`
+        /// prints it, or the whole public key. Without it a signature only shows that
+        /// somebody signed.
+        #[arg(long, value_name = "FINGERPRINT")]
+        expect_key: Option<String>,
     },
 }
 
@@ -442,6 +455,21 @@ pub enum PolicyCommand {
         /// to verify. Implies no limit unless --limit is given explicitly.
         #[arg(long, value_name = "PATH")]
         export: Option<PathBuf>,
+        /// Sign the exported bundle with the store's audit key.
+        #[arg(long, requires = "export")]
+        signed: bool,
+    },
+    /// The store's audit key: the Ed25519 key that signs new audit rows, signed exports and
+    /// erasure reports. Shows its fingerprint, which is what a recipient checks against.
+    ///
+    /// Without a key nothing is signed, as before. Rows written before the key are kept and
+    /// still verify; they are reported as unsigned.
+    AuditKey {
+        /// Make the key, if the store has none. It goes to keys/audit.ed25519 in the store,
+        /// readable by the owner only. Restart `serve`, `mcp` and the daemon afterwards, so
+        /// they sign too.
+        #[arg(long)]
+        init: bool,
     },
     /// Everything stored about an identifier (GDPR Art. 15).
     Subject { identifier: String },
@@ -899,6 +927,12 @@ pub enum HubCommand {
         #[command(subcommand)]
         command: RetentionCommand,
     },
+    /// Post what needs the hub's operators to one webhook: countersignatures waiting, the
+    /// licence ending, devices gone quiet, governance calls failing. Off until a URL is set.
+    Alerts {
+        #[command(subcommand)]
+        command: AlertsCommand,
+    },
     /// What the fleet did in a period, as state: one line per device with its row count
     /// and whether its chain holds.
     ///
@@ -957,6 +991,34 @@ pub enum InviteCommand {
     /// Withdraw a fleet invitation. What it enrolled stays; nobody further gets in.
     Revoke {
         id: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum AlertsCommand {
+    /// Turn alerts on, or point them at another webhook. Loopback or private range only,
+    /// unless --allow-public is given (a team chat's webhook usually is public).
+    Set {
+        url: String,
+        #[arg(long)]
+        allow_public: bool,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Turn alerts off.
+    Off {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Where alerts go, and what would be posted now.
+    Show {
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Post everything that needs a person now, due or not: to try the webhook.
+    Test {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
@@ -1121,6 +1183,15 @@ pub enum PrincipalCommand {
     /// Put a person in charge of a bereich. Only an `editor` has these: seeing note text is
     /// not part of running the machine, so an administrator gets none.
     Assign {
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        bereich: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Take a bereich away from an editor.
+    Unassign {
         #[arg(long, value_name = "PRINCIPAL")]
         principal: String,
         #[arg(long)]

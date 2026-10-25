@@ -240,6 +240,41 @@ fn profile_id_changes_when_tokenizer_changes() {
 }
 
 #[test]
+fn load_options_that_change_vectors_change_the_profile() {
+    let (_d, plain, paths, manifest) = model(9);
+    let load = |max_tokens: Option<usize>, unk_token: Option<&str>| {
+        StaticEmbedder::load_with(
+            &paths,
+            &manifest,
+            LoadOptions {
+                max_tokens,
+                unk_token: unk_token.map(str::to_string),
+            },
+        )
+        .unwrap()
+        .profile_id()
+        .to_string()
+    };
+    // Truncation and another unknown token change what a stored vector means; a store
+    // indexed one way must not be searched with vectors made the other way.
+    let two = load(Some(2), None);
+    assert_ne!(two, plain.profile_id());
+    assert_ne!(two, load(Some(3), None));
+    let unk = load(None, Some("alpha"));
+    assert_ne!(unk, plain.profile_id());
+    assert_ne!(unk, two);
+
+    // The defaults keep the id every existing index was built with: the digests, the
+    // dimension and the pooling, nothing else.
+    assert_eq!(load(None, None), plain.profile_id());
+    let mut h = blake3::Hasher::new();
+    h.update(manifest.weights_blake3.as_bytes());
+    h.update(manifest.tokenizer_blake3.as_bytes());
+    let old = format!("m2v-mean-d{DIM}-{}", &h.finalize().to_hex()[..16]);
+    assert_eq!(plain.profile_id(), old);
+}
+
+#[test]
 fn profile_id_is_stable_across_loads() {
     let (_d, a, paths, manifest) = model(9);
     let b = StaticEmbedder::load(&paths, &manifest).unwrap();

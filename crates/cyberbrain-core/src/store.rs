@@ -199,6 +199,7 @@ impl Store {
     /// directory rather than a ring directory — the ring in the frontmatter is where the
     /// note is *destined*, not where it is.
     fn read_proposal_path(&self, path: &Path) -> Result<Note> {
+        refuse_symlink(path)?;
         let text = fs::read_to_string(path).map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: e,
@@ -348,6 +349,15 @@ impl Store {
                 });
                 continue;
             }
+            // `follow_links(false)` keeps the walker out of linked directories, but a linked
+            // file is still yielded, and reading it would read wherever it points.
+            if entry.path_is_symlink() {
+                listing.skipped.push(Skipped {
+                    path,
+                    reason: SYMLINK_REASON.into(),
+                });
+                continue;
+            }
             if path.extension().and_then(|e| e.to_str()) != Some(NOTE_EXT) {
                 listing.skipped.push(Skipped {
                     path,
@@ -374,11 +384,33 @@ impl Store {
     /// Read and parse the note at `path`. The path must be inside a ring directory; the
     /// frontmatter's `name` and `ring` must agree with where the file is.
     pub fn read_path(&self, path: &Path) -> Result<Note> {
+        refuse_symlink(path)?;
         let text = fs::read_to_string(path).map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let parsed = frontmatter::parse(path, &text)?;
+        self.note_from_text(path, &text)
+    }
+
+    /// [`read_path`](Self::read_path) and the fingerprint of the very bytes it parsed.
+    ///
+    /// One read, not two: a caller that fingerprints the file and then reads it again can
+    /// attest one version and use another, if the file is replaced in between.
+    pub fn read_path_fingerprinted(&self, path: &Path) -> Result<(Note, Fingerprint)> {
+        let io_err = |source: io::Error| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        };
+        let bytes = fs::read(path).map_err(io_err)?;
+        let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        let fingerprint = Fingerprint::of_bytes(mtime, &bytes);
+        let text = String::from_utf8(bytes)
+            .map_err(|e| io_err(io::Error::new(io::ErrorKind::InvalidData, e)))?;
+        Ok((self.note_from_text(path, &text)?, fingerprint))
+    }
+
+    fn note_from_text(&self, path: &Path, text: &str) -> Result<Note> {
+        let parsed = frontmatter::parse(path, text)?;
         let expected = self.note_path(parsed.front.ring, &parsed.front.name)?;
         if !same_file_name(&expected, path) {
             return Err(Error::Frontmatter {
@@ -509,6 +541,22 @@ impl Store {
             total += approx_tokens(&note.body) as usize;
         }
         Ok(total)
+    }
+}
+
+const SYMLINK_REASON: &str = "a symbolic link; notes are regular files and links are not followed";
+
+/// Refuse to read a note through a symbolic link. Everything that reads a note comes
+/// through here, so a link planted in a ring or in the proposals directory cannot make the
+/// store read a file outside it, whatever path the caller got from where.
+fn refuse_symlink(path: &Path) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(Error::Io {
+            path: path.to_path_buf(),
+            source: io::Error::other(SYMLINK_REASON),
+        }),
+        // A missing file is reported by the read that follows, with its usual error.
+        _ => Ok(()),
     }
 }
 
@@ -679,6 +727,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::create(dir.path(), 100).unwrap();
         (dir, store)
+    }
+
+    /// The fingerprint describes the bytes the note was parsed from, not a second read.
+    #[test]
+    fn a_fingerprinted_read_matches_the_note_it_returns() {
+        let (_dir, store) = fresh();
+        let path = store
+            .write(&note(Ring::Protocol, "rule", "Deploy on Fridays never."))
+            .unwrap();
+        let (n, fp) = store.read_path_fingerprinted(&path).unwrap();
+        assert_eq!(n, store.read_path(&path).unwrap());
+        assert_eq!(fp.hash, Fingerprint::of(&path).unwrap().hash);
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(store.read_path_fingerprinted(&path).is_err());
     }
 
     #[test]
@@ -904,6 +966,32 @@ mod tests {
             .map(|e| e.name)
             .collect();
         assert_eq!(names, ["keep"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_note_is_neither_listed_nor_read() {
+        // A `.md` symlink inside a ring would otherwise be listed and followed: whoever can
+        // write into the store could make it read any file the process can.
+        let (dir, store) = fresh();
+        let n = note(Ring::Knowledge, "outside", "secret");
+        let outside = dir.path().join("outside.md");
+        fs::write(&outside, frontmatter::render(&n.front, &n.body).unwrap()).unwrap();
+        let link = store.ring_dir(Ring::Knowledge).join("outside.md");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+
+        let l = store.list().unwrap();
+        assert!(l.entries.is_empty(), "{:?}", l.entries);
+        assert!(
+            l.skipped
+                .iter()
+                .any(|s| s.path == link && s.reason.contains("symbolic link")),
+            "{:?}",
+            l.skipped
+        );
+        let err = store.read_path(&link).unwrap_err();
+        assert!(err.to_string().contains("symbolic link"), "{err}");
+        assert!(store.read("outside").is_err());
     }
 
     #[test]

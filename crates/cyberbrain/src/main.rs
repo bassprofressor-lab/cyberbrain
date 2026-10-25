@@ -430,12 +430,33 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         // No store: the point of this one is that a person who was handed a file can check
         // it with nothing but the binary. Opening a store first would make it useless
         // exactly where it is needed.
-        Command::VerifyExport { ref path } => {
+        Command::VerifyExport {
+            ref path,
+            ref expect_key,
+        } => {
             let text = std::fs::read_to_string(path).map_err(|e| Error::Io {
                 path: path.clone(),
                 source: e,
             })?;
-            let report = cyberbrain_policy::bundle::verify(&text)?;
+            // One object is an erasure report; a bundle is one object per line and never
+            // parses as a single one.
+            let is_receipt = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("kind").and_then(|k| k.as_str()).map(str::to_owned))
+                .is_some_and(|k| k == cyberbrain_policy::erasure::receipt::KIND);
+            if is_receipt {
+                use cyberbrain_policy::erasure::receipt;
+                let checked = match expect_key {
+                    Some(k) => receipt::verify_expecting(&text, k)?,
+                    None => receipt::verify(&text)?,
+                };
+                out.emit(&checked, render::verify_receipt)?;
+                return Ok(0);
+            }
+            let report = match expect_key {
+                Some(k) => cyberbrain_policy::bundle::verify_expecting(&text, k)?,
+                None => cyberbrain_policy::bundle::verify(&text)?,
+            };
             out.emit(&report, render::verify_export)?;
             return Ok(0);
         }
@@ -717,10 +738,38 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             })?;
             out.emit(&r, render::invalidated)?;
         }
-        Command::Forget { target, dry_run } => {
+        Command::Forget {
+            target,
+            dry_run,
+            report,
+            sign,
+        } => {
+            // Before the erasure, so a missing key stops it rather than leaving an erasure
+            // without the signed report that was asked for.
+            if sign && app.policy_audit_key_missing() {
+                return Err(Error::Config(
+                    "--sign: this store has no audit key; create one with \
+                     `cyberbrain policy audit-key --init`, or leave --sign off"
+                        .into(),
+                ));
+            }
             // Read before the erasure, because afterwards there is nothing left to ask.
             let shared = app.shared_copy_sentence(&target);
             let r = app.forget(&target, dry_run)?;
+            if let Some(path) = &report {
+                let receipt = app.erasure_receipt(&r, sign)?;
+                let text = serde_json::to_string_pretty(&receipt)
+                    .map_err(|e| Error::Index(format!("erasure report: {e}")))?;
+                std::fs::write(path, format!("{text}\n")).map_err(|e| Error::Io {
+                    path: path.clone(),
+                    source: e,
+                })?;
+                eprintln!(
+                    "wrote the erasure report to {}{}",
+                    path.display(),
+                    if sign { ", signed" } else { "" }
+                );
+            }
             out.emit(&r, cyberbrain_policy::erasure::render)?;
             // Art. 17 does not stop at this disk. Erasing locally and saying nothing about
             // the copy on the hub would make `forget` a promise that only half holds.
@@ -1535,6 +1584,11 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             }
                             None => {}
                         }
+                        // Alerts: a loop that does nothing until a webhook is set.
+                        tokio::spawn(hub::alerts::run(
+                            state.clone(),
+                            env!("CARGO_PKG_VERSION").to_string(),
+                        ));
                         // With connect info, because who may set or type a password is
                         // decided by where the request came from.
                         let make = hub::api::router(state)
@@ -2118,6 +2172,36 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     )?;
                     Ok(0)
                 }
+                PrincipalCommand::Unassign {
+                    principal,
+                    bereich,
+                    data,
+                } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let stamp = now();
+                    let done = store.unassign_bereich(principal, bereich)?;
+                    if done {
+                        store.record(
+                            "cli",
+                            "principal.unassigned",
+                            serde_json::json!({ "principal": principal, "bereich": bereich }),
+                            &stamp,
+                        )?;
+                    }
+                    out.emit(
+                        &serde_json::json!({
+                            "principal": principal, "bereich": bereich, "removed": done
+                        }),
+                        |v| {
+                            if v["removed"].as_bool().unwrap_or(false) {
+                                format!("{principal} no longer sees conflicts in {bereich}\n")
+                            } else {
+                                format!("{principal} was not responsible for {bereich}\n")
+                            }
+                        },
+                    )?;
+                    Ok(if done { 0 } else { 1 })
+                }
                 PrincipalCommand::Add { name, role, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let role = hub::access::Role::parse(role)?;
@@ -2414,6 +2498,102 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             Ok(if ok { 0 } else { 1 })
         }
 
+        HubCommand::Alerts { command } => {
+            use cli::AlertsCommand;
+            let data = match command {
+                AlertsCommand::Set { data, .. }
+                | AlertsCommand::Off { data }
+                | AlertsCommand::Show { data }
+                | AlertsCommand::Test { data } => data,
+            };
+            let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+            let stamp = now();
+            match command {
+                AlertsCommand::Set {
+                    url, allow_public, ..
+                } => {
+                    hub::alerts::set(&store, url, *allow_public, "cli", &stamp)?;
+                }
+                AlertsCommand::Off { .. } => hub::alerts::clear(&store, "cli", &stamp)?,
+                AlertsCommand::Show { .. } => {}
+                AlertsCommand::Test { .. } => {
+                    let settings = hub::alerts::settings(&store)?;
+                    let all = hub::alerts::collect(
+                        &store,
+                        jiff::Timestamp::now(),
+                        env!("CARGO_PKG_VERSION"),
+                    )?;
+                    // Something to see even on a hub with nothing wrong: the point is to find
+                    // out whether the webhook answers.
+                    let what = if all.is_empty() {
+                        vec![hub::alerts::Alert {
+                            kind: "test",
+                            key: "test".into(),
+                            text: "A test from `cyberbrain hub alerts test`; nothing needs you."
+                                .into(),
+                        }]
+                    } else {
+                        all
+                    };
+                    let sent = runtime()?.block_on(hub::alerts::post(&settings, "cli", &what));
+                    store.record(
+                        "cli",
+                        if sent.is_ok() {
+                            "alerts.sent"
+                        } else {
+                            "alerts.failed"
+                        },
+                        serde_json::json!({
+                            "count": what.len(), "test": true,
+                            "error": sent.as_ref().err().map(|e| e.to_string()),
+                        }),
+                        &stamp,
+                    )?;
+                    let status = sent?;
+                    out.emit(
+                        &serde_json::json!({ "posted": what.len(), "status": status }),
+                        |v| {
+                            format!(
+                                "posted {} alert(s); the webhook answered HTTP {}\n",
+                                v["posted"], v["status"]
+                            )
+                        },
+                    )?;
+                    return Ok(0);
+                }
+            }
+            let settings = hub::alerts::settings(&store)?;
+            let now_alerts =
+                hub::alerts::collect(&store, jiff::Timestamp::now(), env!("CARGO_PKG_VERSION"))?;
+            out.emit(
+                &serde_json::json!({ "settings": settings, "now": now_alerts }),
+                |v| {
+                    let mut s = match v["settings"]["url"].as_str() {
+                        None => "alerts are off\n".to_string(),
+                        Some(u) => format!(
+                            "alerts go to {u}{}\n",
+                            if v["settings"]["allow_public"].as_bool() == Some(true) {
+                                " (public address allowed)"
+                            } else {
+                                ""
+                            }
+                        ),
+                    };
+                    let list = v["now"].as_array().cloned().unwrap_or_default();
+                    if list.is_empty() {
+                        s.push_str("nothing needs a person right now\n");
+                    } else {
+                        s.push_str(&format!("{} thing(s) need a person now:\n", list.len()));
+                        for a in list {
+                            s.push_str(&format!("  {}\n", a["text"].as_str().unwrap_or_default()));
+                        }
+                    }
+                    s
+                },
+            )?;
+            Ok(0)
+        }
+
         HubCommand::Retention { command } => {
             use cli::RetentionCommand;
             match command {
@@ -2625,6 +2805,7 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             since,
             until,
             export,
+            signed,
         } => {
             let stamp = |s: Option<String>, what: &str| -> Result<Option<jiff::Timestamp>> {
                 s.map(|v| {
@@ -2650,18 +2831,30 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 ..Default::default()
             };
             if let Some(path) = export {
-                let text = app.export_audit_bundle(&filter)?;
+                let text = app.export_audit_bundle_with(&filter, signed)?;
                 std::fs::write(&path, &text).map_err(|e| Error::Io {
                     path: path.clone(),
                     source: e,
                 })?;
                 let report = cyberbrain_policy::bundle::verify(&text)?;
                 out.emit(&report, |r| {
+                    let checked = if r.filter.is_some() {
+                        "each selected row is as it was written (a selection, gaps expected)"
+                            .to_string()
+                    } else {
+                        format!(
+                            "chain holds from anchor {}",
+                            &r.anchor[..r.anchor.len().min(12)]
+                        )
+                    };
+                    let signed = match &r.fingerprint {
+                        Some(fp) => format!("signed with key {fp}\n"),
+                        None => String::new(),
+                    };
                     format!(
-                        "wrote {} row(s) to {}\nchecked as written: chain holds from anchor {}\n",
+                        "wrote {} row(s) to {}\nchecked as written: {checked}\n{signed}",
                         r.rows,
                         path.display(),
-                        &r.anchor[..r.anchor.len().min(12)]
                     )
                 })?;
                 return Ok(0);
@@ -2680,6 +2873,9 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                         Ok(n) => format!("chain verified over {n} rows\n"),
                         Err(e) => format!("CHAIN BROKEN: {e}\n"),
                     });
+                    if let Some(c) = &v.chain {
+                        s.push_str(&render::signing_line(c));
+                    }
                 }
                 s.push_str(&format!(
                     "{} rows shown (ts\tactor\taction\tsubject\tdetail)\n",
@@ -2689,6 +2885,10 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 s
             })?;
             return Ok(code);
+        }
+        PolicyCommand::AuditKey { init } => {
+            let r = app.audit_key(init)?;
+            out.emit(&r, render::audit_key)?;
         }
         PolicyCommand::Subject { identifier } => {
             let r = app.policy_subject(&identifier)?;
@@ -2792,6 +2992,7 @@ mod tests {
         AuditView {
             rows: 3,
             verified,
+            chain: None,
             rendered: String::new(),
         }
     }
