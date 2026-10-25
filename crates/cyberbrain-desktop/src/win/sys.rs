@@ -10,10 +10,15 @@ use std::path::Path;
 use windows_sys::Win32::Foundation::{
     CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE, WAIT_OBJECT_0,
 };
+use windows_sys::Win32::Globalization::GetUserDefaultUILanguage;
 use windows_sys::Win32::System::JobObjects::{
     AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectExtendedLimitInformation,
     SetInformationJobObject,
+};
+use windows_sys::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegCreateKeyExW,
+    RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
 };
 use windows_sys::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, GetCurrentProcess, OpenEventW, ReleaseMutex,
@@ -311,4 +316,145 @@ pub fn ask_running_to_quit() -> bool {
     let set = unsafe { SetEvent(handle) };
     unsafe { CloseHandle(handle) };
     set != 0
+}
+
+/// The name of the event that means "somebody started a second launcher: show a window".
+///
+/// The same shape as the quit event, in the other direction. A second start used to open
+/// the system browser at the first one's address, whatever `Open in` said, and without the
+/// terminal token — so the person who clicked the shortcut again got a browser tab where
+/// their window had been.
+const SHOW_EVENT: &str = "Local\\cyberbrain-desktop-show";
+
+/// The "please show yourself" flag of the running launcher.
+pub struct ShowRequest {
+    handle: HANDLE,
+}
+
+impl ShowRequest {
+    pub fn create() -> Self {
+        let name = wide(SHOW_EVENT);
+        // Manual reset and cleared at once, for the same reason as the quit flag: a request
+        // left by a launcher that was killed must not open a window for this one.
+        let handle = unsafe { CreateEventW(std::ptr::null(), 1, 0, name.as_ptr()) };
+        if !handle.is_null() {
+            unsafe { ResetEvent(handle) };
+        }
+        Self { handle }
+    }
+
+    /// Whether somebody has asked since the last time, and forget it. Never waits.
+    pub fn take(&self) -> bool {
+        if self.handle.is_null() {
+            return false;
+        }
+        let asked = unsafe { WaitForSingleObject(self.handle, 0) == WAIT_OBJECT_0 };
+        if asked {
+            unsafe { ResetEvent(self.handle) };
+        }
+        asked
+    }
+}
+
+impl Drop for ShowRequest {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { CloseHandle(self.handle) };
+        }
+    }
+}
+
+/// Ask the running launcher to show its page. `false` when none is listening, which is what
+/// an older launcher looks like: the caller falls back to the browser.
+pub fn ask_running_to_show() -> bool {
+    let name = wide(SHOW_EVENT);
+    let handle = unsafe { OpenEventW(EVENT_MODIFY_STATE, 0, name.as_ptr()) };
+    if handle.is_null() {
+        return false;
+    }
+    let set = unsafe { SetEvent(handle) };
+    unsafe { CloseHandle(handle) };
+    set != 0
+}
+
+/// The Windows display language, as a language id.
+pub fn ui_language_id() -> u16 {
+    unsafe { GetUserDefaultUILanguage() }
+}
+
+const RUN_KEY: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+const RUN_VALUE: &str = "Cyberbrain";
+
+/// Whether the launcher starts when this person signs in: a value under the per-user Run
+/// key, which needs no administrator and affects nobody else on the machine.
+pub fn autostart_enabled() -> bool {
+    let key = wide(RUN_KEY);
+    let value = wide(RUN_VALUE);
+    let mut hkey: HKEY = std::ptr::null_mut();
+    unsafe {
+        if RegOpenKeyExW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            0,
+            KEY_QUERY_VALUE,
+            &mut hkey,
+        ) != 0
+        {
+            return false;
+        }
+        let found = RegQueryValueExW(
+            hkey,
+            value.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        ) == 0;
+        RegCloseKey(hkey);
+        found
+    }
+}
+
+/// Turn the start at sign-in on or off. The command is this program's own path, quoted.
+pub fn set_autostart(on: bool) -> Result<(), String> {
+    let key = wide(RUN_KEY);
+    let value = wide(RUN_VALUE);
+    let mut hkey: HKEY = std::ptr::null_mut();
+    unsafe {
+        let rc = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            0,
+            std::ptr::null(),
+            0,
+            KEY_SET_VALUE,
+            std::ptr::null(),
+            &mut hkey,
+            std::ptr::null_mut(),
+        );
+        if rc != 0 {
+            return Err(format!("registry error {rc}"));
+        }
+        let rc = if on {
+            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+            let command = wide(&format!("\"{}\" --background", exe.display()));
+            RegSetValueExW(
+                hkey,
+                value.as_ptr(),
+                0,
+                REG_SZ,
+                command.as_ptr().cast(),
+                (command.len() * 2) as u32,
+            )
+        } else {
+            let rc = RegDeleteValueW(hkey, value.as_ptr());
+            // Already absent is the state asked for.
+            if rc == 2 { 0 } else { rc }
+        };
+        RegCloseKey(hkey);
+        if rc != 0 {
+            return Err(format!("registry error {rc}"));
+        }
+    }
+    Ok(())
 }

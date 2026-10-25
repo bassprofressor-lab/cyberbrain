@@ -13,6 +13,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg_attr(not(windows), allow(dead_code))]
+mod i18n;
+#[cfg_attr(not(windows), allow(dead_code))]
 mod launch;
 #[cfg_attr(not(windows), allow(dead_code))]
 mod settings;

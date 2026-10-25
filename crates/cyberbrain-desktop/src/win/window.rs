@@ -319,9 +319,7 @@ fn runtime_missing<E: std::fmt::Display>(e: E) -> String {
 }
 
 fn runtime_missing_text() -> String {
-    "The WebView2 runtime could not be started. It is part of Windows 11 and of current \
-     Windows 10, and can be installed from Microsoft's Evergreen download page."
-        .to_string()
+    crate::i18n::tr(crate::i18n::Key::WebviewMissing, &[])
 }
 
 /// COM and DPI, once. Both are process-wide, both are harmless to ask for twice, and
