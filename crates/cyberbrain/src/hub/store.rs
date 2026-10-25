@@ -2264,6 +2264,16 @@ impl HubStore {
         reason: &str,
         now: &str,
     ) -> Result<AccessRequest> {
+        // The device is one the hub knows. Its id becomes a file name when the request is
+        // disclosed, and an unchecked one (`../x`) would be written outside the directory the
+        // auditor chose.
+        if let Some(d) = device
+            && !self.devices()?.iter().any(|known| known.id == d)
+        {
+            return Err(Error::Config(format!(
+                "there is no device {d:?} on this hub; `cyberbrain hub fleet` lists them"
+            )));
+        }
         let id = format!("req_{}", cyberbrain_core::NoteId::generate());
         ix(self.conn.execute(
             "INSERT INTO access_requests (id, requester, device, from_ts, to_ts, reason, created_at)
@@ -2366,17 +2376,29 @@ impl HubStore {
 
     /// Note that rows were handed out under a request.
     pub fn note_disclosure(&self, id: &str, by: &str, rows: usize, now: &str) -> Result<()> {
-        ix(self.conn.execute(
-            "UPDATE access_requests SET disclosures = disclosures + 1 WHERE id = ?",
-            params![id],
-        ))?;
-        self.record(
-            by,
-            "access.disclosed",
-            serde_json::json!({ "request": id, "rows": rows }),
-            now,
-        )?;
-        Ok(())
+        // The count and the chain row together or neither: a count that says a disclosure
+        // happened with no row saying who made it is the gap this record exists to close.
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let done = (|| -> Result<()> {
+            ix(self.conn.execute(
+                "UPDATE access_requests SET disclosures = disclosures + 1 WHERE id = ?",
+                params![id],
+            ))?;
+            self.record(
+                by,
+                "access.disclosed",
+                serde_json::json!({ "request": id, "rows": rows }),
+                now,
+            )?;
+            Ok(())
+        })();
+        match done {
+            Ok(()) => ix(self.conn.execute_batch("COMMIT")),
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
     }
 }
 

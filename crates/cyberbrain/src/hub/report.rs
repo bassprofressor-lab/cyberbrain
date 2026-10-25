@@ -345,8 +345,9 @@ use super::access::{AccessRequest, Denied, Principal, RequestState, Role};
 /// Everything this checks is a separate way the rule could be got round, and each one is its
 /// own answer rather than a shared "denied": the auditor role, that the request exists, that
 /// somebody else approved it, and that the window is still open. The disclosure is recorded
-/// before the rows are written, so a crash halfway leaves the record saying more happened
-/// than did — which is the safe direction for a log about who looked at what.
+/// before the rows are written, and not at all means not written: a crash halfway leaves the
+/// record saying more happened than did, which is the safe direction for a log about who
+/// looked at what.
 pub fn disclose(
     hub: &HubStore,
     token: Option<&str>,
@@ -385,22 +386,47 @@ pub fn disclose(
             .collect(),
     };
 
-    std::fs::create_dir_all(dir)
-        .map_err(|e| Denied::NotAuthorised(format!("cannot write to {}: {e}", dir.display())))?;
-
-    let mut files = Vec::new();
+    // Read first, record second, write last. The rows are gathered in memory so the record
+    // can name how many; the record is made before any of them reaches a file, and a record
+    // that cannot be made stops the disclosure. This used to be the other way round, with
+    // the record's error discarded, so a reading could happen without a trace.
+    let mut bundles = Vec::new();
     let mut total = 0usize;
     for id in &devices {
+        // The id becomes a file name. `create_request` only takes devices the hub knows, but a
+        // request written by an older version was not checked, so the name is checked here
+        // too rather than trusted.
+        if id.is_empty()
+            || !id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err(Denied::NotAuthorised(format!(
+                "request {} names device {id:?}, which is not a device id",
+                req.id
+            )));
+        }
         let (text, n) = device_bundle(hub, id, req.from.as_deref(), req.to.as_deref(), tool)
             .map_err(|e| Denied::NotAuthorised(e.to_string()))?;
-        let name = format!("{id}.jsonl");
-        std::fs::write(dir.join(&name), &text)
-            .map_err(|e| Denied::NotAuthorised(format!("cannot write {name}: {e}")))?;
         total += n;
-        files.push(name);
+        bundles.push((format!("{id}.jsonl"), text));
     }
 
-    let _ = hub.note_disclosure(&req.id, &who.id, total, &now.to_string());
+    hub.note_disclosure(&req.id, &who.id, total, &now.to_string())
+        .map_err(|e| {
+            Denied::NotAuthorised(format!(
+                "the disclosure could not be recorded, so nothing was written: {e}"
+            ))
+        })?;
+
+    std::fs::create_dir_all(dir)
+        .map_err(|e| Denied::NotAuthorised(format!("cannot write to {}: {e}", dir.display())))?;
+    let mut files = Vec::new();
+    for (name, text) in bundles {
+        std::fs::write(dir.join(&name), &text)
+            .map_err(|e| Denied::NotAuthorised(format!("cannot write {name}: {e}")))?;
+        files.push(name);
+    }
 
     Ok(serde_json::json!({
         "request": req.id,

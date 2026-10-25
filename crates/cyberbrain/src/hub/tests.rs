@@ -1327,6 +1327,52 @@ fn an_approved_request_opens_a_window_that_closes_itself() {
     assert!(err.to_string().contains("Make a new request"), "{err}");
 }
 
+/// A disclosure that cannot be recorded does not happen. The rows used to be written first
+/// and the record attempted afterwards with its error thrown away, so a reading could take
+/// place without a trace, which is the one thing this procedure exists to prevent.
+#[test]
+fn a_disclosure_that_cannot_be_recorded_writes_nothing() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let signer = hub
+        .principal_for(Some(&council), Role::Countersigner)
+        .unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    hub.approve_request(&req.id, &signer, "2099-01-01T00:00:00Z", NOW)
+        .unwrap();
+    hub.conn
+        .execute_batch(
+            "CREATE TRIGGER no_disclosure BEFORE INSERT ON hub_audit
+             WHEN NEW.action = 'access.disclosed'
+             BEGIN SELECT raise(ABORT, 'the record is full'); END;",
+        )
+        .unwrap();
+    let dir = tmpdir();
+    let out = report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test");
+    assert!(out.is_err(), "{out:?}");
+    let written: Vec<_> = std::fs::read_dir(dir.path())
+        .map(|d| d.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(written.is_empty(), "{written:?}");
+}
+
+/// A request names a device the hub knows. The id becomes a file name in `disclose`, and an
+/// unchecked `../x` would have been written outside the chosen directory.
+#[test]
+fn a_request_for_a_device_the_hub_does_not_know_is_refused() {
+    let (hub, _, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    for bad in ["../outside", "dev_does_not_exist"] {
+        let err = hub
+            .create_request(&who, Some(bad), None, None, "a reason", NOW)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no device"), "{bad}: {err}");
+    }
+}
+
 #[test]
 fn another_auditor_cannot_collect_somebody_elses_approval() {
     let (hub, device, auditor, council, _) = hub_with_activity();

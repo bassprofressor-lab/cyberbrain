@@ -69,6 +69,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - **"Sign out" on the conflicts and requests pages signs out.** Those pages sign out with a POST
   form, and `/logout` took GET only, so the button answered 405 and the session stayed open,
   which on a shared machine is the case the button exists for. `/logout` now takes both.
+- **A disclosure that cannot be recorded no longer happens.** `hub disclose` wrote the rows
+  first and recorded the disclosure afterwards, discarding any error, so a reading could take
+  place without a trace in the hub's chain. The rows are now gathered, the disclosure recorded
+  (count and chain row in one transaction), and only then written; if the record fails, nothing
+  is written. A request also has to name a device the hub knows: the id becomes a file name, and
+  `../x` was written outside the chosen directory.
 
 ## [0.7.10] — 2026-10-23
 
