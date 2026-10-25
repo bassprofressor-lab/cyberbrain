@@ -97,19 +97,26 @@ pub fn parse<'a>(path: &Path, text: &'a str) -> Result<Parsed<'a>> {
     let front: Frontmatter = serde_norway::from_value(serde_norway::Value::Mapping(mapping))
         .map_err(|e| fail(e.to_string()))?;
 
-    validate_name(&front.name).map_err(|r| fail(format!("name `{}`: {r}", front.name)))?;
-    if let Some(b) = &front.bereich {
-        validate_bereich(b).map_err(|r| fail(format!("bereich `{b}`: {r}")))?;
-    }
-    if let Some(r) = &front.retention {
-        validate_retention(r).map_err(|why| fail(format!("retention `{r}`: {why}")))?;
-    }
-    for n in front.supersedes.iter().chain(&front.superseded_by) {
-        validate_name(n).map_err(|r| fail(format!("supersession names `{n}`, which {r}")))?;
-    }
-    validate_validity(front.valid_from, front.invalid_at).map_err(fail)?;
+    validate_head(&front).map_err(fail)?;
 
     Ok(Parsed { front, body })
+}
+
+/// The checks on a typed head that serde cannot express. Shared by [`parse`] and
+/// [`render`], so that no write path can put a head on disk that the next read refuses:
+/// a caller that forgot one of these checks used to produce a note nobody could open.
+fn validate_head(front: &Frontmatter) -> std::result::Result<(), String> {
+    validate_name(&front.name).map_err(|r| format!("name `{}`: {r}", front.name))?;
+    if let Some(b) = &front.bereich {
+        validate_bereich(b).map_err(|r| format!("bereich `{b}`: {r}"))?;
+    }
+    if let Some(r) = &front.retention {
+        validate_retention(r).map_err(|why| format!("retention `{r}`: {why}"))?;
+    }
+    for n in front.supersedes.iter().chain(&front.superseded_by) {
+        validate_name(n).map_err(|r| format!("supersession names `{n}`, which {r}"))?;
+    }
+    validate_validity(front.valid_from, front.invalid_at)
 }
 
 /// A note cannot stop holding before it starts to: `invalid_at` must lie after
@@ -131,15 +138,11 @@ pub fn validate_validity(
 /// with the fence, ends the head with a fence, then one blank line, then the body,
 /// byte for byte — the body is the human's text and is not normalised here.
 pub fn render(front: &Frontmatter, body: &str) -> Result<String> {
-    validate_name(&front.name).map_err(|r| Error::Frontmatter {
-        path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
-        reason: format!("name `{}`: {r}", front.name),
-    })?;
     // Checked here as well as in `parse`, so no write path can put a head on disk that
     // the next read would refuse.
-    validate_validity(front.valid_from, front.invalid_at).map_err(|r| Error::Frontmatter {
+    validate_head(front).map_err(|reason| Error::Frontmatter {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
-        reason: r,
+        reason,
     })?;
     let yaml = serde_norway::to_string(front).map_err(|e| Error::Frontmatter {
         path: Path::new(&format!("{}.md", front.name)).to_path_buf(),
@@ -702,5 +705,31 @@ Body in Markdown. Links to other notes are written [[like-this]].
         let mut front = parsed.front;
         front.name = "Not A Slug".into();
         assert!(matches!(render(&front, ""), Err(Error::Frontmatter { .. })));
+    }
+
+    #[test]
+    fn render_refuses_every_head_that_parse_would_refuse() {
+        // Whatever `render` puts on disk, the next `parse` has to accept: a note written
+        // through a path that skipped a check would otherwise be unreadable afterwards.
+        let front = parse(p(), SPEC_EXAMPLE).unwrap().front;
+        let mut bereich = front.clone();
+        bereich.bereich = Some("a b".into());
+        let mut retention = front.clone();
+        retention.retention = Some("2 years".into());
+        let mut supersedes = front.clone();
+        supersedes.supersedes = vec!["Not A Slug".into()];
+        let mut superseded_by = front.clone();
+        superseded_by.superseded_by = Some("../escape".into());
+        for (what, bad) in [
+            ("bereich", bereich),
+            ("retention", retention),
+            ("supersedes", supersedes),
+            ("superseded_by", superseded_by),
+        ] {
+            assert!(
+                matches!(render(&bad, ""), Err(Error::Frontmatter { .. })),
+                "{what} was rendered"
+            );
+        }
     }
 }
