@@ -789,6 +789,48 @@ fn post_tool_use_says_the_index_is_stale_after_a_raw_note_edit() {
     assert!(out.stdout.is_empty());
 }
 
+/// Windows has two kinds of relative path that are not relative to the working directory:
+/// `\x` is rooted on the working directory's drive, and `C:x` is relative to that drive's
+/// own directory. Both were glued onto the working directory as if they were `x`.
+#[test]
+fn drive_relative_and_rooted_windows_paths_resolve_like_windows() {
+    use paths::{Platform, StoreTarget, classify};
+    let w = Platform::Windows;
+    let store = r"C:\proj\.cyberbrain";
+    assert_eq!(
+        classify(w, store, r"C:\proj\sub", r"\proj\.cyberbrain\audit.db"),
+        Some(StoreTarget::AuditLog)
+    );
+    assert_eq!(
+        classify(w, store, r"C:\proj\sub", r"/proj/.cyberbrain/audit.db"),
+        Some(StoreTarget::AuditLog)
+    );
+    assert_eq!(
+        classify(w, store, r"C:\proj\sub", r"C:..\.cyberbrain\audit.db"),
+        Some(StoreTarget::AuditLog)
+    );
+    assert_eq!(
+        classify(w, store, r"C:\proj", r"c:.cyberbrain\audit.db"),
+        Some(StoreTarget::AuditLog)
+    );
+    // Another drive's own directory is unknown here; its root is the honest guess, and it is
+    // not this store.
+    assert_eq!(
+        classify(w, store, r"C:\proj", r"D:.cyberbrain\audit.db"),
+        None
+    );
+    // On a share, rooted means the share's root.
+    assert_eq!(
+        classify(
+            w,
+            r"\\srv\team\proj\.cyberbrain",
+            r"\\srv\team\proj\sub",
+            r"\proj\.cyberbrain\audit.db"
+        ),
+        Some(StoreTarget::AuditLog)
+    );
+}
+
 #[test]
 fn path_classification_holds_on_both_platforms() {
     use paths::{Platform, StoreTarget, classify};
