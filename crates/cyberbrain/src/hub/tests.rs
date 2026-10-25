@@ -2829,6 +2829,48 @@ fn an_older_delivery_does_not_overwrite_a_newer_note() {
     assert_eq!(held[0].updated, "2026-09-10T12:00:00Z");
 }
 
+/// The same stamp is a re-send only when the text is the same too. A note edited by hand
+/// without touching `updated` used to be taken for the held version and dropped unreported.
+#[test]
+fn the_same_stamp_with_other_text_is_a_conflict_not_a_resend() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("laptop", NOW).unwrap();
+    let offer = |front: &str, body: &str| {
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "disposition",
+            "regel",
+            2,
+            "knowledge",
+            "2026-09-10T12:00:00Z",
+            front,
+            body,
+            None,
+            &d.id,
+            NOW,
+        )
+        .unwrap()
+    };
+    assert!(matches!(offer("fm", "text"), store::NoteOutcome::Stored));
+    assert!(
+        matches!(offer("fm", "text"), store::NoteOutcome::Unchanged),
+        "a true re-send stays quiet"
+    );
+    assert!(
+        matches!(
+            offer("fm", "edited by hand"),
+            store::NoteOutcome::Conflict { .. }
+        ),
+        "other text under the same stamp is kept beside the held one"
+    );
+    assert!(matches!(
+        offer("fm2", "text"),
+        store::NoteOutcome::Conflict { .. }
+    ));
+    assert_eq!(hub.open_conflicts("disposition").unwrap().len(), 2);
+    assert_eq!(hub.synced_notes("disposition").unwrap()[0].body, "text");
+}
+
 // ---- cut 3: two machines that did not see each other ----
 
 /// The failure this cut exists for. Two devices edit the same note from the same starting

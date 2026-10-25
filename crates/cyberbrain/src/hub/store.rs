@@ -1394,12 +1394,13 @@ impl HubStore {
         from_device: &str,
         now: &str,
     ) -> Result<NoteOutcome> {
-        let held: Option<(String, String)> = ix(self
+        let held: Option<(String, String, String, String)> = ix(self
             .conn
             .query_row(
-                "SELECT updated, from_device FROM synced_notes WHERE bereich = ? AND name = ?",
+                "SELECT updated, from_device, frontmatter, body
+                 FROM synced_notes WHERE bereich = ? AND name = ?",
                 params![bereich, name],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
             )
             .optional())?;
 
@@ -1420,7 +1421,7 @@ impl HubStore {
                 )?;
                 Ok(NoteOutcome::Stored)
             }
-            Some((held_updated, held_device)) => {
+            Some((held_updated, held_device, held_front, held_body)) => {
                 // The sender says which version it started from. Equal means it saw what the
                 // hub holds and moved on from there: a continuation, and safe to take.
                 if based_on == Some(held_updated.as_str()) {
@@ -1438,8 +1439,11 @@ impl HubStore {
                     )?;
                     return Ok(NoteOutcome::Stored);
                 }
-                // Byte-identical to what is held is not a conflict, it is a re-send.
-                if updated == held_updated {
+                // Byte-identical to what is held is not a conflict, it is a re-send. The stamp
+                // alone does not say that: a note edited by hand keeps its `updated`, and
+                // taking the stamp for the text dropped that edit without a word. The text is
+                // compared as it is, not by digest, because both sides are already in hand.
+                if updated == held_updated && frontmatter == held_front && body == held_body {
                     return Ok(NoteOutcome::Unchanged);
                 }
                 // Anything else is two machines that did not see each other. Keep both.

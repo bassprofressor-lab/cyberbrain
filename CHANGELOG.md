@@ -22,6 +22,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   from an older hub is a timestamp, which is no longer read: the first pull after the upgrade
   gets everything once, which the device already has or takes again. An older hub handed the
   new cursor sends everything rather than nothing.
+- **The same `updated` with other text is a conflict, not a re-send.** The hub compared only
+  the stamp, so a note edited by hand without touching `updated` was taken for the version it
+  already held and dropped without a word. It now compares frontmatter and body as well; a
+  true re-send is still quiet, and anything else is kept as a conflict like any other.
 
 ## [0.7.10] — 2026-10-23
 
