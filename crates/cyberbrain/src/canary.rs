@@ -26,6 +26,7 @@
 
 use crate::app::{App, WriteOutcome, WriteRequest};
 use cyberbrain_core::{Error, NoteKind, Result, Ring};
+use cyberbrain_policy::audit::Actor;
 use cyberbrain_policy::write_gate::OperatorChoice;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -313,6 +314,16 @@ pub struct Planted {
 
 /// Make a canary: the value, its note, the register entry and an audit row.
 pub fn plant(app: &App, kind: Kind, label: Option<&str>, ring: Ring) -> Result<Planted> {
+    // The note is written with the PII hold answered "reviewed", which only the operator may
+    // do. Said here, before anything exists, rather than as the write gate's refusal about
+    // a note the agent never named.
+    if !matches!(app.actor(), Actor::Operator | Actor::Cli) {
+        return Err(Error::Config(
+            "a canary is planted by the operator: run `cyberbrain canary plant` in your own \
+             terminal. An agent that could plant one would know where every decoy is"
+                .into(),
+        ));
+    }
     if !matches!(ring, Ring::Knowledge | Ring::Session | Ring::External) {
         return Err(Error::Config(
             "a canary goes into ring 2, 3 or 4: rings 0 and 1 are injected into every \

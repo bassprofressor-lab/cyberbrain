@@ -1576,6 +1576,20 @@ fn plant(f: &Fixture, kind: crate::canary::Kind) -> crate::canary::Canary {
         .unwrap()
 }
 
+/// Planting is the operator's: an agent asking for one is told so, before a note exists.
+/// It used to get the PII hold's answer about a note it never named.
+#[test]
+fn an_agent_cannot_plant_a_canary_and_is_told_who_can() {
+    let f = fixture();
+    let app = App::open(Some(&f.store), Actor::Agent("claude-code:test".into())).unwrap();
+    let err = crate::canary::plant(&app, crate::canary::Kind::ApiKey, None, Ring::Knowledge)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("operator"), "{err}");
+    assert!(err.contains("cyberbrain canary plant"), "{err}");
+    assert!(crate::canary::load(&f.store).unwrap().is_empty());
+}
+
 fn audit_text(app: &App) -> String {
     serde_json::to_string(&app.policy().audit().read(&AuditFilter::default()).unwrap()).unwrap()
 }
