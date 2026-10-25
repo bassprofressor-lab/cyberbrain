@@ -12,6 +12,7 @@ mod audit_bridge;
 mod canary;
 mod cli;
 mod daemon;
+mod expiry;
 mod hook;
 mod hostload;
 mod hub;
@@ -349,8 +350,15 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         }
         Command::McpClient { command } => {
             match command {
-                cli::McpClientCommand::Add { name } => {
-                    let token = mcp::clients::add(&name)?;
+                cli::McpClientCommand::Add { name, expires } => {
+                    let expires_at = expires
+                        .as_deref()
+                        .map(|e| expiry::parse(e, jiff::Timestamp::now()))
+                        .transpose()?;
+                    let token = mcp::clients::add(&name, expires_at.clone())?;
+                    if let Some(at) = &expires_at {
+                        println!("client {name} works until {at}.");
+                    }
                     println!(
                         "client {name} registered. Its token, shown this once:\n\n  {token}\n\n\
                          Use it as `Authorization: Bearer <token>` against `mcp --http`. \
@@ -359,8 +367,16 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     );
                 }
                 cli::McpClientCommand::List => {
-                    for (n, _) in mcp::clients::load() {
-                        println!("{n}");
+                    let now = jiff::Timestamp::now();
+                    for c in mcp::clients::load() {
+                        let until =
+                            match (&c.expires_at, expiry::state(c.expires_at.as_deref(), now)) {
+                                (None, _) => String::new(),
+                                (Some(at), expiry::State::Expired) => format!("  expired {at}"),
+                                (Some(at), expiry::State::Soon) => format!("  until {at} (soon)"),
+                                (Some(at), _) => format!("  until {at}"),
+                            };
+                        println!("{}{until}", c.name);
                     }
                 }
                 cli::McpClientCommand::Remove { name } => {

@@ -1151,7 +1151,13 @@ pub enum CanaryCommand {
 #[derive(Debug, Subcommand)]
 pub enum McpClientCommand {
     /// Register a client and print its token. The token is shown once and not stored.
-    Add { name: String },
+    Add {
+        name: String,
+        /// When the token stops working: a period (P30D, P6M, P1Y), a date (2027-03-31) or
+        /// a timestamp. Without it the token works until it is removed.
+        #[arg(long)]
+        expires: Option<String>,
+    },
     /// The registered clients, by name.
     List,
     /// Remove a client; its token stops working at the next request.

@@ -1224,7 +1224,11 @@ mod http_transport {
     fn router_with(root: &std::path::Path, token: &str) -> axum::Router {
         http::router(
             Some(root.to_path_buf()),
-            Some(vec![("n8n".to_string(), clients::digest(token))]),
+            Some(vec![clients::Client::new(
+                "n8n",
+                clients::digest(token),
+                None,
+            )]),
         )
     }
 
@@ -1262,6 +1266,51 @@ mod http_transport {
             StatusCode::UNAUTHORIZED
         );
         assert_eq!(post(&r, Some("cbm_right"), ping).await.0, StatusCode::OK);
+    }
+
+    /// An expired token is refused by name, and the refusal is in the store's audit log.
+    #[tokio::test]
+    async fn an_expired_client_token_is_refused_and_recorded() {
+        let (_d, root) = temp_store();
+        let r = http::router(
+            Some(root.clone()),
+            Some(vec![clients::Client::new(
+                "n8n",
+                clients::digest("cbm_old"),
+                Some("2026-01-01T00:00:00Z".into()),
+            )]),
+        );
+        let ping = json!({"jsonrpc": "2.0", "id": 1, "method": "ping"});
+        let resp = r
+            .clone()
+            .oneshot(
+                Request::post("/mcp")
+                    .header("authorization", "Bearer cbm_old")
+                    .body(Body::from(ping.to_string()))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let text = String::from_utf8(
+            axum::body::to_bytes(resp.into_body(), 1 << 16)
+                .await
+                .unwrap()
+                .to_vec(),
+        )
+        .unwrap();
+        assert!(text.contains("expired at 2026-01-01T00:00:00Z"), "{text}");
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        let rows = app
+            .policy()
+            .audit()
+            .read(&cyberbrain_policy::AuditFilter::default())
+            .unwrap();
+        assert!(
+            rows.iter()
+                .any(|r| r.subject == "mcp-client:n8n" && r.detail["reason"] == "token expired"),
+            "the refusal is on record"
+        );
     }
 
     #[tokio::test]

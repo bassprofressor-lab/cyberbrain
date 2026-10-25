@@ -38,7 +38,7 @@ struct HttpState {
     apps: Mutex<HashMap<String, Arc<App>>>,
     /// Where the client list is read from; `None` reads the user's file on every request, so
     /// `mcp-client add/remove` take effect without a restart.
-    clients: Option<Vec<(String, String)>>,
+    clients: Option<Vec<super::clients::Client>>,
 }
 
 impl HttpState {
@@ -71,7 +71,7 @@ pub fn check_bind(addr: &SocketAddr) -> Result<()> {
     }
 }
 
-pub fn router(store: Option<PathBuf>, clients: Option<Vec<(String, String)>>) -> Router {
+pub fn router(store: Option<PathBuf>, clients: Option<Vec<super::clients::Client>>) -> Router {
     let st = Arc::new(HttpState {
         store,
         apps: Mutex::new(HashMap::new()),
@@ -119,16 +119,50 @@ async fn post_mcp(State(st): State<Arc<HttpState>>, headers: HeaderMap, body: By
         .map(str::trim)
         .unwrap_or_default();
     let clients = st.clients.clone().unwrap_or_else(super::clients::load);
-    let Some(client) = (!token.is_empty())
-        .then(|| super::clients::lookup(&clients, token))
-        .flatten()
-    else {
-        return (
-            StatusCode::UNAUTHORIZED,
-            [(header::WWW_AUTHENTICATE, "Bearer")],
-            "a client token is required: `cyberbrain mcp-client add <name>`\n",
-        )
-            .into_response();
+    let found = if token.is_empty() {
+        super::clients::Lookup::Unknown
+    } else {
+        super::clients::lookup(&clients, token, jiff::Timestamp::now())
+    };
+    let client = match found {
+        super::clients::Lookup::Client(name) => name,
+        super::clients::Lookup::Unknown => {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+                "a client token is required: `cyberbrain mcp-client add <name>`\n",
+            )
+                .into_response();
+        }
+        // Said as what it is, and written down: an expired token still in use is a client
+        // somebody forgot to renew, or a copy somebody kept.
+        super::clients::Lookup::Expired { name, at } => {
+            let st = st.clone();
+            let (who, when) = (name.clone(), at.clone());
+            let _ = tokio::task::spawn_blocking(move || {
+                st.app_for(&who).and_then(|app| {
+                    app.policy()
+                        .audit()
+                        .record(
+                            &Actor::Agent(format!("mcp:{who}")),
+                            cyberbrain_policy::AuditAction::PolicyRefusal,
+                            format!("mcp-client:{who}"),
+                            serde_json::json!({ "reason": "token expired", "expired_at": when }),
+                        )
+                        .map(|_| ())
+                })
+            })
+            .await;
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer error=\"invalid_token\"")],
+                format!(
+                    "the token of client {name} expired at {at}; `cyberbrain mcp-client remove \
+                     {name}` and `cyberbrain mcp-client add {name}` issue a new one\n"
+                ),
+            )
+                .into_response();
+        }
     };
     let opened = {
         let st = st.clone();
