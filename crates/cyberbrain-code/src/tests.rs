@@ -635,6 +635,24 @@ fn nested_ignore_files_and_whitelists() {
     );
 }
 
+/// `.cyberbrainignore` is the first tier and `.gitignore` the second, whatever directory
+/// each sits in: a whitelist in a nested `.gitignore` does not bring back what the
+/// operator's `.cyberbrainignore` keeps out, and the reverse holds too.
+#[test]
+fn cyberbrainignore_outranks_a_nearer_gitignore() {
+    let t = TempTree::new();
+    t.write(IGNORE_FILE, "*.py\n");
+    t.write("sub/.gitignore", "!kept_out.py\n");
+    t.write("sub/kept_out.py", "def kept_out():\n    pass\n");
+    t.write(".gitignore", "*.rs\n");
+    t.write("deep/.cyberbrainignore", "!wanted.rs\n");
+    t.write("deep/wanted.rs", "pub fn wanted() {}\n");
+    let r = find(t.path(), "kept_out", 10, &FindOptions::default()).unwrap();
+    assert!(r.hits.is_empty(), "{:?}", r.hits);
+    let r = find(t.path(), "wanted", 10, &FindOptions::default()).unwrap();
+    assert_eq!(r.hits.len(), 1, "{:?}", r.hits);
+}
+
 #[test]
 fn excluded_store_and_gitignore_switch() {
     let t = fixture();
