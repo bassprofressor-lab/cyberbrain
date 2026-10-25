@@ -60,8 +60,8 @@ export function Dialog({
     <div className={`scrim ${top ? "items-start pt-[8vh]" : "items-center"} justify-center`} role="dialog" aria-modal="true" aria-label={label}>
       <div ref={box} tabIndex={-1} className={`dialog dialog-box ${className}`} onKeyDown={onKeyDown}>
         <header className="section-head justify-start shrink-0">{title}</header>
-        <div className="dialog-body p-4 text-sm space-y-3">{children}</div>
-        <div className="dialog-actions shrink-0 flex flex-wrap gap-1.5 justify-end px-4 py-3 border-t">{actions}</div>
+        <div className="dialog-body p-5 text-sm space-y-4">{children}</div>
+        <div className="dialog-actions shrink-0 flex flex-wrap gap-2 justify-end px-5 py-4 border-t bg-surface-2">{actions}</div>
       </div>
     </div>
   );

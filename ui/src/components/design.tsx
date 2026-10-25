@@ -79,3 +79,17 @@ export function MetricCard({ icon, label, value, state, sub }: { icon: IconName;
     </div>
   );
 }
+
+/** The title row of a screen: icon, h1, a quiet subtitle, and the screen's actions on the right. */
+export function PageHeader({ icon, title, sub, children, className = "" }: { icon?: IconName; title: ReactNode; sub?: ReactNode; children?: ReactNode; className?: string }) {
+  return (
+    <div className={`flex items-center gap-x-4 gap-y-3 flex-wrap ${className}`}>
+      <div className="flex items-baseline gap-3 min-w-0 mr-auto">
+        {icon ? <Icon name={icon} size={24} className="text-fg-muted self-center" /> : null}
+        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        {sub ? <span className="text-sm text-fg-muted min-w-0 wrap-soft">{sub}</span> : null}
+      </div>
+      {children ? <div className="flex flex-wrap items-center gap-2">{children}</div> : null}
+    </div>
+  );
+}

@@ -274,40 +274,40 @@
   .panel {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 0.625rem;
+    border-radius: var(--radius-card);
   }
   /* A box inside a panel: one step deeper, no second card border fighting the first. */
   .panel-inset {
     background: var(--surface-2);
     border: 1px solid var(--line);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-ctl);
   }
   .section-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 0.75rem;
-    min-height: 2.75rem;
-    padding: 0.5rem 1rem;
+    min-height: 3.5rem;
+    padding: 0.75rem var(--card-pad);
     border-bottom: 1px solid var(--line);
   }
   .section-head h2 {
-    font-size: 0.8125rem;
+    font-size: 0.9375rem;
     font-weight: 600;
     color: var(--fg);
   }
   .stat {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 0.625rem;
-    padding: 0.875rem 1rem;
+    border-radius: var(--radius-card);
+    padding: var(--card-pad);
     min-width: 0;
   }
   .stat-value {
     margin-top: 0.25rem;
-    font-size: 1.375rem;
-    line-height: 1.2;
-    font-weight: 600;
+    font-size: 1.5rem;
+    line-height: 1.25;
+    font-weight: 650;
     letter-spacing: -0.015em;
     font-variant-numeric: tabular-nums;
   }
@@ -327,13 +327,13 @@
     align-items: center;
     justify-content: center;
     gap: 0.375rem;
-    height: 2rem;
-    padding: 0 0.75rem;
+    height: 2.25rem;
+    padding: 0 0.875rem;
     border: 1px solid var(--line-strong);
-    border-radius: 0.375rem;
+    border-radius: var(--radius-ctl);
     background: var(--surface);
     color: var(--fg);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
@@ -400,23 +400,23 @@
     border-color: transparent;
   }
   .btn-sm {
-    height: 1.75rem;
-    padding: 0 0.625rem;
-    font-size: 0.75rem;
+    height: 2rem;
+    padding: 0 0.75rem;
+    font-size: 0.8125rem;
   }
   .btn-icon {
     padding: 0;
-    width: 2rem;
+    width: 2.25rem;
   }
   .btn-icon.btn-sm {
-    width: 1.75rem;
+    width: 2rem;
   }
   /* A row of exclusive choices (ring filter, day range): one outline, the chosen one lit. */
   .seg {
     display: inline-flex;
     align-items: center;
     border: 1px solid var(--line-strong);
-    border-radius: 0.375rem;
+    border-radius: var(--radius-ctl);
     background: var(--surface);
     box-shadow: var(--shadow-sm);
     overflow: hidden;
@@ -426,14 +426,14 @@
     align-items: center;
     justify-content: center;
     gap: 0.3rem;
-    height: 1.75rem;
-    min-width: 2.25rem;
-    padding: 0 0.625rem;
+    height: 2rem;
+    min-width: 2.5rem;
+    padding: 0 0.75rem;
     border: 0;
     border-right: 1px solid var(--line);
     background: transparent;
     color: var(--fg-muted);
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
@@ -456,13 +456,13 @@
     outline-offset: -2px;
   }
   .input {
-    height: 2rem;
-    padding: 0 0.625rem;
+    height: 2.25rem;
+    padding: 0 0.75rem;
     border: 1px solid var(--line-strong);
-    border-radius: 0.375rem;
+    border-radius: var(--radius-ctl);
     background: var(--surface);
     color: var(--fg);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     transition:
       border-color 150ms ease,
       box-shadow 150ms ease;
@@ -546,13 +546,13 @@
     display: inline-flex;
     align-items: center;
     gap: 0.3rem;
-    height: 1.25rem;
-    padding: 0 0.4375rem;
+    height: 1.5rem;
+    padding: 0 0.625rem;
     border: 1px solid var(--line);
-    border-radius: 0.3125rem;
+    border-radius: 999px;
     background: var(--surface-2);
     color: var(--fg-muted);
-    font-size: 0.6875rem;
+    font-size: 0.75rem;
     font-weight: 500;
     line-height: 1;
     white-space: nowrap;
@@ -576,7 +576,7 @@
     padding: 0.75rem 1rem;
     border: 1px solid var(--line);
     border-left-width: 3px;
-    border-radius: 0.5rem;
+    border-radius: var(--radius-ctl);
     background: var(--surface);
     font-size: 0.875rem;
   }
@@ -596,10 +596,10 @@
     background: var(--ok-bg);
   }
   .empty {
-    padding: 2.5rem 1rem;
+    padding: 2.5rem 1.25rem;
     text-align: center;
     border: 1px dashed var(--line-strong);
-    border-radius: 0.625rem;
+    border-radius: var(--radius-card);
   }
   .empty-title {
     font-size: 0.875rem;
@@ -608,18 +608,21 @@
   }
   .empty-hint {
     margin-top: 0.375rem;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
     color: var(--fg-muted);
   }
   .toast {
-    padding: 0.5rem 0.875rem;
+    display: flex;
+    align-items: flex-start;
+    gap: 0.5rem;
+    padding: 0.625rem 1rem;
     border: 1px solid var(--line);
     border-left-width: 3px;
     border-left-color: var(--ok);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-ctl);
     background: var(--surface);
     box-shadow: var(--shadow-md);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
   }
   .toast-err {
     border-left-color: var(--danger);
@@ -634,19 +637,19 @@
   .table-wrap {
     overflow-x: auto;
     border: 1px solid var(--line);
-    border-radius: 0.5rem;
+    border-radius: var(--radius-ctl);
   }
   .table {
     width: 100%;
     border-collapse: separate;
     border-spacing: 0;
-    font-size: 0.75rem;
+    font-size: 0.8125rem;
   }
   .table thead th {
-    padding: 0.5rem 0.75rem;
+    padding: 0.625rem 1rem;
     background: var(--surface-2);
     border-bottom: 1px solid var(--line);
-    font-size: 0.6875rem;
+    font-size: 0.75rem;
     font-weight: 600;
     letter-spacing: 0.05em;
     text-transform: uppercase;
@@ -655,10 +658,10 @@
     white-space: nowrap;
   }
   .table tbody td {
-    padding: 0.625rem 0.75rem;
+    padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--line);
     vertical-align: top;
-    line-height: 1.45;
+    line-height: 1.5;
   }
   .table tbody tr:last-child td {
     border-bottom: 0;
@@ -667,7 +670,19 @@
     background: color-mix(in oklch, var(--surface-2) 60%, transparent);
   }
   .table-dense tbody td {
-    padding: 0.4375rem 0.75rem;
+    padding: 0.5rem 1rem;
+  }
+  /* Numbers: right-aligned, in the head as well as in the body. */
+  .table th.num,
+  .table td.num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
   }
   /* A row that is two lines: `.row-main` and, under it, `.row-detail` across all columns.
      One `tbody` per row, so hover and the bottom rule treat the pair as one. */
@@ -997,28 +1012,28 @@
   .banner-warn { background: var(--warn-bg); border-color: color-mix(in oklch, var(--warn) 35%, var(--line)); }
   .banner-danger { background: var(--danger-bg); border-color: color-mix(in oklch, var(--danger) 35%, var(--line)); }
   .banner-idle { background: var(--accent-soft); border-color: color-mix(in oklch, var(--accent) 25%, var(--line)); }
-  .kv {
+  .facts {
     display: grid;
     grid-template-columns: minmax(7.5rem, max-content) minmax(0, 1fr);
     column-gap: 1.5rem;
     font-size: 0.875rem;
   }
-  .kv > div {
+  .facts > div {
     display: contents;
   }
-  .kv dt,
-  .kv dd {
+  .facts dt,
+  .facts dd {
     padding: 0.5rem 0;
     border-bottom: 1px solid var(--line);
   }
-  .kv > div:last-child dt,
-  .kv > div:last-child dd {
+  .facts > div:last-child dt,
+  .facts > div:last-child dd {
     border-bottom: 0;
   }
-  .kv dt {
+  .facts dt {
     color: var(--fg-muted);
   }
-  .kv dd {
+  .facts dd {
     min-width: 0;
     overflow-wrap: anywhere;
   }
@@ -1065,7 +1080,7 @@
   .dialog {
     background: var(--surface);
     border: 1px solid var(--line);
-    border-radius: 0.75rem;
+    border-radius: 1rem;
     box-shadow: var(--shadow-md);
   }
   /* The box never outgrows the window: the body scrolls and the answer buttons stay put. */
@@ -1109,7 +1124,7 @@
     gap: 0.75rem;
     padding: 0.85rem 1rem;
     border: 1px solid var(--line);
-    border-radius: 0.75rem;
+    border-radius: var(--radius-card);
     background: var(--surface);
     box-shadow: var(--shadow-sm);
     transition:
@@ -1146,7 +1161,7 @@
     gap: 0.85rem;
     padding: 1.4rem 1.5rem 1.1rem;
     border: 1px solid var(--line);
-    border-radius: 0.875rem;
+    border-radius: var(--radius-card);
     background:
       radial-gradient(120% 140% at 100% 0%, var(--wash, transparent) 0%, transparent 62%),
       var(--surface);
@@ -1176,8 +1191,8 @@
     flex-direction: column;
     gap: 0.55rem;
     min-height: 7rem;
-    padding: 0.9rem 1rem;
-    border-radius: 0.75rem;
+    padding: 1rem 1.125rem;
+    border-radius: var(--radius-card);
     background: var(--surface);
     border-color: var(--line);
     box-shadow: var(--shadow-sm);

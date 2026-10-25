@@ -35,7 +35,7 @@ export function HoldDialog({ hold, onResolve }: { hold: PiiHold; onResolve: (a: 
             <tr>
               <th>{t.note.hold.colKind}</th>
               <th>{t.note.hold.colExcerpt}</th>
-              <th className="tnum">{t.note.hold.colPos}</th>
+              <th className="num">{t.note.hold.colPos}</th>
             </tr>
           </thead>
           <tbody>
@@ -43,7 +43,7 @@ export function HoldDialog({ hold, onResolve }: { hold: PiiHold; onResolve: (a: 
               <tr key={i}>
                 <td><Pill tone="warn">{t.enums.pii[f.kind]}</Pill></td>
                 <td className="font-mono">{f.excerpt}</td>
-                <td className="font-mono tnum text-fg-muted">{f.line}:{f.col}</td>
+                <td className="num font-mono text-fg-muted">{f.line}:{f.col}</td>
               </tr>
             ))}
           </tbody>
