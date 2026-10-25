@@ -12,6 +12,55 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Windows launcher, installer and web page
+
+- **The page no longer says notes never leave the machine.** The hub line in the sidebar and
+  its tooltip now say what is true since note sharing: by default only the audit trail goes,
+  the text of a note only when `allow_note_sync` is on, the note has a bereich and that bereich
+  is granted to this machine, and rings 0 and 1 never. The compliance headline says "nothing
+  went to a public destination" instead of "nothing left this machine", because traffic to the
+  hub and to your own network is counted separately below it.
+- **The launcher speaks German on a German Windows**, in the tray menu, its dialogs and the
+  WebView2 message, and so does the installer (pages, messages, section descriptions); every
+  other language gets English.
+- **The installer's "Open Cyberbrain" box starts the launcher as the signed-in user.** It used
+  to start it under the installer's elevated token. It now goes through `explorer.exe`, the
+  stock NSIS way, with no extra plugin.
+- **The hub delivery schedule counts seconds.** The message pump called the tick after every
+  window message, so with a window open or the mouse over the tray icon the "every 15 minutes"
+  push ran every few seconds.
+- **Closing a project from the menu also closes the side-by-side window** that held its
+  address. A second start asks the running launcher to show its page (window or browser, as set,
+  with the terminal) instead of opening a bare browser tab; an older launcher still gets the
+  tab. The side-by-side panes show the command line without the sidebar.
+- **The launcher stays responsive while a project starts**, while the clients are set up and
+  while an invitation is enrolled; those run on threads, the tooltip says what is starting,
+  projects reopened at login start in parallel, and `init`, `install` and `hub enrol` give up
+  after 60 seconds instead of holding the launcher for good.
+- **New: "Start with Windows"** in the tray menu (per user, `HKCU\...\Run`, off by default,
+  starts with `--background`: no window, no folder question).
+- **Dialogs trap focus, close on Escape and fit the window.** The PII question, the forget
+  confirmation and the shortcut list share one shell; the page behind them hears no shortcuts
+  while one is open, and their buttons stay in view above a scrolling body.
+- **"In the team" shows "10 of 37" with a Show all button** instead of stopping at ten under a
+  count of 37; the team screen and the sidebar say "checking" or "unavailable" for the hub
+  instead of "not enrolled" while the answer is missing.
+- **Errors lead with a sentence**; the code, the status and the server's text are under
+  "Technical details". Console output is bounded in height and scrolls.
+- **New: search "as of" a day** (`recall --stand`), with superseded, no-longer-valid and
+  not-yet-valid badges; the HTTP client had been dropping `stand`. The simple view no longer
+  reads out a conflict's loser or a replaced note as the answer, and shows the caveats.
+- **New: approvals show a line diff** against the current note when a proposal changes one.
+- **Block links scroll to the block** they name (matched by its preview), in both views, and
+  flash it. A tag in a note filters the list; a broken `%` in the address no longer blanks the
+  page; a slow audit answer for an old filter no longer overwrites the new one; an audit export
+  that hits the page limit is named `-partial` and says so; a cleared search box stays clear.
+- **The graph works from the keyboard and by touch** (arrows pan, `n`/`p` walk the nodes, a
+  node list, pointer events). Kinds, PII kinds and destination classes are German in the German
+  page; `note.proposed` has its own audit filter. A title typed in the simple view is kept as
+  the note's first heading; Back from a note returns to the question.
+- Tests: `npm test` (vitest, node) runs in the `ui` job.
+
 ### Fixed
 
 - **A note pushed late reaches every device again.** The sync cursor was the newest `updated`
