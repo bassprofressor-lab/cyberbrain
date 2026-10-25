@@ -48,6 +48,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   reading through the change. All of them, and the `mcp-clients` list, are now written into a
   new 0600 file that is renamed over the old one (Unix; on Windows the file keeps the
   directory's permissions, as before).
+- **The hub's own audit chain no longer forks when the CLI and the server write at once.**
+  Reading the last hash and appending after it were two steps, and the server's lock does not
+  reach a `cyberbrain hub …` command that opens `hub.db` itself; two rows could continue the
+  same row, and the append-only triggers keep such a fork for good. Appending now happens in
+  one `BEGIN IMMEDIATE` transaction, which SQLite holds across processes, a second writer waits
+  up to 10 s instead of failing with "database is locked", and a unique index allows one
+  successor per row. A hub that already forked still opens (the index is left out there) and
+  `hub verify` names the fork: which row continues which, a second time. Nothing is repaired.
 
 ## [0.7.10] — 2026-10-23
 

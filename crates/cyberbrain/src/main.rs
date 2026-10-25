@@ -2329,11 +2329,17 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         HubCommand::Verify { data } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let report = hub::report::verify(&store)?;
-            let ok = report.ok;
+            // The hub's own log is a chain too, and the one a fork can only show up in: two
+            // processes appending at once before that was serialised.
+            let hub_chain = store.verify_hub_chain().map_err(|e| e.to_string());
+            let ok = report.ok && hub_chain.is_ok();
             // Rendered from the JSON shape rather than the struct so the text and `--json`
             // cannot describe two different things.
-            let as_json = serde_json::to_value(&report)
+            let mut as_json = serde_json::to_value(&report)
                 .map_err(|e| Error::Index(format!("verify report does not serialise: {e}")))?;
+            as_json["hub_chain"] = serde_json::to_value(&hub_chain)
+                .map_err(|e| Error::Index(format!("verify report does not serialise: {e}")))?;
+            as_json["ok"] = serde_json::Value::Bool(ok);
             out.emit(&as_json, |v| {
                 let mut s = String::new();
                 for d in v["devices"].as_array().cloned().unwrap_or_default() {
@@ -2356,6 +2362,14 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         verdict
                     ));
                 }
+                s.push_str(&match v["hub_chain"].get("Ok") {
+                    Some(n) => format!("{:<24} chain holds over {n} row(s)\n", "(hub's own log)"),
+                    None => format!(
+                        "{:<24} BROKEN: {}\n",
+                        "(hub's own log)",
+                        v["hub_chain"]["Err"].as_str().unwrap_or("unknown")
+                    ),
+                });
                 s.push_str(&format!(
                     "\n{} row(s) checked; {}\n",
                     v["rows"].as_i64().unwrap_or_default(),

@@ -185,6 +185,9 @@ impl HubStore {
             })?;
         }
         let conn = ix(Connection::open(path))?;
+        // The CLI opens this file while the server holds it open too. Without a timeout the
+        // second writer fails at once with "database is locked" instead of waiting its turn.
+        ix(conn.busy_timeout(std::time::Duration::from_secs(10)))?;
         let s = Self { conn };
         s.migrate()?;
         Ok(s)
@@ -455,7 +458,28 @@ impl HubStore {
              );",
         ))?;
         self.add_missing_columns()?;
+        self.guard_hub_chain()?;
         self.upgrade_delete_trigger()
+    }
+
+    /// One row per predecessor in the hub's chain, enforced by SQLite as well as by `record`.
+    ///
+    /// Only where the chain has not forked already: the rows are append-only, so a hub that
+    /// forked before appending was serialised keeps its fork, and an index that cannot be
+    /// built must not stop that hub from opening. `verify_hub_chain` names the fork instead.
+    fn guard_hub_chain(&self) -> Result<()> {
+        let forked: bool = ix(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM hub_audit GROUP BY prev HAVING COUNT(*) > 1)",
+            [],
+            |r| r.get(0),
+        ))?;
+        if !forked {
+            ix(self.conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS hub_audit_one_successor ON hub_audit(prev)",
+                [],
+            ))?;
+        }
+        Ok(())
     }
 
     /// The one delete trigger on `entries`, created here rather than in the schema batch.
@@ -1112,6 +1136,77 @@ mod tests {
         let after = s.synced_notes_after("disposition", Some(0)).unwrap();
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].name, "new");
+    }
+
+    /// The CLI opens `hub.db` itself while the server runs, so two processes append to the
+    /// hub's chain. Reading the last hash and appending were two steps with nothing around
+    /// them, and two writers could both continue the same row: a fork the triggers then keep
+    /// for good. Two connections stand in for the two processes.
+    #[test]
+    fn two_writers_on_one_hub_keep_one_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hub.db");
+        HubStore::open(&path).unwrap();
+        let writers: Vec<_> = (0..4)
+            .map(|w| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let s = HubStore::open(&path).unwrap();
+                    for i in 0..100 {
+                        s.record(
+                            &format!("w{w}"),
+                            "test.event",
+                            serde_json::json!({ "i": i }),
+                            "2026-10-25T00:00:00Z",
+                        )
+                        .unwrap();
+                    }
+                })
+            })
+            .collect();
+        for w in writers {
+            w.join().expect("a writer failed");
+        }
+        let s = HubStore::open(&path).unwrap();
+        assert_eq!(s.verify_hub_chain().unwrap(), 400);
+    }
+
+    /// A chain that forked before appending was serialised cannot be repaired (the rows are
+    /// append-only), so `verify` has to say what it is: which row continues which, a second
+    /// time.
+    #[test]
+    fn a_forked_hub_chain_is_named_as_a_fork() {
+        let s = HubStore::in_memory().unwrap();
+        let first = s.record("a", "one", serde_json::json!({}), "t1").unwrap();
+        s.record("a", "two", serde_json::json!({}), "t2").unwrap();
+        // A hub from before the guard: no unique index, so the losing writer of a race could
+        // append a second row after `first`.
+        s.conn
+            .execute_batch("DROP INDEX hub_audit_one_successor")
+            .unwrap();
+        ix(s.conn.execute(
+            "INSERT INTO hub_audit (ts, actor, action, detail, prev, hash)
+             VALUES ('t2', 'b', 'other', '{}', ?1, 'whatever')",
+            params![first],
+        ))
+        .unwrap();
+        let err = s.verify_hub_chain().unwrap_err().to_string();
+        assert!(err.contains("forked"), "{err}");
+        assert!(err.contains("row 3") && err.contains("row 1"), "{err}");
+
+        // Such a hub still opens: the guard is left out where it cannot be built, and new
+        // rows go on after the newest one.
+        s.migrate().unwrap();
+        let index: i64 = s
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'hub_audit_one_successor'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(index, 0);
+        s.record("a", "three", serde_json::json!({}), "t3").unwrap();
     }
 
     #[test]
@@ -1894,6 +1989,34 @@ impl HubStore {
         detail: serde_json::Value,
         now: &str,
     ) -> Result<String> {
+        // Reading the last hash and appending after it are one step or the chain forks: the
+        // CLI and the server are two processes on one file, and the server's mutex is not
+        // seen by the CLI. `BEGIN IMMEDIATE` takes SQLite's write lock before the read, which
+        // holds across processes. A caller already inside a transaction (a purge, an
+        // enrolment) began it with `BEGIN IMMEDIATE` and holds that lock already.
+        if !self.conn.is_autocommit() {
+            return self.append_hub_event(actor, action, &detail, now);
+        }
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        match self.append_hub_event(actor, action, &detail, now) {
+            Ok(hash) => {
+                ix(self.conn.execute_batch("COMMIT"))?;
+                Ok(hash)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    fn append_hub_event(
+        &self,
+        actor: &str,
+        action: &str,
+        detail: &serde_json::Value,
+        now: &str,
+    ) -> Result<String> {
         let prev = self.last_hub_hash()?;
         let detail_text = detail.to_string();
         // Same rule as the store's audit chain: prev, timestamp, actor, action, detail,
@@ -1971,10 +2094,33 @@ impl HubStore {
         }))?;
         let mut prev = GENESIS.to_string();
         let mut n = 0usize;
+        // Row number by hash, to tell a fork from a gap.
+        let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for row in rows {
             let (ts, actor, action, detail, stored_prev, stored_hash) = ix(row)?;
             n += 1;
             if stored_prev != prev {
+                // A row that continues an earlier row, not the one before it, is what two
+                // writers appending at once left behind. It cannot be repaired here (the rows
+                // are append-only) and is not a deletion, so it is named for what it is.
+                let earlier = if stored_prev == GENESIS {
+                    Some(0)
+                } else {
+                    seen.get(&stored_prev).copied()
+                };
+                if let Some(m) = earlier {
+                    let after = if m == 0 {
+                        "the start of the chain".to_string()
+                    } else {
+                        format!("row {m}")
+                    };
+                    return Err(Error::Index(format!(
+                        "hub audit chain forked at row {n} ({action}): it continues {after}, \
+                         which row {} already continued. Two writers appended at once; the \
+                         rows are kept as they are",
+                        m + 1
+                    )));
+                }
                 return Err(Error::Index(format!(
                     "hub audit chain broken at row {n} ({action}): a row was removed, \
                      reordered or inserted"
@@ -1992,6 +2138,7 @@ impl HubStore {
                     "hub audit chain broken at row {n} ({action}): the row was edited"
                 )));
             }
+            seen.insert(stored_hash.clone(), n);
             prev = stored_hash;
         }
         Ok(n)
