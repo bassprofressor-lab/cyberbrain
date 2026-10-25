@@ -774,3 +774,17 @@ fn definitions_inside_docstrings_and_block_comments_are_not_symbols() {
         assert_eq!(names, ["real"], "{lang:?}");
     }
 }
+
+/// The `>` of `->` in a generic bound does not close the generics: the impl is named for
+/// its type, not for whatever follows the arrow.
+#[test]
+fn an_arrow_in_impl_generics_does_not_end_them() {
+    let src =
+        "impl<F: Fn() -> U, U> Holder<F> {\n}\nimpl<F: Fn(u8) -> u8> Apply for Wrapper<F> {\n}\n";
+    let impls: Vec<String> = crate::lang::defs(Language::Rust, src)
+        .into_iter()
+        .filter(|d| d.0 == DefKind::Impl)
+        .map(|d| d.1)
+        .collect();
+    assert_eq!(impls, ["Holder", "Wrapper"]);
+}
