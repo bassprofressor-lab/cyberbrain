@@ -712,21 +712,7 @@ pub async fn post_note(
             .ok_or_else(|| bad_front("`front.kind` is required to create a note"))?;
         // `App::write` updates an existing name in place; creation must not do that
         // behind the caller's back, and `expected_updated` is ignored here by contract.
-        match st.app.store().read(&name) {
-            Ok(n) => {
-                return Err(ApiError::conflict(
-                    "write-conflict",
-                    format!(
-                        "note `{name}` already exists (ring {}); edit it with PUT /api/v1/notes/{name}",
-                        n.front.ring
-                    ),
-                    1,
-                )
-                .with("current_updated", n.front.updated));
-            }
-            Err(Error::NoSuchNote(_)) => {}
-            Err(e) => return Err(e.into()),
-        }
+        refuse_existing(&st, &name)?;
         let req = WriteRequest {
             ring,
             kind,
@@ -747,6 +733,23 @@ pub async fn post_note(
         run_write(&st, req, true, None, None)
     })
     .await
+}
+
+/// A creation must not land on a note that exists: 409 with the note's current stamp.
+fn refuse_existing(st: &ServeState, name: &str) -> ApiResult<()> {
+    match st.app.store().read(name) {
+        Ok(n) => Err(ApiError::conflict(
+            "write-conflict",
+            format!(
+                "note `{name}` already exists (ring {}); edit it with PUT /api/v1/notes/{name}",
+                n.front.ring
+            ),
+            1,
+        )
+        .with("current_updated", n.front.updated)),
+        Err(Error::NoSuchNote(_)) => Ok(()),
+        Err(e) => Err(e.into()),
+    }
 }
 
 pub fn forget_report(r: ErasureReport, path: String) -> ForgetReport {
@@ -834,6 +837,12 @@ pub async fn resolve_hold(
             return Ok(StatusCode::NO_CONTENT.into_response());
         };
         req.choice = Some(choice);
+        // The creation was checked when it was first asked, and a hold can wait fifteen
+        // minutes. Whatever made a note of this name in between (an agent over MCP, another
+        // tab) is not overwritten by a decision about different text.
+        if held.created {
+            refuse_existing(&st, &req.name)?;
+        }
         let existing_created = st.app.store().read(&req.name).ok().map(|n| n.front.created);
         run_write(
             &st,
