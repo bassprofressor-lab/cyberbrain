@@ -109,7 +109,7 @@ Function ${UN}CloseCyberbrain
     Pop $R0
     Pop $R1
     ${If} $R0 != 0
-      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "${NAME} did not close when asked, and its files cannot be replaced while it is running.$\r$\n$\r$\nOK closes it now. Anything it had not yet saved to its hub stays in the local log and goes on the next start." IDOK +2
+      MessageBox MB_OKCANCEL|MB_ICONEXCLAMATION "$(MSG_NOCLOSE)" IDOK +2
       Abort
       nsExec::ExecToStack 'taskkill /F /T /IM cyberbrain-desktop.exe'
       Pop $R0
@@ -132,16 +132,54 @@ FunctionEnd
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\cyberbrain-desktop.exe"
-!define MUI_FINISHPAGE_RUN_TEXT "Open ${NAME}"
-!define MUI_FINISHPAGE_LINK "Cyberbrain on the web"
+; Not MUI_FINISHPAGE_RUN with a path: that starts the program under the installer's own
+; elevated token, so the launcher ran as an administrator -- or, for a standard user who typed
+; an administrator's password, as that other account, writing its settings into the wrong
+; profile. Handing the path to explorer.exe starts it as the person who is signed in, which
+; is the usual NSIS answer and needs no plugin from outside this installer.
+!define MUI_FINISHPAGE_RUN
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchAsUser
+!define MUI_FINISHPAGE_RUN_TEXT "$(FINISH_RUN)"
+!define MUI_FINISHPAGE_LINK "$(FINISH_LINK)"
 !define MUI_FINISHPAGE_LINK_LOCATION "${WEBSITE}"
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
 !insertmacro MUI_UNPAGE_INSTFILES
 
+; English first: it is what a machine in any other language gets. NSIS picks the German
+; pages when the Windows display language is German.
 !insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "German"
+
+LangString FINISH_RUN ${LANG_ENGLISH} "Open ${NAME}"
+LangString FINISH_RUN ${LANG_GERMAN} "${NAME} öffnen"
+LangString FINISH_LINK ${LANG_ENGLISH} "Cyberbrain on the web"
+LangString FINISH_LINK ${LANG_GERMAN} "Cyberbrain im Web"
+LangString SEC_DESKTOP ${LANG_ENGLISH} "Desktop shortcut"
+LangString SEC_DESKTOP ${LANG_GERMAN} "Desktop-Verknüpfung"
+LangString SEC_HUB ${LANG_ENGLISH} "Hub service (collector)"
+LangString SEC_HUB ${LANG_GERMAN} "Hub-Dienst (Sammelstelle)"
+LangString MSG_64BIT ${LANG_ENGLISH} "Cyberbrain needs 64-bit Windows."
+LangString MSG_64BIT ${LANG_GERMAN} "Cyberbrain braucht ein 64-Bit-Windows."
+LangString MSG_NOCLOSE ${LANG_ENGLISH} "${NAME} did not close when asked, and its files cannot be replaced while it is running.$\r$\n$\r$\nOK closes it now. Anything it had not yet saved to its hub stays in the local log and goes on the next start."
+LangString MSG_NOCLOSE ${LANG_GERMAN} "${NAME} hat sich auf Bitte nicht beendet, und seine Dateien lassen sich nicht ersetzen, solange es läuft.$\r$\n$\r$\nMit OK wird es jetzt beendet. Was es noch nicht an seinen Hub geliefert hatte, bleibt im lokalen Protokoll und geht beim nächsten Start hinaus."
+LangString MSG_HUBFAIL ${LANG_ENGLISH} "The hub service could not be registered:$\r$\n$\r$\n"
+LangString MSG_HUBFAIL ${LANG_GERMAN} "Der Hub-Dienst konnte nicht eingerichtet werden:$\r$\n$\r$\n"
+LangString MSG_HUBFAIL2 ${LANG_ENGLISH} "$\r$\nEverything else was installed, and the workstation side works.$\r$\n$\r$\nTo try again, in a prompt opened with Run as administrator:$\r$\n  cd $\"$INSTDIR$\"$\r$\n  cyberbrain.exe hub service install$\r$\n$\r$\nIf it says the service is being removed, restart Windows first."
+LangString MSG_HUBFAIL2 ${LANG_GERMAN} "$\r$\nAlles andere wurde installiert, die Arbeitsplatzseite funktioniert.$\r$\n$\r$\nZum erneuten Versuch in einer Eingabeaufforderung, die mit „Als Administrator ausführen“ geöffnet wurde:$\r$\n  cd $\"$INSTDIR$\"$\r$\n  cyberbrain.exe hub service install$\r$\n$\r$\nWenn dort steht, der Dienst werde entfernt, starten Sie zuerst Windows neu."
+LangString DESC_SecMain ${LANG_ENGLISH} "The command-line tool and the launcher that opens it without a terminal."
+LangString DESC_SecMain ${LANG_GERMAN} "Das Kommandozeilenwerkzeug und der Starter, der es ohne Terminal öffnet."
+LangString DESC_SecDesktop ${LANG_ENGLISH} "An icon on the desktop as well as in the Start menu."
+LangString DESC_SecDesktop ${LANG_GERMAN} "Ein Symbol auf dem Desktop zusätzlich zum Startmenü."
+LangString DESC_SecHub ${LANG_ENGLISH} "Only for the one machine that collects the audit trail of the others. Registers a Windows service on port 7788, opens that port in the firewall, and creates a folder to put the licence in. Not needed on a normal workstation."
+LangString DESC_SecHub ${LANG_GERMAN} "Nur für den einen Rechner, der das Prüfprotokoll der anderen sammelt. Richtet einen Windows-Dienst auf Port 7788 ein, öffnet diesen Port in der Firewall und legt einen Ordner für die Lizenz an. Auf einem normalen Arbeitsplatz nicht nötig."
+
+; The finish page's "open it" box, run as the signed-in user. The elevated installer cannot
+; simply start the program: it would inherit the administrator token.
+Function LaunchAsUser
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\cyberbrain-desktop.exe"'
+FunctionEnd
 
 
 Section "Cyberbrain" SecMain
@@ -218,7 +256,7 @@ Section "Cyberbrain" SecMain
   WriteUninstaller "$INSTDIR\uninstall.exe"
 SectionEnd
 
-Section "Desktop shortcut" SecDesktop
+Section "$(SEC_DESKTOP)" SecDesktop
   CreateShortcut "$DESKTOP\${NAME}.lnk" "$INSTDIR\cyberbrain-desktop.exe" "" "$INSTDIR\cyberbrain.ico" 0
 SectionEnd
 
@@ -227,7 +265,7 @@ SectionEnd
 ; The hub, for the one machine that collects. Off by default: on a client it would open a
 ; port for nothing.
 
-Section /o "Hub service (collector)" SecHub
+Section /o "$(SEC_HUB)" SecHub
   CreateDirectory "$COMMONPROGRAMDATA\${NAME}"
 
   ; Written before the service is registered, so the folder is never empty and confusing.
@@ -251,7 +289,7 @@ Section /o "Hub service (collector)" SecHub
   ${If} $0 != 0
     ; Not fatal: the rest of the installation is fine and the command can be run again.
     ; Saying what happened beats a silent half-installed collector.
-    MessageBox MB_ICONEXCLAMATION "The hub service could not be registered:$\r$\n$\r$\n$1$\r$\nEverything else was installed, and the workstation side works.$\r$\n$\r$\nTo try again, in a prompt opened with Run as administrator:$\r$\n  cd $\"$INSTDIR$\"$\r$\n  cyberbrain.exe hub service install$\r$\n$\r$\nIf it says the service is being removed, restart Windows first."
+    MessageBox MB_ICONEXCLAMATION "$(MSG_HUBFAIL)$1$(MSG_HUBFAIL2)"
   ${Else}
     DetailPrint $1
     ; Without this the service listens and nothing ever reaches it, which looks exactly
@@ -264,16 +302,12 @@ Section /o "Hub service (collector)" SecHub
   CreateShortcut "$SMPROGRAMS\${NAME}\Hub data folder.lnk" "$COMMONPROGRAMDATA\${NAME}"
 SectionEnd
 
-LangString DESC_SecMain ${LANG_ENGLISH} "The command-line tool and the launcher that opens it without a terminal."
-LangString DESC_SecDesktop ${LANG_ENGLISH} "An icon on the desktop as well as in the Start menu."
-LangString DESC_SecHub ${LANG_ENGLISH} "Only for the one machine that collects the audit trail of the others. Registers a Windows service on port 7788, opens that port in the firewall, and creates a folder to put the licence in. Not needed on a normal workstation."
-
 ; After the sections on purpose: NSIS gives a section its number where the section stands,
 ; so `${SecHub}` above the definition is not an error but a warning, and the flag would have
 ; been accepted and quietly done nothing.
 Function .onInit
   ${IfNot} ${RunningX64}
-    MessageBox MB_ICONSTOP "Cyberbrain needs 64-bit Windows."
+    MessageBox MB_ICONSTOP "$(MSG_64BIT)"
     Abort
   ${EndIf}
 
