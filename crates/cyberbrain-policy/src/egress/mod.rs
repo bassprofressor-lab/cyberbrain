@@ -700,7 +700,7 @@ impl Destination {
 
     /// Locality without touching the resolver: known for IP literals and `localhost`.
     pub fn literal_locality(&self) -> Option<Locality> {
-        if self.host == "localhost" {
+        if is_localhost_name(&self.host) {
             return Some(Locality::Loopback);
         }
         self.host.parse::<IpAddr>().ok().map(locality)
@@ -744,6 +744,14 @@ pub(crate) fn shown_destination(s: &str) -> String {
     }
 }
 
+/// `localhost` and every name under it. RFC 6761 reserves them for loopback, and the core
+/// config already counts them as local; answered here without the OS resolver, so the gate
+/// agrees with the config on every machine rather than only where the resolver knows the
+/// rule. The answer is the loopback addresses, which is all the connection is pinned to.
+fn is_localhost_name(host: &str) -> bool {
+    host == "localhost" || host.ends_with(".localhost")
+}
+
 /// Name resolution seam so the gate can be tested without DNS. The OS resolver is the
 /// default and is itself declared in the register text.
 pub trait Resolver: Send + Sync {
@@ -757,7 +765,7 @@ impl Resolver for OsResolver {
         if let Ok(ip) = host.parse::<IpAddr>() {
             return Ok(vec![ip]);
         }
-        if host == "localhost" {
+        if is_localhost_name(host) {
             return Ok(vec![
                 IpAddr::V4(Ipv4Addr::LOCALHOST),
                 IpAddr::V6(Ipv6Addr::LOCALHOST),
@@ -1907,6 +1915,31 @@ mod tests {
             assert!(!text.contains("alice"), "{text}");
         }
         assert_eq!(sink.rows().len(), 5);
+    }
+
+    /// Would fail if the gate disagreed with the config about `*.localhost`. The config
+    /// takes it as local (RFC 6761: it is loopback); the gate asked the OS resolver and
+    /// refused it wherever that had no answer.
+    #[test]
+    fn a_localhost_subdomain_is_loopback_without_asking_the_resolver() {
+        let lo = OsResolver.resolve("gpu.localhost", 11434).unwrap();
+        assert!(!lo.is_empty());
+        assert!(lo.iter().all(|a| a.is_loopback()), "{lo:?}");
+        let d = Destination::parse("http://gpu.localhost:11434/v1").unwrap();
+        assert_eq!(d.literal_locality(), Some(Locality::Loopback));
+        let (log, sink) = AuditLog::in_memory();
+        let g = Egress::new(PolicyConfig::default(), log, Actor::Cli);
+        g.permit(
+            EgressPurpose::LocalInference,
+            "http://gpu.localhost:11434/v1",
+        )
+        .unwrap();
+        assert_eq!(sink.actions(), ["egress.permitted"]);
+        // Only the label `localhost` itself counts, not a name that merely ends in it.
+        let evil = Destination::parse("http://evil-localhost:1/").unwrap();
+        assert_eq!(evil.literal_locality(), None);
+        let evil = Destination::parse("http://localhost.evil.example:1/").unwrap();
+        assert_eq!(evil.literal_locality(), None);
     }
 
     /// Would fail if the gate said `Ok` when it could not write the row.
