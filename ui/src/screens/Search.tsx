@@ -3,6 +3,7 @@ import { api, ApiError, type Hit, type RecallResult, type Ring } from "@/api/cli
 import { CitationChip } from "@/components/Citation";
 import { RingBadge, RingLegend } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
+import { PageHeader } from "@/components/design";
 import { Empty, ErrorBanner, Kbd, Pill } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
 import { absTime, dec, highlight, shortDate } from "@/lib/format";
@@ -127,12 +128,13 @@ export function SearchScreen({ route }: { route: Route }) {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-5 pt-4 pb-3 border-b bg-surface">
+      <div className="px-5 pt-5 pb-4 border-b bg-surface">
+        <PageHeader icon="search" title={t.nav.search} className="mb-4" />
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <input
               ref={inputRef}
-              className="input w-full h-9 pl-3 pr-16 text-sm"
+              className="input w-full pl-3 pr-16"
               placeholder={t.search.placeholder}
               value={q}
               onChange={(e) => setQ(e.target.value)}
@@ -151,7 +153,7 @@ export function SearchScreen({ route }: { route: Route }) {
               <Kbd keys="/" />
             </span>
           </div>
-          <select className="input h-9" value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t.search.nAria} title={t.search.nTitle}>
+          <select className="input" value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t.search.nAria} title={t.search.nTitle}>
             {[8, 16, 32, 64].map((v) => (
               <option key={v} value={v}>
                 {t.search.nOption(v)}
@@ -162,7 +164,7 @@ export function SearchScreen({ route }: { route: Route }) {
         <div className="mt-2.5 flex items-center gap-2 flex-wrap">
           <label className="label inline-flex items-center gap-1.5" title={t.search.stand.title}>
             {t.search.stand.label}
-            <input type="date" className="input h-7 text-xs" value={stand} onChange={(e) => setStand(e.target.value)} aria-label={t.search.stand.aria} />
+            <input type="date" className="input h-8 text-xs" value={stand} onChange={(e) => setStand(e.target.value)} aria-label={t.search.stand.aria} />
           </label>
           {stand ? (
             <button type="button" className="btn btn-ghost btn-sm" onClick={() => setStand("")}>
@@ -194,7 +196,7 @@ export function SearchScreen({ route }: { route: Route }) {
 
         {!q.trim() ? (
           <div className="max-w-2xl mx-auto mt-10">
-            <Empty title={t.search.emptyTitle}>
+            <Empty title={t.search.emptyTitle} icon="search">
               <div className="mt-4 flex flex-wrap justify-center gap-1.5">
                 {t.search.examples.map((ex) => (
                   <button key={ex} className="btn btn-sm" onClick={() => setQ(ex)}>
@@ -203,7 +205,7 @@ export function SearchScreen({ route }: { route: Route }) {
                 ))}
               </div>
             </Empty>
-            <div className="panel p-4 mt-6 grid gap-4 sm:grid-cols-2 text-xs">
+            <div className="panel p-5 mt-6 grid gap-5 sm:grid-cols-2 text-sm">
               <div>
                 <div className="label mb-2">{t.search.keysTitle}</div>
                 <ul className="space-y-1.5">
@@ -262,7 +264,7 @@ export function SearchScreen({ route }: { route: Route }) {
             ) : null}
 
             {hits.length === 0 && !loading ? (
-              <Empty title={t.search.noHits(q, ring)}>
+              <Empty title={t.search.noHits(q, ring)} icon="search">
                 {ring !== null ? t.search.tryAllRings : t.search.tryWords}
               </Empty>
             ) : null}
@@ -274,7 +276,7 @@ export function SearchScreen({ route }: { route: Route }) {
                 return (
                   <li
                     key={h.citation}
-                    className={`panel px-3 py-2.5 cursor-default ${isSel ? "row-selected" : ""}`}
+                    className={`panel px-4 py-3 cursor-default ${isSel ? "row-selected" : ""}`}
                     onClick={() => setSel(i)}
                     onDoubleClick={() => navigate(href("note", h.note_name, { block: h.block_idx }))}
                     aria-selected={isSel}

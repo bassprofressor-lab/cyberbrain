@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type RecallResult, type StatusReport } from "@/api/client";
 import { RingChip } from "@/components/RingBadge";
-import { ErrorBanner } from "@/components/ui";
+import { PageHeader } from "@/components/design";
+import { Icon } from "@/components/icons";
+import { Empty, ErrorBanner } from "@/components/ui";
 import { relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
@@ -84,13 +86,11 @@ export function AskScreen({ route }: { route: Route }) {
 
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-2xl px-8 py-8 flex flex-col gap-6">
+      <div className="max-w-3xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-6">
+        <PageHeader icon="search" title={t.ask.navLabel} />
         <div>
           <div className="ask-field">
-            <svg width="18" height="18" viewBox="0 0 16 16" fill="none" className="text-fg-faint shrink-0" aria-hidden>
-              <circle cx="7" cy="7" r="4.6" stroke="currentColor" strokeWidth="1.5" />
-              <path d="M10.4 10.4 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
+            <Icon name="search" size={20} className="text-fg-faint" />
             <input ref={inputRef} className="flex-1 bg-transparent border-0 outline-none text-lg placeholder:text-fg-faint" placeholder={t.ask.placeholder} value={q} onChange={(e) => setQ(e.target.value)} spellCheck={false} autoComplete="off" aria-label={t.ask.aria} />
             {loading ? <span className="text-2xs text-fg-faint shrink-0">{t.ask.thinking}</span> : null}
           </div>
@@ -145,9 +145,7 @@ export function AskScreen({ route }: { route: Route }) {
                       <span className="block text-sm leading-snug line-clamp-3">{h.text}</span>
                       <span className="block mt-1 text-2xs text-fg-faint">{h.note_name.replace(/-/g, " ")}</span>
                     </span>
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-fg-faint shrink-0 self-center" aria-hidden>
-                      <path d="m6.5 4 4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
+                    <Icon name="chevron" size={16} className="-rotate-90 text-fg-faint self-center" />
                   </button>
                 ))}
               </section>
@@ -169,10 +167,9 @@ export function AskScreen({ route }: { route: Route }) {
         ) : null}
 
         {q.trim() && !loading && !error && result && !hits.length ? (
-          <div className="py-6">
-            <p className="text-sm">{t.ask.nothing(q.trim())}</p>
-            <p className="mt-1 text-2xs text-fg-faint">{t.ask.nothingHint}</p>
-          </div>
+          <Empty title={t.ask.nothing(q.trim())} icon="search">
+            {t.ask.nothingHint}
+          </Empty>
         ) : null}
 
         <HealthLine />

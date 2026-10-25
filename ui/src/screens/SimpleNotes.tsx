@@ -2,7 +2,9 @@ import { useState } from "react";
 import { api, type NoteDetail, type NoteSummary } from "@/api/client";
 import { NewNoteForm } from "@/components/NewNote";
 import { RingChip } from "@/components/RingBadge";
-import { ErrorBanner, Loading } from "@/components/ui";
+import { PageHeader } from "@/components/design";
+import { Icon } from "@/components/icons";
+import { Empty, ErrorBanner, Loading } from "@/components/ui";
 import { absTime, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { Markdown } from "@/lib/markdown";
@@ -33,21 +35,19 @@ export function SimpleNotesScreen({ route }: { route: Route }) {
 
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-3xl px-8 py-8 flex flex-col gap-5">
-        <div className="flex items-baseline gap-4 flex-wrap">
-          <h1 className="text-xl font-semibold tracking-tight">{t.simpleNotes.title}</h1>
-          {all.length ? <span className="text-2xs text-fg-faint tnum">{t.simpleNotes.count(all.length)}</span> : null}
-          {all.length ? <input className="input h-8 ml-auto w-44" placeholder={t.simpleNotes.filterPlaceholder} aria-label={t.simpleNotes.filterAria} value={filter} onChange={(e) => setFilter(e.target.value)} /> : null}
-          <button className={`btn ${all.length ? "" : "ml-auto"}`} onClick={() => navigate(href("notes", null, { new: 1 }))}>
+      <div className="max-w-4xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-5">
+        <PageHeader icon="notes" title={t.simpleNotes.title} sub={all.length ? <span className="tnum">{t.simpleNotes.count(all.length)}</span> : null}>
+          {all.length ? <input className="input w-48" placeholder={t.simpleNotes.filterPlaceholder} aria-label={t.simpleNotes.filterAria} value={filter} onChange={(e) => setFilter(e.target.value)} /> : null}
+          <button className="btn btn-primary" onClick={() => navigate(href("notes", null, { new: 1 }))}>
             {t.newNote.button}
           </button>
-        </div>
+        </PageHeader>
 
         {list.error ? <ErrorBanner error={list.error} /> : null}
         {list.loading && !list.data ? <Loading /> : null}
 
         {!list.loading && !all.length ? <FirstDay /> : null}
-        {all.length && !notes.length ? <p className="text-sm text-fg-muted py-6">{t.simpleNotes.noMatch}</p> : null}
+        {all.length && !notes.length ? <Empty title={t.simpleNotes.noMatch} icon="search" /> : null}
 
         {notes.length ? (
           <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(15rem,1fr))]">
@@ -79,6 +79,7 @@ function FirstDay() {
   const [how, setHow] = useState(false);
   return (
     <div className="panel px-8 py-10 text-center">
+      <span className="metric-tile metric-tile-idle mx-auto mb-4"><Icon name="notes" size={24} /></span>
       <h2 className="text-lg font-semibold tracking-tight">{t.simpleNotes.emptyTitle}</h2>
       <p className="mt-2 mx-auto max-w-[44ch] text-sm text-fg-muted">{t.simpleNotes.emptyBody}</p>
       <div className="mt-5 flex justify-center gap-2 flex-wrap">
@@ -104,11 +105,11 @@ function SimpleNewNote({ onCreated }: { onCreated: () => void }) {
   const t = useT();
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
+      <div className="max-w-3xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-5">
         <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => navigate(href("notes"))}>
-          ← {t.simpleNotes.title}
+          <Icon name="chevron" size={16} className="rotate-90" /> {t.simpleNotes.title}
         </button>
-        <h1 className="text-2xl font-semibold tracking-tight">{t.newNote.heading}</h1>
+        <PageHeader icon="notes" title={t.newNote.heading} />
         <NewNoteForm
           full={false}
           onCreated={(d) => {
@@ -138,9 +139,9 @@ function SimpleNoteView({ name, block }: { name: string; block: string | null })
 
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
+      <div className="max-w-3xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-5">
         <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => (fromQuestion ? history.back() : navigate(href("notes")))}>
-          ← {fromQuestion ? t.simpleNotes.backToQuestion : t.simpleNotes.title}
+          <Icon name="chevron" size={16} className="rotate-90" /> {fromQuestion ? t.simpleNotes.backToQuestion : t.simpleNotes.title}
         </button>
         {note.error ? <ErrorBanner error={note.error} /> : null}
         {note.loading && !d ? <Loading /> : null}

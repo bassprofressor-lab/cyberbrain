@@ -82,7 +82,7 @@ export function NoteScreen({ route }: { route: Route }) {
                 </button>
               ))}
             </div>
-            <select className="input h-7 text-xs ml-auto" value={kind} onChange={(e) => setKind(e.target.value as NoteKind | "")} aria-label={t.notes.kindAria}>
+            <select className="input h-8 text-xs ml-auto" value={kind} onChange={(e) => setKind(e.target.value as NoteKind | "")} aria-label={t.notes.kindAria}>
               <option value="">{t.notes.anyKind}</option>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
@@ -101,7 +101,7 @@ export function NoteScreen({ route }: { route: Route }) {
           {notes.map((n, i) => (
             <NoteRow key={n.id} n={n} active={n.name === selectedName || n.id === selectedName} cursor={i === cursor} onHover={() => setCursor(i)} />
           ))}
-          {!list.loading && !notes.length ? <Empty title={t.notes.noMatch} /> : null}
+          {!list.loading && !notes.length ? <Empty title={t.notes.noMatch} icon="search" /> : null}
         </ol>
         <div className="px-3 py-1.5 border-t text-2xs text-fg-faint tnum">
           {t.notes.count(notes.length)} · <Kbd keys="j" /> <Kbd keys="k" /> <Kbd keys="Enter" />
@@ -110,7 +110,7 @@ export function NoteScreen({ route }: { route: Route }) {
       <main className="min-h-0 overflow-auto scroll-thin">
         {creating ? (
           <div className="p-5 max-w-3xl">
-            <h1 className="text-lg font-semibold mb-4">{t.newNote.heading}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight mb-5">{t.newNote.heading}</h1>
             <NewNoteForm
               full
               onCreated={(d) => {
@@ -123,7 +123,7 @@ export function NoteScreen({ route }: { route: Route }) {
         ) : selectedName ? (
           <NoteDetailView key={selectedName} nameOrId={selectedName} resolves={(nm) => names.has(nm)} editing={editing} setEditing={setEditing} block={route.query.get("block")} onChanged={list.reload} />
         ) : (
-          <Empty title={t.notes.selectTitle}>
+          <Empty title={t.notes.selectTitle} icon="notes">
             <Kbd keys="j" /> <Kbd keys="k" /> {t.notes.selectHint.move} <Kbd keys="Enter" /> {t.notes.selectHint.open} <Kbd keys="e" /> {t.notes.selectHint.edit}
           </Empty>
         )}
@@ -251,10 +251,10 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
 
   return (
     <div className="grid grid-cols-1 xl:grid-cols-[1fr_17rem] min-h-full">
-      <article className="p-5 min-w-0">
+      <article className="p-6 min-w-0">
         <header className="flex flex-wrap items-center gap-2">
           <RingBadge ring={f.ring} showName />
-          <h1 className="text-lg font-semibold font-mono truncate">{f.name}</h1>
+          <h1 className="text-xl font-semibold font-mono truncate">{f.name}</h1>
           <Pill>{t.enums.kind[f.kind]}</Pill>
           {f.pii !== "none" ? (
             <Pill tone={f.pii === "flagged" ? "danger" : f.pii === "reviewed" ? "warn" : "neutral"} title={f.pii === "unscanned" ? t.note.piiNotScannedTitle : undefined}>
