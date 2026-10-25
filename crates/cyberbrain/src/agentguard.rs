@@ -95,17 +95,39 @@ pub fn approval_status(app: &App, actor: &Actor, action_id: &str) -> Result<Stri
             crate::hook::governance::KEY_ENV
         ))
     })?;
-    let endpoint = format!(
-        "{}/v1/actions/{action_id}/approval?tenant_id={}",
-        url.trim_end_matches('/'),
-        cfg.tenant
-    );
+    let endpoint = approval_endpoint(&url, action_id, &cfg.tenant);
     // Reading a decision is not a tool call: a longer wait than the hook's is fine here.
     let v = request(app, actor, &endpoint, &key, None, cfg.timeout_ms.max(5000))?;
     v["status"]
         .as_str()
         .map(str::to_string)
         .ok_or_else(|| Error::Index("AgentGuard answered without a status".into()))
+}
+
+/// Where an approval's status is read. The id and the tenant are percent-encoded: the host is
+/// fixed by the egress ticket, but an unencoded `/`, `?`, `&` or `#` in either would still
+/// choose another route or add a parameter on the governance service.
+fn approval_endpoint(url: &str, action_id: &str, tenant: &str) -> String {
+    format!(
+        "{}/v1/actions/{}/approval?tenant_id={}",
+        url.trim_end_matches('/'),
+        encode_component(action_id),
+        encode_component(tenant),
+    )
+}
+
+/// RFC 3986 percent-encoding of everything outside the unreserved set, which is right for a
+/// path segment and for a query value alike.
+fn encode_component(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 fn request(
@@ -179,4 +201,28 @@ fn request(
         )));
     }
     Ok(v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_ordinary_action_id_is_left_as_it_is() {
+        assert_eq!(
+            approval_endpoint("https://ag.example/", "01ABC", "acme"),
+            "https://ag.example/v1/actions/01ABC/approval?tenant_id=acme"
+        );
+    }
+
+    /// An id or tenant carrying `/`, `?`, `&` or `#` must stay one path segment and one query
+    /// value, not become another route or a second parameter on the governance service.
+    #[test]
+    fn reserved_characters_cannot_change_the_route_or_add_a_parameter() {
+        let url = approval_endpoint("https://ag.example", "../admin?x=1#", "a&tenant_id=b c");
+        assert_eq!(
+            url,
+            "https://ag.example/v1/actions/..%2Fadmin%3Fx%3D1%23/approval?tenant_id=a%26tenant_id%3Db%20c"
+        );
+    }
 }
