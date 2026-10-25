@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api } from "@/api/client";
 import { HubLine } from "@/components/HubLine";
+import { Icon } from "@/components/icons";
 import { ShortcutHelp } from "@/components/ShortcutHelp";
 import { Kbd } from "@/components/ui";
 import { LANG_NAME, setLang, useLang, useT } from "@/lib/i18n";
@@ -32,6 +33,19 @@ const TerminalsScreen = lazy(() =>
   import("@/screens/Terminals").then((m) => ({ default: m.TerminalsScreen })),
 );
 
+/** Contiguous runs of the sidebar order; `status` stands alone above the first heading. */
+const NAV_GROUP: Partial<Record<NavScreen, "work" | "operations" | "tools">> = {
+  search: "work",
+  notes: "work",
+  team: "work",
+  review: "work",
+  graph: "work",
+  usage: "operations",
+  compliance: "operations",
+  console: "tools",
+  terminals: "tools",
+};
+
 export function App() {
   const route = useRoute();
   const theme = useTheme();
@@ -46,6 +60,15 @@ export function App() {
   useEffect(() => {
     if (route.screen === "terminals") setVisitedTerminals(true);
   }, [route.screen]);
+  // Below 768px the navigation is a sheet under the header; it closes when a page is chosen.
+  const [menuOpen, setMenuOpen] = useState(false);
+  useEffect(() => setMenuOpen(false), [route.screen]);
+  useEffect(() => {
+    if (!menuOpen) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenuOpen(false);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [menuOpen]);
   const other = lang === "en" ? "de" : "en";
   const nav = simple ? SIMPLE_SCREENS : SCREENS;
   // One pane of the launcher's side-by-side window: the command line alone, without the
@@ -87,23 +110,36 @@ export function App() {
     // Below 768px the sidebar is a header: brand, a nav strip that scrolls sideways, and
     // the same footer folded into one row. Nothing is dropped, it only changes direction —
     // a 13rem column next to a 390px screen left the content 180px wide.
-    <div className={`h-dvh grid grid-cols-1 overflow-hidden ${bare ? "grid-rows-1" : "grid-rows-[auto_1fr] md:grid-rows-1 md:grid-cols-[14rem_minmax(0,1fr)]"}`}>
+    <div className={`h-dvh grid grid-cols-1 overflow-hidden ${bare ? "grid-rows-1" : "grid-rows-[auto_1fr] md:grid-rows-1 md:grid-cols-[16rem_minmax(0,1fr)]"}`}>
       <aside className="app-side min-w-0" style={bare ? { display: "none" } : undefined}>
         <div className="app-brand">
-          <Logo />
-          <span>Cyberbrain</span>
+          <img src="./logo.png" alt="" width={32} height={32} />
+          <span>{t.design.brand}</span>
+          <button className="btn btn-icon btn-ghost app-menu-btn md:hidden" onClick={() => setMenuOpen((o) => !o)} aria-expanded={menuOpen} aria-controls="app-sheet" aria-label={menuOpen ? t.design.menuClose : t.design.menu} title={menuOpen ? t.design.menuClose : t.design.menu}>
+            <Icon name={menuOpen ? "close" : "menu"} />
+          </button>
         </div>
-        <nav className="app-nav">
+        <div id="app-sheet" className={`app-sheet scroll-thin ${menuOpen ? "is-open" : ""}`}>
+        <nav className="app-nav" aria-label={t.design.navAria}>
           <ul className="nav-list">
-            {nav.map((s) => (
-              <li key={s.screen}>
-                <a href={href(s.screen)} className={`nav-item ${current === s.screen ? "is-active" : ""}`} aria-current={current === s.screen ? "page" : undefined}>
-                  {simple ? <NavIcon screen={s.screen} /> : null}
-                  <span>{simple && s.screen === "search" ? t.ask.navLabel : t.nav[s.screen]}</span>
-                  {simple ? null : <span className="nav-key">g {s.key}</span>}
-                </a>
-              </li>
-            ))}
+            {nav.map((s, i) => {
+              const group = simple ? null : NAV_GROUP[s.screen];
+              const label = simple && s.screen === "search" ? t.ask.navLabel : t.nav[s.screen];
+              return (
+                <li key={s.screen}>
+                  {group && group !== (NAV_GROUP[nav[i - 1]?.screen as NavScreen] ?? null) ? (
+                    <div className="nav-group" aria-hidden>
+                      {t.design.group[group]}
+                    </div>
+                  ) : null}
+                  <a href={href(s.screen)} className={`nav-item ${current === s.screen ? "is-active" : ""}`} aria-current={current === s.screen ? "page" : undefined}>
+                    <Icon name={s.screen} />
+                    <span className="truncate">{label}</span>
+                    {simple ? null : <span className="nav-key">g {s.key}</span>}
+                  </a>
+                </li>
+              );
+            })}
           </ul>
         </nav>
         <div className="app-foot">
@@ -133,6 +169,7 @@ export function App() {
               {simple ? t.mode.toExpert : t.mode.toSimple}
             </button>
           </div>
+        </div>
         </div>
       </aside>
       <main className="min-h-0 min-w-0 overflow-hidden">
@@ -175,41 +212,5 @@ export function App() {
       </main>
       <ShortcutHelp />
     </div>
-  );
-}
-
-/** Simple mode labels its three entries with a shape as well as a word; the full view does not. */
-function NavIcon({ screen }: { screen: NavScreen }) {
-  const common = { width: 16, height: 16, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true } as const;
-  if (screen === "search")
-    return (
-      <svg {...common} className="shrink-0 opacity-80">
-        <circle cx="7" cy="7" r="4.6" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M10.4 10.4 14 14" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-      </svg>
-    );
-  if (screen === "notes")
-    return (
-      <svg {...common} className="shrink-0 opacity-80">
-        <rect x="3" y="2" width="10" height="12" rx="2" stroke="currentColor" strokeWidth="1.4" />
-        <path d="M5.8 5.6h4.4M5.8 8h4.4M5.8 10.4h2.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      </svg>
-    );
-  return (
-    <svg {...common} className="shrink-0 opacity-80">
-      <circle cx="6" cy="6" r="2.4" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M2.4 13c0-2.2 1.6-3.6 3.6-3.6S9.6 10.8 9.6 13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M10.6 4.2a2.2 2.2 0 0 1 0 4M11.4 9.7c1.4.4 2.3 1.7 2.3 3.3" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function Logo() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden>
-      <circle cx="9" cy="9" r="8" fill="none" stroke="var(--ring-4)" strokeWidth="1.2" strokeDasharray="2 1.5" />
-      <circle cx="9" cy="9" r="5.6" fill="none" stroke="var(--ring-2)" strokeWidth="1.4" />
-      <circle cx="9" cy="9" r="3" fill="var(--ring-0)" />
-    </svg>
   );
 }
