@@ -3081,6 +3081,91 @@ fn the_same_stamp_with_other_text_is_a_conflict_not_a_resend() {
     assert_eq!(hub.synced_notes("disposition").unwrap()[0].body, "text");
 }
 
+/// Settling a conflict for the offered version replaces what was held when the conflict was
+/// raised, not whatever is held by the time somebody decides. A newer version that arrived
+/// meanwhile used to be overwritten by the older decision without a word.
+#[test]
+fn a_conflict_decided_late_does_not_overwrite_a_newer_held_version() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("laptop", NOW).unwrap();
+    let offer = |updated: &str, body: &str, based_on: Option<&str>| {
+        hub.offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "disposition",
+            "regel",
+            2,
+            "knowledge",
+            updated,
+            "fm",
+            body,
+            based_on,
+            &d.id,
+            NOW,
+        )
+        .unwrap()
+    };
+    offer("2026-09-10T10:00:00Z", "v1", None);
+    let store::NoteOutcome::Conflict { id, .. } = offer("2026-09-10T11:00:00Z", "v2", None) else {
+        panic!("expected a conflict")
+    };
+    // Somebody continues the held version before the conflict is looked at.
+    offer("2026-09-10T12:00:00Z", "v3", Some("2026-09-10T10:00:00Z"));
+
+    let r = hub.resolve_conflict(&id, true, NOW);
+    assert!(r.is_err(), "{r:?}");
+    assert_eq!(hub.synced_notes("disposition").unwrap()[0].body, "v3");
+    assert_eq!(
+        hub.open_conflicts("disposition").unwrap().len(),
+        1,
+        "still open"
+    );
+}
+
+/// Taking the offered version takes all of it, ring and kind included.
+#[test]
+fn taking_the_offered_version_takes_its_ring_and_kind() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("laptop", NOW).unwrap();
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "regel",
+        2,
+        "knowledge",
+        "2026-09-10T10:00:00Z",
+        "fm",
+        "held",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    let store::NoteOutcome::Conflict { id, .. } = hub
+        .offer_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+            "disposition",
+            "regel",
+            3,
+            "decision",
+            "2026-09-10T11:00:00Z",
+            "fm",
+            "offered",
+            None,
+            &d.id,
+            NOW,
+        )
+        .unwrap()
+    else {
+        panic!("expected a conflict")
+    };
+    assert!(hub.resolve_conflict(&id, true, NOW).unwrap());
+    let held = &hub.synced_notes("disposition").unwrap()[0];
+    assert_eq!(
+        (held.body.as_str(), held.ring, held.kind.as_str()),
+        ("offered", 3, "decision")
+    );
+}
+
 // ---- cut 3: two machines that did not see each other ----
 
 /// The failure this cut exists for. Two devices edit the same note from the same starting

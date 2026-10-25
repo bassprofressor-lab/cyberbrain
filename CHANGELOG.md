@@ -79,6 +79,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   fleet invitations carried the fingerprint, the page wrote a version 1 file without it, so a
   hub serving its own certificate could not be reached from a machine invited through the page.
   The page now writes version 2 with the pin, which clients since 0.4.0 read.
+- **Deciding a hub conflict no longer overwrites a newer version, and takes all of the offered
+  one.** Taking the offered version replaced whatever the hub held at that moment, also a
+  version that arrived after the conflict was raised, in two separate statements; ring and kind
+  stayed those of the held version. It is now one transaction that first checks the held version
+  is still the one the conflict was about (otherwise it refuses and the conflict stays open,
+  also on the page, which says why), and takes the offered ring and kind as well. Conflicts
+  raised before this version keep the held ring and kind, since they never recorded the offered
+  ones.
 
 ## [0.7.10] — 2026-10-23
 

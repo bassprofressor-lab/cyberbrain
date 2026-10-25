@@ -130,7 +130,7 @@ pub(crate) fn hostname() -> String {
         })
 }
 
-fn esc(s: &str) -> String {
+pub(super) fn esc(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;")

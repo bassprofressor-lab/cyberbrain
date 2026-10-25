@@ -568,6 +568,18 @@ impl HubStore {
                 "machine",
                 "ALTER TABLE devices ADD COLUMN machine TEXT",
             ),
+            // What the offered version was, beyond its text, so taking it takes all of it.
+            // NULL on conflicts raised before; those keep the held ring and kind.
+            (
+                "note_conflicts",
+                "offered_ring",
+                "ALTER TABLE note_conflicts ADD COLUMN offered_ring INTEGER",
+            ),
+            (
+                "note_conflicts",
+                "offered_kind",
+                "ALTER TABLE note_conflicts ADD COLUMN offered_kind TEXT",
+            ),
             // NULL on rows from before the count. They are older than every cursor the
             // count ever hands out, and the first fetch after the upgrade sends them anyway,
             // because the cursor it brings is a timestamp the hub no longer reads.
@@ -1547,8 +1559,8 @@ impl HubStore {
                     "INSERT INTO note_conflicts
                         (id, bereich, name, held_updated, held_from_device, offered_updated,
                          offered_from_device, offered_frontmatter, offered_body, based_on,
-                         detected_at)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         detected_at, offered_ring, offered_kind)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     params![
                         cid,
                         bereich,
@@ -1560,7 +1572,9 @@ impl HubStore {
                         frontmatter,
                         body,
                         based_on,
-                        now
+                        now,
+                        ring,
+                        kind
                     ],
                 ))?;
                 Ok(NoteOutcome::Conflict {
@@ -1886,40 +1900,90 @@ impl HubStore {
     /// turned away; otherwise the held version stands. Either way the conflict is closed
     /// with a note of which way it went, so the decision is not folded into the data.
     pub fn resolve_conflict(&self, id: &str, take_offered: bool, now: &str) -> Result<bool> {
-        let c: Option<NoteConflict> = ix(self
+        // One transaction: the check that the held version is still the one the conflict was
+        // about, the replacement, and the closing. Two separate statements let a delivery in
+        // between be overwritten by a decision made about the version before it.
+        ix(self.conn.execute_batch("BEGIN IMMEDIATE"))?;
+        let done = self.resolve_conflict_in_tx(id, take_offered, now);
+        match done {
+            Ok(v) => {
+                ix(self.conn.execute_batch("COMMIT"))?;
+                Ok(v)
+            }
+            Err(e) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(e)
+            }
+        }
+    }
+
+    fn resolve_conflict_in_tx(&self, id: &str, take_offered: bool, now: &str) -> Result<bool> {
+        let c: Option<(NoteConflict, Option<i64>, Option<String>)> = ix(self
             .conn
             .query_row(
                 "SELECT id, bereich, name, held_updated, held_from_device, offered_updated,
                         offered_from_device, offered_frontmatter, offered_body, based_on,
-                        detected_at
+                        detected_at, offered_ring, offered_kind
                  FROM note_conflicts WHERE id = ? AND resolved_at IS NULL",
                 params![id],
                 |r| {
-                    Ok(NoteConflict {
-                        id: r.get(0)?,
-                        bereich: r.get(1)?,
-                        name: r.get(2)?,
-                        held_updated: r.get(3)?,
-                        held_from_device: r.get(4)?,
-                        offered_updated: r.get(5)?,
-                        offered_from_device: r.get(6)?,
-                        offered_frontmatter: r.get(7)?,
-                        offered_body: r.get(8)?,
-                        based_on: r.get(9)?,
-                        detected_at: r.get(10)?,
-                    })
+                    Ok((
+                        NoteConflict {
+                            id: r.get(0)?,
+                            bereich: r.get(1)?,
+                            name: r.get(2)?,
+                            held_updated: r.get(3)?,
+                            held_from_device: r.get(4)?,
+                            offered_updated: r.get(5)?,
+                            offered_from_device: r.get(6)?,
+                            offered_frontmatter: r.get(7)?,
+                            offered_body: r.get(8)?,
+                            based_on: r.get(9)?,
+                            detected_at: r.get(10)?,
+                        },
+                        r.get(11)?,
+                        r.get(12)?,
+                    ))
                 },
             )
             .optional())?;
-        let Some(c) = c else { return Ok(false) };
+        let Some((c, offered_ring, offered_kind)) = c else {
+            return Ok(false);
+        };
         if take_offered {
+            let held: Option<String> = ix(self
+                .conn
+                .query_row(
+                    "SELECT updated FROM synced_notes WHERE bereich = ? AND name = ?",
+                    params![c.bereich, c.name],
+                    |r| r.get(0),
+                )
+                .optional())?;
+            match held {
+                None => {
+                    return Err(Error::Config(format!(
+                        "{}: the hub no longer holds {} in {}, so there is nothing to replace",
+                        c.id, c.name, c.bereich
+                    )));
+                }
+                Some(h) if h != c.held_updated => {
+                    // Taking the offered version now would replace a version nobody decided
+                    // about. The conflict stays open, to be looked at against what is held.
+                    return Err(Error::Config(format!(
+                        "{}: {} changed since this conflict was raised (held {} then, {} now); \
+                         look at it again before deciding",
+                        c.id, c.name, c.held_updated, h
+                    )));
+                }
+                Some(_) => {}
+            }
             // A new number, or the devices that already pulled the held version would never
             // be told it was replaced.
             let seq = self.next_sync_seq()?;
             ix(self.conn.execute(
                 "UPDATE synced_notes
                  SET updated = ?, frontmatter = ?, body = ?, from_device = ?, received_at = ?,
-                     sync_seq = ?
+                     sync_seq = ?, ring = COALESCE(?, ring), kind = COALESCE(?, kind)
                  WHERE bereich = ? AND name = ?",
                 params![
                     c.offered_updated,
@@ -1928,6 +1992,8 @@ impl HubStore {
                     c.offered_from_device,
                     now,
                     seq,
+                    offered_ring,
+                    offered_kind,
                     c.bereich,
                     c.name
                 ],

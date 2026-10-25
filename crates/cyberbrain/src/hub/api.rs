@@ -999,10 +999,22 @@ async fn post_conflict(
         _ => return Redirect::to("/conflicts").into_response(),
     }
     let take_offered = form.take == "offered";
-    if hub
-        .resolve_conflict(&cid, take_offered, &now)
-        .unwrap_or(false)
-    {
+    let resolved = match hub.resolve_conflict(&cid, take_offered, &now) {
+        Ok(done) => done,
+        // Said, not swallowed: the usual reason is that the held version changed since the
+        // conflict was raised, and the person has to look again before deciding.
+        Err(e) => {
+            return (
+                StatusCode::CONFLICT,
+                Html(format!(
+                    "<p>{}</p><p><a href=\"/conflicts\">Back to the conflicts</a></p>",
+                    super::page::esc(&e.to_string())
+                )),
+            )
+                .into_response();
+        }
+    };
+    if resolved {
         let _ = hub.record(
             &pid,
             "conflict.resolved",
