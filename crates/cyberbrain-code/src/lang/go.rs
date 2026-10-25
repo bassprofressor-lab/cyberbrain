@@ -47,6 +47,11 @@ pub(crate) fn extract(lines: &[&str], out: &mut Vec<Def>) {
     let mut block: Option<DefKind> = None;
 
     for (i, &line) in lines.iter().enumerate() {
+        // A line that begins inside a multi-line string or comment is text: a docstring
+        // or a commented-out block may well contain what looks like a definition.
+        if lx.open_before(i) {
+            continue;
+        }
         if let Some(kind) = block {
             if line.trim_start().starts_with(')') {
                 block = None;

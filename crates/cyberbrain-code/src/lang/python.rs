@@ -38,6 +38,11 @@ pub(crate) fn extract(lines: &[&str], out: &mut Vec<Def>) {
         if i < skip_until {
             continue;
         }
+        // A line that begins inside a multi-line string or comment is text: a docstring
+        // or a commented-out block may well contain what looks like a definition.
+        if lx.open_before(i) {
+            continue;
+        }
         let (indent, name, is_class, is_def) = if let Some(c) = caps(&DEF, line) {
             (c[1].len(), c[2].to_string(), false, true)
         } else if let Some(c) = caps(&CLASS, line) {

@@ -742,3 +742,35 @@ fn bench_scan_of_a_real_tree() {
         times[times.len() - 1]
     );
 }
+
+/// A definition written inside a docstring or a block comment is text, not a symbol.
+/// Before, only the body of a module-level assignment was skipped, so a module docstring
+/// with `def fake():` in it produced a function `fake`.
+#[test]
+fn definitions_inside_docstrings_and_block_comments_are_not_symbols() {
+    let cases: [(Language, &str); 4] = [
+        (
+            Language::Python,
+            "\"\"\"Module.\n\ndef fake():\n    pass\n\nclass Fake:\n\"\"\"\n\ndef real():\n    pass\n",
+        ),
+        (
+            Language::JavaScript,
+            "/*\nfunction fake() {\n}\nclass Fake {}\n*/\nfunction real() {\n}\n",
+        ),
+        (
+            Language::Go,
+            "package x\n\n/*\nfunc fake() {\n}\n*/\nfunc real() {\n}\n",
+        ),
+        (
+            Language::Rust,
+            "/*\nfn fake() {\n}\nstruct Fake;\n*/\nfn real() {\n}\n",
+        ),
+    ];
+    for (lang, src) in cases {
+        let names: Vec<String> = crate::lang::defs(lang, src)
+            .into_iter()
+            .map(|d| d.1)
+            .collect();
+        assert_eq!(names, ["real"], "{lang:?}");
+    }
+}

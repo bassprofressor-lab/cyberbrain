@@ -176,6 +176,11 @@ pub(crate) fn extract(lines: &[&str], typescript: bool, out: &mut Vec<Def>) {
         while classes.last().is_some_and(|c| c.0 < i) {
             classes.pop();
         }
+        // A line that begins inside a multi-line string or comment is text: a docstring
+        // or a commented-out block may well contain what looks like a definition.
+        if lx.open_before(i) {
+            continue;
+        }
 
         if let Some(c) = caps(&CLASS, line) {
             let indent = indent_of(&c[1]);

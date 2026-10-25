@@ -109,6 +109,11 @@ pub(crate) fn extract(lines: &[&str], out: &mut Vec<Def>) {
         while scopes.last().is_some_and(|s| s.0 < i) {
             scopes.pop();
         }
+        // A line that begins inside a multi-line string or comment is text: a docstring
+        // or a commented-out block may well contain what looks like a definition.
+        if lx.open_before(i) {
+            continue;
+        }
         let scope = scopes.last();
 
         if let Some(c) = caps(&IMPL, line) {
