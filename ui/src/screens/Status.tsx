@@ -27,7 +27,7 @@ const BACKEND_LABEL: Record<InferenceBackend, string> = {
  */
 function checkLabel(f: DoctorFinding, t: Dict): { label: string; tone: "ok" | "warn" | "danger" | "neutral"; hint: string } {
   if (f.check === "dangling-link") return { label: t.status.doctor.danglingIntent, tone: "neutral", hint: t.status.doctor.danglingIntentHint };
-  if (f.check === "unresolvable-links") return { label: t.status.doctor.unresolvable, tone: "warn", hint: t.status.doctor.unresolvableHint };
+  if (f.check === "unresolvable-links" || f.check === "unresolvable-link") return { label: t.status.doctor.unresolvable, tone: "warn", hint: t.status.doctor.unresolvableHint };
   const tone = f.severity === "error" ? "danger" : f.severity === "warn" ? "warn" : "neutral";
   return { label: f.check, tone, hint: t.status.doctor.checkHint(f.check) };
 }
@@ -89,7 +89,10 @@ export function StatusScreen() {
   const indexWarnings: string[] = [];
   if (d.index.stale_notes > 0) indexWarnings.push(dd.card.stale(d.index.stale_notes));
   if (d.index.orphan_vectors > 0) indexWarnings.push(dd.card.orphans(d.index.orphan_vectors));
-  if (d.index.dangling_links > 0) indexWarnings.push(dd.card.dangling(d.index.dangling_links));
+  // Links without a target are information: most are intent (a note somebody will write).
+  // The status call cannot tell them from unresolvable ones; `doctor` can, and only those warn.
+  const unresolvable = doctor ? doctor.findings.filter((f) => f.check === "unresolvable-links" || f.check === "unresolvable-link").length : 0;
+  if (unresolvable > 0) indexWarnings.push(dd.card.unresolvable(unresolvable));
   const indexState: State = !d.index.fts_ok ? "danger" : indexWarnings.length ? "warn" : "ok";
 
   // embedding: not loaded is "not set up" (optional) unless the store holds model data that
@@ -165,18 +168,18 @@ export function StatusScreen() {
           <Kbd keys="Mod+k" className="shrink-0" />
         </button>
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-win" onClick={() => s.reload()} disabled={s.loading}>
+          <button className="btn btn-win" onClick={() => s.reload()} disabled={s.loading} title={`${dd.btn.refreshTitle} (r)`}>
             <Icon name="refresh" size={18} />
-            {t.common.refresh}
+            {dd.btn.refresh}
           </button>
-          <button className="btn btn-win" onClick={runDoctor} disabled={busy !== ""}>
-            {busy === "doctor" ? t.status.btn.doctorBusy : t.status.btn.doctor}
+          <button className="btn btn-win" onClick={runDoctor} disabled={busy !== ""} title={`${dd.btn.checkTitle} (d) · cyberbrain doctor`}>
+            {busy === "doctor" ? dd.btn.checkBusy : dd.btn.check}
           </button>
-          <button className="btn btn-win" onClick={() => runScan(false)} disabled={busy !== ""}>
-            {busy === "scan" ? t.status.btn.scanBusy : t.status.btn.scan}
+          <button className="btn btn-win" onClick={() => runScan(false)} disabled={busy !== ""} title={`${dd.btn.updateTitle} · cyberbrain scan`}>
+            {busy === "scan" ? dd.btn.updateBusy : dd.btn.update}
           </button>
-          <button className="btn btn-win" onClick={() => runScan(true)} disabled={busy !== ""} title={t.status.btn.fullTitle}>
-            {busy === "full" ? t.status.btn.fullBusy : t.status.btn.full}
+          <button className="btn btn-win btn-ghost" onClick={() => runScan(true)} disabled={busy !== ""} title={`${t.status.btn.fullTitle} · cyberbrain scan --full`}>
+            {busy === "full" ? dd.btn.rebuildBusy : dd.btn.rebuild}
           </button>
         </div>
       </div>
@@ -281,11 +284,12 @@ export function StatusScreen() {
             [cap(t.status.index.lastScan), <span title={absTime(d.index.last_scan)}>{lastScanRow}</span>],
             [cap(t.status.index.lastFull), <span title={absTime(d.index.last_full_scan)}>{lastFull}</span>],
             [cap(t.status.index.stale), row(d.index.stale_notes, t.status.index.stale, t.status.index.staleHint)],
-            [idx.dangling, row(d.index.dangling_links, idx.dangling, t.status.index.danglingHint)],
+            [idx.dangling, <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5"><span className="tnum font-medium">{d.index.dangling_links}</span><span className="text-xs text-fg-muted">{t.status.index.danglingHint}</span></span>],
+            ...(doctor ? ([[idx.unresolvable, row(unresolvable, idx.unresolvable, t.status.doctor.unresolvableHint)]] as Array<[ReactNode, ReactNode]>) : []),
           ])}
           {scan ? (
             <div className="mt-4 panel-inset px-3 py-2.5 text-xs">
-              <Pill>{scan.full ? t.status.btn.full : t.status.btn.scan}</Pill>{scan.dry_run ? <Pill className="ml-1">{t.status.index.dryRun}</Pill> : null}{" "}
+              <Pill title={scan.full ? "cyberbrain scan --full" : "cyberbrain scan"}>{scan.full ? dd.btn.rebuild : dd.btn.update}</Pill>{scan.dry_run ? <Pill className="ml-1">{t.status.index.dryRun}</Pill> : null}{" "}
               <span className="tnum">{t.status.index.scanLine({ scanned: scan.scanned, changed: scan.changed, added: scan.added, removed: scan.removed, ms: scan.elapsed_ms, blocks: num(scan.blocks_written), vectors: num(scan.vectors_written) })}</span>
               <div className="mt-1 text-fg-faint tnum">
                 {t.status.index.scanDetail({ unchanged: scan.detail.unchanged, touched: scan.detail.touched_only, revectorised: scan.detail.revectorised, links: scan.detail.links_written_back })}
@@ -420,17 +424,21 @@ export function StatusScreen() {
       </div>
 
       {d.caveats.length ? (
-        <div className="card px-5 py-4 text-sm" role="note">
-          <div className="flex items-center gap-2 font-medium">
+        <details className="card px-5 py-3 text-sm group" role="note">
+          <summary className="flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
             <Icon name="info" size={18} className="text-fg-muted" />
-            {t.status.caveats}
-          </div>
-          <ul className="mt-2 space-y-1 text-fg-muted">
+            <span className="font-medium">{t.status.caveats}</span>
+            <span className="text-fg-muted tnum">({d.caveats.length})</span>
+            <Icon name="chevron" size={16} className="ml-auto text-fg-muted transition-transform group-open:rotate-180" />
+          </summary>
+          <ul className="mt-3 divide-y divide-line text-fg-muted max-w-[60rem]">
             {d.caveats.map((c, i) => (
-              <li key={i}>· {c}</li>
+              <li key={i} className="py-2 leading-relaxed wrap-soft">
+                {c}
+              </li>
             ))}
           </ul>
-        </div>
+        </details>
       ) : null}
 
       <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line pt-4 text-xs text-fg-muted">
