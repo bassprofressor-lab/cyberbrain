@@ -19,8 +19,8 @@
 //!   an http ticket gets an empty root store instead, since it never negotiates TLS and
 //!   loading the platform store is the most expensive part of building it.
 //!
-//! Bodies are read fully into memory. The largest thing that goes through here is a ~30 MB
-//! model artefact.
+//! Bodies are read fully into memory, up to a limit per purpose, and every request has an
+//! overall deadline besides the connect and read timeouts.
 //!
 //! # Pinned destinations
 //!
@@ -42,6 +42,35 @@ use url::Url;
 const USER_AGENT: &str = concat!("cyberbrain/", env!("CARGO_PKG_VERSION"));
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long one request may take from connect to the last byte of the body. The read
+/// timeout alone resets with every byte, so a peer sending one now and then could hold a
+/// request open for as long as it liked. A model artefact is hundreds of megabytes and may
+/// come over a slow line; everything else is a hub or a governance call. Tests use a few
+/// seconds, so the deadline can be shown to hold without waiting minutes for it.
+fn total_timeout(purpose: EgressPurpose) -> Duration {
+    if cfg!(test) {
+        return Duration::from_secs(3);
+    }
+    match purpose {
+        EgressPurpose::ModelDownload => Duration::from_secs(60 * 60),
+        _ => Duration::from_secs(10 * 60),
+    }
+}
+
+/// The most a response body may hold. Bodies are read into memory whole, so this is what
+/// stands between a misbehaving peer and the process's memory. The model artefact shipped
+/// today is about 500 MB; a first hub pull carries the notes of a whole store. Tests use a
+/// megabyte for the same reason as [`total_timeout`].
+fn body_limit(purpose: EgressPurpose) -> u64 {
+    if cfg!(test) {
+        return 1 << 20;
+    }
+    match purpose {
+        EgressPurpose::ModelDownload => 2 << 30,
+        _ => 256 << 20,
+    }
+}
 
 static TLS_PROVIDER: Once = Once::new();
 
@@ -213,6 +242,7 @@ fn client(ticket: &EgressTicket, pin: Option<CertificatePin>) -> Result<reqwest:
         .no_proxy()
         .connect_timeout(CONNECT_TIMEOUT)
         .read_timeout(READ_TIMEOUT)
+        .timeout(total_timeout(ticket.purpose()))
         .https_only(ticket.purpose() == EgressPurpose::ModelDownload || pin.is_some())
         .resolve_to_addrs(&dest.host, &pinned);
     if let Some(want) = pin {
@@ -247,7 +277,7 @@ fn client(ticket: &EgressTicket, pin: Option<CertificatePin>) -> Result<reqwest:
         .map_err(|e| err_for(ticket.purpose(), format!("building HTTP client: {e}")))
 }
 
-async fn finish(ticket: &EgressTicket, resp: reqwest::Response) -> Result<Response> {
+async fn finish(ticket: &EgressTicket, mut resp: reqwest::Response) -> Result<Response> {
     let status = resp.status().as_u16();
     let content_type = resp
         .headers()
@@ -275,16 +305,30 @@ async fn finish(ticket: &EgressTicket, resp: reqwest::Response) -> Result<Respon
     } else {
         None
     };
-    let body = resp
-        .bytes()
-        .await
-        .map_err(|e| {
-            err_for(
-                ticket.purpose(),
-                format!("reading response body: {}", with_cause(&e.without_url())),
-            )
-        })?
-        .to_vec();
+    let limit = body_limit(ticket.purpose());
+    let too_large = || {
+        err_for(
+            ticket.purpose(),
+            format!("response body is larger than {limit} bytes; refusing to read it"),
+        )
+    };
+    // An announced length is checked before anything is read; the count below catches a
+    // body that announces none, or a smaller one than it sends.
+    if resp.content_length().is_some_and(|len| len > limit) {
+        return Err(too_large());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(|e| {
+        err_for(
+            ticket.purpose(),
+            format!("reading response body: {}", with_cause(&e.without_url())),
+        )
+    })? {
+        if (body.len() + chunk.len()) as u64 > limit {
+            return Err(too_large());
+        }
+        body.extend_from_slice(&chunk);
+    }
     Ok(Response {
         status,
         body,
@@ -624,6 +668,86 @@ mod tests {
             assert!(err.contains(&format!("127.0.0.1:{port}/x")), "{err}");
         }
         t.close(Outcome::failed("refused")).unwrap();
+    }
+
+    /// A server that answers with `head`, then writes `chunks` one after another with
+    /// `pause` between them. For bodies the one-shot server above cannot express.
+    fn serve_slowly(head: &'static str, chunks: Vec<Vec<u8>>, pause: std::time::Duration) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            if let Some(Ok(mut stream)) = listener.incoming().next() {
+                let mut buf = vec![0u8; 65536];
+                let mut req = Vec::new();
+                while !req.windows(4).any(|w| w == b"\r\n\r\n") {
+                    let n = stream.read(&mut buf).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    req.extend_from_slice(&buf[..n]);
+                }
+                let _ = stream.write_all(head.as_bytes());
+                for c in chunks {
+                    std::thread::sleep(pause);
+                    if stream.write_all(&c).and_then(|_| stream.flush()).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        port
+    }
+
+    /// Would fail if a body larger than the transport's limit were read into memory whole,
+    /// with or without a `Content-Length` that announces it.
+    #[tokio::test]
+    async fn a_body_over_the_limit_is_refused() {
+        let big = vec![b'x'; (body_limit(EgressPurpose::LocalInference) + 1) as usize];
+        let (g, _) = gate();
+        for head in [
+            "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n",
+            Box::leak(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    big.len()
+                )
+                .into_boxed_str(),
+            ),
+        ] {
+            let port = serve_slowly(head, vec![big.clone()], std::time::Duration::ZERO);
+            let url = format!("http://127.0.0.1:{port}/x");
+            let t = g
+                .open(&Actor::Cli, EgressPurpose::LocalInference, &url)
+                .unwrap();
+            let err = match get(&t, &url).await {
+                Ok(r) => panic!("{head:?}: read {} bytes", r.body.len()),
+                Err(e) => e.to_string(),
+            };
+            assert!(err.contains("larger than"), "{head:?}: {err}");
+            t.close(Outcome::failed(&err)).unwrap();
+        }
+    }
+
+    /// Would fail if a server that keeps sending a byte now and then, each well within the
+    /// read timeout, could hold a request open for as long as it liked.
+    #[tokio::test]
+    async fn a_request_has_an_overall_deadline() {
+        let chunks = vec![b"x".to_vec(); 40];
+        let port = serve_slowly(
+            "HTTP/1.1 200 OK\r\nContent-Length: 40\r\nConnection: close\r\n\r\n",
+            chunks,
+            std::time::Duration::from_millis(250),
+        );
+        let (g, _) = gate();
+        let url = format!("http://127.0.0.1:{port}/x");
+        let t = g
+            .open(&Actor::Cli, EgressPurpose::LocalInference, &url)
+            .unwrap();
+        let started = std::time::Instant::now();
+        let r = get(&t, &url).await;
+        assert!(r.is_err(), "a ten-second dribble outlived the deadline");
+        assert!(started.elapsed() < std::time::Duration::from_secs(8));
+        t.close(Outcome::failed("deadline")).unwrap();
     }
 
     /// Would fail if the transport contacted a host the ticket does not cover.
