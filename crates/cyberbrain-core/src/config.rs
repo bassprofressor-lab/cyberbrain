@@ -322,7 +322,17 @@ impl OllamaEmbeddingConfig {
         h.update(&[0]);
         h.update(&self.num_ctx.to_le_bytes());
         let settings = h.finalize().to_hex();
-        let digest: String = self.digest.chars().take(12).collect();
+        // Normalised the way the digest check compares it, so the same weights written as
+        // `sha256:ABC…` and `abc…` are one profile. Raw, the prefix ate seven of the twelve
+        // characters, left five hex digits to tell models apart and rebuilt the index for
+        // a spelling change.
+        let digest = self.digest.trim();
+        let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
+        let digest: String = digest
+            .chars()
+            .take(12)
+            .collect::<String>()
+            .to_ascii_lowercase();
         format!(
             "ollama-{}-{digest}-d{}-{}",
             self.model,
@@ -887,6 +897,21 @@ document_prefix = "title: none | text: "
         );
         let err = Config::parse(&bad, p()).unwrap_err();
         assert!(err.to_string().contains("embedding.ollama.digest"), "{err}");
+    }
+
+    #[test]
+    fn the_digest_counts_the_same_with_or_without_its_sha256_prefix() {
+        let base = Config::parse(OLLAMA, p())
+            .unwrap()
+            .embedding
+            .ollama
+            .unwrap();
+        let mut prefixed = base.clone();
+        prefixed.digest = format!("sha256:{}", base.digest);
+        assert_eq!(prefixed.profile_id(), base.profile_id());
+        let mut upper = base.clone();
+        upper.digest = format!("sha256:{}", base.digest.to_ascii_uppercase());
+        assert_eq!(upper.profile_id(), base.profile_id());
     }
 
     #[test]
