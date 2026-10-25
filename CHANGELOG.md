@@ -14,6 +14,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Windows launcher, installer and web page
 
+- **A new mark: the neon brain with its orbit ring**, in the tray, on the installer and its
+  shortcuts, in Apps and now also in the window's title bar and taskbar button, which showed
+  Windows' blank program icon before.
 - **The page no longer says notes never leave the machine.** The hub line in the sidebar and
   its tooltip now say what is true since note sharing: by default only the audit trail goes,
   the text of a note only when `allow_note_sync` is on, the note has a bereich and that bereich
