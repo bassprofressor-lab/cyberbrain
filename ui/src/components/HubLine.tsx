@@ -17,21 +17,23 @@ import { useT } from "@/lib/i18n";
 export function HubLine() {
   const t = useT();
   const [hub, setHub] = useState<HubStatus | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
-    // Quietly: a store that is not enrolled is the ordinary case, and a failure here must
-    // never be a banner on somebody's notes.
+    // Never a banner on somebody's notes, but never "keeps everything to itself" either
+    // while the answer is missing: that sentence is a claim about what leaves the machine,
+    // and "I could not ask" is not the same as "no".
     api
       .hubStatus()
       .then((h) => alive && setHub(h))
-      .catch(() => {});
+      .catch(() => alive && setFailed(true));
     return () => {
       alive = false;
     };
   }, []);
 
-  if (!hub) return null;
+  if (!hub) return <div className="leading-snug text-fg-faint">{failed ? t.app.hubUnknown : t.app.hubChecking}</div>;
 
   if (!hub.enrolled) {
     return (

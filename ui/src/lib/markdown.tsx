@@ -64,9 +64,12 @@ export interface MarkdownProps {
   /** Names that resolve to a note. Anything else in `[[…]]` is intent. */
   resolves: (name: string) => boolean;
   className?: string;
+  /** Lines cut off the front of `source`, added back to the line numbers the blocks carry. */
+  lineOffset?: number;
 }
 
-export function Markdown({ source, resolves, className }: MarkdownProps) {
+export function Markdown({ source, resolves, className, lineOffset = 0 }: MarkdownProps) {
+  const line = (n: { position?: { start: { line: number } } | undefined } | undefined) => (n?.position ? n.position.start.line + lineOffset : undefined);
   const components: Components = {
     // `node` is react-markdown's syntax-tree node. Spread into `rest` it ended up in the DOM
     // as `node="[object Object]"`.
@@ -95,6 +98,20 @@ export function Markdown({ source, resolves, className }: MarkdownProps) {
         </a>
       );
     },
+    // The line each block-level node came from, so a link to "block 7" can scroll to the
+    // paragraph that block starts at (see lib/blocks.ts) and not to the top of the note.
+    p: ({ node, ...rest }) => <p data-line={line(node)} {...rest} />,
+    h1: ({ node, ...rest }) => <h1 data-line={line(node)} {...rest} />,
+    h2: ({ node, ...rest }) => <h2 data-line={line(node)} {...rest} />,
+    h3: ({ node, ...rest }) => <h3 data-line={line(node)} {...rest} />,
+    h4: ({ node, ...rest }) => <h4 data-line={line(node)} {...rest} />,
+    h5: ({ node, ...rest }) => <h5 data-line={line(node)} {...rest} />,
+    h6: ({ node, ...rest }) => <h6 data-line={line(node)} {...rest} />,
+    ul: ({ node, ...rest }) => <ul data-line={line(node)} {...rest} />,
+    ol: ({ node, ...rest }) => <ol data-line={line(node)} {...rest} />,
+    pre: ({ node, ...rest }) => <pre data-line={line(node)} {...rest} />,
+    blockquote: ({ node, ...rest }) => <blockquote data-line={line(node)} {...rest} />,
+    table: ({ node, ...rest }) => <table data-line={line(node)} {...rest} />,
     img: ({ alt, src }) => (
       <span className="inline-block px-2 py-1 rounded border border-dashed text-fg-muted text-xs" title={dict().markdown.imageTitle}>
         {dict().markdown.image}: {alt || (typeof src === "string" ? src : "")}

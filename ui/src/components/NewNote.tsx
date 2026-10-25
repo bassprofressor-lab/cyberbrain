@@ -5,7 +5,7 @@ import { useToast } from "@/components/Toast";
 import { ErrorBanner } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { href } from "@/lib/router";
-import { isValidName, slugFromTitle } from "@/lib/slug";
+import { bodyWithTitle, isValidName, slugFromTitle } from "@/lib/slug";
 import { toApiError } from "@/lib/useAsync";
 
 const KINDS: NoteKind[] = ["knowledge", "bug", "lesson", "decision", "reference", "session"];
@@ -68,7 +68,7 @@ export function NewNoteForm({ full, onCreated, onCancel }: { full: boolean; onCr
     setError(null);
     setExists(null);
     try {
-      created(await api.createNote({ body, front }));
+      created(await api.createNote({ body: full ? body : bodyWithTitle(title, name, body), front }));
     } catch (x) {
       const err = toApiError(x);
       if (err.body.code === "pii-held" && err.body.hold) setHold(err.body.hold);
@@ -127,7 +127,7 @@ export function NewNoteForm({ full, onCreated, onCancel }: { full: boolean; onCr
               <select id="new-note-kind" className="input h-8" value={kind} onChange={(e) => setKind(e.target.value as NoteKind)}>
                 {KINDS.map((k) => (
                   <option key={k} value={k}>
-                    {k}
+                    {t.enums.kind[k]}
                   </option>
                 ))}
               </select>

@@ -6,14 +6,12 @@ import { ErrorBanner, Loading } from "@/components/ui";
 import { absTime, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { Markdown } from "@/lib/markdown";
-import { href, navigate, type Route } from "@/lib/router";
+import { cameFromSearch, href, navigate, type Route } from "@/lib/router";
+import { useBlockJump } from "@/lib/useBlockJump";
+import { splitTitle, titleOf } from "@/lib/slug";
 import { useAsync } from "@/lib/useAsync";
 
-/** `keine-auslieferung-am-freitag` reads as a file name. People do not name things that way. */
-export function titleOf(name: string): string {
-  const words = name.replace(/[-_]+/g, " ").trim();
-  return words ? words[0]!.toUpperCase() + words.slice(1) : name;
-}
+export { titleOf };
 
 /**
  * Simple mode's notes: what is written down, as cards, newest first.
@@ -27,7 +25,7 @@ export function SimpleNotesScreen({ route }: { route: Route }) {
   const [filter, setFilter] = useState("");
   const list = useAsync<NoteSummary[]>(() => api.listNotes({ sort: "updated" }), []);
 
-  if (route.screen === "note" && route.param) return <SimpleNoteView name={route.param} />;
+  if (route.screen === "note" && route.param) return <SimpleNoteView name={route.param} block={route.query.get("block")} />;
   if (route.screen === "notes" && route.query.has("new")) return <SimpleNewNote onCreated={list.reload} />;
 
   const all = list.data ?? [];
@@ -129,16 +127,20 @@ function SimpleNewNote({ onCreated }: { onCreated: () => void }) {
  * full view: this is the screen somebody lands on from a source under an answer, and what
  * they need there is to read it.
  */
-function SimpleNoteView({ name }: { name: string }) {
+function SimpleNoteView({ name, block }: { name: string; block: string | null }) {
   const t = useT();
   const note = useAsync<NoteDetail>(() => api.getNote(name), [name]);
   const d = note.data;
+  useBlockJump(d, block);
+  // Back goes to the question when that is where the person came from, not to the list of
+  // all notes, which is a different place to the one they were reading.
+  const fromQuestion = cameFromSearch();
 
   return (
     <div className="h-full overflow-auto scroll-thin">
       <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
-        <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => navigate(href("notes"))}>
-          ← {t.simpleNotes.title}
+        <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => (fromQuestion ? history.back() : navigate(href("notes")))}>
+          ← {fromQuestion ? t.simpleNotes.backToQuestion : t.simpleNotes.title}
         </button>
         {note.error ? <ErrorBanner error={note.error} /> : null}
         {note.loading && !d ? <Loading /> : null}
@@ -148,8 +150,8 @@ function SimpleNoteView({ name }: { name: string }) {
               <RingChip ring={d.front.ring} />
               <span className="text-2xs text-fg-faint">{t.ask.applies[d.front.ring]}</span>
             </div>
-            <h1 className="text-2xl font-semibold tracking-tight text-pretty">{titleOf(d.front.name)}</h1>
-            <Markdown source={d.body} resolves={(n) => d.outbound.some((l) => l.target === n && l.resolved !== null)} className="prose-note" />
+            <h1 className="text-2xl font-semibold tracking-tight text-pretty">{splitTitle(d.front.name, d.body).title}</h1>
+            <Markdown source={splitTitle(d.front.name, d.body).text} lineOffset={splitTitle(d.front.name, d.body).skipped} resolves={(n) => d.outbound.some((l) => l.target === n && l.resolved !== null)} className="prose-note" />
             <p className="pt-4 border-t text-2xs text-fg-faint" title={absTime(d.front.updated)}>
               {t.ask.changed(relTime(d.front.updated))}
             </p>

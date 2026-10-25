@@ -78,6 +78,8 @@ export function TerminalsScreen({ route }: Props) {
   // The address may still carry it on a first load; after that it lives in memory.
   const token = route.query.get("t") ?? terminalToken();
   const [command, setCommand] = useState("");
+  // The name being typed for a connection to save, or null while nobody is saving one.
+  const [naming, setNaming] = useState<string | null>(null);
   /** Each pane is a session; the key is what makes React build a fresh one. */
   const [panes, setPanes] = useState<Array<{ id: number; command: string }>>([]);
   const next = useRef(0);
@@ -130,7 +132,7 @@ export function TerminalsScreen({ route }: Props) {
 
   return (
     <div className="h-full flex flex-col min-h-0">
-      <Section title={t.terminals.title} className="flex-1 min-h-0 flex flex-col">
+      <Section title={t.terminals.title} fill>
         <p className="text-2xs text-fg-faint mb-3 max-w-prose">{t.terminals.lead}</p>
 
         <form
@@ -163,15 +165,37 @@ export function TerminalsScreen({ route }: Props) {
             type="button"
             className="btn btn-ghost btn-sm"
             disabled={command.trim() === ""}
-            onClick={() => {
-              const name = window.prompt(t.terminals.namePrompt, defaultName(command));
-              if (!name) return;
-              void write([...saved.filter((x) => x.name !== name), { name, command }]);
-            }}
+            onClick={() => setNaming(defaultName(command))}
           >
             {t.terminals.save}
           </button>
         </form>
+
+        {/* Inline rather than window.prompt: a browser dialog is a different program's
+            window, in the wrong language and the wrong style, and it blocks the terminals
+            running behind it. */}
+        {naming !== null ? (
+          <form
+            className="flex items-center gap-2 mb-3"
+            onSubmit={(e) => {
+              e.preventDefault();
+              const name = naming.trim();
+              if (name) void write([...saved.filter((x) => x.name !== name), { name, command }]);
+              setNaming(null);
+            }}
+          >
+            <label htmlFor="terminal-save-name" className="text-2xs text-fg-faint shrink-0">
+              {t.terminals.namePrompt}
+            </label>
+            <input id="terminal-save-name" autoFocus value={naming} onChange={(e) => setNaming(e.target.value)} onKeyDown={(e) => e.key === "Escape" && setNaming(null)} className="input flex-1 min-w-0 text-xs" spellCheck={false} autoComplete="off" />
+            <button type="submit" className="btn btn-sm btn-primary" disabled={naming.trim() === ""}>
+              {t.terminals.save}
+            </button>
+            <button type="button" className="btn btn-sm" onClick={() => setNaming(null)}>
+              {t.common.cancel}
+            </button>
+          </form>
+        ) : null}
 
         {saved.length > 0 || savedWhy ? (
           <div className="mb-3">

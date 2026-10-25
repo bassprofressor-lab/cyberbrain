@@ -7,6 +7,7 @@ import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { setMode } from "@/lib/mode";
 import { href, navigate, type Route } from "@/lib/router";
+import { pickAnswer } from "@/lib/answer";
 import { toApiError, useAsync } from "@/lib/useAsync";
 
 /**
@@ -40,6 +41,9 @@ export function AskScreen({ route }: { route: Route }) {
   useEffect(() => {
     const query = q.trim();
     if (!query) {
+      // Counts as a newer request: an answer still on its way for the text that was just
+      // deleted must not come back and fill the empty box.
+      gen.current++;
       setResult(null);
       setError(null);
       setLoading(false);
@@ -72,8 +76,10 @@ export function AskScreen({ route }: { route: Route }) {
   useShortcuts("search", [{ keys: "/", label: t.search.keys.focus, run: () => inputRef.current?.select() }, { keys: "Mod+k", label: t.search.keys.focus, run: () => inputRef.current?.select(), inInputs: true, hidden: true }], [t]);
 
   const hits = result?.hits ?? [];
-  const answer = hits[0];
-  const sources = hits.slice(1, 4);
+  // Not simply the first hit: one that lost a conflict, or whose note has been replaced, is
+  // not what to read out as the answer.
+  const { answer, index: answerAt } = pickAnswer(hits, result?.conflicts ?? []);
+  const sources = hits.filter((_, i) => i !== answerAt).slice(0, 3);
   const open = (name: string, block: number) => navigate(href("note", name, { block }));
 
   return (
@@ -116,6 +122,12 @@ export function AskScreen({ route }: { route: Route }) {
               </div>
             </article>
 
+            {answer.superseded_by ? (
+              <div className="alert alert-warn" role="note">
+                {t.ask.superseded(answer.superseded_by)}
+              </div>
+            ) : null}
+
             {result?.conflicts.length ? (
               <div className="alert alert-warn" role="note">
                 <span className="font-medium">{t.ask.conflict}</span>{" "}
@@ -141,6 +153,19 @@ export function AskScreen({ route }: { route: Route }) {
               </section>
             ) : null}
           </>
+        ) : null}
+
+        {/* Checks that did not run, in the words the server gave. Shown here as in the full
+            search: a conflict check that was skipped is the reason "no warning" may mean
+            nothing. */}
+        {answer && result?.caveats.length ? (
+          <ul className="space-y-0.5">
+            {result.caveats.map((c, i) => (
+              <li key={i} className={`text-2xs ${/skipped|disabled|not configured/i.test(c) ? "text-warn" : "text-fg-faint"}`}>
+                {c}
+              </li>
+            ))}
+          </ul>
         ) : null}
 
         {q.trim() && !loading && !error && result && !hits.length ? (

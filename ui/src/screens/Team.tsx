@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { api, type HubStatus, type NoteSummary } from "@/api/client";
 import { RingChip } from "@/components/RingBadge";
 import { ErrorBanner, Loading } from "@/components/ui";
@@ -25,6 +26,17 @@ export function TeamScreen() {
   const list = useAsync<NoteSummary[]>(() => api.listNotes({ sort: "updated" }), []);
   const hub = useAsync<HubStatus>(() => api.hubStatus(), []);
   const notes = list.data ?? [];
+  // Groups shown in full. Ten is where the list starts; the count in the heading is the true
+  // total, and a button gets to the rest rather than the screen quietly stopping at ten.
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const PREVIEW = 10;
+  const more = (key: string, total: number) =>
+    total > PREVIEW ? (
+      <button type="button" className="btn btn-ghost btn-sm self-start" aria-expanded={open.has(key)} onClick={() => setOpen((s) => { const x = new Set(s); if (!x.delete(key)) x.add(key); return x; })}>
+        {open.has(key) ? t.team.showFewer : t.team.showAll(total)}
+      </button>
+    ) : null;
+  const shownOf = (key: string, ns: NoteSummary[]) => (open.has(key) ? ns : ns.slice(0, PREVIEW));
 
   // Grouped by bereich, most recently touched group first, so the order follows the work
   // rather than the alphabet.
@@ -67,7 +79,12 @@ export function TeamScreen() {
         {/* Said before the lists, because it decides what they mean: the same note in the
             same bereich is shared on one machine and private on another. */}
         <p className="text-xs text-fg-muted">
-          {hub.data?.enrolled ? t.team.enrolled(hub.data.hub ?? "") : t.team.notEnrolled}
+          {hub.loading && !hub.data ? t.team.hubChecking : hub.error || !hub.data ? t.team.hubUnknown : hub.data.enrolled ? t.team.enrolled(hub.data.hub ?? "") : t.team.notEnrolled}
+          {hub.error ? (
+            <button type="button" className="btn btn-ghost btn-sm ml-2" onClick={hub.reload}>
+              {t.common.retry}
+            </button>
+          ) : null}
         </p>
 
         {list.error ? <ErrorBanner error={list.error} /> : null}
@@ -77,21 +94,23 @@ export function TeamScreen() {
         {groups.map(([bereich, ns]) => (
           <section key={bereich} className="flex flex-col gap-1">
             <h2 className="text-sm font-medium">
-              {bereich} <span className="text-2xs text-fg-faint font-normal">{t.team.count(ns.length)}</span>
+              {bereich} <span className="text-2xs text-fg-faint font-normal">{ns.length > PREVIEW && !open.has(bereich) ? t.team.showing(PREVIEW, ns.length) : t.team.count(ns.length)}</span>
             </h2>
-            {ns.slice(0, 10).map(row)}
+            {shownOf(bereich, ns).map(row)}
+            {more(bereich, ns.length)}
           </section>
         ))}
 
         {unshared.length ? (
           <section className="flex flex-col gap-1">
             <h2 className="text-sm font-medium text-fg-muted">
-              {t.team.privateHeading} <span className="text-2xs text-fg-faint font-normal">{t.team.count(unshared.length)}</span>
+              {t.team.privateHeading} <span className="text-2xs text-fg-faint font-normal">{unshared.length > PREVIEW && !open.has("") ? t.team.showing(PREVIEW, unshared.length) : t.team.count(unshared.length)}</span>
             </h2>
             {/* The default state, and the safe one. Named rather than left implicit, because
                 "nobody else sees this" is the fact somebody came here to check. */}
             <p className="text-2xs text-fg-faint mb-1">{t.team.privateNote}</p>
-            {unshared.slice(0, 10).map(row)}
+            {shownOf("", unshared).map(row)}
+            {more("", unshared.length)}
           </section>
         ) : null}
       </div>

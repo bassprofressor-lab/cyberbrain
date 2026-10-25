@@ -290,11 +290,13 @@ export function GraphScreen() {
     cancelAnimationFrame(rafRef.current);
     const loop = () => {
       const s = simRef.current;
+      // Through the ref: `kick` was made by an earlier render, and the `draw` it closed over
+      // knows the hover and the selection of that render, not of the frame being painted.
       if (s?.running) {
         s.tick();
-        draw();
+        drawRef.current();
         rafRef.current = requestAnimationFrame(loop);
-      } else draw();
+      } else drawRef.current();
     };
     loop();
   };
@@ -389,6 +391,29 @@ export function GraphScreen() {
     draw();
   };
 
+  // The same moves for the keyboard: arrows pan, + and - zoom (below), n and p walk the
+  // nodes in name order. Without them the canvas was a picture to anybody not holding a mouse.
+  const pan = (dx: number, dy: number) => {
+    viewRef.current = { ...viewRef.current, x: viewRef.current.x + dx, y: viewRef.current.y + dy };
+    draw();
+  };
+  const onKey = (e: React.KeyboardEvent) => {
+    const step = e.shiftKey ? 160 : 48;
+    const moves: Record<string, [number, number]> = { ArrowLeft: [step, 0], ArrowRight: [-step, 0], ArrowUp: [0, step], ArrowDown: [0, -step] };
+    const m = moves[e.key];
+    if (m) {
+      e.preventDefault();
+      pan(m[0], m[1]);
+    }
+  };
+  const ordered = useMemo(() => [...(sim?.nodes ?? [])].filter((n) => !matches || matches.has(n.id)).sort((a, b) => a.name.localeCompare(b.name)), [sim, matches]);
+  const walk = (d: number) => {
+    if (!ordered.length) return;
+    const at = ordered.findIndex((n) => n.id === selected);
+    const next = ordered[(at < 0 ? (d > 0 ? 0 : ordered.length - 1) : (at + d + ordered.length) % ordered.length)];
+    if (next) setSelected(next.id);
+  };
+
   const selNode = sim?.nodes.find((n) => n.id === selected) ?? null;
   const toggleRing = (r: Ring) =>
     setRings((s) => {
@@ -410,10 +435,12 @@ export function GraphScreen() {
           if (target && !target.dangling) navigate(href("note", target.name));
         }, inInputs: true },
       { keys: "Escape", label: t.graph.keys.clear, run: () => (setSelected(null), setQuery("")), inInputs: true },
+      { keys: "n", label: t.graph.keys.nextNode, run: () => walk(1) },
+      { keys: "p", label: t.graph.keys.prevNode, run: () => walk(-1) },
       { keys: "l", label: t.graph.keys.labels, run: () => setLabels((l) => (l === "auto" ? "all" : l === "all" ? "none" : "auto")) },
       { keys: "d", label: t.graph.keys.dangling, run: () => setShowDangling((v) => !v) },
     ],
-    [selNode, matches, sim, t],
+    [selNode, matches, sim, t, ordered, selected],
   );
 
   const counts = useMemo(() => {
@@ -448,6 +475,18 @@ export function GraphScreen() {
           {counts ? t.graph.counts(counts) : ""} · <Kbd keys="0" /> {t.graph.fit} <Kbd keys="+" /> <Kbd keys="-" /> {t.graph.zoom}
         </span>
       </div>
+      <details className="border-b bg-surface text-xs">
+        <summary className="px-4 py-1.5 cursor-pointer text-fg-muted">{t.graph.nodeList(ordered.length)}</summary>
+        <ul className="px-4 pb-2 max-h-40 overflow-auto scroll-thin columns-1 sm:columns-2 lg:columns-3 gap-4">
+          {ordered.slice(0, 500).map((n) => (
+            <li key={n.id} className="break-inside-avoid">
+              <button type="button" className={`link font-mono text-left ${n.id === selected ? "font-semibold" : ""}`} aria-pressed={n.id === selected} onClick={() => setSelected(n.id)}>
+                {n.dangling ? `${n.name} ?` : n.name}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </details>
       <div ref={wrapRef} className="relative flex-1 min-h-0">
         {g.error ? (
           <div className="p-4">
@@ -459,17 +498,21 @@ export function GraphScreen() {
           ref={canvasRef}
           className="w-full h-full block cursor-grab active:cursor-grabbing"
           onWheel={onWheel}
-          onMouseDown={onDown}
-          onMouseMove={onMove}
-          onMouseUp={onUp}
-          onMouseLeave={() => {
+          onPointerDown={onDown}
+          onPointerMove={onMove}
+          onPointerUp={onUp}
+          onKeyDown={onKey}
+          tabIndex={0}
+          style={{ touchAction: "none" }}
+          onPointerLeave={() => {
             setHover(null);
             if (dragRef.current?.node) dragRef.current.node.fixed = false;
             dragRef.current = null;
           }}
           onDoubleClick={onDouble}
-          role="img"
+          role="application"
           aria-label={t.graph.canvasAria}
+          aria-describedby="graph-keys"
         />
         {hover && !dragRef.current ? (
           <div className="absolute pointer-events-none dialog px-2 py-1 text-xs" style={{ left: hover.px + 12, top: hover.py + 12 }}>
@@ -502,7 +545,7 @@ export function GraphScreen() {
             ) : null}
           </div>
         ) : null}
-        <div className="absolute left-3 bottom-3 panel px-2.5 py-1.5 text-2xs text-fg-muted flex items-center gap-3">
+        <div className="absolute left-3 right-3 bottom-3 sm:right-auto panel px-2.5 py-1.5 text-2xs text-fg-muted flex flex-wrap items-center gap-x-3 gap-y-1">
           {([0, 1, 2, 3, 4] as Ring[]).map((r) => (
             <span key={r} className="inline-flex items-center gap-1">
               <RingGlyph ring={r} size={9} /> r{r}
@@ -511,7 +554,7 @@ export function GraphScreen() {
           <span className="inline-flex items-center gap-1">
             <span className="inline-block w-[9px] h-[9px] rounded-full border border-dashed border-fg-faint" /> {t.common.intent}
           </span>
-          <span className="text-fg-faint">{t.graph.legendHint}</span>
+          <span id="graph-keys" className="text-fg-faint">{t.graph.legendHint} {t.graph.keyboardHint}</span>
         </div>
       </div>
     </div>

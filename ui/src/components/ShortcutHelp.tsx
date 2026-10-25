@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useT } from "@/lib/i18n";
 import { activeBindings, onBindingsChange, useShortcuts } from "@/lib/keys";
+import { Dialog } from "./Dialog";
 import { Kbd } from "./ui";
 
 export function ShortcutHelp() {
@@ -21,30 +22,40 @@ export function ShortcutHelp() {
     groups.set(b.scope, g);
   }
   return (
-    <div className="scrim items-start justify-center pt-[12vh]" onClick={() => setOpen(false)} role="dialog" aria-label={t.keys.dialogLabel}>
-      <div className="dialog w-[min(40rem,92vw)] max-h-[76vh] overflow-auto scroll-thin" onClick={(e) => e.stopPropagation()}>
-        <header className="section-head">
+    <Dialog
+      top
+      label={t.keys.dialogLabel}
+      onEscape={() => setOpen(false)}
+      className="w-[min(40rem,92vw)]"
+      title={
+        <>
           <h2 className="text-sm font-semibold">{t.keys.title}</h2>
-          <span className="text-xs text-fg-faint">
+          <span className="text-xs text-fg-faint ml-3">
             <Kbd keys="?" /> {t.keys.hint.toggles} · <Kbd keys="Escape" /> {t.keys.hint.closes}
           </span>
-        </header>
-        <div className="p-4 grid gap-4 sm:grid-cols-2">
-          {[...groups.entries()].map(([scope, bs]) => (
-            <div key={scope}>
-              <div className="label mb-1.5">{t.scopes[scope as keyof typeof t.scopes] ?? scope}</div>
-              <ul className="space-y-1">
-                {bs.map(({ binding }, i) => (
-                  <li key={i} className="flex items-center justify-between gap-3 text-sm">
-                    <span className="text-fg-muted">{binding.label}</span>
-                    <Kbd keys={binding.keys} />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
-        </div>
+        </>
+      }
+      actions={
+        <button type="button" className="btn btn-sm" onClick={() => setOpen(false)}>
+          {t.common.close}
+        </button>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        {[...groups.entries()].map(([scope, bs]) => (
+          <div key={scope}>
+            <div className="label mb-1.5">{t.scopes[scope as keyof typeof t.scopes] ?? scope}</div>
+            <ul className="space-y-1">
+              {bs.map(({ binding }, i) => (
+                <li key={i} className="flex items-center justify-between gap-3 text-sm">
+                  <span className="text-fg-muted">{binding.label}</span>
+                  <Kbd keys={binding.keys} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
-    </div>
+    </Dialog>
   );
 }

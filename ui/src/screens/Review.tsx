@@ -5,7 +5,8 @@ import { ErrorBanner, Loading, Pill } from "@/components/ui";
 import { absTime, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { Markdown } from "@/lib/markdown";
-import { useAsync } from "@/lib/useAsync";
+import { diffSummary, lineDiff } from "@/lib/diff";
+import { toApiError, useAsync } from "@/lib/useAsync";
 
 /**
  * What agents want to add to memory, and who decided (C5, 2026-10-03).
@@ -139,6 +140,10 @@ function ProposalCard({ p, onDecided }: { p: ProposalDetail; onDecided: () => vo
 
       {p.untrusted ? <p className="text-xs text-fg-muted">{t.review.untrustedNote}</p> : null}
 
+      {/* The reviewer used to see only the new text of a proposal that replaces a note, and
+          had to open the note in another tab to find out what was being replaced. */}
+      {p.changes_existing ? <Compare name={p.name} proposed={p.body} /> : null}
+
       <div className="text-sm border-l-2 border-line pl-3">
         {/* `[[…]]` in a proposal is shown as intent, never as a link into the store: the text may be from outside. */}
         <Markdown source={p.body} resolves={() => false} />
@@ -162,5 +167,72 @@ function ProposalCard({ p, onDecided }: { p: ProposalDetail; onDecided: () => vo
         </button>
       </div>
     </article>
+  );
+}
+
+/**
+ * What an accepted proposal would change: the note as it is now against the proposal, line
+ * by line. Loaded when asked for, not with every card.
+ */
+function Compare({ name, proposed }: { name: string; proposed: string }) {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState<string | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (!next || current !== null) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setCurrent((await api.getNote(name)).body);
+    } catch (e) {
+      setError(toApiError(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const diff = current === null ? null : lineDiff(current, proposed);
+  const sum = diff ? diffSummary(diff) : null;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <button type="button" className="btn btn-sm self-start" aria-expanded={open} onClick={toggle}>
+        {open ? t.review.compareHide : t.review.compare}
+      </button>
+      {open && busy ? <Loading /> : null}
+      {open && error ? <ErrorBanner error={error} onRetry={toggle} /> : null}
+      {open && current !== null ? (
+        <div className="panel-inset text-xs">
+          {sum ? <div className="px-3 py-1.5 border-b text-fg-muted">{t.review.compareSummary(sum.added, sum.removed)}</div> : null}
+          {diff ? (
+            <pre className="px-3 py-2 overflow-auto max-h-[24rem] whitespace-pre-wrap break-words font-mono" tabIndex={0} aria-label={t.review.compareAria}>
+              {diff.map((l, i) => (
+                <div key={i} className={l.kind === "add" ? "diff-add" : l.kind === "del" ? "diff-del" : "text-fg-muted"}>
+                  <span aria-hidden className="select-none inline-block w-4">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>
+                  <span className="sr-only">{l.kind === "add" ? t.review.added : l.kind === "del" ? t.review.removed : t.review.unchanged}: </span>
+                  {l.text}
+                </div>
+              ))}
+            </pre>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 p-3">
+              <div>
+                <div className="label mb-1">{t.review.before}</div>
+                <pre className="whitespace-pre-wrap break-words max-h-[24rem] overflow-auto" tabIndex={0}>{current}</pre>
+              </div>
+              <div>
+                <div className="label mb-1">{t.review.after}</div>
+                <pre className="whitespace-pre-wrap break-words max-h-[24rem] overflow-auto" tabIndex={0}>{proposed}</pre>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
   );
 }

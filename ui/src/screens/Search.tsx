@@ -5,7 +5,7 @@ import { RingBadge, RingLegend } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
 import { Empty, ErrorBanner, Kbd, Pill } from "@/components/ui";
 import { copyText } from "@/lib/clipboard";
-import { dec, highlight } from "@/lib/format";
+import { absTime, dec, highlight, shortDate } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, type Route } from "@/lib/router";
@@ -19,6 +19,8 @@ export function SearchScreen({ route }: { route: Route }) {
   const [q, setQ] = useState(route.query.get("q") ?? "");
   const [n, setN] = useState(Number(route.query.get("n") ?? 8) || 8);
   const [ring, setRing] = useState<Ring | null>(route.query.has("ring") ? (Number(route.query.get("ring")) as Ring) : null);
+  // "As of": judge validity on that day instead of today (`recall --stand`).
+  const [stand, setStand] = useState(/^\d{4}-\d{2}-\d{2}$/.test(route.query.get("stand") ?? "") ? (route.query.get("stand") as string) : "");
   const [result, setResult] = useState<RecallResult | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
@@ -28,13 +30,14 @@ export function SearchScreen({ route }: { route: Route }) {
 
   // The URL is the state of record so a search can be bookmarked and shared with an agent.
   useEffect(() => {
-    const timer = setTimeout(() => navigate(href("search", null, { q: q || undefined, n: n !== 8 ? n : undefined, ring: ring ?? undefined }), true), 150);
+    const timer = setTimeout(() => navigate(href("search", null, { q: q || undefined, n: n !== 8 ? n : undefined, ring: ring ?? undefined, stand: stand || undefined }), true), 150);
     return () => clearTimeout(timer);
-  }, [q, n, ring]);
+  }, [q, n, ring, stand]);
 
   useEffect(() => {
     const query = q.trim();
     if (!query) {
+      gen.current++; // see Ask: a late answer must not refill the cleared box
       setResult(null);
       setError(null);
       setLoading(false);
@@ -45,6 +48,7 @@ export function SearchScreen({ route }: { route: Route }) {
     const timer = setTimeout(() => {
       const params: Parameters<typeof api.recall>[0] = { q: query, n };
       if (ring !== null) params.ring = ring;
+      if (stand) params.stand = stand;
       api.recall(params).then(
         (r) => {
           if (g !== gen.current) return;
@@ -62,7 +66,7 @@ export function SearchScreen({ route }: { route: Route }) {
       );
     }, 220);
     return () => clearTimeout(timer);
-  }, [q, n, ring]);
+  }, [q, n, ring, stand]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -156,7 +160,16 @@ export function SearchScreen({ route }: { route: Route }) {
           </select>
         </div>
         <div className="mt-2.5 flex items-center gap-2 flex-wrap">
-          <span className="label">{t.common.ring}</span>
+          <label className="label inline-flex items-center gap-1.5" title={t.search.stand.title}>
+            {t.search.stand.label}
+            <input type="date" className="input h-7 text-xs" value={stand} onChange={(e) => setStand(e.target.value)} aria-label={t.search.stand.aria} />
+          </label>
+          {stand ? (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={() => setStand("")}>
+              {t.search.stand.clear}
+            </button>
+          ) : null}
+          <span className="label ml-2">{t.common.ring}</span>
           <div className="seg" role="group" aria-label={t.common.ring}>
             {ringOptions.map((r) => (
               <button
@@ -273,6 +286,9 @@ export function SearchScreen({ route }: { route: Route }) {
                         {h.note_name}
                       </a>
                       <span className="text-2xs text-fg-faint tnum">#{h.block_idx}</span>
+                      {h.superseded_by ? <Pill tone="warn" title={t.search.badge.supersededTitle(h.superseded_by)}>{t.search.badge.superseded}</Pill> : null}
+                      {h.invalid_at ? <Pill tone="warn" title={absTime(h.invalid_at)}>{t.search.badge.invalid}</Pill> : null}
+                      {h.valid_from ? <Pill title={absTime(h.valid_from)}>{t.search.badge.notYet(shortDate(h.valid_from))}</Pill> : null}
                       <CitationChip citation={h.citation} ring={h.ring} className="ml-auto" />
                       <ScoreBar score={h.score} top={top} />
                       <span className="hidden md:inline-flex gap-1">

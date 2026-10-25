@@ -804,7 +804,7 @@ fn show_all_command_lines(
     }
     let urls: Vec<String> = projects
         .iter()
-        .map(|p| format!("{}#/console", p.server.url))
+        .map(|p| format!("{}#/console?pane=1", p.server.url))
         .collect();
     match window::open_panes(&tr(Key::PanesTitle, &[]), &urls) {
         Ok(w) => *panes = Some(w),

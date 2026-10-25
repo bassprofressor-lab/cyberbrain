@@ -686,6 +686,7 @@ export type AuditActionFilter = AuditAction | "note" | "note.write" | "note.eras
 export const AUDIT_ACTION_FAMILIES: ReadonlyArray<AuditActionFilter> = [
   "note",
   "note.write",
+  "note.proposed",
   "note.proposal",
   "note.erase",
   "egress",

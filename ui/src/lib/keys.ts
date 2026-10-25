@@ -23,6 +23,27 @@ interface Scope {
 }
 
 const scopes: Scope[] = [];
+/** Open dialogs. While there is one, the page behind it does not hear the keyboard. */
+let modalDepth = 0;
+
+/**
+ * Whether a scope may react to keys right now. With a dialog open only the help overlay
+ * (which is itself one) does: `j`, `e` or `g s` typed into a PII question would otherwise
+ * move the list, start an edit or leave the screen behind it.
+ */
+export function scopeAllowed(name: string, depth: number): boolean {
+  return depth === 0 || name === "help";
+}
+
+/** Mark a dialog as open for as long as the calling component is mounted. */
+export function useModal() {
+  useEffect(() => {
+    modalDepth++;
+    return () => {
+      modalDepth--;
+    };
+  }, []);
+}
 const listeners = new Set<() => void>();
 let pendingChord: string | null = null;
 let chordTimer: ReturnType<typeof setTimeout> | null = null;
@@ -52,6 +73,7 @@ function dispatch(e: KeyboardEvent) {
   const chord = pendingChord ? `${pendingChord} ${name}` : null;
   // Newest scope first.
   for (let i = scopes.length - 1; i >= 0; i--) {
+    if (!scopeAllowed(scopes[i]?.name ?? "", modalDepth)) continue;
     for (const b of scopes[i]?.bindings ?? []) {
       if (editing && !b.inInputs && name !== "Escape") continue;
       if (chord && b.keys === chord) {
@@ -72,7 +94,7 @@ function dispatch(e: KeyboardEvent) {
     return;
   }
   // Start a chord if any binding begins with this key.
-  if (!editing && scopes.some((s) => s.bindings.some((b) => b.keys.startsWith(name + " ")))) {
+  if (!editing && scopes.some((s) => scopeAllowed(s.name, modalDepth) && s.bindings.some((b) => b.keys.startsWith(name + " ")))) {
     pendingChord = name;
     chordTimer = setTimeout(clearChord, 900);
     e.preventDefault();

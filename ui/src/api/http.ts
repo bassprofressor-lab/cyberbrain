@@ -97,7 +97,7 @@ export const httpClient: CyberbrainApi = {
   status: () => request<StatusReport>("GET", "/status"),
   hubStatus: () => request<HubStatus>("GET", "/hub"),
   usage: (days) => request<UsageReport>("GET", `/usage${qs({ days })}`),
-  recall: (p: RecallParams) => request<RecallResult>("GET", `/recall${qs({ q: p.q, n: p.n, ring: p.ring })}`),
+  recall: (p: RecallParams) => request<RecallResult>("GET", `/recall${qs({ q: p.q, n: p.n, ring: p.ring, stand: p.stand })}`),
   expand: (citation) => request<CitationExpansion>("GET", `/recall/${encodeURIComponent(citation)}`),
 
   listNotes: (p: NoteListParams = {}) => request<NoteSummary[]>("GET", `/notes${qs({ ring: p.ring, kind: p.kind, q: p.q, sort: p.sort })}`),

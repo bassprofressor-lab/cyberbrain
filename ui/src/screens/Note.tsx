@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, type ForgetReport, type NoteDetail, type NoteKind, type NoteSummary, type PiiHold, type Ring } from "@/api/client";
+import { api, ApiError, type ForgetReport, type NoteKind, type NoteSummary, type PiiHold, type Ring } from "@/api/client";
 import { CitationChip } from "@/components/Citation";
 import { HoldDialog } from "@/components/HoldDialog";
 import { NewNoteForm } from "@/components/NewNote";
@@ -10,8 +10,10 @@ import { absTime, duration, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { Markdown } from "@/lib/markdown";
-import { href, navigate, type Route } from "@/lib/router";
+import { filterFromRoute, href, navigate, type Route } from "@/lib/router";
+import { useBlockJump } from "@/lib/useBlockJump";
 import { toApiError, useAsync } from "@/lib/useAsync";
+import { Dialog } from "@/components/Dialog";
 
 const KINDS: NoteKind[] = ["knowledge", "bug", "lesson", "decision", "reference", "session"];
 
@@ -22,6 +24,8 @@ export function NoteScreen({ route }: { route: Route }) {
   const [filter, setFilter] = useState(route.query.get("q") ?? "");
   const [ring, setRing] = useState<Ring | null>(route.query.has("ring") ? (Number(route.query.get("ring")) as Ring) : null);
   const [kind, setKind] = useState<NoteKind | "">("");
+  // The tag link goes from `#/note/x` to `#/notes?q=tag` without unmounting this component.
+  useEffect(() => setFilter((typed) => filterFromRoute(route, typed)), [route]);
   const list = useAsync(() => {
     const p: Parameters<typeof api.listNotes>[0] = { sort: "updated" };
     if (ring !== null) p.ring = ring;
@@ -82,7 +86,7 @@ export function NoteScreen({ route }: { route: Route }) {
               <option value="">{t.notes.anyKind}</option>
               {KINDS.map((k) => (
                 <option key={k} value={k}>
-                  {k}
+                  {t.enums.kind[k]}
                 </option>
               ))}
             </select>
@@ -144,7 +148,7 @@ function NoteRow({ n, active, cursor, onHover }: { n: NoteSummary; active: boole
         </div>
         <div className="mt-0.5 flex items-center gap-2 text-2xs text-fg-faint tnum">
           <span style={{ color: `var(--ring-${n.ring})` }}>r{n.ring}</span>
-          <span>{n.kind}</span>
+          <span>{t.enums.kind[n.kind]}</span>
           <span>{relTime(n.updated)}</span>
           {n.pii !== "none" ? <Pill tone={n.pii === "flagged" ? "danger" : n.pii === "reviewed" ? "warn" : "neutral"}>{n.pii === "unscanned" ? t.notes.piiNotScanned : t.notes.pii(t.pii.state[n.pii])}</Pill> : null}
         </div>
@@ -173,12 +177,8 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
     }
   }, [editing, d]);
 
-  // Deep link from a search hit: scroll the cited block's heading into view when possible.
-  useEffect(() => {
-    if (!d || block === null) return;
-    const el = document.getElementById(`block-${block}`);
-    el?.scrollIntoView({ block: "start" });
-  }, [d, block]);
+  // Deep link from a search hit or a citation: scroll to the block it names.
+  useBlockJump(d, block, !editing);
 
   const save = async () => {
     if (!d) return;
@@ -255,7 +255,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
         <header className="flex flex-wrap items-center gap-2">
           <RingBadge ring={f.ring} showName />
           <h1 className="text-lg font-semibold font-mono truncate">{f.name}</h1>
-          <Pill>{f.kind}</Pill>
+          <Pill>{t.enums.kind[f.kind]}</Pill>
           {f.pii !== "none" ? (
             <Pill tone={f.pii === "flagged" ? "danger" : f.pii === "reviewed" ? "warn" : "neutral"} title={f.pii === "unscanned" ? t.note.piiNotScannedTitle : undefined}>
               {f.pii === "unscanned" ? t.note.piiNotScanned : t.notes.pii(t.pii.state[f.pii])}
@@ -338,7 +338,6 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
           </div>
         ) : (
           <div className="mt-5">
-            <BlockAnchors detail={d} />
             <Markdown source={d.body} resolves={resolvesAll} />
           </div>
         )}
@@ -412,52 +411,45 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
   );
 }
 
-/** Invisible anchors so `?block=N` from a search hit lands near the right paragraph. Approximate: block N ≈ heading N. */
-function BlockAnchors({ detail }: { detail: NoteDetail }) {
-  return (
-    <>
-      {detail.blocks.map((b) => (
-        <span key={b.idx} id={`block-${b.idx}`} className="block h-0" aria-hidden />
-      ))}
-    </>
-  );
-}
-
 function ForgetDialog({ report, onCancel, onConfirm }: { report: ForgetReport; onCancel: () => void; onConfirm: () => void }) {
   const t = useT();
   const r = report.removed;
   return (
-    <div className="scrim items-center justify-center" role="dialog" aria-modal aria-label={t.note.forgetDialog.aria}>
-      <div className="dialog w-[min(30rem,100%)]">
-        <header className="section-head justify-start">
+    <Dialog
+      label={t.note.forgetDialog.aria}
+      onEscape={onCancel}
+      className="w-[min(30rem,100%)]"
+      title={
+        <>
           <Pill>{t.note.forgetDialog.dryRun}</Pill>
-          <h2 className="text-sm font-semibold">{t.note.forgetDialog.title(report.note.name)}</h2>
-        </header>
-        <div className="p-4 text-sm space-y-3">
-          <p className="text-fg-muted">{t.note.forgetDialog.body}</p>
-          <ul className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono tnum">
-            <li>{t.note.forgetDialog.file} <span className="text-fg-muted">{report.note.path}</span></li>
-            <li>{t.note.forgetDialog.blocks} {r.blocks}</li>
-            <li>{t.note.forgetDialog.vectors} {r.vectors}</li>
-            <li>{t.note.forgetDialog.ftsRows} {r.fts_rows}</li>
-            <li>{t.note.forgetDialog.linksIn} {r.links_in}</li>
-            <li>{t.note.forgetDialog.linksOut} {r.links_out}</li>
-            <li>{t.note.forgetDialog.derivatives} {r.derivatives}</li>
-          </ul>
-          {report.notes.length ? (
-            <ul className="text-2xs text-fg-muted space-y-0.5">
-              {report.notes.map((x, i) => (
-                <li key={i}>{x}</li>
-              ))}
-            </ul>
-          ) : null}
-          <p className="text-2xs text-fg-faint">{t.note.forgetDialog.audit}</p>
-          <div className="flex gap-1.5 justify-end">
-            <button className="btn btn-sm" onClick={onCancel}>{t.common.cancel}</button>
-            <button className="btn btn-sm btn-danger" onClick={onConfirm}>{t.note.forgetDialog.confirm}</button>
-          </div>
-        </div>
-      </div>
-    </div>
+          <h2 className="text-sm font-semibold ml-2">{t.note.forgetDialog.title(report.note.name)}</h2>
+        </>
+      }
+      actions={
+        <>
+          <button className="btn btn-sm" onClick={onCancel}>{t.common.cancel}</button>
+          <button className="btn btn-sm btn-danger" onClick={onConfirm}>{t.note.forgetDialog.confirm}</button>
+        </>
+      }
+    >
+      <p className="text-fg-muted">{t.note.forgetDialog.body}</p>
+      <ul className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs font-mono tnum">
+        <li>{t.note.forgetDialog.file} <span className="text-fg-muted">{report.note.path}</span></li>
+        <li>{t.note.forgetDialog.blocks} {r.blocks}</li>
+        <li>{t.note.forgetDialog.vectors} {r.vectors}</li>
+        <li>{t.note.forgetDialog.ftsRows} {r.fts_rows}</li>
+        <li>{t.note.forgetDialog.linksIn} {r.links_in}</li>
+        <li>{t.note.forgetDialog.linksOut} {r.links_out}</li>
+        <li>{t.note.forgetDialog.derivatives} {r.derivatives}</li>
+      </ul>
+      {report.notes.length ? (
+        <ul className="text-2xs text-fg-muted space-y-0.5">
+          {report.notes.map((x, i) => (
+            <li key={i}>{x}</li>
+          ))}
+        </ul>
+      ) : null}
+      <p className="text-2xs text-fg-faint">{t.note.forgetDialog.audit}</p>
+    </Dialog>
   );
 }

@@ -5,6 +5,7 @@ import { RingBadge } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
 import { Dot, Empty, ErrorBanner, KeyValue, Loading, Pill, Section, Stat } from "@/components/ui";
 import { absTime, bytes, duration, num, relTime, shortDate } from "@/lib/format";
+import { collectAudit } from "@/lib/auditExport";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, type Route } from "@/lib/router";
@@ -98,6 +99,19 @@ export function ComplianceScreen({ route }: { route: Route }) {
         ) : null}
       </nav>
       <div ref={scrollRef} className="overflow-auto scroll-thin p-5 space-y-5 min-w-0">
+        {/* The side list is hidden below md; this is the same jump list for a narrow window
+            (two windows side by side), so the sections are not reachable only by scrolling. */}
+        <nav className="md:hidden -mx-5 -mt-5 px-5 py-2 sticky top-0 z-10 bg-surface border-b overflow-x-auto" aria-label={t.compliance.sectionsAria}>
+          <ul className="flex gap-1 w-max">
+            {SECTIONS.map((id) => (
+              <li key={id}>
+                <a href={href("compliance", null, undefined, id)} className={`nav-item whitespace-nowrap ${active === id ? "is-active" : ""}`}>
+                  {t.compliance.sections[id]}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
         <div id="c-overview">
           {egress.error ? <ErrorBanner error={egress.error} onRetry={egress.reload} /> : egress.data ? <Overview register={egress.data} auditRows={status.data?.policy.audit_rows ?? null} /> : <Loading label={t.compliance.loadingEgress} />}
         </div>
@@ -160,7 +174,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
                           {e.findings.length ? (
                             e.findings.map((f, i) => (
                               <div key={i}>
-                                <span className="text-fg-muted">{f.kind}</span> {f.excerpt} <span className="text-fg-faint tnum">{f.line}:{f.col}</span>
+                                <span className="text-fg-muted">{t.enums.pii[f.kind]}</span> {f.excerpt} <span className="text-fg-faint tnum">{f.line}:{f.col}</span>
                               </div>
                             ))
                           ) : (
@@ -279,7 +293,7 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         <Stat label={t.compliance.overview.internet} value={pubUses === 0 ? t.compliance.overview.noRequests : t.compliance.overview.requests(num(pubUses))} sub={pubUses === 0 ? t.compliance.overview.noBytes : t.compliance.overview.bytesOut(bytes(pubBytes), pub.map((p) => p.purpose).join(", "))} tone={pubUses === 0 ? "ok" : undefined} />
-        <Stat label={t.compliance.overview.ownNetwork} value={t.compliance.overview.calls(num(localUses))} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => p.destination_class).join(", ")}` : t.compliance.overview.noLocalEndpoint} />
+        <Stat label={t.compliance.overview.ownNetwork} value={t.compliance.overview.calls(num(localUses))} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => t.enums.destination[p.destination_class]).join(", ")}` : t.compliance.overview.noLocalEndpoint} />
         <Stat label={t.compliance.overview.refused} value={num(register.refused_total)} sub={register.refused_total ? t.compliance.overview.refusedSub : t.compliance.overview.refusedNone} tone={register.refused_total ? "warn" : "ok"} />
         <Stat label={t.compliance.overview.auditRows} value={auditRows === null ? "—" : num(auditRows)} sub={t.compliance.overview.auditRowsSub} />
       </div>
@@ -385,7 +399,7 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
                   <Breakable text={p.destination} />
                 </code>
                 <div className="mt-0.5">
-                  <Pill tone={p.destination_class === "public" ? "warn" : p.destination_class === "none" ? "neutral" : "ok"}>{p.destination_class}</Pill>
+                  <Pill tone={p.destination_class === "public" ? "warn" : p.destination_class === "none" ? "neutral" : "ok"}>{t.enums.destination[p.destination_class]}</Pill>
                 </div>
               </td>
               <td className="font-mono">{p.permitted_by.join(" ")}</td>
@@ -409,6 +423,9 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
   );
 }
 
+/** 100 pages of 1000 rows. Past that the export says it is partial instead of stopping quietly. */
+const EXPORT_PAGES = 100;
+
 function AuditSection() {
   const t = useT();
   const [action, setAction] = useState<AuditActionFilter | "">("");
@@ -420,8 +437,13 @@ function AuditSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<ReturnType<typeof toApiError> | null>(null);
   const toast = useToast();
+  // The newest request wins, as in the search screens. A slow answer for the previous filter
+  // used to land after the answer for this one and replace its rows and total, or, for a
+  // page of "more", append rows of the wrong filter.
+  const gen = useRef(0);
 
   const load = (before?: number) => {
+    const g = ++gen.current;
     setLoading(true);
     const p: Parameters<typeof api.audit>[0] = { limit: 50 };
     if (before !== undefined) p.before = before;
@@ -430,6 +452,7 @@ function AuditSection() {
     if (q) p.q = q;
     api.audit(p).then(
       (page) => {
+        if (g !== gen.current) return;
         setRows((r) => (before === undefined ? page.rows : [...r, ...page.rows]));
         setTotal(page.total);
         setNext(page.next_before);
@@ -439,6 +462,7 @@ function AuditSection() {
       (e) => {
         // A 400 here is the server refusing a filter that matches nothing, with the names
         // that exist; keep the old rows off the screen so the message is not read as data.
+        if (g !== gen.current) return;
         setError(toApiError(e));
         if (before === undefined) {
           setRows([]);
@@ -458,24 +482,22 @@ function AuditSection() {
   const exportJson = async () => {
     // The export is built in the page and handed to the browser; nothing is uploaded.
     try {
-      const all: AuditRow[] = [];
-      let before: number | undefined;
-      for (let i = 0; i < 100; i++) {
+      const { rows: all, complete } = await collectAudit<AuditRow>((before) => {
         const p: Parameters<typeof api.audit>[0] = { limit: 1000 };
         if (before !== undefined) p.before = before;
-        const page = await api.audit(p);
-        all.push(...page.rows);
-        if (page.next_before === null) break;
-        before = page.next_before;
-      }
+        return api.audit(p);
+      }, EXPORT_PAGES);
       const blob = new Blob([JSON.stringify(all, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `cyberbrain-audit-${new Date().toISOString().slice(0, 10)}.json`;
+      // A file that stops short must say so in its name: it is handed on as evidence, and a
+      // partial log that looks whole is worse than none.
+      a.download = `cyberbrain-audit-${new Date().toISOString().slice(0, 10)}${complete ? "" : "-partial"}.json`;
       a.click();
       URL.revokeObjectURL(url);
-      toast(t.compliance.audit.exported(all.length));
+      if (complete) toast(t.compliance.audit.exported(all.length));
+      else toast(t.compliance.audit.exportedPartial(all.length), "err");
     } catch (e) {
       toast(toApiError(e).message, "err");
     }

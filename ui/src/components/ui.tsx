@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { useT } from "@/lib/i18n";
+import { errorKind } from "@/lib/errors";
 import { prettyKeys } from "@/lib/keys";
 
 export function Kbd({ keys, className = "" }: { keys: string; className?: string }) {
@@ -15,14 +16,17 @@ export function Kbd({ keys, className = "" }: { keys: string; className?: string
   );
 }
 
-export function Section({ id, title, aside, children, className = "" }: { id?: string; title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string }) {
+export function Section({ id, title, aside, children, className = "", fill = false }: { id?: string; title: ReactNode; aside?: ReactNode; children: ReactNode; className?: string; fill?: boolean }) {
+  // `fill`: the section takes the height it is given and its body is a column, so a child
+  // with `flex-1 min-h-0 overflow-y-auto` scrolls inside it. The body used to be a plain
+  // block, in which that child just grew, and a long output pushed the input out of view.
   return (
-    <section id={id} className={`panel ${className}`}>
+    <section id={id} className={`panel ${fill ? "flex-1 min-h-0 flex flex-col" : ""} ${className}`}>
       <header className="section-head">
         <h2>{title}</h2>
         {aside ? <div className="text-xs text-fg-muted flex items-center gap-2 min-w-0">{aside}</div> : null}
       </header>
-      <div className="p-4">{children}</div>
+      <div className={`p-4 ${fill ? "flex-1 min-h-0 flex flex-col" : ""}`}>{children}</div>
     </section>
   );
 }
@@ -78,19 +82,26 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
+/**
+ * What went wrong, in a sentence first; the code, the status and the server's own text are
+ * one click down. The server's wording is English and technical, and it used to be the first
+ * thing a colleague read.
+ */
 export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
   const t = useT();
   return (
     <div className="alert alert-danger" role="alert">
       <div className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="font-medium text-danger">
-            {error.body.code}
-            <span className="ml-2 font-mono text-2xs text-fg-muted">
-              {t.error.http(error.status || "—", error.body.exit_code)}
-            </span>
-          </div>
-          <div className="mt-0.5 text-fg">{error.message}</div>
+          <div className="font-medium text-danger">{t.error.friendly[errorKind(error)]}</div>
+          <details className="mt-1 text-xs">
+            <summary className="cursor-pointer text-fg-muted">{t.error.details}</summary>
+            <div className="mt-1">
+              <span className="font-mono">{error.body.code}</span>
+              <span className="ml-2 font-mono text-2xs text-fg-muted">{t.error.http(error.status || "—", error.body.exit_code)}</span>
+            </div>
+            <div className="mt-0.5 text-fg break-words">{error.message}</div>
+          </details>
         </div>
         {onRetry ? (
           <button className="btn btn-sm" onClick={onRetry}>

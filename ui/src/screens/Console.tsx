@@ -138,7 +138,7 @@ export function ConsoleScreen() {
             </button>
           ) : undefined
         }
-        className="flex-1 min-h-0 flex flex-col"
+        fill
       >
         <p className="text-2xs text-fg-faint mb-3 max-w-prose">{t.console.lead}</p>
 
@@ -228,9 +228,9 @@ function Transcript({ entry }: { entry: Entry }) {
       </div>
       {/* A refusal is the server's own sentence. It says which command and why, and
           paraphrasing it here would be a second place to keep that reason true. */}
-      {error ? <pre className="mt-1 ml-4 whitespace-pre-wrap text-danger">{error.body.message}</pre> : null}
-      {result?.stdout ? <pre className="mt-1 ml-4 whitespace-pre-wrap">{result.stdout}</pre> : null}
-      {result?.stderr ? <pre className="mt-1 ml-4 whitespace-pre-wrap text-warn">{result.stderr}</pre> : null}
+      {error ? <pre className="mt-1 ml-4 whitespace-pre-wrap text-danger max-h-[24rem] overflow-auto">{error.body.message}</pre> : null}
+      {result?.stdout ? <pre className="mt-1 ml-4 whitespace-pre-wrap max-h-[24rem] overflow-auto" tabIndex={0}>{result.stdout}</pre> : null}
+      {result?.stderr ? <pre className="mt-1 ml-4 whitespace-pre-wrap text-warn max-h-[24rem] overflow-auto" tabIndex={0}>{result.stderr}</pre> : null}
       {result?.truncated ? <div className="ml-4 text-2xs text-fg-faint">{t.console.truncated}</div> : null}
     </div>
   );

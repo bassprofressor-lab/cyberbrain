@@ -706,6 +706,13 @@
     display: flex;
     gap: 0.125rem;
   }
+  /* A fade on the right edge says the strip scrolls sideways; there was no sign of it. */
+  @media (max-width: 767px) {
+    .app-nav {
+      -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 1.75rem), transparent);
+      mask-image: linear-gradient(to right, #000 calc(100% - 1.75rem), transparent);
+    }
+  }
   .app-foot {
     display: flex;
     flex-wrap: wrap;
@@ -812,6 +819,32 @@
     border: 1px solid var(--line);
     border-radius: 0.75rem;
     box-shadow: var(--shadow-md);
+  }
+  /* The box never outgrows the window: the body scrolls and the answer buttons stay put. */
+  .dialog-box {
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - 2rem);
+    overflow: hidden;
+    outline: none;
+  }
+  .dialog-body {
+    min-height: 0;
+    overflow: auto;
+  }
+  /* Approval diff: tinted lines, and a sign in front so colour is never the only cue. */
+  .diff-add { background: color-mix(in oklch, var(--ok) 16%, transparent); }
+  .diff-del { background: color-mix(in oklch, var(--danger) 16%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in oklch, var(--danger) 50%, transparent); }
+  /* The block a link pointed at, for a moment after the page scrolled to it. */
+  .block-flash {
+    animation: block-flash 2.2s ease-out;
+  }
+  @keyframes block-flash {
+    0%, 35% { background: color-mix(in oklch, var(--accent) 22%, transparent); }
+    100% { background: transparent; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .block-flash { animation: none; background: color-mix(in oklch, var(--accent) 14%, transparent); }
   }
   .scroll-thin {
     scrollbar-width: thin;

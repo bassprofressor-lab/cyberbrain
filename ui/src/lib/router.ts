@@ -108,6 +108,35 @@ export function href(screen: Screen, param?: string | null, query?: Record<strin
   return h;
 }
 
+// Where the person came from, for a Back that goes to the question and not to a list. The
+// hash is the only history the page has; `previous` is the one before `current`.
+let current = typeof location !== "undefined" ? location.hash : "";
+let previous = "";
+if (typeof window !== "undefined") {
+  window.addEventListener("hashchange", () => {
+    previous = current;
+    current = location.hash;
+  });
+}
+
+/** Whether the screen before this one was the search (or the question box in simple mode). */
+export function cameFromSearch(from: string = previous): boolean {
+  return /^#\/search(\?|#|$)/.test(from);
+}
+
+/**
+ * What the filter box of the notes list holds after the address changed.
+ *
+ * The list is the same component whether the address is `#/notes` or `#/note/x`, so it stays
+ * mounted when a tag link goes from one to the other and only read `q` once, at the start.
+ * The tag link changed the address and nothing else. An address that carries `q` wins;
+ * one without it leaves what the person typed alone.
+ */
+export function filterFromRoute(route: Route, typed: string): string {
+  if (route.screen === "notes" && route.query.has("q")) return route.query.get("q") ?? "";
+  return typed;
+}
+
 export function navigate(to: string, replace = false) {
   if (replace) history.replaceState(null, "", to);
   else location.hash = to.startsWith("#") ? to.slice(1) : to;

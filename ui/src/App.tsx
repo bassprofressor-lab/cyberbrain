@@ -48,6 +48,9 @@ export function App() {
   }, [route.screen]);
   const other = lang === "en" ? "de" : "en";
   const nav = simple ? SIMPLE_SCREENS : SCREENS;
+  // One pane of the launcher's side-by-side window: the command line alone, without the
+  // sidebar. Four projects each carrying a full navigation left the lines 180 px wide.
+  const bare = route.screen === "console" && route.query.get("pane") === "1";
 
   useShortcuts(
     "global",
@@ -84,8 +87,8 @@ export function App() {
     // Below 768px the sidebar is a header: brand, a nav strip that scrolls sideways, and
     // the same footer folded into one row. Nothing is dropped, it only changes direction —
     // a 13rem column next to a 390px screen left the content 180px wide.
-    <div className="h-dvh grid grid-cols-1 grid-rows-[auto_1fr] md:grid-rows-1 md:grid-cols-[14rem_minmax(0,1fr)] overflow-hidden">
-      <aside className="app-side min-w-0">
+    <div className={`h-dvh grid grid-cols-1 overflow-hidden ${bare ? "grid-rows-1" : "grid-rows-[auto_1fr] md:grid-rows-1 md:grid-cols-[14rem_minmax(0,1fr)]"}`}>
+      <aside className="app-side min-w-0" style={bare ? { display: "none" } : undefined}>
         <div className="app-brand">
           <Logo />
           <span>Cyberbrain</span>
