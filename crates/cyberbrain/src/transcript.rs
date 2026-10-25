@@ -91,6 +91,13 @@ pub fn extract(jsonl: &str, max_chars: usize) -> Extract {
         let n = p.chars().count() + 2;
         if size + n > max_chars {
             omitted_start = true;
+            // The newest message alone is over the cap. Stopping here would keep nothing at
+            // all, so it keeps its own end instead, marked as cut.
+            if kept.is_empty() {
+                let room = max_chars.saturating_sub(3);
+                let skip = p.chars().count().saturating_sub(room);
+                kept.push(format!("…{}", p.chars().skip(skip).collect::<String>()));
+            }
             break;
         }
         size += n;
@@ -222,6 +229,23 @@ mod tests {
         assert!(e.text.ends_with("User: Frage 199"), "{}", e.text);
         assert!(!e.text.contains("Frage 0\n"));
         assert!(e.text.chars().count() <= 300 + 40);
+    }
+
+    /// A last message larger than the whole cap used to leave nothing but the omission note:
+    /// the walk back stopped at the first paragraph that did not fit.
+    #[test]
+    fn a_last_message_over_the_cap_keeps_its_end() {
+        let mut s = line(serde_json::json!({"type": "user", "message": {"content": "Frage"}}));
+        let long = format!("{} ENDE", "x".repeat(5000));
+        s += &line(serde_json::json!({"type": "user", "message": {"content": long}}));
+        let e = extract(&s, 300);
+        assert!(e.omitted_start);
+        assert!(e.text.ends_with("x ENDE"), "{}", e.text);
+        let kept = e
+            .text
+            .trim_start_matches("[earlier part of the session omitted]\n\n");
+        assert!(kept.chars().count() <= 300, "{}", kept.chars().count());
+        assert!(kept.chars().count() > 200, "{}", kept.chars().count());
     }
 
     #[test]
