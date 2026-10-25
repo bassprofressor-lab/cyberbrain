@@ -219,6 +219,27 @@ mod tests {
         );
     }
 
+    /// A password that contains an email address. The email used to win the overlap and
+    /// push the secret aside, so redaction left `[redacted:email]!S3cret9`, the rescan found
+    /// nothing in it, and the note was marked Reviewed with the rest of the password in it.
+    #[test]
+    fn a_secret_that_contains_an_email_is_redacted_whole() {
+        let body = r#"password = "alice@corp.de!S3cret9""#;
+        let WriteVerdict::Held { findings } = check_write(Profile::Eu, body) else {
+            panic!()
+        };
+        let kinds: Vec<PiiKind> = findings.iter().map(|f| f.kind).collect();
+        assert_eq!(
+            kinds,
+            [PiiKind::ApiKey],
+            "one finding, named for the secret"
+        );
+        let r = resolve_hold(body, &findings, OperatorChoice::Redact);
+        assert!(!r.body.contains("S3cret9"), "{}", r.body);
+        assert!(!r.body.contains("alice@corp.de"), "{}", r.body);
+        assert_eq!(r.pii, PiiState::Reviewed);
+    }
+
     #[test]
     fn reviewed_and_flagged_keep_the_body() {
         let WriteVerdict::Held { findings } = check_write(Profile::Ch, DIRTY) else {

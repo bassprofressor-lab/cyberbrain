@@ -68,8 +68,9 @@ impl PiiKind {
         }
     }
 
-    /// When two detections overlap, the lower number wins. An IBAN's digit groups look
-    /// like phone numbers; an assignment value may contain an email.
+    /// When two detections overlap, they are merged (see `resolve_overlaps`), and the lower
+    /// number names the result among those that span all of it. An IBAN's digit groups look
+    /// like phone numbers; an assignment value may be an email.
     fn priority(self) -> u8 {
         match self {
             PiiKind::Email => 0,
@@ -147,7 +148,7 @@ pub fn scan_kinds(text: &str, kinds: &[PiiKind]) -> Vec<Finding> {
             PiiKind::Phone => find_phones(text, &mut raw),
         }
     }
-    resolve_overlaps(raw)
+    resolve_overlaps(text, raw)
 }
 
 /// Replace every finding with its kind's placeholder. `findings` must come from a scan of
@@ -177,24 +178,66 @@ pub fn redact(text: &str, findings: &[Finding]) -> (String, usize) {
     (out, n)
 }
 
-fn resolve_overlaps(mut raw: Vec<Finding>) -> Vec<Finding> {
-    // Higher-priority kinds claim their ranges first; within a kind, earlier and longer wins.
-    raw.sort_by(|a, b| {
-        a.kind
-            .priority()
-            .cmp(&b.kind.priority())
-            .then(a.start.cmp(&b.start))
-            .then(b.end.cmp(&a.end))
-    });
-    let mut accepted: Vec<Finding> = Vec::with_capacity(raw.len());
+/// Overlapping findings become one, over the whole stretch they cover together.
+///
+/// Keeping only the winner of an overlap dropped the rest of the loser's range: in
+/// `password = "alice@corp.de!S3cret9"` the email won, the secret was discarded, and
+/// redaction left `!S3cret9` standing, which the rescan no longer recognised. The merged
+/// finding takes its kind from the highest-priority member that spans all of it, so a
+/// secret holding an email reads as a secret and an IBAN's digit groups still read as an
+/// IBAN; if none spans it all, from the highest-priority member. Confidence is the highest
+/// any member had.
+fn resolve_overlaps(text: &str, mut raw: Vec<Finding>) -> Vec<Finding> {
+    raw.sort_by(|a, b| a.start.cmp(&b.start).then(b.end.cmp(&a.end)));
+    let mut clusters: Vec<Vec<Finding>> = Vec::new();
+    let mut reach = 0;
     for f in raw {
-        let overlaps = accepted.iter().any(|a| f.start < a.end && a.start < f.end);
-        if !overlaps {
-            accepted.push(f);
+        match clusters.last_mut() {
+            Some(c) if f.start < reach => {
+                reach = reach.max(f.end);
+                c.push(f);
+            }
+            _ => {
+                reach = f.end;
+                clusters.push(vec![f]);
+            }
         }
     }
-    accepted.sort_by_key(|f| f.start);
-    accepted
+    clusters
+        .into_iter()
+        .map(|mut c| {
+            if c.len() == 1 {
+                return c.pop().expect("one member");
+            }
+            let start = c.iter().map(|f| f.start).min().unwrap_or(0);
+            let end = c.iter().map(|f| f.end).max().unwrap_or(start);
+            let confidence = c
+                .iter()
+                .map(|f| f.confidence)
+                .max()
+                .unwrap_or(Confidence::Low);
+            let by_priority = |a: &&Finding, b: &&Finding| {
+                a.kind
+                    .priority()
+                    .cmp(&b.kind.priority())
+                    .then(a.start.cmp(&b.start))
+            };
+            let lead = c
+                .iter()
+                .filter(|f| f.start == start && f.end == end)
+                .min_by(by_priority)
+                .or_else(|| c.iter().min_by(by_priority))
+                .expect("a cluster has members");
+            Finding {
+                kind: lead.kind,
+                start,
+                end,
+                matched: text.get(start..end).unwrap_or(&lead.matched).to_string(),
+                confidence,
+                why: lead.why,
+            }
+        })
+        .collect()
 }
 
 // ---- boundary helpers ----

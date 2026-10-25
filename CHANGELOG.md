@@ -34,6 +34,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   outright, `sort`, `uniq`, `git branch` and `sed` pass only with flags and scripts it knows to
   read, `find` and `git log/show/diff` are refused with any writing option, as are `tree -o`,
   `date -s` and `rg --pre`. What it cannot take apart asks, as every other call does then.
+- **A secret that contains an email address is redacted whole.** Of two overlapping
+  findings only the higher-priority one was kept, so in `password = "alice@corp.de!S3cret9"`
+  the email pushed the secret aside, redaction left `[redacted:email]!S3cret9`, the rescan
+  found nothing in that, and the note was marked Reviewed with the rest of the password in
+  it. Overlapping findings are now merged into one over the whole stretch, named for the
+  finding that spans all of it (here the secret).
 
 ## [0.7.10] — 2026-10-23
 
