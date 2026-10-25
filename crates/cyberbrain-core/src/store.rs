@@ -389,7 +389,28 @@ impl Store {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let parsed = frontmatter::parse(path, &text)?;
+        self.note_from_text(path, &text)
+    }
+
+    /// [`read_path`](Self::read_path) and the fingerprint of the very bytes it parsed.
+    ///
+    /// One read, not two: a caller that fingerprints the file and then reads it again can
+    /// attest one version and use another, if the file is replaced in between.
+    pub fn read_path_fingerprinted(&self, path: &Path) -> Result<(Note, Fingerprint)> {
+        let io_err = |source: io::Error| Error::Io {
+            path: path.to_path_buf(),
+            source,
+        };
+        let bytes = fs::read(path).map_err(io_err)?;
+        let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
+        let fingerprint = Fingerprint::of_bytes(mtime, &bytes);
+        let text = String::from_utf8(bytes)
+            .map_err(|e| io_err(io::Error::new(io::ErrorKind::InvalidData, e)))?;
+        Ok((self.note_from_text(path, &text)?, fingerprint))
+    }
+
+    fn note_from_text(&self, path: &Path, text: &str) -> Result<Note> {
+        let parsed = frontmatter::parse(path, text)?;
         let expected = self.note_path(parsed.front.ring, &parsed.front.name)?;
         if !same_file_name(&expected, path) {
             return Err(Error::Frontmatter {
@@ -706,6 +727,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::create(dir.path(), 100).unwrap();
         (dir, store)
+    }
+
+    /// The fingerprint describes the bytes the note was parsed from, not a second read.
+    #[test]
+    fn a_fingerprinted_read_matches_the_note_it_returns() {
+        let (_dir, store) = fresh();
+        let path = store
+            .write(&note(Ring::Protocol, "rule", "Deploy on Fridays never."))
+            .unwrap();
+        let (n, fp) = store.read_path_fingerprinted(&path).unwrap();
+        assert_eq!(n, store.read_path(&path).unwrap());
+        assert_eq!(fp.hash, Fingerprint::of(&path).unwrap().hash);
+        std::fs::write(&path, [0xff, 0xfe]).unwrap();
+        assert!(store.read_path_fingerprinted(&path).is_err());
     }
 
     #[test]
