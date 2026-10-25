@@ -1301,6 +1301,19 @@ fn run_hub_service(command: &cli::ServiceCommand, out: Out) -> Result<i32> {
     }
 }
 
+/// "  until …", "  expired …" or nothing, for a list of tokens.
+fn until_text(expires_at: Option<&str>) -> String {
+    match (
+        expires_at,
+        expiry::state(expires_at, jiff::Timestamp::now()),
+    ) {
+        (None, _) => String::new(),
+        (Some(at), expiry::State::Expired) => format!("  expired {at}"),
+        (Some(at), expiry::State::Soon) => format!("  until {at} (soon)"),
+        (Some(at), _) => format!("  until {at}"),
+    }
+}
+
 fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out) -> Result<i32> {
     use cli::HubCommand;
     let now = || jiff::Timestamp::now().to_string();
@@ -1742,7 +1755,12 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             hub_url,
             machine,
             inference_url,
+            expires,
         } => {
+            let expires_at = expires
+                .as_deref()
+                .map(|e| expiry::parse(e, jiff::Timestamp::now()))
+                .transpose()?;
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let machine = machine
                 .as_deref()
@@ -1774,7 +1792,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     }
                 }
             }
-            let (device, token) = store.add_device(name, &now())?;
+            let (device, token) = store.add_device_until(name, &now(), expires_at.as_deref())?;
             if let Some(m) = &machine {
                 store.set_machine(&device.id, m)?;
             }
@@ -2294,10 +2312,20 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     )?;
                     Ok(if done { 0 } else { 1 })
                 }
-                PrincipalCommand::Add { name, role, data } => {
+                PrincipalCommand::Add {
+                    name,
+                    role,
+                    expires,
+                    data,
+                } => {
+                    let expires_at = expires
+                        .as_deref()
+                        .map(|e| expiry::parse(e, jiff::Timestamp::now()))
+                        .transpose()?;
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let role = hub::access::Role::parse(role)?;
-                    let (who, token) = store.add_principal(name, role, &now())?;
+                    let (who, token) =
+                        store.add_principal_until(name, role, &now(), expires_at.as_deref())?;
                     out.emit(
                         &serde_json::json!({ "principal": who, "token": token }),
                         |v| {
@@ -2325,14 +2353,15 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         let mut s = String::new();
                         for p in list {
                             s.push_str(&format!(
-                                "{:<16} {:<24} {}\n",
+                                "{:<16} {:<24} {}{}\n",
                                 p["role"].as_str().unwrap_or_default(),
                                 p["name"].as_str().unwrap_or_default(),
                                 if p["revoked_at"].is_string() {
                                     "revoked"
                                 } else {
                                     p["id"].as_str().unwrap_or_default()
-                                }
+                                },
+                                until_text(p["expires_at"].as_str())
                             ));
                         }
                         s

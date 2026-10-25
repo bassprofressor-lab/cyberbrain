@@ -375,6 +375,8 @@ fn people_card(v: &View) -> String {
          <label>Role <select name=role>\
            <option value=editor>editor: decides conflicts in their bereiche</option>\
            <option value=auditor>auditor: may ask to see activity</option></select></label>\
+         <label>Credential valid for <input name=expires placeholder=\"P90D or 2027-03-31; \
+         empty: until withdrawn\"></label>\
          <button type=submit>Add</button></form>\
          <p class=note>The credential is shown once, after adding. Countersigners and \
          administrators are made at the hub's machine: <code>cyberbrain hub principal add \
@@ -415,10 +417,20 @@ fn people_card(v: &View) -> String {
         rows.push_str(&format!(
             // A person reads as their name, as signatures do elsewhere on this page; the id is
             // only in the form actions.
-            "<tr class={cls}><td>{name}<td>{role}<td>{areas}<td>{action}</tr>",
+            "<tr class={cls}><td>{name}<td>{role}<td>{until}<td>{areas}<td>{action}</tr>",
             cls = if live { "ok" } else { "off" },
             name = esc(&p.name),
             role = esc(p.role.as_str()),
+            until = match (
+                &p.expires_at,
+                crate::expiry::state(p.expires_at.as_deref(), v.now.parse().unwrap_or_default()),
+            ) {
+                (None, _) => "until withdrawn".to_string(),
+                (Some(at), crate::expiry::State::Expired) => format!("expired {}", esc(at)),
+                (Some(at), crate::expiry::State::Soon) =>
+                    format!("<strong>until {}</strong>", esc(at)),
+                (Some(at), _) => format!("until {}", esc(at)),
+            },
             action = if live {
                 format!(
                     "<form method=post action=\"/principals/{}/revoke\">\
@@ -432,7 +444,7 @@ fn people_card(v: &View) -> String {
     }
     format!(
         "<section class=card><h2>People</h2>\
-         <table><thead><tr><th>Name<th>Role<th>Bereiche<th></tr></thead>\
+         <table><thead><tr><th>Name<th>Role<th>Valid<th>Bereiche<th></tr></thead>\
          <tbody>{rows}</tbody></table>{form}</section>"
     )
 }
@@ -575,6 +587,8 @@ fn fleet_card(v: &View) -> String {
          <label>Name <input name=name placeholder=\"laptop-anna\" required></label>\
          <label>Address the machine delivers to \
          <input name=hub_url value=\"{}\"></label>\
+         <label>Token valid for <input name=expires placeholder=\"P1Y or 2027-03-31; empty: \
+         until revoked\"></label>\
          <button type=submit>Register and write the invitation</button></form>\
          <p class=note>An invitation file is written next to the record. It carries the \
          token, so hand it over the way you would a password and delete it once the machine \

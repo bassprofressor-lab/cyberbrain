@@ -92,11 +92,19 @@ pub struct Principal {
     pub role: Role,
     pub created_at: String,
     pub revoked_at: Option<String>,
+    /// When the credential stops working; `None` for one without an end.
+    pub expires_at: Option<String>,
 }
 
 impl Principal {
     pub fn is_active(&self) -> bool {
         self.revoked_at.is_none()
+    }
+
+    /// The moment the credential ran out, if it has.
+    pub fn expired_at(&self, now: jiff::Timestamp) -> Option<String> {
+        (crate::expiry::state(self.expires_at.as_deref(), now) == crate::expiry::State::Expired)
+            .then(|| self.expires_at.clone().unwrap_or_default())
     }
 }
 

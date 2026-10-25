@@ -585,6 +585,14 @@ $ cyberbrain hub principal assign R. Berger --bereich disposition
 Credentials are shown once and stored as a hash, like device tokens. Granting a role is
 itself an entry in the hub's log.
 
+A credential or a device token can be given an end: `--expires P90D` (or `P1Y`, a date such as
+`2027-03-31`, valid through that day, or a timestamp) on `hub principal add` and `hub add`, and
+the same field on the page. One without an end works until it is withdrawn, as before. After
+its end it is refused by name ("expired at …"), and the hub's log says so: `credential.expired`
+for a person, `device.token_expired` once for a device. `principal list`, the fleet and the page
+show the end, and alerts name a token a week before it runs out (`token-expiring`) and once it
+has (`token-expired`).
+
 The administrator's page does the same for auditors and editors: add a person (the credential
 is shown once, after adding), withdraw one, give an editor a bereich or take it away, and make
 or withdraw fleet invitations (the file is written to `invitations/` next to the record,

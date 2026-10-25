@@ -28,6 +28,10 @@ pub enum Concern {
     Refused { reason: String, at: String },
     /// Running an older version than the hub itself.
     Behind { version: String, hub: String },
+    /// Its token stops working within a week.
+    TokenExpiring { at: String },
+    /// Its token stopped working; it is refused until it is registered again.
+    TokenExpired { at: String },
 }
 
 impl Concern {
@@ -40,6 +44,8 @@ impl Concern {
                 format!("last delivery refused at {at}: {short}")
             }
             Concern::Behind { version, hub } => format!("version {version}, hub runs {hub}"),
+            Concern::TokenExpiring { at } => format!("token runs out at {at}"),
+            Concern::TokenExpired { at } => format!("token expired at {at}"),
         }
     }
 }
@@ -91,6 +97,15 @@ fn concerns_for(d: &Device, now: jiff::Timestamp, hub_version: &str) -> Vec<Conc
             reason: reason.clone(),
             at: at.clone(),
         });
+    }
+    match crate::expiry::state(d.expires_at.as_deref(), now) {
+        crate::expiry::State::Soon => out.push(Concern::TokenExpiring {
+            at: d.expires_at.clone().unwrap_or_default(),
+        }),
+        crate::expiry::State::Expired => out.push(Concern::TokenExpired {
+            at: d.expires_at.clone().unwrap_or_default(),
+        }),
+        _ => {}
     }
     if let Some(v) = &d.version
         && v != hub_version

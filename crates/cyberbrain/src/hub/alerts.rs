@@ -43,7 +43,8 @@ pub const GOVERNANCE_WINDOW_HOURS: i64 = 24;
 /// One thing that needs a person.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Alert {
-    /// `countersignature`, `licence`, `quiet-device`, `governance`.
+    /// `countersignature`, `licence`, `quiet-device`, `governance`, `token-expiring`,
+    /// `token-expired`.
     pub kind: &'static str,
     /// What identifies this condition across rounds, so it is posted once and then reminded.
     pub key: String,
@@ -175,6 +176,57 @@ pub fn collect(hub: &HubStore, now: jiff::Timestamp, hub_version: &str) -> Resul
                 });
             }
         }
+    }
+
+    // Tokens running out within a week, and those that already did: a device that is refused
+    // from tomorrow, or a person who can no longer sign, is found out here rather than by
+    // the first refusal.
+    for row in report::fleet(hub, now, hub_version)? {
+        for c in &row.concerns {
+            let (kind, text) = match c {
+                report::Concern::TokenExpiring { at } => (
+                    "token-expiring",
+                    format!("The token of device {} runs out at {at}.", row.device.name),
+                ),
+                report::Concern::TokenExpired { at } => (
+                    "token-expired",
+                    format!("The token of device {} expired at {at}.", row.device.name),
+                ),
+                _ => continue,
+            };
+            out.push(Alert {
+                kind,
+                key: format!("{kind}:{}", row.device.id),
+                text,
+            });
+        }
+    }
+    for p in hub.principals()?.into_iter().filter(|p| p.is_active()) {
+        let at = p.expires_at.clone().unwrap_or_default();
+        let (kind, text) = match crate::expiry::state(p.expires_at.as_deref(), now) {
+            crate::expiry::State::Soon => (
+                "token-expiring",
+                format!(
+                    "The credential of {} ({}) runs out at {at}.",
+                    p.name,
+                    p.role.as_str()
+                ),
+            ),
+            crate::expiry::State::Expired => (
+                "token-expired",
+                format!(
+                    "The credential of {} ({}) expired at {at}.",
+                    p.name,
+                    p.role.as_str()
+                ),
+            ),
+            _ => continue,
+        };
+        out.push(Alert {
+            kind,
+            key: format!("{kind}:{}", p.id),
+            text,
+        });
     }
 
     // Governance that fails: calls to AgentGuard that did not get an answer, as the devices

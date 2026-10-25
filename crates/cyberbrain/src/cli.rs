@@ -740,6 +740,10 @@ pub enum HubCommand {
         /// by hand.
         #[arg(long, value_name = "URL")]
         inference_url: Option<String>,
+        /// When the device's token stops working: a period (P90D, P1Y), a date (2027-03-31)
+        /// or a timestamp. Without it the token works until the device is revoked.
+        #[arg(long)]
+        expires: Option<String>,
     },
     /// The administrator account for the hub's page.
     Admin {
@@ -1237,9 +1241,13 @@ pub enum PrincipalCommand {
     /// Register a person and print their credential once.
     Add {
         name: String,
-        /// admin | auditor | countersigner
+        /// admin | auditor | countersigner | editor
         #[arg(long)]
         role: String,
+        /// When the credential stops working: a period (P90D, P1Y), a date (2027-03-31) or a
+        /// timestamp. Without it the credential works until it is revoked.
+        #[arg(long)]
+        expires: Option<String>,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },

@@ -5072,3 +5072,135 @@ fn a_canary_used_on_a_device_is_an_alert() {
     assert_eq!(canary.len(), 1, "{all:?}");
     assert!(canary[0].text.contains("ws-7") && canary[0].text.contains("0a1b2c3d4e5f"));
 }
+
+// ---- tokens that expire ----
+
+const PAST: &str = "2020-01-01T00:00:00Z";
+const FAR: &str = "2099-01-01T00:00:00Z";
+
+/// A device whose token ran out is refused by name, once on the hub's record, and the fleet
+/// shows why. A token with an end still in the future works like one without.
+#[test]
+fn an_expired_device_token_is_refused_by_name_and_recorded_once() {
+    let hub = HubStore::in_memory().unwrap();
+    let (old, old_token) = hub.add_device_until("ws-alt", NOW, Some(PAST)).unwrap();
+    let (_, fresh_token) = hub.add_device_until("ws-neu", NOW, Some(FAR)).unwrap();
+    let (_, open_token) = hub.add_device("ws-ohne", NOW).unwrap();
+    for _ in 0..3 {
+        let err = super::fetch_notes(&hub, Some(&old_token), None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("expired at 2020-01-01"), "{err}");
+    }
+    assert!(super::fetch_notes(&hub, Some(&fresh_token), None).is_ok());
+    assert!(super::fetch_notes(&hub, Some(&open_token), None).is_ok());
+    let expired_rows = hub
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.action == "device.token_expired")
+        .count();
+    assert_eq!(expired_rows, 1, "once, not per retry");
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let row = report::fleet(&hub, now, "0.7.10")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.device.id == old.id)
+        .unwrap();
+    assert!(
+        row.concerns
+            .iter()
+            .any(|c| matches!(c, report::Concern::TokenExpired { .. })),
+        "{:?}",
+        row.concerns
+    );
+}
+
+#[test]
+fn an_expired_credential_is_refused_and_recorded() {
+    let hub = HubStore::in_memory().unwrap();
+    let (_, token) = hub
+        .add_principal_until("A. Udit", Role::Auditor, NOW, Some(PAST))
+        .unwrap();
+    let err = hub
+        .principal_for(Some(&token), Role::Auditor)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("expired at 2020-01-01"), "{err}");
+    assert!(
+        hub.hub_events(100)
+            .unwrap()
+            .iter()
+            .any(|e| e.action == "credential.expired")
+    );
+    let (_, later) = hub
+        .add_principal_until("B. Udit", Role::Auditor, NOW, Some(FAR))
+        .unwrap();
+    assert!(hub.principal_for(Some(&later), Role::Auditor).is_ok());
+}
+
+#[tokio::test]
+async fn an_expired_credential_does_not_sign_in() {
+    let hub = hub_with_password("correct horse battery");
+    let (_, token) = hub
+        .add_principal_until("A. Udit", Role::Auditor, NOW, Some(PAST))
+        .unwrap();
+    let state = state_for(hub, true);
+    let r = sign_in_from(state.clone(), "192.168.1.77:50000", &token).await;
+    assert!(cookie_of(&r).is_empty(), "no session");
+    let rows = refused_sign_ins(&state);
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["credential"], "expired");
+}
+
+/// A hub from before expiries: the columns are added, and what it holds has no end.
+#[test]
+fn a_hub_from_before_expiries_keeps_every_token_working() {
+    let hub = HubStore::in_memory().unwrap();
+    hub.conn
+        .execute_batch(
+            "ALTER TABLE devices DROP COLUMN expires_at;
+             ALTER TABLE principals DROP COLUMN expires_at;",
+        )
+        .unwrap();
+    hub.conn
+        .execute(
+            "INSERT INTO devices (id, name, token_hash, created_at, anchor)
+             VALUES ('dev_old', 'ws-alt', ?1, ?2, 'genesis')",
+            rusqlite::params![blake3::hash(b"cbh_old").to_hex().to_string(), NOW],
+        )
+        .unwrap();
+    hub.migrate().unwrap();
+    let d = hub.device_by_token("cbh_old").unwrap().unwrap();
+    assert_eq!(d.expires_at, None);
+    assert!(super::fetch_notes(&hub, Some("cbh_old"), None).is_ok());
+}
+
+#[test]
+fn alerts_name_tokens_that_run_out_this_week_and_those_that_did() {
+    let hub = HubStore::in_memory().unwrap();
+    let now = jiff::Timestamp::now();
+    let soon = (now + jiff::SignedDuration::from_hours(72)).to_string();
+    hub.add_device_until("ws-bald", NOW, Some(&soon)).unwrap();
+    hub.add_principal_until("A. Udit", Role::Auditor, NOW, Some(PAST))
+        .unwrap();
+    hub.add_principal_until("C. Lang", Role::Auditor, NOW, Some(FAR))
+        .unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    let tokens: Vec<(&str, &str)> = all
+        .iter()
+        .filter(|a| a.kind.starts_with("token-"))
+        .map(|a| (a.kind, a.text.as_str()))
+        .collect();
+    assert_eq!(tokens.len(), 2, "{tokens:?}");
+    assert!(
+        tokens
+            .iter()
+            .any(|(k, t)| *k == "token-expiring" && t.contains("ws-bald"))
+    );
+    assert!(
+        tokens
+            .iter()
+            .any(|(k, t)| *k == "token-expired" && t.contains("A. Udit"))
+    );
+}

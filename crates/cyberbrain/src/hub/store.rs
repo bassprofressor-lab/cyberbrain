@@ -39,6 +39,9 @@ pub struct Device {
     /// The machine this device is on, as its deliveries report it. Seats are counted by this:
     /// every project is its own device, and the licence promises a seat per machine.
     pub machine: Option<String>,
+    /// When this device's token stops working; `None` for one without an end, which is
+    /// every device registered before expiries existed.
+    pub expires_at: Option<String>,
 }
 
 impl Device {
@@ -236,7 +239,7 @@ impl HubStore {
         Ok(s)
     }
 
-    fn migrate(&self) -> Result<()> {
+    pub(super) fn migrate(&self) -> Result<()> {
         ix(self.conn.execute_batch(
             "PRAGMA journal_mode = WAL;
              PRAGMA foreign_keys = ON;
@@ -577,6 +580,18 @@ impl HubStore {
                 "effective_seq",
                 "ALTER TABLE bereich_grants ADD COLUMN effective_seq INTEGER",
             ),
+            // When a token stops working. NULL on everything registered before expiries
+            // existed, which is "never", as it always was.
+            (
+                "devices",
+                "expires_at",
+                "ALTER TABLE devices ADD COLUMN expires_at TEXT",
+            ),
+            (
+                "principals",
+                "expires_at",
+                "ALTER TABLE principals ADD COLUMN expires_at TEXT",
+            ),
             // What the offered version was, beyond its text, so taking it takes all of it.
             // NULL on conflicts raised before; those keep the held ring and kind.
             (
@@ -625,6 +640,16 @@ impl HubStore {
     /// value exists anywhere: the table keeps a hash, so a stolen database is not a set of
     /// working credentials.
     pub fn add_device(&self, name: &str, now: &str) -> Result<(Device, String)> {
+        self.add_device_until(name, now, None)
+    }
+
+    /// [`Self::add_device`] with a token that stops working at `expires_at` (RFC 3339).
+    pub fn add_device_until(
+        &self,
+        name: &str,
+        now: &str,
+        expires_at: Option<&str>,
+    ) -> Result<(Device, String)> {
         let id = format!("dev_{}", cyberbrain_core::NoteId::generate());
         let token = format!("cbh_{}", cyberbrain_core::NoteId::generate());
         let device = Device {
@@ -641,11 +666,12 @@ impl HubStore {
             floor_hash: None,
             floor_seq: None,
             machine: None,
+            expires_at: expires_at.map(str::to_string),
         };
         ix(self.conn.execute(
-            "INSERT INTO devices (id, name, token_hash, created_at, anchor)
-             VALUES (?, ?, ?, ?, ?)",
-            params![id, name, token_hash(&token), now, GENESIS],
+            "INSERT INTO devices (id, name, token_hash, created_at, anchor, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![id, name, token_hash(&token), now, GENESIS, expires_at],
         ))?;
         // In the chain, like a role grant, and for the same reason: a new device is a new
         // pair of eyes on whatever it is later granted, and it used to appear out of
@@ -654,7 +680,7 @@ impl HubStore {
         self.record(
             "hub",
             "device.registered",
-            serde_json::json!({ "device": device.id, "name": name }),
+            serde_json::json!({ "device": device.id, "name": name, "expires_at": expires_at }),
             now,
         )?;
         Ok((device, token))
@@ -666,7 +692,7 @@ impl HubStore {
             .conn
             .query_row(
                 "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                        last_refusal, last_refusal_at, floor_hash, floor_seq, machine
+                        last_refusal, last_refusal_at, floor_hash, floor_seq, machine, expires_at
                  FROM devices WHERE token_hash = ?",
                 params![hash],
                 row_to_device,
@@ -677,7 +703,7 @@ impl HubStore {
     pub fn devices(&self) -> Result<Vec<Device>> {
         let mut stmt = ix(self.conn.prepare(
             "SELECT id, name, created_at, revoked_at, last_seen, anchor, rows, version,
-                    last_refusal, last_refusal_at, floor_hash, floor_seq, machine
+                    last_refusal, last_refusal_at, floor_hash, floor_seq, machine, expires_at
              FROM devices ORDER BY created_at, id",
         ))?;
         let rows = ix(stmt.query_map([], row_to_device))?;
@@ -998,6 +1024,7 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
         floor_hash: r.get(10)?,
         floor_seq: r.get(11)?,
         machine: r.get(12)?,
+        expires_at: r.get(13)?,
     })
 }
 
@@ -2297,18 +2324,34 @@ impl HubStore {
         Ok(n)
     }
 
+    /// A credential without an end. The program itself always goes through
+    /// [`Self::add_principal_until`]; this is what the tests ask.
+    #[cfg(test)]
     pub fn add_principal(&self, name: &str, role: Role, now: &str) -> Result<(Principal, String)> {
+        self.add_principal_until(name, role, now, None)
+    }
+
+    /// [`Self::add_principal`] with a credential that stops working at `expires_at`.
+    pub fn add_principal_until(
+        &self,
+        name: &str,
+        role: Role,
+        now: &str,
+        expires_at: Option<&str>,
+    ) -> Result<(Principal, String)> {
         let id = format!("who_{}", cyberbrain_core::NoteId::generate());
         let token = format!("cbp_{}", cyberbrain_core::NoteId::generate());
         ix(self.conn.execute(
-            "INSERT INTO principals (id, name, role, token_hash, created_at)
-             VALUES (?, ?, ?, ?, ?)",
-            params![id, name, role.as_str(), token_hash(&token), now],
+            "INSERT INTO principals (id, name, role, token_hash, created_at, expires_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![id, name, role.as_str(), token_hash(&token), now, expires_at],
         ))?;
         self.record(
             "hub",
             "role.granted",
-            serde_json::json!({ "principal": id, "name": name, "role": role.as_str() }),
+            serde_json::json!({
+                "principal": id, "name": name, "role": role.as_str(), "expires_at": expires_at,
+            }),
             now,
         )?;
         Ok((
@@ -2318,6 +2361,7 @@ impl HubStore {
                 role,
                 created_at: now.to_string(),
                 revoked_at: None,
+                expires_at: expires_at.map(str::to_string),
             },
             token,
         ))
@@ -2328,7 +2372,7 @@ impl HubStore {
         ix(self
             .conn
             .query_row(
-                "SELECT id, name, role, created_at, revoked_at FROM principals
+                "SELECT id, name, role, created_at, revoked_at, expires_at FROM principals
                  WHERE token_hash = ?",
                 params![hash],
                 row_to_principal,
@@ -2353,7 +2397,7 @@ impl HubStore {
 
     pub fn principals(&self) -> Result<Vec<Principal>> {
         let mut stmt = ix(self.conn.prepare(
-            "SELECT id, name, role, created_at, revoked_at FROM principals
+            "SELECT id, name, role, created_at, revoked_at, expires_at FROM principals
              ORDER BY created_at, id",
         ))?;
         let rows = ix(stmt.query_map([], row_to_principal))?;
@@ -2398,6 +2442,20 @@ impl HubStore {
             .ok_or_else(|| Denied::NotAuthorised("unknown credential".into()))?;
         if !who.is_active() {
             return Err(Denied::NotAuthorised(format!("{} was revoked", who.name)));
+        }
+        if let Some(at) = who.expired_at(jiff::Timestamp::now()) {
+            // On record, like a refused sign-in: a credential used after its end is somebody
+            // who was not renewed, or a copy somebody kept.
+            let _ = self.record(
+                &who.id,
+                "credential.expired",
+                serde_json::json!({ "principal": who.id, "expired_at": at }),
+                &jiff::Timestamp::now().to_string(),
+            );
+            return Err(Denied::NotAuthorised(format!(
+                "the credential of {} expired at {at}; an administrator issues a new one",
+                who.name
+            )));
         }
         if who.role != need {
             return Err(Denied::WrongRole {
@@ -2562,6 +2620,7 @@ fn row_to_principal(r: &rusqlite::Row<'_>) -> rusqlite::Result<Principal> {
         role: Role::parse(&r.get::<_, String>(2)?).unwrap_or(Role::Admin),
         created_at: r.get(3)?,
         revoked_at: r.get(4)?,
+        expires_at: r.get(5)?,
     })
 }
 

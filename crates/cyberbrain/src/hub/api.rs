@@ -231,11 +231,14 @@ fn session_who_in(
         .ok()
         .and_then(|all| all.into_iter().find(|p| &p.id == id));
     match current {
-        Some(p) if p.is_active() => Some(super::admin::Who::Principal {
-            id: p.id,
-            name: p.name,
-            role: p.role,
-        }),
+        // A credential that ran out ends the sessions opened with it, as revoking does.
+        Some(p) if p.is_active() && p.expired_at(jiff::Timestamp::now()).is_none() => {
+            Some(super::admin::Who::Principal {
+                id: p.id,
+                name: p.name,
+                role: p.role,
+            })
+        }
         _ => {
             state.sessions.close(token);
             None
@@ -474,11 +477,25 @@ async fn login(
     } else {
         match state.hub() {
             Ok(hub) => match hub.principal_by_token(&form.password) {
-                Ok(Some(p)) if p.is_active() => Some(super::admin::Who::Principal {
-                    id: p.id.clone(),
-                    name: p.name.clone(),
-                    role: p.role,
-                }),
+                Ok(Some(p)) if p.is_active() && p.expired_at(jiff::Timestamp::now()).is_none() => {
+                    Some(super::admin::Who::Principal {
+                        id: p.id.clone(),
+                        name: p.name.clone(),
+                        role: p.role,
+                    })
+                }
+                // Ran out. The same sentence to the caller, and its own reason in the log.
+                Ok(Some(p)) if p.is_active() => {
+                    refused_sign_in(
+                        &state,
+                        &hub,
+                        &from,
+                        json!({ "form": "sign-in", "credential": "expired",
+                                    "principal": p.id, "name": p.name,
+                                    "expired_at": p.expires_at }),
+                    );
+                    None
+                }
                 // The caller hears the same sentence either way. The log does not: a
                 // credential that was withdrawn and is still being tried is the one
                 // refusal the operator most needs to see, and whose it was.
@@ -686,6 +703,9 @@ pub struct DeviceForm {
     name: String,
     #[serde(default)]
     hub_url: String,
+    /// Empty for a token without an end.
+    #[serde(default)]
+    expires: String,
 }
 
 /// Register a machine and write its invitation next to the record.
@@ -707,7 +727,13 @@ async fn add_device(
             Ok(h) => h,
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
-        register(&hub, &state.record, form.name.trim(), form.hub_url.trim())
+        register(
+            &hub,
+            &state.record,
+            form.name.trim(),
+            form.hub_url.trim(),
+            form.expires.trim(),
+        )
     };
     if let Ok(mut f) = state.flash.lock() {
         *f = Some(outcome);
@@ -763,10 +789,15 @@ fn register(
     record: &std::path::Path,
     name: &str,
     hub_url: &str,
+    expires: &str,
 ) -> Result<String, String> {
     if name.is_empty() {
         return Err("A machine needs a name.".into());
     }
+    let expires_at = (!expires.is_empty())
+        .then(|| crate::expiry::parse(expires, jiff::Timestamp::now()))
+        .transpose()
+        .map_err(|e| e.to_string())?;
     // The same seat check the command does, and for the same reason: a device that is
     // allowed to register and then refused every night looks registered and collects
     // nothing, which is the worst of both.
@@ -786,7 +817,11 @@ fn register(
     }
 
     let (device, token) = hub
-        .add_device(name, &jiff::Timestamp::now().to_string())
+        .add_device_until(
+            name,
+            &jiff::Timestamp::now().to_string(),
+            expires_at.as_deref(),
+        )
         .map_err(|e| e.to_string())?;
     let invitation = web_invitation(hub, &device, &token, hub_url);
     let text = serde_json::to_string_pretty(&invitation).map_err(|e| e.to_string())?;
@@ -921,6 +956,9 @@ async fn add_grant(
 pub struct PrincipalForm {
     name: String,
     role: String,
+    /// Empty for a credential without an end.
+    #[serde(default)]
+    expires: String,
 }
 
 /// Answer a form on the administrator's page: back to the page with what happened, or a 400
@@ -961,9 +999,15 @@ async fn add_principal(
         if name.is_empty() {
             return Err("A person needs a name.".into());
         }
+        let now = jiff::Timestamp::now();
+        let expires = form.expires.trim();
+        let expires_at = (!expires.is_empty())
+            .then(|| crate::expiry::parse(expires, now))
+            .transpose()
+            .map_err(|e| e.to_string())?;
         let hub = state.hub()?;
         let (p, token) = hub
-            .add_principal(name, role, &jiff::Timestamp::now().to_string())
+            .add_principal_until(name, role, &now.to_string(), expires_at.as_deref())
             .map_err(|e| e.to_string())?;
         // The credential once, here, the way the command prints it once. The record keeps a
         // hash; the page never shows it again.

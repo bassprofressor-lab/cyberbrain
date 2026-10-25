@@ -294,6 +294,7 @@ pub fn fetch_notes(
             device.name
         )));
     }
+    refuse_if_expired(hub, &device)?;
     // A cursor this hub did not hand out, such as the timestamp an older hub used, reads as
     // no cursor: everything once, which the device already has or takes again. Reading it
     // as anything else would trade a re-send for a gap.
@@ -340,6 +341,38 @@ fn parse_cursor(cursor: &str) -> Option<i64> {
         .filter(|n| *n >= 0)
 }
 
+/// Refuse a device whose token ran out, by name, and put it on record once.
+///
+/// The fleet view shows it as the device's last refusal; the hub's chain gets one row when
+/// the token is first used after its end rather than one per retry, since a device that was
+/// not renewed tries again on every push.
+fn refuse_if_expired(
+    hub: &store::HubStore,
+    device: &store::Device,
+) -> std::result::Result<(), Refusal> {
+    let now = jiff::Timestamp::now();
+    if crate::expiry::state(device.expires_at.as_deref(), now) != crate::expiry::State::Expired {
+        return Ok(());
+    }
+    let at = device.expires_at.clone().unwrap_or_default();
+    let why = format!(
+        "the token of device {} expired at {at}; register it again (`cyberbrain hub add`) and \
+         enrol with the new invitation",
+        device.name
+    );
+    let stamp = now.to_string();
+    if device.last_refusal.as_deref() != Some(why.as_str()) {
+        let _ = hub.record(
+            "hub",
+            "device.token_expired",
+            serde_json::json!({ "device": device.id, "expired_at": at }),
+            &stamp,
+        );
+    }
+    let _ = hub.note_refusal(&device.id, &why, &stamp);
+    Err(Refusal::NotAuthorised(why))
+}
+
 /// A request to erase one note everywhere the hub holds it.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct EraseRequest {
@@ -372,6 +405,7 @@ pub fn erase_note(
             device.name
         )));
     }
+    refuse_if_expired(hub, &device)?;
     let req: EraseRequest = serde_json::from_str(body)
         .map_err(|e| Refusal::BadBundle(format!("not an erase request: {e}")))?;
 
@@ -438,6 +472,7 @@ pub fn ingest_notes(
             device.name
         )));
     }
+    refuse_if_expired(hub, &device)?;
 
     let delivery: NoteDelivery = serde_json::from_str(body)
         .map_err(|e| Refusal::BadBundle(format!("delivery is not a note batch: {e}")))?;
@@ -590,6 +625,7 @@ pub fn ingest(
             device.id
         )));
     }
+    refuse_if_expired(hub, &device)?;
 
     // From here on the sender is known, so a refusal can be recorded against it. Anything
     // above this line has no device to record against, which is also why it cannot be shown

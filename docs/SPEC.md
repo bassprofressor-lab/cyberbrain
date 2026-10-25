@@ -919,7 +919,10 @@ this machine — n8n in a container is the case it was built for (2026-10-03).
   its SHA-256, in `~/.config/cyberbrain/mcp-clients` beside the identity, never in the store.
   Every request needs `Authorization: Bearer <token>` and runs as `agent:mcp:<name>`, the
   name `[provenance] untrusted_clients` lists and the audit log records. `list` and `remove`
-  take effect at the next request; the file is read per request.
+  take effect at the next request; the file is read per request. `add --expires <period|date>` gives
+  the token an end (written as `expires=<RFC 3339>` after the digest); after it the request is
+  refused with 401 naming the client and the moment, and a `policy.refusal` row with subject
+  `mcp-client:<name>` is written. A line without `expires=` has no end.
 - **Local network only.** The address must be loopback or private (as for an inference
   endpoint); there is no TLS. `0.0.0.0` is refused: name the address the container reaches
   this host on, such as the docker bridge.
