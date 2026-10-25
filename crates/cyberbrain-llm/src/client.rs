@@ -325,10 +325,17 @@ impl LlmClient {
             }
         };
         let status = resp.status();
-        let text = match resp.text().await {
+        let read = if status.is_success() {
+            read_body(resp, MAX_BODY_BYTES)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        } else {
+            Ok(read_error_body(resp).await)
+        };
+        let text = match read {
             Ok(t) => t,
             Err(e) => {
-                let (outcome, err) = transport_failure(&url, &e);
+                let (outcome, err) = e.outcome(&url);
                 self.record(
                     CallKind::ChatCompletion,
                     req.task,
@@ -452,7 +459,7 @@ impl LlmClient {
         };
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let text = read_error_body(resp).await;
             self.record(
                 kind,
                 req.task,
@@ -474,6 +481,8 @@ impl LlmClient {
         let mut reported_model = None;
         let mut usage: Option<Usage> = None;
         let mut buf: Vec<u8> = Vec::new();
+        // How far `buf` has been searched for an event end without finding one.
+        let mut scanned = 0usize;
         let mut done = false;
 
         loop {
@@ -488,7 +497,8 @@ impl LlmClient {
             };
             buf.extend_from_slice(&chunk);
             // SSE events are separated by a blank line. Process every complete event.
-            while let Some(pos) = find_event_end(&buf) {
+            while let Some(pos) = find_event_end_from(&buf, scanned.saturating_sub(3)) {
+                scanned = 0;
                 let event: Vec<u8> = buf.drain(..pos.0).collect();
                 buf.drain(..pos.1);
                 let event = String::from_utf8_lossy(&event);
@@ -538,6 +548,14 @@ impl LlmClient {
                     }
                 }
             }
+            scanned = buf.len();
+            // One event that never ends, or a text that never stops, is refused at the same
+            // limit a whole answer is held to.
+            if buf.len() > MAX_BODY_BYTES || content.len() > MAX_BODY_BYTES {
+                let (outcome, err) = BodyError::TooLarge(MAX_BODY_BYTES).outcome(&url);
+                self.record(kind, req.task, &url, &model, outcome, usage, started);
+                return Err(err);
+            }
             if done {
                 break;
             }
@@ -586,7 +604,21 @@ impl LlmClient {
             .iter()
             .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
-        let text = resp.text().await.unwrap_or_default();
+        let read = if status.is_success() {
+            read_body(resp, MAX_BODY_BYTES)
+                .await
+                .map(|b| String::from_utf8_lossy(&b).into_owned())
+        } else {
+            Ok(read_error_body(resp).await)
+        };
+        let text = match read {
+            Ok(t) => t,
+            Err(e) => {
+                let (outcome, err) = e.outcome(&url);
+                self.record(CallKind::ListModels, None, &url, "", outcome, None, started);
+                return Err(err);
+            }
+        };
         if !status.is_success() {
             self.record(
                 CallKind::ListModels,
@@ -673,7 +705,13 @@ impl LlmClient {
             .send()
             .await;
         let (outcome, body) = match resp {
-            Ok(r) if r.status().is_success() => (CallOutcome::Ok, r.text().await.ok()),
+            Ok(r) if r.status().is_success() => match read_body(r, MAX_BODY_BYTES).await {
+                Ok(b) => (
+                    CallOutcome::Ok,
+                    Some(String::from_utf8_lossy(&b).into_owned()),
+                ),
+                Err(e) => (e.outcome(&url).0, None),
+            },
             Ok(r) => (CallOutcome::BadStatus(r.status().as_u16()), None),
             Err(e) => (transport_failure(&url, &e).0, None),
         };
@@ -768,17 +806,79 @@ impl LlmClient {
     }
 }
 
-/// Position of the next SSE event terminator in `buf`: (event end, terminator length).
-fn find_event_end(buf: &[u8]) -> Option<(usize, usize)> {
-    let crlf = buf
+/// Position of the next SSE event terminator in `buf` at or after `from`: (event end,
+/// terminator length). A terminator is at most four bytes, so
+/// a caller that already searched up to `n` without finding one passes `n - 3`; without
+/// that, every chunk of a long event rescanned the whole buffer.
+fn find_event_end_from(buf: &[u8], from: usize) -> Option<(usize, usize)> {
+    let from = from.min(buf.len());
+    let tail = &buf[from..];
+    let crlf = tail
         .windows(4)
         .position(|w| w == b"\r\n\r\n")
-        .map(|p| (p, 4));
-    let lf = buf.windows(2).position(|w| w == b"\n\n").map(|p| (p, 2));
+        .map(|p| (from + p, 4));
+    let lf = tail
+        .windows(2)
+        .position(|w| w == b"\n\n")
+        .map(|p| (from + p, 2));
     match (crlf, lf) {
         (Some(a), Some(b)) => Some(if a.0 <= b.0 { a } else { b }),
         (a, b) => a.or(b),
     }
+}
+
+/// The most an answer from the endpoint may hold, in bytes: a completion, a model list, one
+/// pending stream event, or a whole streamed text. A completion is bounded by `max_tokens`
+/// and is a few kilobytes; this only stops an endpoint that misbehaves from filling memory.
+pub(crate) const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
+
+/// An error body is only shown, cut to 200 characters; more than this is not read.
+const ERROR_BODY_BYTES: usize = 64 * 1024;
+
+pub(crate) enum BodyError {
+    Transport(reqwest::Error),
+    TooLarge(usize),
+}
+
+impl BodyError {
+    /// What to record and what to return, in the shape of [`transport_failure`].
+    pub(crate) fn outcome(&self, url: &str) -> (CallOutcome, Error) {
+        match self {
+            BodyError::Transport(e) => transport_failure(url, e),
+            BodyError::TooLarge(limit) => {
+                let msg = format!("{url} answered with a body larger than {limit} bytes; not read");
+                (CallOutcome::BadResponse(msg.clone()), Error::Llm(msg))
+            }
+        }
+    }
+}
+
+/// Read a response body, refusing one larger than `limit` instead of holding it whole.
+/// An announced length is checked before anything is read.
+pub(crate) async fn read_body(
+    mut resp: reqwest::Response,
+    limit: usize,
+) -> std::result::Result<Vec<u8>, BodyError> {
+    if resp.content_length().is_some_and(|n| n > limit as u64) {
+        return Err(BodyError::TooLarge(limit));
+    }
+    let mut out = Vec::new();
+    while let Some(chunk) = resp.chunk().await.map_err(BodyError::Transport)? {
+        if out.len() + chunk.len() > limit {
+            return Err(BodyError::TooLarge(limit));
+        }
+        out.extend_from_slice(&chunk);
+    }
+    Ok(out)
+}
+
+/// An error body for a message: at most [`ERROR_BODY_BYTES`], empty if it is larger or
+/// cannot be read, since the status already says what went wrong.
+pub(crate) async fn read_error_body(resp: reqwest::Response) -> String {
+    read_body(resp, ERROR_BODY_BYTES)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default()
 }
 
 /// Pull a readable message out of an error body, if the server sent one.
@@ -1378,6 +1478,54 @@ mod tests {
         assert_eq!(audit.rows()[1].usage.unwrap().total_tokens, Some(5));
     }
 
+    /// Would fail if an answer of any size were read into memory whole.
+    #[tokio::test]
+    async fn an_oversized_answer_is_refused_not_read() {
+        let big = vec![b'x'; 16 * 1024 * 1024 + 1];
+        let server = MockServer::start(move |_| MockResponse::new(200, big.clone())).await;
+        let audit = MemoryAuditSink::new();
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
+            .await
+            .unwrap();
+        let err = client
+            .chat(&ChatRequest::new(vec![ChatMessage::user("hi")]))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("larger than"), "{err}");
+        assert!(
+            matches!(
+                audit.rows().last().unwrap().outcome,
+                CallOutcome::BadResponse(_)
+            ),
+            "{:?}",
+            audit.rows().last().unwrap().outcome
+        );
+    }
+
+    /// Would fail if a stream that never closes an event could grow the buffer without end.
+    #[tokio::test]
+    async fn an_unterminated_stream_event_is_refused_at_the_limit() {
+        let mut body = b"data: ".to_vec();
+        body.extend(std::iter::repeat_n(b'x', 16 * 1024 * 1024 + 1));
+        let server = MockServer::start(move |_| {
+            MockResponse::new(200, body.clone()).header("content-type", "text/event-stream")
+        })
+        .await;
+        let audit = MemoryAuditSink::new();
+        let client = LlmClient::connect(cfg(&server.base_url("/v1")), audit.clone(), open_gate())
+            .await
+            .unwrap();
+        let err = client
+            .chat_streaming(
+                &ChatRequest::new(vec![ChatMessage::user("hi")]),
+                &mut |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("larger than"), "{err}");
+        assert!(!audit.rows().last().unwrap().outcome.is_ok());
+    }
+
     #[test]
     fn build_refuses_any_other_purpose() {
         let ep = ValidatedEndpoint {
@@ -1401,8 +1549,11 @@ mod tests {
 
     #[test]
     fn sse_event_boundary_detection() {
-        assert_eq!(find_event_end(b"data: a\n\ndata: b"), Some((7, 2)));
-        assert_eq!(find_event_end(b"data: a\r\n\r\nrest"), Some((7, 4)));
-        assert_eq!(find_event_end(b"data: partial"), None);
+        assert_eq!(find_event_end_from(b"data: a\n\ndata: b", 0), Some((7, 2)));
+        assert_eq!(find_event_end_from(b"data: a\r\n\r\nrest", 0), Some((7, 4)));
+        assert_eq!(find_event_end_from(b"data: partial", 0), None);
+        // Resuming three bytes back still finds a terminator split across two chunks.
+        assert_eq!(find_event_end_from(b"data: a\r\n\r\nrest", 6), Some((7, 4)));
+        assert_eq!(find_event_end_from(b"data: a\n\n", 99), None);
     }
 }

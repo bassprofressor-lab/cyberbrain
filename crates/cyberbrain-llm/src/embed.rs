@@ -102,6 +102,19 @@ pub fn normalise_digest(d: &str) -> String {
         .to_ascii_lowercase()
 }
 
+/// Read a JSON answer of at most [`crate::client::MAX_BODY_BYTES`]. The error is the reason
+/// as text, which the callers put after what they expected to get.
+async fn read_json<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+) -> std::result::Result<T, String> {
+    use crate::client::{BodyError, MAX_BODY_BYTES, read_body};
+    let bytes = read_body(resp, MAX_BODY_BYTES).await.map_err(|e| match e {
+        BodyError::Transport(e) => e.without_url().to_string(),
+        BodyError::TooLarge(limit) => format!("the body is larger than {limit} bytes; not read"),
+    })?;
+    serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+}
+
 /// One model as `GET /api/tags` lists it.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct InstalledModel {
@@ -524,7 +537,7 @@ impl Worker {
                 "{url} answered {status}; is this an Ollama server?"
             )));
         }
-        match resp.json::<TagsResponse>().await {
+        match read_json::<TagsResponse>(resp).await {
             Ok(t) => {
                 self.record(CallKind::VendorStatus, &url, CallOutcome::Ok, None, started);
                 Ok(t.models)
@@ -590,7 +603,7 @@ impl Worker {
                 "{url} answered {status}; is this an Ollama server?"
             )));
         }
-        match resp.json::<ShowResponse>().await {
+        match read_json::<ShowResponse>(resp).await {
             Ok(r) => {
                 self.record(CallKind::VendorStatus, &url, CallOutcome::Ok, None, started);
                 Ok(parse_show(r))
@@ -697,7 +710,7 @@ impl Worker {
         };
         let status = resp.status();
         if !status.is_success() {
-            let text = resp.text().await.unwrap_or_default();
+            let text = crate::client::read_error_body(resp).await;
             self.record(
                 CallKind::Embedding,
                 &url,
@@ -710,7 +723,7 @@ impl Worker {
                 text.chars().take(200).collect::<String>()
             )));
         }
-        let parsed: EmbedResponse = match resp.json().await {
+        let parsed: EmbedResponse = match read_json(resp).await {
             Ok(p) => p,
             Err(e) => {
                 self.record(
@@ -853,6 +866,34 @@ mod tests {
             _ => MockResponse::json(404, "{}"),
         })
         .await
+    }
+
+    /// Would fail if an Ollama answering with an endless body were read into memory whole.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn an_oversized_embedding_answer_is_refused_not_read() {
+        let server = MockServer::start(move |req| match req.path.as_str() {
+            "/api/show" => MockResponse::json(
+                200,
+                &serde_json::json!({
+                    "modelfile": format!("FROM /m/blobs/sha256-{DIGEST}\n"),
+                    "model_info": { "x.embedding_length": 3 }
+                })
+                .to_string(),
+            ),
+            "/api/embed" => MockResponse::new(200, vec![b' '; 16 * 1024 * 1024 + 1]),
+            _ => MockResponse::json(404, "{}"),
+        })
+        .await;
+        let e = OllamaEmbedder::new(
+            cfg(format!("http://{}", server.addr), DIGEST),
+            MemoryAuditSink::new(),
+            Arc::new(OpenGate),
+        )
+        .unwrap();
+        let err = tokio::task::spawn_blocking(move || e.embed(&["a"]).unwrap_err())
+            .await
+            .unwrap();
+        assert!(err.to_string().contains("larger than"), "{err}");
     }
 
     #[tokio::test(flavor = "multi_thread")]
