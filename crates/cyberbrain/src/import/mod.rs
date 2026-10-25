@@ -84,6 +84,19 @@ pub fn import(app: &App, plan: &ImportPlan, dry_run: bool) -> Result<ImportRepor
     let mut cands: Vec<Candidate> = Vec::new();
     for (f, gi) in &mapped {
         let group = &plan.groups[*gi];
+        // Not followed, the way the code index never follows one either: a link in a foreign
+        // export can name any file this account can read, and reading through it would
+        // import that file under the source tree's name.
+        if f.link {
+            file_failures.push(FileFailure {
+                path: f.rel.clone(),
+                group: group.name.clone(),
+                reason: "a symbolic link; import does not follow links out of the source \
+                         tree. Copy the file in, or skip it by rule"
+                    .into(),
+            });
+            continue;
+        }
         let text = match std::fs::read(&f.abs) {
             Ok(bytes) => match String::from_utf8(bytes) {
                 Ok(t) => t,

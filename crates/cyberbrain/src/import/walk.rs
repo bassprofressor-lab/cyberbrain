@@ -17,10 +17,13 @@ pub struct Found {
     /// normalisation leaks into names or tags).
     pub rel: String,
     pub abs: PathBuf,
+    /// A symbolic link. Listed, so the two counts still agree, and never read: its target
+    /// can be anywhere on the machine, and the source tree is what was asked for.
+    pub link: bool,
 }
 
 /// Every file under `root`, sorted by relative path. Directories are entered, symlinks
-/// are listed as files and not followed as directories.
+/// are listed as files, marked, and not followed at all.
 pub fn list_files(root: &Path) -> Result<Vec<Found>> {
     let mut out = Vec::new();
     walk(root, root, &mut out)?;
@@ -49,7 +52,11 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<Found>) -> Result<()> {
                 .map(|c| c.as_os_str().to_string_lossy().into_owned())
                 .collect::<Vec<_>>()
                 .join("/");
-            out.push(Found { rel, abs: path });
+            out.push(Found {
+                rel,
+                abs: path,
+                link: ft.is_symlink(),
+            });
         }
     }
     Ok(())

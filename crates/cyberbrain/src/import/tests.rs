@@ -650,3 +650,33 @@ fn the_default_plan_maps_a_tree_of_the_expected_shape_with_nothing_unmapped() {
         "abc  PREREG_va_2026-08-25.md\n"
     );
 }
+
+/// A link in a foreign export (a wiki dump, an Obsidian vault) can point anywhere on the
+/// machine, and reading through it imported whatever it named. The source tree is what was
+/// asked for; a link out of it is reported, not followed.
+#[cfg(unix)]
+#[test]
+fn a_symlinked_file_is_reported_not_followed() {
+    let fx = fixture();
+    let outside = fx.src.parent().unwrap().join("outside-secret.md");
+    fs::write(&outside, "the contents of somebody's home directory\n").unwrap();
+    std::os::unix::fs::symlink(&outside, fx.src.join("link.md")).unwrap();
+    write(&fx.src, "ok.md", "fine\n");
+    let p = plan(
+        &fx.src,
+        "[[group]]\nname = \"g\"\npaths = [\"*.md\"]\nring = 2\nkind = \"knowledge\"\n",
+    );
+    let r = import(&fx.app, &p, false).unwrap();
+    assert!(r.is_balanced(), "{}", r.render());
+    assert_eq!(r.file_failures.len(), 1, "{}", r.render());
+    assert_eq!(r.file_failures[0].path, "link.md");
+    assert!(
+        r.file_failures[0].reason.contains("link"),
+        "{}",
+        r.file_failures[0].reason
+    );
+    assert!(
+        fx.app.store().read("link").is_err(),
+        "the target was imported"
+    );
+}
