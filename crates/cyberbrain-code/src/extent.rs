@@ -216,8 +216,12 @@ fn rust_char_literal_end(b: &[u8], at: usize) -> Option<usize> {
         return None;
     }
     if b[at + 1] == b'\\' {
-        // '\n', '\'', '\u{1F600}'
-        let end = memchr::memchr(b'\'', &b[at + 2..]).map(|j| at + 2 + j)?;
+        // '\n', '\'', '\u{1F600}'. The byte after the backslash is the escaped character
+        // and never the closing quote, even when it is a quote itself (`'\''`).
+        if at + 3 >= n {
+            return None;
+        }
+        let end = memchr::memchr(b'\'', &b[at + 3..]).map(|j| at + 3 + j)?;
         return (end - at <= 12).then_some(end);
     }
     // One (possibly multi-byte) character then a quote.
@@ -539,6 +543,13 @@ mod tests {
             "fn f<'a>(x: &'a str) {"
         );
         assert_eq!(code("let c = '{';", Style::Rust), "let c = ;");
+        // An escaped quote is the character, not the end of the literal.
+        assert_eq!(code(r"let q = '\''; f(x)", Style::Rust), "let q = ; f(x)");
+        assert_eq!(code(r"let b = '\\'; f(x)", Style::Rust), "let b = ; f(x)");
+        assert_eq!(
+            code(r"let u = '\u{7D}'; f(x)", Style::Rust),
+            "let u = ; f(x)"
+        );
         assert_eq!(code("let s = `a{b}`;", Style::CLike), "let s = ;");
         // An apostrophe in JSX text does not swallow the closing brace.
         assert_eq!(code("<p>don't</p> }", Style::CLike), "<p>don't</p> }");
