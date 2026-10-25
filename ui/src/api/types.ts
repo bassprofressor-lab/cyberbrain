@@ -1283,12 +1283,32 @@ export interface ProposalDecision {
   reason: string | null;
 }
 
+/**
+ * `GET /api/v1/canaries`: the store's decoys (`cyberbrain canary`). Never a value; the
+ * fingerprint is what everything else names a decoy by.
+ */
+export interface CanaryReport {
+  summary: { count: number; hits: number; last_hit_at: string | null };
+  canaries: {
+    fingerprint: string;
+    kind: "api-key" | "iban" | "password" | "token";
+    label: string;
+    note: string;
+    ring: number;
+    created_at: string;
+    hits: number;
+    last_hit_at: string | null;
+    pushed_at: string | null;
+  }[];
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
 
   status(): Promise<StatusReport>;
   hubStatus(): Promise<HubStatus>;
+  canaries(): Promise<CanaryReport>;
   /** `days` of history for the daily buckets, 1 to 365; the server defaults to 30. */
   usage(days?: number): Promise<UsageReport>;
   recall(params: RecallParams): Promise<RecallResult>;

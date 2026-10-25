@@ -119,6 +119,7 @@ pub fn router_with(
     let api = Router::new()
         .route("/status", get(ops::status))
         .route("/hub", get(ops::hub_status))
+        .route("/canaries", get(ops::canaries))
         .route("/recall", get(ops::recall))
         .route("/recall/{citation}", get(ops::expand))
         .route("/notes", get(notes::list_notes).post(notes::post_note))

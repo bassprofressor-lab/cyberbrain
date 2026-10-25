@@ -7,6 +7,7 @@ import {
   type ApiErrorBody,
   type AuditPage,
   type HubStatus,
+  type CanaryReport,
   type AuditParams,
   type CitationExpansion,
   type CommandResult,
@@ -96,6 +97,7 @@ export const httpClient: CyberbrainApi = {
 
   status: () => request<StatusReport>("GET", "/status"),
   hubStatus: () => request<HubStatus>("GET", "/hub"),
+  canaries: () => request<CanaryReport>("GET", "/canaries"),
   usage: (days) => request<UsageReport>("GET", `/usage${qs({ days })}`),
   recall: (p: RecallParams) => request<RecallResult>("GET", `/recall${qs({ q: p.q, n: p.n, ring: p.ring, stand: p.stand })}`),
   expand: (citation) => request<CitationExpansion>("GET", `/recall/${encodeURIComponent(citation)}`),

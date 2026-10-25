@@ -103,6 +103,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   in the audit log, a refusal, an alert or an answer of `serve`; they carry its fingerprint (12
   hex digits of SHA-256). `push` hands the decoys to AgentGuard (`POST /v1/koeder`, key scope
   `koeder:write`). The value lives in `keys/canaries.json`, owner-only and kept out of git.
+- **A "Decoys" card on the status page.** How many decoys are planted, how often one was used
+  and when last, from the new `GET /api/v1/canaries` (counts, labels and fingerprints; never a
+  value). A used decoy turns the card red.
 
 ### Fixed
 

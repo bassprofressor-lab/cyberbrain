@@ -177,6 +177,16 @@ export const en = {
       backendNoCall: "no call yet",
       backendUnknown: "unknown",
     },
+    canary: {
+      title: "Decoys",
+      none: "No decoys planted.",
+      noneHint: "cyberbrain canary plant puts a credential nobody uses into a note and watches for it.",
+      planted: "planted",
+      hits: "uses",
+      lastHit: "last use",
+      never: "never",
+      used: "A decoy was used. Look in the audit log for canary.hit.",
+    },
     caveats: "what this page cannot measure",
     mismatch: {
       lead: "Semantic search is disabled.",

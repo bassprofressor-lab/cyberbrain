@@ -15,6 +15,7 @@
  */
 import {
   type HubStatus,
+  type CanaryReport,
   type ProposalDecision,
   type ProposalDetail,
   ApiError,
@@ -694,6 +695,18 @@ export const mockClient: CyberbrainApi = {
       hub: "https://hub.example.internal:7788",
       device: "dev_01M1Y70BYZM68NWYVE03ZF09YM",
       last_delivery: new Date(NOW - 11 * 60_000).toISOString(),
+    };
+  },
+
+  async canaries(): Promise<CanaryReport> {
+    // Two decoys, one of them used once: the card's interesting state.
+    const last = new Date(NOW - 3 * 3_600_000).toISOString();
+    return {
+      summary: { count: 2, hits: 1, last_hit_at: last },
+      canaries: [
+        { fingerprint: "3f2a9c0d1e7b", kind: "api-key", label: "billing key", note: "payments-api-key-production-3f2a", ring: 2, created_at: new Date(NOW - 9 * 86_400_000).toISOString(), hits: 1, last_hit_at: last, pushed_at: null },
+        { fingerprint: "a81c44e0b2d9", kind: "iban", label: "refund account", note: "supplier-refund-account-a81c", ring: 2, created_at: new Date(NOW - 9 * 86_400_000).toISOString(), hits: 0, last_hit_at: null, pushed_at: null },
+      ],
     };
   },
 

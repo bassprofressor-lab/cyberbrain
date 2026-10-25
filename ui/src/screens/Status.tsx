@@ -7,6 +7,7 @@ import { Icon } from "@/components/icons";
 import { Dot, ErrorBanner, Kbd, Loading, Pill } from "@/components/ui";
 import { absTime, bytes, num, relTime } from "@/lib/format";
 import { type Dict, useT } from "@/lib/i18n";
+import { canaryState } from "@/lib/canary";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate } from "@/lib/router";
 import { toApiError, useAsync } from "@/lib/useAsync";
@@ -423,6 +424,8 @@ export function StatusScreen() {
         </Card>
       </div>
 
+      <CanaryCard />
+
       {d.caveats.length ? (
         <details className="card px-5 py-3 text-sm group" role="note">
           <summary className="flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
@@ -462,6 +465,37 @@ export function StatusScreen() {
         <span className="sm:ml-auto font-mono">cyberbrain {d.version}</span>
       </footer>
     </div>
+  );
+}
+
+/**
+ * Decoys (`cyberbrain canary`): how many, how often used, when last. Its own request, so a
+ * store without the endpoint (an older server) only loses this card, not the page.
+ */
+function CanaryCard() {
+  const t = useT();
+  const c = useAsync(() => api.canaries(), []);
+  if (!c.data) return null;
+  const r = c.data;
+  const state = canaryState(r);
+  return (
+    <Card title={t.status.canary.title} icon="alert" {...(state === "idle" ? { state: "idle" as const } : {})} aside={r.summary.count ? <StatusBadge state={state}>{num(r.summary.count)} {t.status.canary.planted}</StatusBadge> : null}>
+      {r.summary.count === 0 ? (
+        <div className="text-sm text-fg-muted">
+          {t.status.canary.none} <code className="text-xs">{t.status.canary.noneHint}</code>
+        </div>
+      ) : (
+        <>
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm">
+            <dt className="text-fg-muted">{t.status.canary.hits}</dt>
+            <dd className="tnum">{num(r.summary.hits)}</dd>
+            <dt className="text-fg-muted">{t.status.canary.lastHit}</dt>
+            <dd>{r.summary.last_hit_at ? <span title={absTime(r.summary.last_hit_at)}>{relTime(r.summary.last_hit_at)}</span> : <span className="text-fg-muted">{t.status.canary.never}</span>}</dd>
+          </dl>
+          {r.summary.hits > 0 ? <div className="mt-3 text-sm text-danger">{t.status.canary.used}</div> : null}
+        </>
+      )}
+    </Card>
   );
 }
 

@@ -171,6 +171,16 @@ export const de: Dict = {
       backendNoCall: "noch kein Aufruf",
       backendUnknown: "unbekannt",
     },
+    canary: {
+      title: "Köder",
+      none: "Keine Köder ausgelegt.",
+      noneHint: "cyberbrain canary plant legt einen Zugangswert, den niemand benutzt, in eine Notiz und achtet darauf.",
+      planted: "ausgelegt",
+      hits: "Treffer",
+      lastHit: "letzter Treffer",
+      never: "nie",
+      used: "Ein Köder wurde benutzt. Im Prüfprotokoll unter canary.hit nachsehen.",
+    },
     caveats: "was diese Seite nicht messen kann",
     mismatch: {
       lead: "Die semantische Suche ist abgeschaltet.",

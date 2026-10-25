@@ -2084,3 +2084,26 @@ async fn resolving_a_held_creation_does_not_replace_a_note_made_meanwhile() {
     let text = std::fs::read_to_string(fx.note_path(3, "contact")).unwrap();
     assert!(text.contains("somebody else"), "{text}");
 }
+
+/// The status card's numbers: how many decoys, how often one was used, when last. The value
+/// is not in the answer.
+#[tokio::test]
+async fn canaries_are_counted_for_the_status_card_without_their_values() {
+    let fx = Fx::new();
+    let empty = fx.ok("/api/v1/canaries").await;
+    assert_eq!(empty["summary"]["count"], 0);
+    let app = App::open(Some(&fx.store), Actor::Operator).unwrap();
+    crate::canary::plant(
+        &app,
+        crate::canary::Kind::Token,
+        Some("ci token"),
+        cyberbrain_core::Ring::Knowledge,
+    )
+    .unwrap();
+    let value = crate::canary::load(&fx.store).unwrap()[0].value.clone();
+    let v = fx.ok("/api/v1/canaries").await;
+    assert_eq!(v["summary"]["count"], 1);
+    assert_eq!(v["summary"]["hits"], 0);
+    assert_eq!(v["canaries"][0]["label"], "ci token");
+    assert!(!v.to_string().contains(&value));
+}

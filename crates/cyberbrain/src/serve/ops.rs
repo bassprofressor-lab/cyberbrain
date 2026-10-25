@@ -192,6 +192,19 @@ pub async fn hub_status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<ser
     blocking(move || Ok(Json(st.app.hub_status()?))).await
 }
 
+/// The decoys and their hits, for the status card. Never a value: `canary::Shown` has none.
+pub async fn canaries(State(st): State<Arc<ServeState>>) -> ApiResult<Json<serde_json::Value>> {
+    blocking(move || {
+        let all = crate::canary::load(st.app.root())?;
+        let shown: Vec<crate::canary::Shown> = all.iter().map(Into::into).collect();
+        Ok(Json(serde_json::json!({
+            "summary": crate::canary::summary(&all),
+            "canaries": shown,
+        })))
+    })
+    .await
+}
+
 pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusReport>> {
     let probed_at = jiff::Timestamp::now();
     let s = st.app.status().await?;
