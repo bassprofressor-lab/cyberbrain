@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, ApiError, type ProposalDecision, type ProposalDetail } from "@/api/client";
 import { RingBadge } from "@/components/RingBadge";
-import { ErrorBanner, Loading, Pill } from "@/components/ui";
+import { PageHeader, StatusBadge } from "@/components/design";
+import { Icon } from "@/components/icons";
+import { Empty, ErrorBanner, Loading, Pill } from "@/components/ui";
 import { absTime, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { Markdown } from "@/lib/markdown";
@@ -29,59 +31,58 @@ export function ReviewScreen() {
 
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-3xl px-8 py-8 flex flex-col gap-6">
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <h1 className="text-xl font-semibold tracking-tight">{t.review.title}</h1>
-          <span className="text-2xs text-fg-faint">{t.review.subtitle}</span>
-          <button className="btn btn-sm ml-auto" onClick={reload}>
+      <div className="max-w-4xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-6">
+        <PageHeader icon="review" title={t.review.title} sub={t.review.subtitle}>
+          <button className="btn" onClick={reload}>
+            <Icon name="refresh" size={18} />
             {t.common.refresh}
           </button>
-        </div>
+        </PageHeader>
 
         <section className="flex flex-col gap-3">
-          <h2 className="text-sm font-medium">
-            {t.review.waiting} <span className="text-2xs text-fg-faint font-normal">{items.length}</span>
+          <h2 className="flex items-center gap-2 text-base font-semibold">
+            {t.review.waiting} <StatusBadge state={items.length ? "warn" : "ok"}>{items.length}</StatusBadge>
           </h2>
           {waiting.error ? <ErrorBanner error={waiting.error} onRetry={waiting.reload} /> : null}
           {waiting.loading && !waiting.data ? <Loading /> : null}
-          {!waiting.loading && !items.length && !waiting.error ? <p className="text-sm text-fg-muted py-2">{t.review.none}</p> : null}
+          {!waiting.loading && !items.length && !waiting.error ? <Empty title={t.review.none} icon="check" /> : null}
           {items.map((p) => (
             <ProposalCard key={p.name} p={p} onDecided={reload} />
           ))}
         </section>
 
-        <section className="flex flex-col gap-2">
-          <h2 className="text-sm font-medium">{t.review.history}</h2>
+        <section className="flex flex-col gap-3">
+          <h2 className="text-base font-semibold">{t.review.history}</h2>
           {history.error ? <ErrorBanner error={history.error} onRetry={history.reload} /> : null}
-          {!history.loading && !(history.data ?? []).length && !history.error ? <p className="text-sm text-fg-muted">{t.review.noHistory}</p> : null}
+          {!history.loading && !(history.data ?? []).length && !history.error ? <Empty title={t.review.noHistory} icon="review" /> : null}
           {(history.data ?? []).length ? (
-            <table className="w-full text-xs">
-              <thead className="text-fg-faint text-left">
+            <div className="table-wrap scroll-thin"><table className="table min-w-[40rem]">
+              <thead>
                 <tr>
-                  <th className="font-normal py-1 pr-3">{t.review.colWhen}</th>
-                  <th className="font-normal py-1 pr-3">{t.review.colNote}</th>
-                  <th className="font-normal py-1 pr-3">{t.review.colProposedBy}</th>
-                  <th className="font-normal py-1 pr-3">{t.review.colDecidedBy}</th>
-                  <th className="font-normal py-1">{t.review.colOutcome}</th>
+                  <th>{t.review.colWhen}</th>
+                  <th>{t.review.colNote}</th>
+                  <th>{t.review.colProposedBy}</th>
+                  <th>{t.review.colDecidedBy}</th>
+                  <th>{t.review.colOutcome}</th>
                 </tr>
               </thead>
               <tbody>
                 {(history.data ?? []).map((d, i) => (
-                  <tr key={`${d.name}-${d.ts}-${i}`} className="border-t border-line align-top">
-                    <td className="py-1.5 pr-3 whitespace-nowrap text-fg-muted" title={absTime(d.ts)}>
+                  <tr key={`${d.name}-${d.ts}-${i}`}>
+                    <td className="whitespace-nowrap text-fg-muted" title={absTime(d.ts)}>
                       {relTime(d.ts)}
                     </td>
-                    <td className="py-1.5 pr-3 font-mono break-all">{d.name}</td>
-                    <td className="py-1.5 pr-3 font-mono break-all">{d.proposed_by ?? "—"}</td>
-                    <td className="py-1.5 pr-3 font-mono break-all">{d.by ?? "—"}</td>
-                    <td className="py-1.5">
-                      <Pill tone={d.accepted ? "ok" : "warn"}>{d.accepted ? t.review.accepted : t.review.rejected}</Pill>
+                    <td className="font-mono break-all">{d.name}</td>
+                    <td className="font-mono text-xs break-all">{d.proposed_by ?? "—"}</td>
+                    <td className="font-mono text-xs break-all">{d.by ?? "—"}</td>
+                    <td>
+                      <StatusBadge state={d.accepted ? "ok" : "idle"}>{d.accepted ? t.review.accepted : t.review.rejected}</StatusBadge>
                       {d.reason ? <span className="block mt-1 text-fg-muted">{d.reason}</span> : null}
                     </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
+            </table></div>
           ) : null}
         </section>
       </div>
@@ -120,7 +121,7 @@ function ProposalCard({ p, onDecided }: { p: ProposalDetail; onDecided: () => vo
       : null;
 
   return (
-    <article className="rounded-sm border border-line bg-surface p-4 flex flex-col gap-3">
+    <article className="card p-5 flex flex-col gap-4">
       <header className="flex items-start gap-2 flex-wrap">
         <RingBadge ring={p.ring} />
         <span className="font-mono text-sm break-all">{p.name}</span>

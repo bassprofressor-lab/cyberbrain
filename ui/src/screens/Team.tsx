@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { api, type HubStatus, type NoteSummary } from "@/api/client";
 import { RingChip } from "@/components/RingBadge";
-import { ErrorBanner, Loading } from "@/components/ui";
+import { Card, PageHeader, StatusBadge } from "@/components/design";
+import { Icon } from "@/components/icons";
+import { Empty, ErrorBanner, Loading } from "@/components/ui";
 import { absTime, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { href, navigate } from "@/lib/router";
@@ -62,23 +64,19 @@ export function TeamScreen() {
           {relTime(n.updated)}
         </span>
       </span>
-      <svg width="14" height="14" viewBox="0 0 16 16" fill="none" className="text-fg-faint shrink-0 self-center" aria-hidden>
-        <path d="m6.5 4 4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
+      <Icon name="chevron" size={16} className="-rotate-90 text-fg-faint self-center" />
     </button>
   );
 
   return (
     <div className="h-full overflow-auto scroll-thin">
-      <div className="max-w-2xl px-8 py-8 flex flex-col gap-5">
-        <div className="flex items-baseline gap-3 flex-wrap">
-          <h1 className="text-xl font-semibold tracking-tight">{t.team.title}</h1>
-          <span className="text-2xs text-fg-faint">{t.team.subtitle}</span>
-        </div>
+      <div className="max-w-3xl px-4 py-5 sm:px-8 sm:py-8 flex flex-col gap-5">
+        <PageHeader icon="team" title={t.team.title} sub={t.team.subtitle} />
 
         {/* Said before the lists, because it decides what they mean: the same note in the
             same bereich is shared on one machine and private on another. */}
-        <p className="text-xs text-fg-muted">
+        <p className="card px-5 py-3.5 text-sm text-fg-muted flex flex-wrap items-center gap-x-3 gap-y-1">
+          {hub.data && !hub.error ? <StatusBadge state={hub.data.enrolled ? "ok" : "idle"}>{hub.data.enrolled ? t.team.badgeEnrolled : t.team.badgeAlone}</StatusBadge> : null}
           {hub.loading && !hub.data ? t.team.hubChecking : hub.error || !hub.data ? t.team.hubUnknown : hub.data.enrolled ? t.team.enrolled(hub.data.hub ?? "") : t.team.notEnrolled}
           {hub.error ? (
             <button type="button" className="btn btn-ghost btn-sm ml-2" onClick={hub.reload}>
@@ -89,29 +87,29 @@ export function TeamScreen() {
 
         {list.error ? <ErrorBanner error={list.error} /> : null}
         {list.loading && !list.data ? <Loading /> : null}
-        {!list.loading && !notes.length && !list.error ? <p className="text-sm text-fg-muted py-6">{t.team.empty}</p> : null}
+        {!list.loading && !notes.length && !list.error ? <Empty title={t.team.empty} icon="team" /> : null}
 
         {groups.map(([bereich, ns]) => (
-          <section key={bereich} className="flex flex-col gap-1">
-            <h2 className="text-sm font-medium">
-              {bereich} <span className="text-2xs text-fg-faint font-normal">{ns.length > PREVIEW && !open.has(bereich) ? t.team.showing(PREVIEW, ns.length) : t.team.count(ns.length)}</span>
-            </h2>
-            {shownOf(bereich, ns).map(row)}
-            {more(bereich, ns.length)}
-          </section>
+          <Card key={bereich} title={bereich} icon="folder" aside={ns.length > PREVIEW && !open.has(bereich) ? t.team.showing(PREVIEW, ns.length) : t.team.count(ns.length)}>
+            <div className="flex flex-col gap-1 -m-2">
+              {shownOf(bereich, ns).map(row)}
+              {more(bereich, ns.length)}
+            </div>
+          </Card>
         ))}
 
         {unshared.length ? (
-          <section className="flex flex-col gap-1">
-            <h2 className="text-sm font-medium text-fg-muted">
-              {t.team.privateHeading} <span className="text-2xs text-fg-faint font-normal">{unshared.length > PREVIEW && !open.has("") ? t.team.showing(PREVIEW, unshared.length) : t.team.count(unshared.length)}</span>
-            </h2>
+          <Card title={t.team.privateHeading} icon="compliance" state="idle" aside={unshared.length > PREVIEW && !open.has("") ? t.team.showing(PREVIEW, unshared.length) : t.team.count(unshared.length)}>
+            <div className="flex flex-col gap-1">
             {/* The default state, and the safe one. Named rather than left implicit, because
                 "nobody else sees this" is the fact somebody came here to check. */}
-            <p className="text-2xs text-fg-faint mb-1">{t.team.privateNote}</p>
-            {shownOf("", unshared).map(row)}
-            {more("", unshared.length)}
-          </section>
+            <p className="text-sm text-fg-muted mb-1">{t.team.privateNote}</p>
+            <div className="flex flex-col gap-1 -mx-2">
+              {shownOf("", unshared).map(row)}
+              {more("", unshared.length)}
+            </div>
+            </div>
+          </Card>
         ) : null}
       </div>
     </div>
