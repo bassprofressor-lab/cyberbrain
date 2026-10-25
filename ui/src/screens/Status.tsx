@@ -135,7 +135,7 @@ export function StatusScreen() {
   const idx = dd.index;
 
   const kv = (rows: Array<[ReactNode, ReactNode]>) => (
-    <dl className="kv">
+    <dl className="facts">
       {rows.map(([k, v], i) => (
         <div key={i}>
           <dt>{k}</dt>

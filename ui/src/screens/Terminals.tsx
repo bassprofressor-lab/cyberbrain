@@ -124,16 +124,18 @@ export function TerminalsScreen({ route }: Props) {
 
   if (!token) {
     return (
-      <Section title={t.terminals.title}>
-        <Empty title={t.terminals.noToken}>{t.terminals.noTokenHow}</Empty>
-      </Section>
+      <div className="p-4 sm:p-6">
+        <Section icon="terminals" title={t.terminals.title}>
+          <Empty title={t.terminals.noToken} icon="terminals">{t.terminals.noTokenHow}</Empty>
+        </Section>
+      </div>
     );
   }
 
   return (
-    <div className="h-full flex flex-col min-h-0">
-      <Section title={t.terminals.title} fill>
-        <p className="text-2xs text-fg-faint mb-3 max-w-prose">{t.terminals.lead}</p>
+    <div className="h-full flex flex-col min-h-0 p-4 sm:p-6">
+      <Section icon="terminals" title={t.terminals.title} fill>
+        <p className="text-sm text-fg-muted mb-4 max-w-prose">{t.terminals.lead}</p>
 
         <form
           className="flex items-center gap-2 mb-3"
@@ -149,9 +151,9 @@ export function TerminalsScreen({ route }: Props) {
             placeholder={t.terminals.placeholder}
             spellCheck={false}
             autoComplete="off"
-            className="input flex-1 min-w-0 font-mono text-xs"
+            className="input flex-1 min-w-0 font-mono"
           />
-          <button type="submit" className="btn btn-sm btn-primary">
+          <button type="submit" className="btn btn-primary">
             {t.terminals.open}
           </button>
           <button
@@ -233,7 +235,7 @@ export function TerminalsScreen({ route }: Props) {
 
         <div className="flex-1 min-h-0 overflow-y-auto space-y-3">
           {panes.length === 0 ? (
-            <Empty title={t.terminals.empty}>{t.terminals.emptyHow}</Empty>
+            <Empty title={t.terminals.empty} icon="terminals">{t.terminals.emptyHow}</Empty>
           ) : null}
           {panes.map((p) => (
             <Pane

@@ -148,7 +148,7 @@ export const en = {
   status: {
     title: "Status",
     loading: "reading status",
-    keys: { refresh: "Refresh", doctor: "Run doctor" },
+    keys: { refresh: "Refresh", doctor: "Check (doctor)" },
     btn: {
       doctor: "doctor",
       doctorBusy: "checking…",
@@ -882,6 +882,8 @@ export const en = {
     openExisting: "Open it",
   },
   team: {
+    badgeEnrolled: "Reports to",
+    badgeAlone: "Only on this machine",
     title: "Team",
     subtitle: "what is shared and what stays here",
     empty: "Nobody has written anything down yet.",

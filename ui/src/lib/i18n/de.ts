@@ -142,7 +142,7 @@ export const de: Dict = {
   status: {
     title: "Status",
     loading: "liest den Status",
-    keys: { refresh: "Aktualisieren", doctor: "doctor ausführen" },
+    keys: { refresh: "Aktualisieren", doctor: "Prüfen (doctor)" },
     btn: {
       doctor: "doctor",
       doctorBusy: "prüft…",
@@ -871,6 +871,8 @@ export const de: Dict = {
     openExisting: "Öffnen",
   },
   team: {
+    badgeEnrolled: "Meldet an",
+    badgeAlone: "Allein auf diesem Rechner",
     title: "Im Team",
     subtitle: "was geteilt wird und was hierbleibt",
     empty: "Es hat noch niemand etwas aufgeschrieben.",

@@ -123,8 +123,9 @@ export function ConsoleScreen() {
   }
 
   return (
-    <div className="h-full flex flex-col min-h-0">
+    <div className="h-full flex flex-col min-h-0 p-4 sm:p-6">
       <Section
+        icon="console"
         title={
           <span className="flex items-baseline gap-2">
             {t.console.title}
@@ -140,17 +141,17 @@ export function ConsoleScreen() {
         }
         fill
       >
-        <p className="text-2xs text-fg-faint mb-3 max-w-prose">{t.console.lead}</p>
+        <p className="text-sm text-fg-muted mb-4 max-w-prose">{t.console.lead}</p>
 
         <div
-          className="flex-1 min-h-0 overflow-y-auto font-mono text-xs space-y-3 pr-1"
+          className="flex-1 min-h-0 overflow-y-auto font-mono text-sm space-y-3 pr-1"
           // The output is the whole of the answer here. Without this a screen reader user
           // presses Enter and is told nothing at all.
           aria-live="polite"
           aria-atomic="false"
         >
           {entries.length === 0 && !busy ? (
-            <Empty title={t.console.empty}>
+            <Empty title={t.console.empty} icon="console">
               <div className="flex flex-wrap gap-1.5 mt-2">
                 <span className="text-fg-faint">{t.console.tryThese}</span>
                 {EXAMPLES.map((x) => (
@@ -193,11 +194,11 @@ export function ConsoleScreen() {
             // command then reach the global shortcuts — a typed `g t` navigates away
             // mid-command.
             readOnly={busy}
-            className="flex-1 h-8 min-w-0 bg-transparent font-mono text-xs rounded-sm placeholder:text-fg-faint"
+            className="flex-1 h-9 min-w-0 bg-transparent font-mono text-sm rounded-sm placeholder:text-fg-faint"
           />
           <button
             type="button"
-            className="btn btn-sm"
+            className="btn btn-primary"
             onClick={() => void run(line)}
             disabled={busy || line.trim() === ""}
           >
