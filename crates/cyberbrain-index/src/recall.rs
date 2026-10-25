@@ -238,6 +238,28 @@ impl Index {
             ));
         }
         let replaced = self.superseded_at(at)?;
+        // A client with a scope learns that a hit is replaced, not the name of a successor
+        // outside its bereiche: the rule `newer_links` follows below. The hit is demoted
+        // all the same, and the caveats say why without naming anything.
+        let visible_names: Option<std::collections::HashSet<String>> = match &opts.scope {
+            None => None,
+            Some(sc) => {
+                let mut sql = String::from("SELECT n.name FROM notes n WHERE 1=1");
+                let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+                bereich_clause(&mut sql, &mut args, None, Some(sc));
+                let mut stmt = self.conn.prepare_cached(&sql).ix()?;
+                let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+                let rows = stmt
+                    .query_map(params.as_slice(), |r| r.get::<_, String>(0))
+                    .ix()?;
+                let mut set = std::collections::HashSet::new();
+                for r in rows {
+                    set.insert(r.ix()?);
+                }
+                Some(set)
+            }
+        };
+        let mut successor_hidden = 0usize;
         let mut outdated: HashMap<String, Outdated> = HashMap::new();
         let mut ranked: Vec<(String, f32)> = fused
             .into_iter()
@@ -248,15 +270,27 @@ impl Index {
                     .unwrap_or(Ring::External);
                 let (recency, stale) = match stand.get(cit) {
                     Some(t) => {
+                        let successor = replaced.get(&t.name).cloned();
+                        let hidden = match (&successor, &visible_names) {
+                            (Some(s), Some(names)) => !names.contains(s),
+                            _ => false,
+                        };
+                        if hidden {
+                            successor_hidden += 1;
+                        }
                         let o = Outdated {
-                            superseded_by: replaced.get(&t.name).cloned(),
+                            superseded_by: successor.filter(|_| !hidden),
                             valid_from: t.valid_from.filter(|f| *f > at),
                             invalid_at: t.invalid_at.filter(|i| *i <= at),
                         };
                         // One weight however many reasons: a note that is both replaced and
                         // expired is not twice as wrong, and ×0.25 would bury the history
                         // somebody may have asked for.
-                        let w = if o.any() { OUTDATED_WEIGHT } else { 1.0 };
+                        let w = if o.any() || hidden {
+                            OUTDATED_WEIGHT
+                        } else {
+                            1.0
+                        };
                         if o.any() {
                             outdated.insert(cit.to_string(), o);
                         }
@@ -268,39 +302,58 @@ impl Index {
             })
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        if successor_hidden > 0 {
+            caveats.push(format!(
+                "{successor_hidden} candidate(s) demoted as replaced by a note outside this \
+                 client's bereiche, which is not named"
+            ));
+        }
 
         // 5. Materialise every candidate: collapsing duplicates needs the text of each, and
         // the members of one group can sit anywhere in the order. Candidates are at most
         // k_lex + k_sem, each a lookup by a unique key.
-        let mut stmt = self
-            .conn
-            .prepare_cached(
-                "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags FROM blocks b \
-                 JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
-            )
-            .ix()?;
+        //
+        // The bereich filter is applied here again. It ran once at the start, and nothing
+        // holds the index still between then and now: a note another process moved into a
+        // foreign bereich in the meantime would otherwise be handed out on the strength of
+        // where it used to be. A candidate the filter now rejects is left out quietly.
+        let filtered = opts.bereich.is_some() || opts.scope.is_some();
+        let mut sql = String::from(
+            "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags FROM blocks b \
+             JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
+        );
+        let mut filter_args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(String::new())];
+        bereich_clause(
+            &mut sql,
+            &mut filter_args,
+            opts.bereich.as_deref(),
+            opts.scope.as_deref(),
+        );
+        let mut stmt = self.conn.prepare_cached(&sql).ix()?;
         let mut cands: Vec<Candidate> = Vec::with_capacity(ranked.len());
         for (cit, score) in ranked {
             let o = outdated.remove(&cit).unwrap_or_default();
-            let (id, name, ring, text, updated, tags): (
-                String,
-                String,
-                i64,
-                String,
-                String,
-                String,
-            ) = stmt
-                .query_row([&cit], |r| {
-                    Ok((
-                        r.get(0)?,
-                        r.get(1)?,
-                        r.get(2)?,
-                        r.get(3)?,
-                        r.get(4)?,
-                        r.get(5)?,
-                    ))
-                })
-                .map_err(|e| Error::Index(format!("hit {cit} vanished during recall: {e}")))?;
+            let mut params: Vec<&dyn rusqlite::ToSql> = vec![&cit];
+            params.extend(filter_args.iter().skip(1).map(|b| b.as_ref()));
+            let row = stmt.query_row(params.as_slice(), |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            });
+            let (id, name, ring, text, updated, tags) = match row {
+                Ok(row) => row,
+                Err(rusqlite::Error::QueryReturnedNoRows) if filtered => continue,
+                Err(e) => {
+                    return Err(Error::Index(format!(
+                        "hit {cit} vanished during recall: {e}"
+                    )));
+                }
+            };
             let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
             cands.push(Candidate {
                 key: dedup_key(&text),

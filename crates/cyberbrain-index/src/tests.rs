@@ -1837,3 +1837,120 @@ fn a_hit_names_the_later_notes_that_link_to_it() {
         .unwrap();
     assert!(later.newer_links.is_empty());
 }
+
+/// Moves one note into another bereich while the recall that asked for the query vector is
+/// still running: after the scope filter and the lexical search, before materialisation.
+struct MovingEmbedder {
+    inner: HashEmbedder,
+    db: PathBuf,
+    note: &'static str,
+}
+
+impl Embedder for MovingEmbedder {
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+    fn profile_id(&self) -> &str {
+        self.inner.profile_id()
+    }
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed(texts)
+    }
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        let other = rusqlite::Connection::open(&self.db).unwrap();
+        other
+            .execute(
+                "UPDATE notes SET bereich = 'buchhaltung' WHERE name = ?1",
+                [self.note],
+            )
+            .unwrap();
+        self.inner.embed(&[query]).map(|mut v| v.remove(0))
+    }
+}
+
+/// A note that leaves the client's scope between the filter and the materialisation is
+/// not handed out. The filter ran once at the start; nothing looked again.
+#[test]
+fn a_note_moved_out_of_scope_during_recall_is_not_returned() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("i.db");
+    let e = MovingEmbedder {
+        inner: HashEmbedder::new("test-v1", 256),
+        db: db.clone(),
+        note: "wandert",
+    };
+    let mut ix = Index::open(&db).unwrap();
+    ix.set_embedding_profile(&profile_of(&e.inner)).unwrap();
+    let mut stays = note("bleibt", Ring::Knowledge, "Ladung und Tour", &[]);
+    stays.front.bereich = Some("disposition".into());
+    let mut moves = note("wandert", Ring::Knowledge, "Ladung und Konto", &[]);
+    moves.front.bereich = Some("disposition".into());
+    put(&mut ix, &e.inner, &stays);
+    put(&mut ix, &e.inner, &moves);
+
+    let r = ix
+        .recall(
+            "Ladung",
+            Some(&e),
+            &RecallOptions {
+                scope: Some(vec!["disposition".into()]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
+    assert_eq!(names, ["bleibt"], "{r:?}");
+}
+
+/// A client with a scope learns that a hit is replaced, but not the name of a successor
+/// outside its bereiche: the same rule `newer_links` follows.
+#[test]
+fn superseded_by_does_not_name_a_note_outside_the_scope() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let mut old = note("alte-regel", Ring::Knowledge, "Tourenplanung Regel", &[]);
+    old.front.bereich = Some("disposition".into());
+    let mut inside = note("neue-regel", Ring::Knowledge, "anderes", &[]);
+    inside.front.bereich = Some("disposition".into());
+    let mut outside = note("geheime-regel", Ring::Knowledge, "sonstiges", &[]);
+    outside.front.bereich = Some("buchhaltung".into());
+    outside.front.supersedes = vec!["alte-regel".into()];
+    for n in [&old, &inside, &outside] {
+        put(&mut ix, &e, n);
+    }
+    let scoped = RecallOptions {
+        scope: Some(vec!["disposition".into()]),
+        ..Default::default()
+    };
+    let r = ix.recall("Tourenplanung", Some(&e), &scoped).unwrap();
+    let h = r.hits.iter().find(|h| h.note_name == "alte-regel").unwrap();
+    assert_eq!(h.superseded_by, None, "{h:?}");
+    assert!(
+        !format!("{r:?}").contains("geheime-regel"),
+        "the name leaked: {r:?}"
+    );
+    // Still demoted: the client is told the hit is outdated, only not by whom.
+    assert!(
+        r.caveats.iter().any(|c| c.contains("outside")),
+        "{:?}",
+        r.caveats
+    );
+
+    // Without a scope the successor is named as before, and so is one inside the scope.
+    let open = ix
+        .recall("Tourenplanung", Some(&e), &RecallOptions::default())
+        .unwrap();
+    let h = open
+        .hits
+        .iter()
+        .find(|h| h.note_name == "alte-regel")
+        .unwrap();
+    assert_eq!(h.superseded_by.as_deref(), Some("geheime-regel"));
+    let mut within = outside.clone();
+    within.front.bereich = Some("disposition".into());
+    put(&mut ix, &e, &within);
+    let r = ix.recall("Tourenplanung", Some(&e), &scoped).unwrap();
+    let h = r.hits.iter().find(|h| h.note_name == "alte-regel").unwrap();
+    assert_eq!(h.superseded_by.as_deref(), Some("geheime-regel"));
+}
