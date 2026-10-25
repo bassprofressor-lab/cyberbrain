@@ -90,53 +90,6 @@ pub enum Key {
     WebviewMissing,
 }
 
-pub const ALL: &[Key] = &[
-    Key::ServerNotFound,
-    Key::TrayMenuFailed,
-    Key::TrayIconFailed,
-    Key::ProjectsLost,
-    Key::AlreadyRunning,
-    Key::HubOffer,
-    Key::ServeStopped,
-    Key::TrayExplained,
-    Key::MenuRebuildFailed,
-    Key::MenuOpen,
-    Key::MenuFolder,
-    Key::MenuClients,
-    Key::MenuEnrol,
-    Key::MenuClose,
-    Key::MenuAdd,
-    Key::MenuPanes,
-    Key::MenuOpenIn,
-    Key::MenuWindow,
-    Key::MenuBrowser,
-    Key::MenuAutostart,
-    Key::MenuQuit,
-    Key::TooltipNone,
-    Key::TooltipOne,
-    Key::TooltipMany,
-    Key::PanesTitle,
-    Key::PanesFailed,
-    Key::PageInBrowser,
-    Key::ClientsDone,
-    Key::ClientsFailed,
-    Key::InvitationTitle,
-    Key::InvitationFilter,
-    Key::EnrolDone,
-    Key::EnrolFailed,
-    Key::HubConnectFailed,
-    Key::ChooseProject,
-    Key::AlreadyOpen,
-    Key::NoStoreAsk,
-    Key::StoreFailed,
-    Key::StartFailed,
-    Key::CannotOpen,
-    Key::PrintedHeader,
-    Key::Starting,
-    Key::AutostartFailed,
-    Key::WebviewMissing,
-];
-
 /// The template for a key. `{0}`, `{1}` stand for the arguments in order.
 pub fn template(lang: Lang, key: Key) -> &'static str {
     use Key::*;
@@ -154,9 +107,7 @@ pub fn template(lang: Lang, key: Key) -> &'static str {
         (Lang::En, TrayMenuFailed) => "the tray menu could not be built",
         (Lang::De, TrayMenuFailed) => "Das Menü im Infobereich konnte nicht aufgebaut werden.",
         (Lang::En, TrayIconFailed) => "the tray icon could not be created: {0}",
-        (Lang::De, TrayIconFailed) => {
-            "Das Symbol im Infobereich konnte nicht angelegt werden: {0}"
-        }
+        (Lang::De, TrayIconFailed) => "Das Symbol im Infobereich konnte nicht angelegt werden: {0}",
         (Lang::En, ProjectsLost) => {
             "These projects could not be opened and have been forgotten:\n\n{0}\n\nUse \
              Open another project… to point at them again once they are back."
@@ -255,9 +206,7 @@ pub fn template(lang: Lang, key: Key) -> &'static str {
         (Lang::De, TooltipMany) => "Cyberbrain — {0} Projekte geöffnet",
         (Lang::En, PanesTitle) => "Cyberbrain — command lines",
         (Lang::De, PanesTitle) => "Cyberbrain — Kommandozeilen",
-        (Lang::En, PanesFailed) => {
-            "{0}\n\nThe command line is also in each project's own page."
-        }
+        (Lang::En, PanesFailed) => "{0}\n\nThe command line is also in each project's own page.",
         (Lang::De, PanesFailed) => {
             "{0}\n\nDie Kommandozeile gibt es auch in der Seite jedes Projekts."
         }
@@ -272,9 +221,7 @@ pub fn template(lang: Lang, key: Key) -> &'static str {
              wird das zur Einstellung."
         }
         (Lang::En, ClientsDone) => "{0}\n\nRestart the client for it to read this.",
-        (Lang::De, ClientsDone) => {
-            "{0}\n\nStarten Sie den Client neu, damit er das übernimmt."
-        }
+        (Lang::De, ClientsDone) => "{0}\n\nStarten Sie den Client neu, damit er das übernimmt.",
         (Lang::En, ClientsFailed) => "Nothing was set up.\n\n{0}",
         (Lang::De, ClientsFailed) => "Es wurde nichts eingerichtet.\n\n{0}",
         (Lang::En, InvitationTitle) => "Open the invitation file you were sent",
@@ -299,9 +246,7 @@ pub fn template(lang: Lang, key: Key) -> &'static str {
         (Lang::De, ChooseProject) => "Projekt wählen, dessen Gedächtnis geöffnet werden soll",
         (Lang::En, AlreadyOpen) => "{0}\n\nis already open. It is in the menu.",
         (Lang::De, AlreadyOpen) => "{0}\n\nist bereits geöffnet. Es steht im Menü.",
-        (Lang::En, NoStoreAsk) => {
-            "There is no Cyberbrain store in\n{0}\n\nCreate one there now?"
-        }
+        (Lang::En, NoStoreAsk) => "There is no Cyberbrain store in\n{0}\n\nCreate one there now?",
         (Lang::De, NoStoreAsk) => {
             "In\n{0}\n\ngibt es noch keinen Cyberbrain-Speicher. Jetzt dort einen anlegen?"
         }
@@ -323,12 +268,8 @@ pub fn template(lang: Lang, key: Key) -> &'static str {
         (Lang::De, PrintedHeader) => "\n\nAusgabe des Programms:\n{0}",
         (Lang::En, Starting) => "Cyberbrain — starting {0}…",
         (Lang::De, Starting) => "Cyberbrain — {0} wird gestartet…",
-        (Lang::En, AutostartFailed) => {
-            "Start with Windows could not be changed:\n\n{0}"
-        }
-        (Lang::De, AutostartFailed) => {
-            "„Mit Windows starten“ ließ sich nicht ändern:\n\n{0}"
-        }
+        (Lang::En, AutostartFailed) => "Start with Windows could not be changed:\n\n{0}",
+        (Lang::De, AutostartFailed) => "„Mit Windows starten“ ließ sich nicht ändern:\n\n{0}",
         (Lang::En, WebviewMissing) => {
             "The WebView2 runtime could not be started. It is part of Windows 11 and of \
              current Windows 10, and can be installed from Microsoft's Evergreen download \
@@ -359,6 +300,53 @@ pub fn fill(template: &str, args: &[&str]) -> String {
 mod tests {
     use super::*;
 
+    const ALL: &[Key] = &[
+        Key::ServerNotFound,
+        Key::TrayMenuFailed,
+        Key::TrayIconFailed,
+        Key::ProjectsLost,
+        Key::AlreadyRunning,
+        Key::HubOffer,
+        Key::ServeStopped,
+        Key::TrayExplained,
+        Key::MenuRebuildFailed,
+        Key::MenuOpen,
+        Key::MenuFolder,
+        Key::MenuClients,
+        Key::MenuEnrol,
+        Key::MenuClose,
+        Key::MenuAdd,
+        Key::MenuPanes,
+        Key::MenuOpenIn,
+        Key::MenuWindow,
+        Key::MenuBrowser,
+        Key::MenuAutostart,
+        Key::MenuQuit,
+        Key::TooltipNone,
+        Key::TooltipOne,
+        Key::TooltipMany,
+        Key::PanesTitle,
+        Key::PanesFailed,
+        Key::PageInBrowser,
+        Key::ClientsDone,
+        Key::ClientsFailed,
+        Key::InvitationTitle,
+        Key::InvitationFilter,
+        Key::EnrolDone,
+        Key::EnrolFailed,
+        Key::HubConnectFailed,
+        Key::ChooseProject,
+        Key::AlreadyOpen,
+        Key::NoStoreAsk,
+        Key::StoreFailed,
+        Key::StartFailed,
+        Key::CannotOpen,
+        Key::PrintedHeader,
+        Key::Starting,
+        Key::AutostartFailed,
+        Key::WebviewMissing,
+    ];
+
     fn placeholders(t: &str) -> Vec<usize> {
         (0..6).filter(|i| t.contains(&format!("{{{i}}}"))).collect()
     }
@@ -368,9 +356,8 @@ mod tests {
         // `ALL` is what the other tests walk, so a key left out of it would escape them:
         // the match above is exhaustive, which makes a missing translation a compile error,
         // and this makes a missing entry in the list a test failure.
-        let keys = std::collections::HashSet::<String>::from_iter(
-            ALL.iter().map(|k| format!("{k:?}")),
-        );
+        let keys =
+            std::collections::HashSet::<String>::from_iter(ALL.iter().map(|k| format!("{k:?}")));
         assert_eq!(keys.len(), ALL.len(), "a key is listed twice");
         let src = include_str!("i18n.rs");
         let declared = src

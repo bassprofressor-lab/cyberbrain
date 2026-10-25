@@ -763,3 +763,26 @@ fn the_company_hub_is_offered_once_and_never_against_a_no() {
         "said no before"
     );
 }
+
+// ---- a command that never answers ----
+
+#[cfg(unix)]
+#[test]
+fn a_command_that_hangs_is_ended_instead_of_waited_for() {
+    let started = std::time::Instant::now();
+    let mut c = std::process::Command::new("sleep");
+    c.arg("30");
+    let err = output_within(c, Duration::from_millis(300)).expect_err("sleep 30 outlasts 300 ms");
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "it waited for the child"
+    );
+
+    let mut c = std::process::Command::new("sh");
+    c.args(["-c", "echo out; echo err >&2; exit 3"]);
+    let o = output_within(c, Duration::from_secs(5)).unwrap();
+    assert_eq!(o.status.code(), Some(3));
+    assert_eq!(String::from_utf8_lossy(&o.stdout).trim(), "out");
+    assert_eq!(String::from_utf8_lossy(&o.stderr).trim(), "err");
+}

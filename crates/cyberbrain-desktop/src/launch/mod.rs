@@ -270,9 +270,9 @@ pub fn has_store(dir: &Path) -> bool {
 
 /// Run `cyberbrain init` in a directory that has no store yet.
 pub fn init_store(server: &Path, project_dir: &Path) -> Result<(), String> {
-    let out = command(server, project_dir)
-        .arg("init")
-        .output()
+    let mut c = command(server, project_dir);
+    c.arg("init");
+    let out = output_within(c, CLI_TIMEOUT)
         .map_err(|e| format!("cannot run {}: {e}", server.display()))?;
     if out.status.success() {
         Ok(())
@@ -495,11 +495,9 @@ pub fn enrol(
     project_dir: &Path,
     invitation: &Path,
 ) -> std::result::Result<String, String> {
-    let out = command(server, project_dir)
-        .arg("hub")
-        .arg("enrol")
-        .arg(invitation)
-        .output()
+    let mut c = command(server, project_dir);
+    c.arg("hub").arg("enrol").arg(invitation);
+    let out = output_within(c, CLI_TIMEOUT)
         .map_err(|e| format!("cyberbrain could not be started: {e}"))?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
     if out.status.success() {
@@ -526,9 +524,9 @@ pub fn enrol(
 /// `Ok` carries what the CLI printed: which clients it found, which files it wrote, and the
 /// lines to paste for the one client it does not write.
 pub fn set_up_clients(server: &Path, project_dir: &Path) -> std::result::Result<String, String> {
-    let out = command(server, project_dir)
-        .arg("install")
-        .output()
+    let mut c = command(server, project_dir);
+    c.arg("install");
+    let out = output_within(c, CLI_TIMEOUT)
         .map_err(|e| format!("cyberbrain could not be started: {e}"))?;
     let text = |b: &[u8]| String::from_utf8_lossy(b).trim().to_string();
     if out.status.success() {
@@ -541,6 +539,60 @@ pub fn set_up_clients(server: &Path, project_dir: &Path) -> std::result::Result<
             msg
         })
     }
+}
+
+/// How long a one-off command of the CLI may take before the launcher gives up on it.
+///
+/// `install` and `hub enrol` talk to other programs and to a hub; nothing about either is
+/// worth a person waiting longer than this, and a hung one used to hold the launcher for as
+/// long as it liked.
+pub const CLI_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// `Command::output`, but ends the child and says so when it takes longer than `limit`.
+pub(crate) fn output_within(
+    mut cmd: Command,
+    limit: Duration,
+) -> std::io::Result<std::process::Output> {
+    use std::io::Read;
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    // Both pipes are read on threads while we wait: a child that fills one and is not read
+    // blocks on the write, and then never exits, which would look like the timeout.
+    let mut out = child.stdout.take().expect("stdout was piped");
+    let mut err = child.stderr.take().expect("stderr was piped");
+    let o = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = out.read_to_end(&mut b);
+        b
+    });
+    let e = std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = err.read_to_end(&mut b);
+        b
+    });
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                format!("no answer within {} seconds", limit.as_secs()),
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    Ok(std::process::Output {
+        status,
+        stdout: o.join().unwrap_or_default(),
+        stderr: e.join().unwrap_or_default(),
+    })
 }
 
 fn command(server: &Path, project_dir: &Path) -> Command {
