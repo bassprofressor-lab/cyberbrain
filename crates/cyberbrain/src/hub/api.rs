@@ -706,6 +706,29 @@ async fn add_device(
     Redirect::to("/").into_response()
 }
 
+/// The invitation the page hands out for a device registered there.
+///
+/// Version 2 with the pin, as `hub add --invite` and the fleet invitations write it. This one
+/// was version 1 without, so a hub serving its own certificate could not be reached from a
+/// machine invited through the page. A client of either version reads a version 2 file.
+fn web_invitation(
+    hub: &HubStore,
+    device: &super::store::Device,
+    token: &str,
+    hub_url: &str,
+) -> serde_json::Value {
+    json!({
+        "kind": "cyberbrain.hub.invitation",
+        "version": 2,
+        "device": device.id,
+        "name": device.name,
+        "token": token,
+        "hub_url": if hub_url.is_empty() { serde_json::Value::Null } else { json!(hub_url) },
+        "inference_url": serde_json::Value::Null,
+        "hub_cert_sha256": super::pin_to_offer(hub),
+    })
+}
+
 /// Write an invitation into `invitations/` next to the record and return where it went.
 fn write_invitation(
     record: &std::path::Path,
@@ -756,15 +779,7 @@ fn register(
     let (device, token) = hub
         .add_device(name, &jiff::Timestamp::now().to_string())
         .map_err(|e| e.to_string())?;
-    let invitation = json!({
-        "kind": "cyberbrain.hub.invitation",
-        "version": 1,
-        "device": device.id,
-        "name": device.name,
-        "token": token,
-        "hub_url": if hub_url.is_empty() { serde_json::Value::Null } else { json!(hub_url) },
-        "inference_url": serde_json::Value::Null,
-    });
+    let invitation = web_invitation(hub, &device, &token, hub_url);
     let text = serde_json::to_string_pretty(&invitation).map_err(|e| e.to_string())?;
 
     let path = write_invitation(record, &device.id, &text)?;
@@ -1642,6 +1657,21 @@ async fn countersign(
 
 #[cfg(test)]
 mod invitation_tests {
+    /// An invitation from the page pins the certificate the hub serves, as the command and
+    /// the fleet invitations do. Without it a hub with its own certificate was unreachable
+    /// from a machine invited through the page: the connection failed rather than trusting
+    /// a certificate nobody had told it to expect.
+    #[test]
+    fn an_invitation_from_the_page_carries_the_pin() {
+        let hub = super::HubStore::in_memory().unwrap();
+        super::super::remember_pin(&hub, Some("AB:CD")).unwrap();
+        let (device, token) = hub.add_device("laptop", "2026-10-25T00:00:00Z").unwrap();
+        let inv = super::web_invitation(&hub, &device, &token, "https://hub.internal:7788");
+        assert_eq!(inv["hub_cert_sha256"], "AB:CD");
+        let parsed = super::super::client::parse_invitation(&inv.to_string()).unwrap();
+        assert_eq!(parsed.hub_cert_sha256.as_deref(), Some("AB:CD"));
+    }
+
     /// The invitation carries the device token in the clear. It used to be written with the
     /// default mode, which on most systems is readable by everybody on the hub.
     #[cfg(unix)]

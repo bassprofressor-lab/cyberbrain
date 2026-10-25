@@ -75,6 +75,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   (count and chain row in one transaction), and only then written; if the record fails, nothing
   is written. A request also has to name a device the hub knows: the id becomes a file name, and
   `../x` was written outside the chosen directory.
+- **An invitation made on the hub page pins the hub's certificate.** `hub add --invite` and
+  fleet invitations carried the fingerprint, the page wrote a version 1 file without it, so a
+  hub serving its own certificate could not be reached from a machine invited through the page.
+  The page now writes version 2 with the pin, which clients since 0.4.0 read.
 
 ## [0.7.10] — 2026-10-23
 
