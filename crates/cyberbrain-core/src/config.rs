@@ -698,6 +698,19 @@ impl Config {
         }
         let host = endpoint_host(&self.inference.base_url)
             .map_err(|why| bad("inference.base_url", why.to_string()))?;
+        // The LLM layer refuses an IPv6 zone, which it cannot pin a connection to. Said
+        // here by name, because read as an address it is "not a private range", which
+        // points at the wrong setting.
+        if host.contains('%') {
+            return Err(bad(
+                "inference.base_url",
+                format!(
+                    "host `{host}` carries an IPv6 zone (the part after %); zones are not \
+                     supported. Use a routable or unique-local address (fd00::/8) of that \
+                     machine, or a host name"
+                ),
+            ));
+        }
         // The overlay switch admits 100.64/10 literals and nothing else. The address
         // check in the LLM layer and the egress gate already honour it; without it here,
         // `parse` refused the endpoint first and the only way through was
@@ -1123,6 +1136,14 @@ document_prefix = "title: none | text: "
                 "inference.base_url",
             );
         }
+    }
+
+    #[test]
+    fn an_ipv6_zone_in_the_base_url_is_named_as_such() {
+        expect_config_error(
+            "[inference]\nbase_url = \"http://[fe80::1%25eth0]:11434/v1\"\n",
+            "zone",
+        );
     }
 
     #[test]
