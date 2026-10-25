@@ -2034,6 +2034,56 @@ async fn refused_sign_ins_are_capped_per_address_and_never_lock() {
     );
 }
 
+/// Argon2 is the slow part of a sign-in on purpose, and it ran while the hub's one mutex was
+/// held: every device push and every page waited behind each guess somebody on the network
+/// sent. The record must stay free while passwords are checked.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn checking_a_password_does_not_hold_the_hub() {
+    // What one check costs on this machine, without any lock around it.
+    let probe = hub_with_password("correct horse battery");
+    let started = std::time::Instant::now();
+    assert!(!admin::verify(&probe, "a wrong guess"));
+    let argon = started.elapsed();
+
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let watcher = {
+        let (state, done) = (state.clone(), done.clone());
+        std::thread::spawn(move || {
+            let mut longest = std::time::Duration::ZERO;
+            while !done.load(std::sync::atomic::Ordering::SeqCst) {
+                let asked = std::time::Instant::now();
+                drop(state.hub.lock().unwrap());
+                longest = longest.max(asked.elapsed());
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            longest
+        })
+    };
+    let guesses: Vec<_> = (0..3)
+        .map(|i| {
+            let state = state.clone();
+            tokio::spawn(async move {
+                sign_in_from(
+                    state,
+                    &format!("192.168.1.{}:50000", 30 + i),
+                    &format!("guess-{i}"),
+                )
+                .await
+            })
+        })
+        .collect();
+    for g in guesses {
+        g.await.unwrap();
+    }
+    done.store(true, std::sync::atomic::Ordering::SeqCst);
+    let longest = watcher.join().unwrap();
+    assert!(
+        longest < argon / 2,
+        "the hub was held for {longest:?} while a password was checked (one check: {argon:?})"
+    );
+}
+
 /// A wrong current password on the password form is recorded like a refused sign-in.
 #[tokio::test]
 async fn a_wrong_current_password_on_the_change_form_is_recorded() {

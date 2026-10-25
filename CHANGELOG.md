@@ -56,6 +56,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   up to 10 s instead of failing with "database is locked", and a unique index allows one
   successor per row. A hub that already forked still opens (the index is left out there) and
   `hub verify` names the fork: which row continues which, a second time. Nothing is repaired.
+- **A flood of sign-in attempts no longer stalls the hub.** The password was checked with
+  argon2 while the hub's one lock on its record was held, so every guess somebody on the
+  network sent held up every device's push and every page for the length of the check. The
+  record is now held only to read the stored hash; checking it, and hashing a new password on
+  the change form, run outside it, on a blocking thread, at most two at a time.
 
 ## [0.7.10] — 2026-10-23
 

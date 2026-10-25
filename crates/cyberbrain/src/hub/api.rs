@@ -269,6 +269,33 @@ fn html(body: String) -> Response {
 /// A failed password costs this much time. Not a lockout: locking out the administrator is
 /// a way to take a hub away from its own operator. Enough that guessing over a network is
 /// hopeless, little enough that a typo is not a punishment.
+/// How many argon2 runs the server does at once. Each takes about 19 MiB and a core for a
+/// moment; a flood of sign-ins waits here instead of taking the machine's memory and cores
+/// from everything else.
+const PASSWORD_CHECKS_AT_ONCE: usize = 2;
+
+static PASSWORD_CHECKS: std::sync::LazyLock<tokio::sync::Semaphore> =
+    std::sync::LazyLock::new(|| tokio::sync::Semaphore::new(PASSWORD_CHECKS_AT_ONCE));
+
+/// Check a password against a stored hash: off the async workers, without the record held,
+/// and no more than `PASSWORD_CHECKS_AT_ONCE` at a time.
+async fn password_check(stored: String, password: String) -> bool {
+    let Ok(_permit) = PASSWORD_CHECKS.acquire().await else {
+        return false;
+    };
+    tokio::task::spawn_blocking(move || super::admin::password_matches(&stored, &password))
+        .await
+        .unwrap_or(false)
+}
+
+/// Hash a new password under the same limit as `password_check`.
+async fn password_hash(password: String) -> Result<String, String> {
+    let _permit = PASSWORD_CHECKS.acquire().await.map_err(|e| e.to_string())?;
+    tokio::task::spawn_blocking(move || super::admin::hash_password(&password))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 async fn stumble() {
     tokio::time::sleep(std::time::Duration::from_millis(
         super::admin::FAILURE_DELAY_MS,
@@ -419,43 +446,53 @@ async fn login(
     // and a person with the credential `hub principal add` printed for them. Tried in that
     // order, and the refusal is the same sentence either way — saying which one nearly
     // worked would tell an unknown caller what kind of secret they are holding.
-    let who = match state.hub() {
-        Ok(hub) => {
-            if super::admin::verify(&hub, &form.password) {
-                Some(super::admin::Who::Admin)
-            } else {
-                match hub.principal_by_token(&form.password) {
-                    Ok(Some(p)) if p.is_active() => Some(super::admin::Who::Principal {
-                        id: p.id.clone(),
-                        name: p.name.clone(),
-                        role: p.role,
-                    }),
-                    // The caller hears the same sentence either way. The log does not: a
-                    // credential that was withdrawn and is still being tried is the one
-                    // refusal the operator most needs to see, and whose it was.
-                    Ok(Some(p)) => {
-                        refused_sign_in(
-                            &state,
-                            &hub,
-                            &from,
-                            json!({ "form": "sign-in", "credential": "withdrawn",
-                                    "principal": p.id, "name": p.name }),
-                        );
-                        None
-                    }
-                    _ => {
-                        refused_sign_in(
-                            &state,
-                            &hub,
-                            &from,
-                            json!({ "form": "sign-in", "credential": "unknown" }),
-                        );
-                        None
-                    }
-                }
-            }
-        }
+    //
+    // The record is held only to read the stored hash. The check itself runs outside it:
+    // under the lock, every guess anybody on the network sent held up every device's push
+    // and every page for the length of an argon2 run.
+    let stored = match state.hub() {
+        Ok(hub) => super::admin::stored_password(&hub),
         Err(_) => None,
+    };
+    let admin = match stored {
+        Some(stored) => password_check(stored, form.password.clone()).await,
+        None => false,
+    };
+    let who = if admin {
+        Some(super::admin::Who::Admin)
+    } else {
+        match state.hub() {
+            Ok(hub) => match hub.principal_by_token(&form.password) {
+                Ok(Some(p)) if p.is_active() => Some(super::admin::Who::Principal {
+                    id: p.id.clone(),
+                    name: p.name.clone(),
+                    role: p.role,
+                }),
+                // The caller hears the same sentence either way. The log does not: a
+                // credential that was withdrawn and is still being tried is the one
+                // refusal the operator most needs to see, and whose it was.
+                Ok(Some(p)) => {
+                    refused_sign_in(
+                        &state,
+                        &hub,
+                        &from,
+                        json!({ "form": "sign-in", "credential": "withdrawn",
+                                    "principal": p.id, "name": p.name }),
+                    );
+                    None
+                }
+                _ => {
+                    refused_sign_in(
+                        &state,
+                        &hub,
+                        &from,
+                        json!({ "form": "sign-in", "credential": "unknown" }),
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        }
     };
     let Some(who) = who else {
         stumble().await;
@@ -522,28 +559,47 @@ async fn change_password(
     if !password_may_travel(&state, &headers, &from) {
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
-    let outcome = {
-        let hub = match state.hub() {
-            Ok(h) => h,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        };
+    // Both argon2 runs, the check of the current password and the hash of the new one, are
+    // done without the record held, as at sign-in.
+    let stored = match state.hub() {
+        Ok(hub) => super::admin::stored_password(&hub),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let current_ok = match stored.clone() {
+        Some(s) => password_check(s, form.current.clone()).await,
+        None => false,
+    };
+    let outcome = if !current_ok {
         // The current one, even though the session already proves who this is: a cookie left
         // open on a shared machine should not be enough to change the password on it.
-        if !super::admin::verify(&hub, &form.current) {
-            // A session and a wrong password: an open cookie on somebody else's desk, or a
-            // typo. Either way it goes on record like a refused sign-in.
+        // A session and a wrong password: an open cookie on somebody else's desk, or a
+        // typo. Either way it goes on record like a refused sign-in.
+        if let Ok(hub) = state.hub() {
             refused_sign_in(
                 &state,
                 &hub,
                 &from,
                 json!({ "form": "password-change", "credential": "unknown" }),
             );
-            Err("The current password is not right.".to_string())
-        } else if form.password != form.again {
-            Err("The two new ones did not match.".to_string())
-        } else {
-            super::admin::set_password(&hub, &form.password)
-                .map(|()| "The password has been changed.".to_string())
+        }
+        Err("The current password is not right.".to_string())
+    } else if form.password != form.again {
+        Err("The two new ones did not match.".to_string())
+    } else {
+        match password_hash(form.password.clone()).await {
+            Err(e) => Err(e),
+            Ok(hash) => match state.hub() {
+                Err(e) => Err(e),
+                // Changed by somebody else while this one was being hashed: the current
+                // password this request proved is no longer the current one.
+                Ok(hub) if super::admin::stored_password(&hub) != stored => {
+                    Err("The password was changed meanwhile. Try again.".to_string())
+                }
+                Ok(hub) => hub
+                    .set_setting("admin_password", &hash)
+                    .map(|()| "The password has been changed.".to_string())
+                    .map_err(|e| e.to_string()),
+            },
         }
     };
     if outcome.is_err() {

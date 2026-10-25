@@ -51,6 +51,14 @@ pub fn is_claimed(hub: &HubStore) -> bool {
 
 /// Set or replace the password. The hash carries its own salt and parameters.
 pub fn set_password(hub: &HubStore, password: &str) -> Result<(), String> {
+    let hash = hash_password(password)?;
+    hub.set_setting("admin_password", &hash)
+        .map_err(|e| e.to_string())
+}
+
+/// The stored form of a new password, checked for length. Needs no hub, so the server can
+/// run it without holding the record (see `api::password_check`).
+pub fn hash_password(password: &str) -> Result<String, String> {
     if password.chars().count() < MIN_PASSWORD {
         return Err(format!(
             "The password needs at least {MIN_PASSWORD} characters. Length is the only part \
@@ -60,19 +68,31 @@ pub fn set_password(hub: &HubStore, password: &str) -> Result<(), String> {
     // The salt comes from the operating system, inside `hash_password`, and travels in the
     // stored string along with the parameters — so a later change of cost does not invalidate
     // what is already stored.
-    let hash = Argon2::default()
+    Ok(Argon2::default()
         .hash_password(password.as_bytes())
         .map_err(|e| format!("the password could not be hashed: {e}"))?
-        .to_string();
-    hub.set_setting("admin_password", &hash)
-        .map_err(|e| e.to_string())
+        .to_string())
 }
 
+/// Both halves in one, for the tests. The server never calls this: it reads the hash under
+/// the record's lock and checks it outside (`stored_password`, `password_matches`).
+#[cfg(test)]
 pub fn verify(hub: &HubStore, password: &str) -> bool {
-    let Some(stored) = hub.setting("admin_password").ok().flatten() else {
-        return false;
-    };
-    let Ok(parsed) = PasswordHash::new(&stored) else {
+    stored_password(hub).is_some_and(|stored| password_matches(&stored, password))
+}
+
+/// The stored hash, if a password was ever set. Cheap: a settings read.
+pub fn stored_password(hub: &HubStore) -> Option<String> {
+    hub.setting("admin_password")
+        .ok()
+        .flatten()
+        .filter(|v| !v.is_empty())
+}
+
+/// Does `password` match a stored hash? The expensive half of `verify`, on purpose (argon2,
+/// about 19 MiB), and therefore the half that must not run while the record is locked.
+pub fn password_matches(stored: &str, password: &str) -> bool {
+    let Ok(parsed) = PasswordHash::new(stored) else {
         return false;
     };
     Argon2::default()
