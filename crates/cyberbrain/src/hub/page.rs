@@ -614,6 +614,9 @@ pub fn conflicts_page(name: &str, conflicts: &[(super::store::NoteConflict, Stri
 /// there to check.
 pub struct SigningView<'a> {
     pub name: &'a str,
+    /// The principal id, which is what a request's `requester` holds. Comparing that with the
+    /// name, as this page did, never matched.
+    pub id: &'a str,
     pub role: super::access::Role,
     /// Requests to see activity. A countersigner gets all of them; an auditor their own.
     pub requests: Vec<(super::access::AccessRequest, super::access::RequestState)>,
@@ -739,7 +742,7 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
                 RequestState::Closed => "window closed".to_string(),
             };
             let action = match (signing, state) {
-                (true, RequestState::Pending) if r.requester != v.name => format!(
+                (true, RequestState::Pending) if r.requester != v.id => format!(
                     "<form method=post action=\"/requests/{}/approve\">\
                      <button type=submit>Approve for 7 days</button></form>",
                     esc(&r.id)

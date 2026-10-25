@@ -1279,6 +1279,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
     let flash = state.flash.lock().ok().and_then(|mut f| f.take());
     let view = super::page::SigningView {
         name: &name,
+        id: &id,
         role,
         requests,
         grants,

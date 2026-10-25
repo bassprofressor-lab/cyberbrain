@@ -1028,6 +1028,7 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
 
     let signing = page::signing_page(&page::SigningView {
         name: "Betriebsrat",
+        id: "who_betriebsrat",
         role: Role::Countersigner,
         requests: Vec::new(),
         grants: hub
@@ -1379,6 +1380,34 @@ fn an_unknown_role_lists_every_role_there_is() {
     for r in ["admin", "editor", "auditor", "countersigner"] {
         assert!(err.contains(r), "{err}");
     }
+}
+
+/// The signing page offers no approve button on a request the viewer made. It compared the
+/// requester's id with the viewer's name, which never matched. Not red against the old code
+/// in any reachable way (only auditors make requests, and the server refuses a self-approval
+/// on its own), so this pins the page's half of the rule.
+#[test]
+fn the_signing_page_does_not_offer_your_own_request() {
+    let (hub, device, auditor, _, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    let state = req.state(now_ts());
+    let page = page::signing_page(&page::SigningView {
+        name: &who.name,
+        id: &who.id,
+        role: Role::Countersigner,
+        requests: vec![(req, state)],
+        grants: Vec::new(),
+        purges: Vec::new(),
+        names: hub.principal_names().unwrap(),
+        log: Vec::new(),
+        devices: Vec::new(),
+        flash: None,
+    });
+    assert!(page.contains("you asked for this one"), "{page}");
+    assert!(!page.contains("Approve for 7 days"));
 }
 
 #[test]
