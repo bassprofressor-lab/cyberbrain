@@ -1,6 +1,8 @@
 import { useMemo, useState } from "react";
 import { api, type DayBucket, type LoadedModel, type LoadSummary, type TaskUsage, type UsageTotals } from "@/api/client";
-import { ErrorBanner, Loading, Pill, Section, Stat } from "@/components/ui";
+import { PageHeader } from "@/components/design";
+import { Icon } from "@/components/icons";
+import { Empty, ErrorBanner, Loading, Pill, Section, Stat } from "@/components/ui";
 import { bytes, dec, num, relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
@@ -216,11 +218,9 @@ export function UsageScreen({ route }: { route: Route }) {
   const load: LoadSummary = d.load;
 
   return (
-    <div className="p-6 space-y-6 overflow-auto scroll-thin h-full">
-      <div className="flex items-center gap-3 flex-wrap">
-        <h1 className="text-xl font-semibold tracking-tight">{t.usage.title}</h1>
-        <span className="text-xs text-fg-muted">{t.usage.subtitle}</span>
-        <div className="ml-auto flex flex-wrap items-center gap-1.5">
+    <div className="px-4 py-5 sm:px-6 sm:py-6 space-y-5 overflow-auto scroll-thin h-full">
+      <PageHeader icon="usage" title={t.usage.title} sub={t.usage.subtitle}>
+        <>
           <div className="seg">
             {RANGES.map((r) => (
               <a key={r} href={href("usage", null, { days: r })} className={`seg-item ${r === days ? "is-on" : ""}`} aria-current={r === days ? "true" : undefined}>
@@ -228,35 +228,37 @@ export function UsageScreen({ route }: { route: Route }) {
               </a>
             ))}
           </div>
-          <button className="btn btn-sm" onClick={() => setTable((v) => !v)} aria-pressed={table}>
+          <button className="btn" onClick={() => setTable((v) => !v)} aria-pressed={table}>
             {table ? t.usage.charts : t.usage.table}
           </button>
-          <button className="btn btn-sm" onClick={() => u.reload()} disabled={u.loading}>
+          <button className="btn" onClick={() => u.reload()} disabled={u.loading}>
+            <Icon name="refresh" size={18} />
             {t.common.refresh}
           </button>
-        </div>
-      </div>
+        </>
+      </PageHeader>
 
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Stat label={t.usage.stat.recallSaved} value={`${savedPct(d.retrieval.recall)}%`} sub={t.usage.stat.recallSavedSub(num(d.retrieval.recall.returned), num(d.retrieval.recall.full))} />
-        <Stat label={t.usage.stat.findSaved} value={`${savedPct(d.retrieval.find)}%`} sub={t.usage.stat.findSavedSub(num(d.retrieval.find.returned), num(d.retrieval.find.full))} />
-        <Stat label={t.usage.stat.throughput} value={totals.tps === null ? "—" : t.usage.stat.throughputValue(Math.round(totals.tps))} sub={t.usage.stat.throughputSub(num(totals.tok), Math.round(totals.ms / 1000))} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat icon="search" label={t.usage.stat.recallSaved} value={`${savedPct(d.retrieval.recall)}%`} sub={t.usage.stat.recallSavedSub(num(d.retrieval.recall.returned), num(d.retrieval.recall.full))} />
+        <Stat icon="graph" label={t.usage.stat.findSaved} value={`${savedPct(d.retrieval.find)}%`} sub={t.usage.stat.findSavedSub(num(d.retrieval.find.returned), num(d.retrieval.find.full))} />
+        <Stat icon="bolt" label={t.usage.stat.throughput} value={totals.tps === null ? "—" : t.usage.stat.throughputValue(Math.round(totals.tps))} sub={t.usage.stat.throughputSub(num(totals.tok), Math.round(totals.ms / 1000))} />
         <Stat
+          icon="cpu"
           label={t.usage.stat.cpu}
           value={load.endpoint_cores_avg === null ? t.usage.stat.cpuNone : t.usage.stat.cpuValue(dec(load.endpoint_cores_avg))}
           sub={load.endpoint_cores_avg === null ? t.usage.stat.cpuNoneSub : `${t.usage.stat.cpuSub}${load.cores_total ? t.usage.stat.cpuShare(Math.round((load.endpoint_cores_avg / load.cores_total) * 100), load.cores_total) : ""}`}
-          tone={load.endpoint_cores_avg === null ? "warn" : undefined}
+          tone={load.endpoint_cores_avg === null ? "idle" : undefined}
         />
       </div>
 
       {table ? (
-        <Section title={t.usage.dayByDay(days)}>
+        <Section title={t.usage.dayByDay(days)} icon="usage">
           <div className="table-wrap scroll-thin">
             <table className="table table-dense tnum">
               <thead>
                 <tr>
-                  {t.usage.columns.map((h) => (
-                    <th key={h} className="whitespace-nowrap">{h}</th>
+                  {t.usage.columns.map((h, i) => (
+                    <th key={h} className={i === 0 ? "whitespace-nowrap" : "num"}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -264,15 +266,15 @@ export function UsageScreen({ route }: { route: Route }) {
                 {d.days.filter((x) => x.recall.ops || x.find.ops || x.calls).map((x) => (
                   <tr key={x.date}>
                     <td className="whitespace-nowrap">{x.date}</td>
-                    <td>{num(x.recall.ops)}</td>
-                    <td>{num(x.recall.returned)}</td>
-                    <td>{num(x.recall.full)}</td>
-                    <td>{num(x.find.ops)}</td>
-                    <td>{num(x.calls)}</td>
-                    <td>{num(x.prompt_tokens)}</td>
-                    <td>{num(x.cached_prompt_tokens)}</td>
-                    <td>{num(x.completion_tokens)}</td>
-                    <td>{x.endpoint_cores === null ? "—" : dec(x.endpoint_cores)}</td>
+                    <td className="num">{num(x.recall.ops)}</td>
+                    <td className="num">{num(x.recall.returned)}</td>
+                    <td className="num">{num(x.recall.full)}</td>
+                    <td className="num">{num(x.find.ops)}</td>
+                    <td className="num">{num(x.calls)}</td>
+                    <td className="num">{num(x.prompt_tokens)}</td>
+                    <td className="num">{num(x.cached_prompt_tokens)}</td>
+                    <td className="num">{num(x.completion_tokens)}</td>
+                    <td className="num">{x.endpoint_cores === null ? "—" : dec(x.endpoint_cores)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -312,9 +314,9 @@ export function UsageScreen({ route }: { route: Route }) {
       )}
 
       <div className="grid gap-5 xl:grid-cols-2">
-        <Section title={t.usage.cost.title} aside={d.inference.last ? <span className="text-2xs">{t.usage.cost.lastCall(relTime(d.inference.last))}</span> : <Pill>{t.usage.cost.noCalls}</Pill>}>
+        <Section icon="bolt" title={t.usage.cost.title} aside={d.inference.last ? <span className="text-2xs">{t.usage.cost.lastCall(relTime(d.inference.last))}</span> : <Pill>{t.usage.cost.noCalls}</Pill>}>
           {Object.keys(d.inference.tasks).length === 0 ? (
-            <p className="text-sm text-fg-muted">{t.usage.cost.none}</p>
+            <Empty title={t.usage.cost.none} icon="bolt" />
           ) : (
             <ul className="space-y-2.5">
               {Object.entries(d.inference.tasks).map(([task, tu]: [string, TaskUsage]) => (
@@ -351,11 +353,11 @@ export function UsageScreen({ route }: { route: Route }) {
           )}
         </Section>
 
-        <Section title={t.usage.memory.title} aside={d.loaded_models === null ? <Pill>{t.usage.memory.endpointSilent}</Pill> : null}>
+        <Section icon="cpu" title={t.usage.memory.title} aside={d.loaded_models === null ? <Pill>{t.usage.memory.endpointSilent}</Pill> : null}>
           {d.loaded_models === null ? (
-            <p className="text-sm text-fg-muted">{t.usage.memory.noApi}</p>
+            <Empty title={t.usage.memory.noApi} icon="cpu" />
           ) : d.loaded_models.length === 0 ? (
-            <p className="text-sm text-fg-muted">{t.usage.memory.nothing}</p>
+            <Empty title={t.usage.memory.nothing} icon="cpu" />
           ) : (
             <ul className="space-y-2">
               {d.loaded_models.map((m: LoadedModel) => (

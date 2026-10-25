@@ -3,6 +3,7 @@ import { api, AUDIT_ACTION_FAMILIES, type Confidence, type AuditAction, type Aud
 import { CitationChip } from "@/components/Citation";
 import { RingBadge } from "@/components/RingBadge";
 import { useToast } from "@/components/Toast";
+import { PageHeader, StateMark } from "@/components/design";
 import { Dot, Empty, ErrorBanner, KeyValue, Loading, Pill, Section, Stat } from "@/components/ui";
 import { absTime, bytes, duration, num, relTime, shortDate } from "@/lib/format";
 import { collectAudit } from "@/lib/auditExport";
@@ -120,7 +121,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           <ObligationsSection />
         </div>
 
-        <Section id="c-egress" title={t.compliance.sections.egress} aside={egress.data ? <span className="font-mono">{t.compliance.egress.register(egress.data.register_hash)}</span> : null}>
+        <Section id="c-egress" icon="server" title={t.compliance.sections.egress} aside={egress.data ? <span className="font-mono">{t.compliance.egress.register(egress.data.register_hash)}</span> : null}>
           {egress.data ? <EgressTable paths={egress.data.paths} /> : null}
           <p className="mt-3 text-xs text-fg-muted leading-relaxed">{t.compliance.egress.note}</p>
         </Section>
@@ -129,7 +130,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           <AuditSection />
         </div>
 
-        <Section id="c-pii" title={t.compliance.pii.title} aside={pii.data ? <Pill tone={pii.data.scan_enabled ? "ok" : "warn"}>{pii.data.scan_enabled ? t.compliance.pii.scanOn : t.compliance.pii.scanOff}</Pill> : null}>
+        <Section id="c-pii" icon="search" title={t.compliance.pii.title} aside={pii.data ? <Pill tone={pii.data.scan_enabled ? "ok" : "warn"}>{pii.data.scan_enabled ? t.compliance.pii.scanOn : t.compliance.pii.scanOff}</Pill> : null}>
           {pii.error ? <ErrorBanner error={pii.error} onRetry={pii.reload} /> : null}
           {pii.data ? (
             <>
@@ -190,7 +191,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
                 </table>
               </div>
               ) : (
-                <Empty title={t.compliance.pii.emptyTitle}>{t.compliance.pii.emptyBody}</Empty>
+                <Empty title={t.compliance.pii.emptyTitle} icon="check">{t.compliance.pii.emptyBody}</Empty>
               )}
             </>
           ) : null}
@@ -200,7 +201,7 @@ export function ComplianceScreen({ route }: { route: Route }) {
           <RetentionSection />
         </div>
 
-        <Section id="c-models" title={t.compliance.sections.models} aside={<span>{t.compliance.models.aside}</span>}>
+        <Section id="c-models" icon="cpu" title={t.compliance.sections.models} aside={<span>{t.compliance.models.aside}</span>}>
           {models.error ? <ErrorBanner error={models.error} onRetry={models.reload} /> : null}
           {models.data ? (
             <div className="grid gap-3 lg:grid-cols-2">
@@ -277,27 +278,26 @@ function Overview({ register, auditRows }: { register: Awaited<ReturnType<typeof
   if (anyLocalPublic) tone = "warn";
 
   return (
-    <div className="panel p-5" style={{ borderColor: tone === "ok" ? "color-mix(in oklch, var(--ok) 45%, var(--line))" : "color-mix(in oklch, var(--warn) 55%, var(--line))" }}>
-      <div className="flex items-start gap-3">
-        <div className="mt-1.5">
-          <Dot tone={tone} />
-        </div>
+    <div className="flex flex-col gap-5">
+      <PageHeader icon="compliance" title={t.nav.compliance}>
+        <span className="text-sm text-fg-muted">
+          {t.compliance.profile} <code className="text-fg">{register.profile}</code> · <span title={absTime(register.since)}>{t.compliance.overview.since(shortDate(register.since))}</span>
+        </span>
+      </PageHeader>
+      <div className={`banner banner-${tone}`}>
+        <StateMark state={tone} />
         <div className="min-w-0">
-          <h1 className="text-xl font-semibold leading-tight">{headline}</h1>
-          <p className="mt-1.5 text-sm text-fg-muted leading-relaxed max-w-3xl">{sub}</p>
-        </div>
-        <div className="ml-auto text-right text-2xs text-fg-faint shrink-0">
-          <div>{t.compliance.profile} <code className="text-fg">{register.profile}</code></div>
-          <div title={absTime(register.since)}>{t.compliance.overview.since(shortDate(register.since))}</div>
+          <h2 className="text-lg font-semibold leading-snug">{headline}</h2>
+          <p className="mt-0.5 text-sm text-fg-muted leading-relaxed max-w-3xl">{sub}</p>
         </div>
       </div>
-      <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label={t.compliance.overview.internet} value={pubUses === 0 ? t.compliance.overview.noRequests : t.compliance.overview.requests(num(pubUses))} sub={pubUses === 0 ? t.compliance.overview.noBytes : t.compliance.overview.bytesOut(bytes(pubBytes), pub.map((p) => p.purpose).join(", "))} tone={pubUses === 0 ? "ok" : undefined} />
-        <Stat label={t.compliance.overview.ownNetwork} value={t.compliance.overview.calls(num(localUses))} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => t.enums.destination[p.destination_class]).join(", ")}` : t.compliance.overview.noLocalEndpoint} />
-        <Stat label={t.compliance.overview.refused} value={num(register.refused_total)} sub={register.refused_total ? t.compliance.overview.refusedSub : t.compliance.overview.refusedNone} tone={register.refused_total ? "warn" : "ok"} />
-        <Stat label={t.compliance.overview.auditRows} value={auditRows === null ? "—" : num(auditRows)} sub={t.compliance.overview.auditRowsSub} />
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <Stat icon="server" label={t.compliance.overview.internet} value={pubUses === 0 ? t.compliance.overview.noRequests : t.compliance.overview.requests(num(pubUses))} sub={pubUses === 0 ? t.compliance.overview.noBytes : t.compliance.overview.bytesOut(bytes(pubBytes), pub.map((p) => p.purpose).join(", "))} tone={pubUses === 0 ? "ok" : undefined} />
+        <Stat icon="cpu" label={t.compliance.overview.ownNetwork} value={t.compliance.overview.calls(num(localUses))} sub={local.length ? `${local.map((p) => p.destination.replace(/^https?:\/\//, "")).join(", ")} · ${local.map((p) => t.enums.destination[p.destination_class]).join(", ")}` : t.compliance.overview.noLocalEndpoint} />
+        <Stat icon="compliance" label={t.compliance.overview.refused} value={num(register.refused_total)} sub={register.refused_total ? t.compliance.overview.refusedSub : t.compliance.overview.refusedNone} tone={register.refused_total ? "warn" : "ok"} />
+        <Stat icon="notes" label={t.compliance.overview.auditRows} value={auditRows === null ? "—" : num(auditRows)} sub={t.compliance.overview.auditRowsSub} />
       </div>
-      <div className="mt-4 grid gap-x-6 gap-y-1.5 sm:grid-cols-2 text-xs text-fg-muted">
+      <div className="card px-5 py-4 grid gap-x-6 gap-y-1.5 sm:grid-cols-2 text-sm text-fg-muted">
         <div className="label sm:col-span-2">{t.compliance.overview.howKnown}</div>
         <div>· {t.compliance.overview.how1(register.register_hash)}</div>
         <div>· {t.compliance.overview.how2}</div>
@@ -322,7 +322,7 @@ function ObligationsSection() {
   const o = useAsync(() => api.obligations(), []);
   const tone = (c: Confidence): "ok" | "warn" | "neutral" => (c === "high" ? "ok" : c === "medium" ? "neutral" : "warn");
   return (
-    <Section title={t.compliance.obligations.title} aside={o.data ? <span>{t.compliance.obligations.aside(o.data.law)}</span> : null}>
+    <Section icon="review" title={t.compliance.obligations.title} aside={o.data ? <span>{t.compliance.obligations.aside(o.data.law)}</span> : null}>
       {o.error ? <ErrorBanner error={o.error} onRetry={o.reload} /> : null}
       {!o.data ? <Loading /> : null}
       {o.data ? (
@@ -375,8 +375,8 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
             <th>{t.compliance.egress.colState}</th>
             <th>{t.compliance.egress.colDestination}</th>
             <th>{t.compliance.egress.colPermitted}</th>
-            <th className="tnum">{t.compliance.egress.colUses}</th>
-            <th className="tnum">{t.compliance.egress.colBytes}</th>
+            <th className="num">{t.compliance.egress.colUses}</th>
+            <th className="num">{t.compliance.egress.colBytes}</th>
             <th>{t.compliance.egress.colLast}</th>
           </tr>
         </thead>
@@ -403,8 +403,8 @@ function EgressTable({ paths }: { paths: EgressPath[] }) {
                 </div>
               </td>
               <td className="font-mono">{p.permitted_by.join(" ")}</td>
-              <td className="tnum">{num(p.uses_total)}</td>
-              <td className="tnum">{bytes(p.bytes_out_total)}</td>
+              <td className="num">{num(p.uses_total)}</td>
+              <td className="num">{bytes(p.bytes_out_total)}</td>
               <td className="text-fg-muted whitespace-nowrap" title={absTime(p.last_used)}>
                 {p.last_used ? relTime(p.last_used) : t.common.never}
               </td>
@@ -512,7 +512,7 @@ function AuditSection() {
 
   return (
     <Section
-      title={t.compliance.audit.title}
+      icon="notes" title={t.compliance.audit.title}
       aside={
         <>
           <span className="tnum">{t.compliance.audit.rowsMatch(num(total))}</span>
@@ -545,7 +545,7 @@ function AuditSection() {
         <table className="table min-w-[46rem]">
           <thead>
             <tr>
-              <th className="tnum">{t.compliance.audit.colSeq}</th>
+              <th className="num">{t.compliance.audit.colSeq}</th>
               <th>{t.compliance.audit.colTime}</th>
               <th>{t.compliance.audit.colActor}</th>
               <th>{t.compliance.audit.colAction}</th>
@@ -555,7 +555,7 @@ function AuditSection() {
           {rows.map((r) => (
             <tbody key={r.seq} className="row-pair">
               <tr className="row-main">
-                <td className="font-mono tnum text-fg-faint">{r.seq}</td>
+                <td className="num font-mono text-fg-faint">{r.seq}</td>
                 <td className="font-mono tnum whitespace-nowrap text-fg-muted" title={relTime(r.ts)}>
                   {absTime(r.ts)}
                 </td>
@@ -592,7 +592,7 @@ function AuditSection() {
           ))}
         </table>
       </div>
-      {!loading && !rows.length ? <Empty title={t.compliance.audit.empty} /> : null}
+      {!loading && !rows.length ? <Empty title={t.compliance.audit.empty} icon="notes" /> : null}
       {loading ? <Loading /> : null}
       {next !== null && !loading ? (
         <div className="mt-2 text-center">
@@ -631,7 +631,7 @@ function RetentionSection() {
   const invalid = entries.filter((e) => e.invalid !== undefined).length;
   return (
     <Section
-      title={t.compliance.retention.title}
+      icon="folder" title={t.compliance.retention.title}
       aside={
         <>
           <span className="tnum">
@@ -692,7 +692,7 @@ function RetentionSection() {
           </table>
           </div>
         ) : (
-          <Empty title={t.compliance.retention.emptyTitle(queue.data ? num(queue.data.indefinite) : null)} />
+          <Empty icon="check" title={t.compliance.retention.emptyTitle(queue.data ? num(queue.data.indefinite) : null)} />
         )
       ) : null}
       {entries.length > 40 ? <div className="mt-2 text-2xs text-fg-faint">{t.compliance.retention.more(entries.length - 40)}</div> : null}
@@ -763,7 +763,7 @@ function SubjectSection() {
     return g;
   }, [report]);
   return (
-    <Section title={t.compliance.subject.title} aside={<span>{t.compliance.subject.aside}</span>}>
+    <Section icon="team" title={t.compliance.subject.title} aside={<span>{t.compliance.subject.aside}</span>}>
       <form
         className="flex gap-2"
         onSubmit={(e) => {

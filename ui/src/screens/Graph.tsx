@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type Graph, type Ring } from "@/api/client";
 import { RingBadge, RingGlyph } from "@/components/RingBadge";
-import { ErrorBanner, Kbd, Loading, Pill } from "@/components/ui";
+import { PageHeader } from "@/components/design";
+import { Empty, ErrorBanner, Kbd, Loading, Pill } from "@/components/ui";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate } from "@/lib/router";
@@ -450,7 +451,10 @@ export function GraphScreen() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="px-4 py-2 border-b bg-surface flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+      <div className="px-5 pt-5 bg-surface">
+        <PageHeader icon="graph" title={t.nav.graph} sub={counts ? <span className="tnum">{t.graph.counts(counts)}</span> : null} />
+      </div>
+      <div className="px-5 py-3 border-b bg-surface flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <input ref={searchRef} className="input w-52" placeholder={t.graph.findPlaceholder} value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t.graph.findAria} />
         <div className="seg">
           {([0, 1, 2, 3, 4] as Ring[]).map((r) => (
@@ -466,17 +470,17 @@ export function GraphScreen() {
         <label className="inline-flex items-center gap-1.5 text-fg-muted cursor-pointer">
           <input type="checkbox" checked={hideIsolated} onChange={(e) => setHideIsolated(e.target.checked)} /> {t.graph.hideIsolated}
         </label>
-        <select className="input h-7 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label={t.graph.labelsAria}>
+        <select className="input h-8 text-xs" value={labels} onChange={(e) => setLabels(e.target.value as typeof labels)} aria-label={t.graph.labelsAria}>
           <option value="auto">{t.graph.labelsAuto}</option>
           <option value="all">{t.graph.labelsAll}</option>
           <option value="none">{t.graph.labelsNone}</option>
         </select>
         <span className="ml-auto text-fg-faint tnum">
-          {counts ? t.graph.counts(counts) : ""} · <Kbd keys="0" /> {t.graph.fit} <Kbd keys="+" /> <Kbd keys="-" /> {t.graph.zoom}
+          <Kbd keys="0" /> {t.graph.fit} <Kbd keys="+" /> <Kbd keys="-" /> {t.graph.zoom}
         </span>
       </div>
       <details className="border-b bg-surface text-xs">
-        <summary className="px-4 py-1.5 cursor-pointer text-fg-muted">{t.graph.nodeList(ordered.length)}</summary>
+        <summary className="px-5 py-2 cursor-pointer text-fg-muted text-sm">{t.graph.nodeList(ordered.length)}</summary>
         <ul className="px-4 pb-2 max-h-40 overflow-auto scroll-thin columns-1 sm:columns-2 lg:columns-3 gap-4">
           {ordered.slice(0, 500).map((n) => (
             <li key={n.id} className="break-inside-avoid">
@@ -494,6 +498,11 @@ export function GraphScreen() {
           </div>
         ) : null}
         {g.loading && !g.data ? <Loading label={t.graph.loading} /> : null}
+        {g.data && !g.data.nodes.length ? (
+          <div className="p-6 max-w-md mx-auto">
+            <Empty title={t.simpleNotes.emptyTitle} icon="graph" />
+          </div>
+        ) : null}
         <canvas
           ref={canvasRef}
           className="w-full h-full block cursor-grab active:cursor-grabbing"

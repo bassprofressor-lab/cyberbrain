@@ -20,9 +20,11 @@ test.afterAll(() => running?.stop());
 
 test("a fresh store's overview says nothing left, without a warning", async ({ page }) => {
   await page.goto(running.url.replace("#/?", "#/compliance?"));
-  const overview = page.locator(".panel").filter({ hasText: "Nothing has gone to a public destination." });
-  await expect(overview).toBeVisible();
-  await expect(overview).not.toHaveAttribute("style", /--warn/);
+  // The overview is a headline banner plus four figure cards; the banner carries the tone.
+  const overview = page.locator("#c-overview");
+  await expect(overview.locator(".banner").filter({ hasText: "Nothing has gone to a public destination." })).toBeVisible();
+  await expect(overview.locator(".banner")).toHaveClass(/banner-ok/);
+  await expect(overview.locator(".banner")).not.toHaveClass(/banner-warn/);
 
   const ownNetwork = overview.getByText("to your own network").locator("..");
   await expect(ownNetwork).toContainText("127.0.0.1:11434");
