@@ -629,6 +629,10 @@ pub struct Delivery {
     /// The delivery in flight, if there is one. At most one: a slow hub must not end up
     /// with a queue of pushes started while it was not answering.
     running: Option<std::sync::mpsc::Receiver<Pushed>>,
+    /// When the schedule last counted a second. The pump calls `tick` after every window
+    /// message, and a mouse moving over the tray icon is hundreds of those a second; the
+    /// counters below are in seconds, so they are only advanced when one has passed.
+    last_second: Option<std::time::Instant>,
 }
 
 impl Delivery {
@@ -648,7 +652,25 @@ impl Delivery {
     }
 
     pub fn tick(&mut self, server_exe: &Path, project_dir: &Path) {
-        self.tick_with(|| spawn_push(server_exe, project_dir));
+        self.tick_at(std::time::Instant::now(), || {
+            spawn_push(server_exe, project_dir)
+        });
+    }
+
+    /// One call of the message pump at `now`. Counts a second of the schedule only when a
+    /// second has passed since the last one it counted, whatever the number of calls.
+    fn tick_at(
+        &mut self,
+        now: std::time::Instant,
+        start: impl FnOnce() -> std::sync::mpsc::Receiver<Pushed>,
+    ) {
+        if let Some(last) = self.last_second
+            && now.saturating_duration_since(last) < Duration::from_secs(1)
+        {
+            return;
+        }
+        self.last_second = Some(now);
+        self.tick_with(start);
     }
 
     /// The schedule itself, with what starts a delivery handed in so a test can watch the

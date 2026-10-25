@@ -571,6 +571,51 @@ fn a_slow_delivery_does_not_start_a_second_one() {
     assert_eq!(started, 1);
 }
 
+#[test]
+fn messages_are_not_seconds() {
+    // The pump calls the tick after every window message, not once a second: an open window
+    // or a mouse over the tray icon sends hundreds a second. The schedule counts seconds, so
+    // it must be told the time. A burst at one instant is one tick, and it used to be as
+    // many ticks as there were messages — a push every few seconds instead of every quarter
+    // hour.
+    let t0 = std::time::Instant::now();
+    let mut d = Delivery::default();
+    let mut started = 0;
+    for _ in 0..5000 {
+        d.tick_at(t0, || {
+            started += 1;
+            primed(Pushed::Delivered)
+        });
+    }
+    assert_eq!(started, 0, "5000 messages in no time are not 30 seconds");
+
+    // Thirty real seconds, with a flood of messages in each, is the first delivery and only
+    // that one.
+    for s in 1..=30u64 {
+        for _ in 0..200 {
+            d.tick_at(t0 + std::time::Duration::from_secs(s), || {
+                started += 1;
+                primed(Pushed::Delivered)
+            });
+        }
+    }
+    assert_eq!(started, 1);
+    // And the next one is a quarter of an hour later, not before.
+    // (The first message counts as the first second, so the 30th tick falls on second 29.)
+    for s in 31..(29 + 15 * 60) {
+        d.tick_at(t0 + std::time::Duration::from_secs(s), || {
+            started += 1;
+            primed(Pushed::Delivered)
+        });
+    }
+    assert_eq!(started, 1);
+    d.tick_at(t0 + std::time::Duration::from_secs(29 + 15 * 60), || {
+        started += 1;
+        primed(Pushed::Delivered)
+    });
+    assert_eq!(started, 2);
+}
+
 // ---- a cyberbrain that has no page to open ----
 //
 // `--no-default-features` builds a working CLI with no web UI in it. That is a supported
