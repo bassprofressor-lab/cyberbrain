@@ -146,13 +146,27 @@ mod unix {
         /// descriptors. One closed browser tab, one leaked thread, for the life of the
         /// process.
         ///
+        /// The group is not enough either. A shell with job control moves every background
+        /// job into a process group of its own, still in the shell's session, and those kept
+        /// the slave open the same way. So every process of the session goes, found by its
+        /// session id where the platform can list processes (Linux, macOS).
+        ///
         /// A grandchild that calls `setsid` for itself still escapes, and that is correct:
         /// `nohup` and `tmux` exist to survive their terminal.
         pub fn kill(&mut self) {
+            let sid = self.child.id() as libc::pid_t;
+            for pid in session_members(sid) {
+                // Safety: plain signal delivery to a pid that was in this session a moment
+                // ago. The session leader is still unreaped, so its id, and with it the
+                // session id, cannot have been reused.
+                unsafe {
+                    libc::kill(pid, libc::SIGKILL);
+                }
+            }
             // Safety: the pid is the group id because of `setsid`, and a negative pid is
             // how `kill` addresses a group.
             unsafe {
-                libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL);
+                libc::kill(-sid, libc::SIGKILL);
             }
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -165,6 +179,45 @@ mod unix {
                 .flatten()
                 .map(|s| s.code().unwrap_or(-1))
         }
+    }
+
+    /// Every process whose session is `sid`, other than ones this account cannot see.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        entries
+            .flatten()
+            .filter_map(|e| e.file_name().to_str()?.parse::<libc::pid_t>().ok())
+            // Safety: getsid only reads.
+            .filter(|&pid| unsafe { libc::getsid(pid) } == sid)
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn session_members(sid: libc::pid_t) -> Vec<libc::pid_t> {
+        // Asked with no buffer first, for the count; the list can grow in between, so the
+        // buffer gets room to spare and the answer is taken as truncated at worst.
+        // Safety: a null buffer asks for the size only; the second call writes at most
+        // `bytes` into a buffer of that size.
+        let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
+        if n <= 0 {
+            return Vec::new();
+        }
+        let mut pids: Vec<libc::pid_t> = vec![0; n as usize + 64];
+        let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+        let got = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        pids.truncate(got.max(0) as usize);
+        pids.into_iter()
+            .filter(|&pid| pid > 0 && unsafe { libc::getsid(pid) } == sid)
+            .collect()
+    }
+
+    /// Elsewhere there is no list to read here; the group kill stays the whole of it.
+    #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
+    fn session_members(_sid: libc::pid_t) -> Vec<libc::pid_t> {
+        Vec::new()
     }
 }
 
@@ -182,12 +235,15 @@ mod windows {
     use windows_sys::Win32::System::Console::{
         COORD, ClosePseudoConsole, CreatePseudoConsole, HPCON, ResizePseudoConsole,
     };
+    use windows_sys::Win32::System::JobObjects::{
+        AssignProcessToJobObject, CreateJobObjectW, TerminateJobObject,
+    };
     use windows_sys::Win32::System::Pipes::CreatePipe;
     use windows_sys::Win32::System::Threading::{
-        CreateProcessW, DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT,
-        GetExitCodeProcess, InitializeProcThreadAttributeList, LPPROC_THREAD_ATTRIBUTE_LIST,
-        PROCESS_INFORMATION, STARTUPINFOEXW, TerminateProcess, UpdateProcThreadAttribute,
-        WaitForSingleObject,
+        CREATE_SUSPENDED, CreateProcessW, DeleteProcThreadAttributeList,
+        EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess, InitializeProcThreadAttributeList,
+        LPPROC_THREAD_ATTRIBUTE_LIST, PROCESS_INFORMATION, ResumeThread, STARTUPINFOEXW,
+        TerminateProcess, UpdateProcThreadAttribute, WaitForSingleObject,
     };
 
     /// Documented in the ConPTY samples and not exported by windows-sys.
@@ -201,6 +257,9 @@ mod windows {
         output: OwnedHandle,
         process: OwnedHandle,
         thread: OwnedHandle,
+        /// The job the program and everything it starts belong to. `None` when the job could
+        /// not be made or joined; then only the program itself is ended on close.
+        job: Option<OwnedHandle>,
     }
 
     // The handles are owned by this struct and only touched through it.
@@ -287,7 +346,9 @@ mod windows {
                     ptr::null(),
                     ptr::null(),
                     0,
-                    EXTENDED_STARTUPINFO_PRESENT,
+                    // Suspended, so it joins the job before it can start anything that
+                    // would be outside it.
+                    EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
                     ptr::null(),
                     cwd.as_ptr(),
                     &si.StartupInfo,
@@ -305,12 +366,30 @@ mod windows {
                     return Err(e);
                 }
 
+                // Membership is inherited, so whatever the shell starts is in the job too and
+                // `kill` can end all of it. Windows has no process group to aim at, and
+                // ending the shell alone left its children holding the console. A job that
+                // cannot be made or joined costs only that; the program still runs.
+                let job = {
+                    let j = CreateJobObjectW(ptr::null(), ptr::null());
+                    if j.is_null() {
+                        None
+                    } else if AssignProcessToJobObject(j, pi.hProcess) == 0 {
+                        CloseHandle(j);
+                        None
+                    } else {
+                        Some(OwnedHandle::from_raw_handle(j as _))
+                    }
+                };
+                ResumeThread(pi.hThread);
+
                 Ok(Pty {
                     pc,
                     input: OwnedHandle::from_raw_handle(in_write as _),
                     output: OwnedHandle::from_raw_handle(out_read as _),
                     process: OwnedHandle::from_raw_handle(pi.hProcess as _),
                     thread: OwnedHandle::from_raw_handle(pi.hThread as _),
+                    job,
                 })
             }
         }
@@ -337,6 +416,9 @@ mod windows {
 
         pub fn kill(&mut self) {
             unsafe {
+                if let Some(job) = &self.job {
+                    TerminateJobObject(handle(job), 1);
+                }
                 TerminateProcess(handle(&self.process), 1);
                 WaitForSingleObject(handle(&self.process), 2000);
             }
@@ -716,6 +798,56 @@ mod tests {
         // Do not leave it behind if the assertion is about to fail.
         unsafe { libc::kill(pid, libc::SIGKILL) };
         panic!("{pid} outlived the terminal it was started in");
+    }
+
+    /// A shell with job control puts each background job in a process group of its own, in
+    /// the same session. Killing the shell's group missed them, and they kept the terminal
+    /// open. Here the job leaves the group by itself, as job control would move it.
+    #[cfg(unix)]
+    #[test]
+    fn killing_a_session_ends_jobs_in_other_process_groups() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let mut pty = Pty::spawn(Spawn {
+            command: &[
+                "/bin/sh".into(),
+                "-c".into(),
+                "trap '' HUP; perl -e 'setpgrp(0,0); $SIG{HUP}=q(IGNORE); sleep 60' & echo $!; wait"
+                    .into(),
+            ],
+            cwd: dir.path(),
+            cols: 80,
+            rows: 24,
+        })
+        .unwrap();
+        let mut buf = [0u8; 64];
+        let n = pty.reader().unwrap().read(&mut buf).unwrap();
+        let pid: i32 = String::from_utf8_lossy(&buf[..n])
+            .trim()
+            .parse()
+            .expect("the shell printed the background pid");
+        // Until the job has left the shell's group, a group kill would still reach it.
+        for _ in 0..100 {
+            if unsafe { libc::getpgid(pid) } == pid {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            unsafe { libc::getpgid(pid) },
+            pid,
+            "the job has a group of its own"
+        );
+
+        pty.kill();
+        for _ in 0..50 {
+            if !alive(pid) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        panic!("{pid}, in its own process group, outlived the terminal it was started in");
     }
 
     #[cfg(unix)]
