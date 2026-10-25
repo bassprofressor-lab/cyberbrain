@@ -26,6 +26,8 @@ pub enum Action {
     Removed,
     /// `--undo` on a file that had nothing of ours in it.
     NothingToUndo,
+    /// An entry under our name that is somebody else's. Left as it is, in both directions.
+    NotOurs,
 }
 
 impl Action {

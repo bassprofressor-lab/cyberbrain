@@ -930,6 +930,7 @@ pub fn install(r: &crate::install::Report) -> String {
                 Action::Unchanged => "already set",
                 Action::Removed => "removed",
                 Action::NothingToUndo => "nothing of ours",
+                Action::NotOurs => "not ours, left",
             };
             let _ = writeln!(s, "  {did:<15} {}", Slash(&change.path));
             let _ = writeln!(s, "  {:<15} {}", "", change.why);

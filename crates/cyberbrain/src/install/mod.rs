@@ -345,6 +345,14 @@ fn claude_desktop(opts: &Options, binary: &Path, store: &Path) -> Result<ClientR
         let change = edit(&candidate.path, candidate.why, opts.dry_run, |root| {
             let servers = edit::object(root, "mcpServers", "claude_desktop_config.json")?;
             let before = servers.get(&opts.name).cloned();
+            // The entry carries no marker (Claude Desktop's own format), so what it starts is
+            // how it is recognised. Somebody else's server under this name is theirs.
+            if before
+                .as_ref()
+                .is_some_and(|b| !is_our_mcp_entry(b) && b["command"] != entry["command"])
+            {
+                return Ok(Action::NotOurs);
+            }
             if opts.undo {
                 servers.remove(&opts.name);
                 let empty = servers.is_empty();
@@ -367,12 +375,23 @@ fn claude_desktop(opts: &Options, binary: &Path, store: &Path) -> Result<ClientR
         changes.push(change);
     }
 
-    let note = (changes.len() > 1).then(|| {
+    let mut note = (changes.len() > 1).then(|| {
         "This machine has more than one Claude Desktop installation, and only one of them \
          reads the file its own Edit Config button opens. Both were written, so it works \
          either way."
             .to_string()
     });
+    if changes.iter().any(|c| c.action == Action::NotOurs) {
+        let theirs = format!(
+            "An MCP server named `{}` is already configured and it does not start cyberbrain, \
+             so it was left as it is. Choose another name with --name.",
+            opts.name
+        );
+        note = Some(match note {
+            Some(n) => format!("{n} {theirs}"),
+            None => theirs,
+        });
+    }
     Ok(ClientReport {
         client: Client::ClaudeDesktop.name(),
         found: true,
@@ -380,6 +399,21 @@ fn claude_desktop(opts: &Options, binary: &Path, store: &Path) -> Result<ClientR
         note,
         snippet: None,
     })
+}
+
+/// Whether an `mcpServers` entry is one `install` wrote: it runs a program called
+/// `cyberbrain` with `mcp` as its first argument. A binary that moved, or another store, is
+/// still ours to update; a different program under the same name is not. An entry that runs
+/// this very binary is ours too, whatever it is called.
+fn is_our_mcp_entry(entry: &Value) -> bool {
+    let program = entry["command"]
+        .as_str()
+        .and_then(|c| c.rsplit(['/', '\\']).next())
+        .map(|p| p.to_ascii_lowercase());
+    let program = program
+        .as_deref()
+        .map(|p| p.strip_suffix(".exe").unwrap_or(p));
+    program == Some("cyberbrain") && entry["args"][0].as_str() == Some("mcp")
 }
 
 fn mcp_entry(binary: &Path, store: &Path) -> Value {

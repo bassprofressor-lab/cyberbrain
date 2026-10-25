@@ -337,7 +337,7 @@ fn the_desktop_entry_is_updated_in_place_and_undone_by_name() {
         .join("claude_desktop_config.json");
     fs::write(
         &config,
-        r#"{"mcpServers":{"theirs":{"command":"npx"},"cyberbrain":{"command":"old"}}}"#,
+        r#"{"mcpServers":{"theirs":{"command":"npx"},"cyberbrain":{"command":"/old/bin/cyberbrain","args":["mcp","--store","/old"]}}}"#,
     )
     .unwrap();
 
@@ -351,13 +351,56 @@ fn the_desktop_entry_is_updated_in_place_and_undone_by_name() {
     assert!(change.backup.is_some(), "the previous file is kept");
     let v = read(&config);
     assert_eq!(v["mcpServers"]["theirs"]["command"], "npx");
-    assert_ne!(v["mcpServers"]["cyberbrain"]["command"], "old");
+    assert_ne!(
+        v["mcpServers"]["cyberbrain"]["command"],
+        "/old/bin/cyberbrain"
+    );
 
     o.undo = true;
     run(&o).unwrap();
     let v = read(&config);
     assert_eq!(v["mcpServers"]["theirs"]["command"], "npx");
     assert!(v["mcpServers"].get("cyberbrain").is_none());
+}
+
+/// An MCP entry carries no marker, so the name was all `install` went by: somebody else's
+/// server called `cyberbrain` was replaced, and `--undo` deleted it. An entry is ours when it
+/// starts this program's MCP server; anything else under the name is left alone and said.
+#[test]
+fn a_foreign_entry_under_our_name_is_neither_replaced_nor_removed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut o = opts(tmp.path(), windows_with_both(tmp.path()));
+    o.clients = vec![Client::ClaudeDesktop];
+    let config = tmp
+        .path()
+        .join("Roaming")
+        .join("Claude")
+        .join("claude_desktop_config.json");
+    let theirs =
+        r#"{"mcpServers":{"cyberbrain":{"command":"npx","args":["-y","cyberbrain-cloud"]}}}"#;
+    fs::write(&config, theirs).unwrap();
+
+    let r = run(&o).unwrap();
+    let report = only(&r, Client::ClaudeDesktop);
+    let change = report.changes.iter().find(|c| c.path == config).unwrap();
+    assert_eq!(change.action, Action::NotOurs);
+    assert!(
+        report.note.as_deref().is_some_and(|n| n.contains("--name")),
+        "{:?}",
+        report.note
+    );
+    assert_eq!(fs::read_to_string(&config).unwrap(), theirs);
+
+    o.undo = true;
+    let r = run(&o).unwrap();
+    let change = only(&r, Client::ClaudeDesktop)
+        .changes
+        .iter()
+        .find(|c| c.path == config)
+        .unwrap()
+        .clone();
+    assert_eq!(change.action, Action::NotOurs);
+    assert_eq!(fs::read_to_string(&config).unwrap(), theirs);
 }
 
 #[test]
