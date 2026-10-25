@@ -3136,7 +3136,7 @@ fn a_fetch_reports_what_was_erased() {
     assert_eq!(f.erased[0].name, "weg");
 }
 
-/// The cursor is the newest thing in the answer, so a puller never reasons about clocks.
+/// The cursor is the hub's count of what it took in, so a puller never reasons about clocks.
 #[test]
 fn the_cursor_covers_notes_and_erasures() {
     let hub = HubStore::in_memory().unwrap();
@@ -3159,11 +3159,89 @@ fn the_cursor_covers_notes_and_erasures() {
     hub.erase_note("disposition", "b", &d.id, "2026-09-10T17:00:00Z")
         .unwrap();
     let f = super::fetch_notes(&hub, Some(&token), None).unwrap();
-    assert_eq!(f.cursor.as_deref(), Some("2026-09-10T17:00:00Z"));
+    assert_eq!((f.notes.len(), f.erased.len()), (1, 1));
+    assert_eq!(f.cursor.as_deref(), Some("#2"));
 
     // And asking again from there returns nothing new.
     let f2 = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
     assert!(f2.notes.is_empty() && f2.erased.is_empty());
+}
+
+/// A note written offline arrives at the hub after a newer one was already pulled. Its own
+/// `updated` is older than the puller's cursor, and it must still reach the puller: the
+/// cursor counts what the hub received, not what the writer's clock said.
+#[test]
+fn a_note_pushed_late_still_reaches_a_device_that_pulled_in_between() {
+    let hub = HubStore::in_memory().unwrap();
+    let (a, _) = hub.add_device("laptop", NOW).unwrap();
+    let (b, b_token) = hub.add_device("desktop", NOW).unwrap();
+    grant_in_force(&hub, "ga", &a.id, "disposition", Direction::Both);
+    grant_in_force(&hub, "gb", &b.id, "disposition", Direction::Both);
+    let offer = |id: &str, name: &str, updated: &str, now: &str| {
+        hub.offer_synced_note(
+            id,
+            "disposition",
+            name,
+            2,
+            "knowledge",
+            updated,
+            "fm",
+            "text",
+            None,
+            &a.id,
+            now,
+        )
+        .unwrap()
+    };
+    // Something written and pushed at 12:30, which B pulls straight away.
+    offer(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "online",
+        "2026-09-10T12:30:00Z",
+        "2026-09-10T12:30:01Z",
+    );
+    let first = super::fetch_notes(&hub, Some(&b_token), None).unwrap();
+    assert_eq!(first.notes.len(), 1);
+
+    // A note A wrote offline at 12:00 and only pushes at 13:00.
+    offer(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+        "offline",
+        "2026-09-10T12:00:00Z",
+        "2026-09-10T13:00:00Z",
+    );
+    let second = super::fetch_notes(&hub, Some(&b_token), first.cursor.as_deref()).unwrap();
+    let names: Vec<&str> = second.notes.iter().map(|n| n.name.as_str()).collect();
+    assert_eq!(names, ["offline"], "the late note must not be skipped");
+}
+
+/// A cursor from before the hub counted deliveries is a timestamp. It is not understood any
+/// more, and the answer is everything once: a re-send the device already knows, never a gap.
+#[test]
+fn a_cursor_from_an_older_hub_gets_everything_once() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, token) = hub.add_device("laptop", NOW).unwrap();
+    grant_in_force(&hub, "g1", &d.id, "disposition", Direction::Both);
+    hub.offer_synced_note(
+        "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        "disposition",
+        "a",
+        2,
+        "knowledge",
+        "2026-09-10T09:00:00Z",
+        "fm",
+        "text",
+        None,
+        &d.id,
+        NOW,
+    )
+    .unwrap();
+    hub.erase_note("disposition", "b", &d.id, "2026-09-10T08:00:00Z")
+        .unwrap();
+    let f = super::fetch_notes(&hub, Some(&token), Some("2026-09-10T17:00:00Z")).unwrap();
+    assert_eq!((f.notes.len(), f.erased.len()), (1, 1));
+    let again = super::fetch_notes(&hub, Some(&token), f.cursor.as_deref()).unwrap();
+    assert!(again.notes.is_empty() && again.erased.is_empty());
 }
 
 /// An editor sees the conflicts of their own bereiche and nobody else's.

@@ -258,8 +258,8 @@ pub struct Fetched {
     /// Notes withdrawn since `since`, as bereich, name and when. Carried alongside the
     /// notes because "gone" and "not offered to you" look identical otherwise.
     pub erased: Vec<ErasedElsewhere>,
-    /// The stamp to pass as `since` next time. The newest thing in this answer, so a puller
-    /// never has to reason about clocks.
+    /// The value to pass as `since` next time: where the hub's own count of what it took in
+    /// stood when it answered (see `cursor_of`). Opaque to the puller, which only keeps it.
     pub cursor: Option<String>,
 }
 
@@ -293,11 +293,15 @@ pub fn fetch_notes(
             device.name
         )));
     }
+    // A cursor this hub did not hand out, such as the timestamp an older hub used, reads as
+    // no cursor: everything once, which the device already has or takes again. Reading it
+    // as anything else would trade a re-send for a gap.
+    let after = since.and_then(parse_cursor);
     let notes = hub
-        .notes_for_device(&device.id, since)
+        .notes_for_device(&device.id, after)
         .map_err(|e| Refusal::BadBundle(format!("cannot read notes: {e}")))?;
     let erased: Vec<ErasedElsewhere> = hub
-        .erasures_for_device(&device.id, since)
+        .erasures_for_device(&device.id, after)
         .map_err(|e| Refusal::BadBundle(format!("cannot read erasures: {e}")))?
         .into_iter()
         .map(|(bereich, name, erased_at)| ErasedElsewhere {
@@ -306,16 +310,33 @@ pub fn fetch_notes(
             erased_at,
         })
         .collect();
-    let cursor = notes
-        .iter()
-        .map(|n| n.updated.clone())
-        .chain(erased.iter().map(|e| e.erased_at.clone()))
-        .max();
+    // Read after the rows and under the same lock, so nothing can be counted between them.
+    let cursor = hub
+        .sync_clock()
+        .map_err(|e| Refusal::BadBundle(format!("cannot read the sync count: {e}")))?;
+    let cursor = Some(cursor_of(cursor));
     Ok(Fetched {
         notes,
         erased,
         cursor,
     })
+}
+
+/// A sync cursor as it travels: `#` and the hub's count.
+///
+/// The `#` is chosen for how it sorts. A hub from before the count compares `since` as text
+/// against timestamps, and `#` sorts below every digit, so such a hub, handed this cursor
+/// after a downgrade, sends everything rather than nothing.
+fn cursor_of(seq: i64) -> String {
+    format!("#{seq}")
+}
+
+/// The count inside a cursor `cursor_of` wrote, or `None` for anything else.
+fn parse_cursor(cursor: &str) -> Option<i64> {
+    cursor
+        .strip_prefix('#')
+        .and_then(|n| n.parse::<i64>().ok())
+        .filter(|n| *n >= 0)
 }
 
 /// A request to erase one note everywhere the hub holds it.

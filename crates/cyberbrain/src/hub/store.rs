@@ -444,6 +444,14 @@ impl HubStore {
                  erased_at   TEXT NOT NULL,
                  by_device   TEXT NOT NULL,
                  PRIMARY KEY (bereich, name)
+             );
+
+             -- The hub's own count of what it took in. Every held note and every erasure
+             -- carries the value it was given (`sync_seq`), and a puller's cursor is a value
+             -- of this count. One row, only ever counted up.
+             CREATE TABLE IF NOT EXISTS sync_clock (
+                 id   INTEGER PRIMARY KEY CHECK (id = 1),
+                 seq  INTEGER NOT NULL
              );",
         ))?;
         self.add_missing_columns()?;
@@ -535,6 +543,19 @@ impl HubStore {
                 "devices",
                 "machine",
                 "ALTER TABLE devices ADD COLUMN machine TEXT",
+            ),
+            // NULL on rows from before the count. They are older than every cursor the
+            // count ever hands out, and the first fetch after the upgrade sends them anyway,
+            // because the cursor it brings is a timestamp the hub no longer reads.
+            (
+                "synced_notes",
+                "sync_seq",
+                "ALTER TABLE synced_notes ADD COLUMN sync_seq INTEGER",
+            ),
+            (
+                "erasures",
+                "sync_seq",
+                "ALTER TABLE erasures ADD COLUMN sync_seq INTEGER",
             ),
         ] {
             if !self.has_column(table, column)? {
@@ -1046,6 +1067,53 @@ mod tests {
         assert!(delete.contains("append-only"), "{delete}");
     }
 
+    /// A hub from before the sync count opens with the column added, and what it already
+    /// held is still delivered: once in full, and not again after that.
+    #[test]
+    fn a_hub_from_before_the_sync_count_keeps_delivering_what_it_held() {
+        let s = HubStore::in_memory().unwrap();
+        s.conn
+            .execute_batch(
+                "ALTER TABLE synced_notes DROP COLUMN sync_seq;
+                 ALTER TABLE erasures DROP COLUMN sync_seq;
+                 DROP TABLE sync_clock;",
+            )
+            .unwrap();
+        let (d, _) = s.add_device("laptop", "2026-09-07T00:00:00Z").unwrap();
+        s.conn
+            .execute(
+                "INSERT INTO synced_notes (id, bereich, name, ring, kind, updated, frontmatter,
+                     body, from_device, received_at)
+                 VALUES ('01ARZ3NDEKTSV4RRFFQ69G5FAV', 'disposition', 'old', 2, 'knowledge',
+                     '2026-09-07T00:00:00Z', 'fm', 'text', ?1, '2026-09-07T00:00:00Z')",
+                params![d.id],
+            )
+            .unwrap();
+        s.migrate().unwrap();
+        assert_eq!(s.synced_notes_after("disposition", None).unwrap().len(), 1);
+        assert!(
+            s.synced_notes_after("disposition", Some(s.sync_clock().unwrap()))
+                .unwrap()
+                .is_empty()
+        );
+        s.write_synced_note(
+            "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+            "disposition",
+            "new",
+            2,
+            "knowledge",
+            "2026-09-01T00:00:00Z",
+            "fm",
+            "text",
+            &d.id,
+            "2026-09-08T00:00:00Z",
+        )
+        .unwrap();
+        let after = s.synced_notes_after("disposition", Some(0)).unwrap();
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].name, "new");
+    }
+
     #[test]
     fn a_resolved_conflict_keeps_its_decision_and_drops_the_texts() {
         let s = HubStore::in_memory().unwrap();
@@ -1420,16 +1488,17 @@ impl HubStore {
         from_device: &str,
         now: &str,
     ) -> Result<()> {
+        let seq = self.next_sync_seq()?;
         ix(self.conn.execute(
             "INSERT INTO synced_notes
                 (id, bereich, name, ring, kind, updated, frontmatter, body, from_device,
-                 received_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 received_at, sync_seq)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(bereich, name) DO UPDATE SET
                 id = excluded.id, ring = excluded.ring, kind = excluded.kind,
                 updated = excluded.updated, frontmatter = excluded.frontmatter,
                 body = excluded.body, from_device = excluded.from_device,
-                received_at = excluded.received_at",
+                received_at = excluded.received_at, sync_seq = excluded.sync_seq",
             params![
                 id,
                 bereich,
@@ -1440,10 +1509,36 @@ impl HubStore {
                 frontmatter,
                 body,
                 from_device,
-                now
+                now,
+                seq
             ],
         ))?;
         Ok(())
+    }
+
+    /// Count one more thing taken in, and return its number.
+    ///
+    /// The cursor a puller keeps used to be the newest `updated` it had seen, which is the
+    /// writer's clock. A note written offline at 12:00 and pushed at 13:00 then sat below the
+    /// cursor of a device that pulled at 12:30 and never arrived there. The hub's own count
+    /// orders by arrival, which is the order a puller needs.
+    fn next_sync_seq(&self) -> Result<i64> {
+        ix(self.conn.query_row(
+            "INSERT INTO sync_clock (id, seq) VALUES (1, 1)
+             ON CONFLICT(id) DO UPDATE SET seq = seq + 1
+             RETURNING seq",
+            [],
+            |r| r.get(0),
+        ))
+    }
+
+    /// The newest number `next_sync_seq` has handed out, 0 before the first.
+    pub fn sync_clock(&self) -> Result<i64> {
+        ix(self
+            .conn
+            .query_row("SELECT seq FROM sync_clock WHERE id = 1", [], |r| r.get(0))
+            .optional())
+        .map(|v| v.unwrap_or(0))
     }
 
     /// Erase a note the hub holds, everywhere it holds it.
@@ -1472,12 +1567,14 @@ impl HubStore {
         ))?;
         // The tombstone carries no text. It is what stops the next delivery from recreating
         // what somebody asked to have removed.
+        let seq = self.next_sync_seq()?;
         ix(self.conn.execute(
-            "INSERT INTO erasures (bereich, name, erased_at, by_device)
-             VALUES (?, ?, ?, ?)
+            "INSERT INTO erasures (bereich, name, erased_at, by_device, sync_seq)
+             VALUES (?, ?, ?, ?, ?)
              ON CONFLICT(bereich, name) DO UPDATE SET
-                erased_at = excluded.erased_at, by_device = excluded.by_device",
-            params![bereich, name, now, by_device],
+                erased_at = excluded.erased_at, by_device = excluded.by_device,
+                sync_seq = excluded.sync_seq",
+            params![bereich, name, now, by_device, seq],
         ))?;
         Ok(ErasureCount { notes, conflicts })
     }
@@ -1532,10 +1629,10 @@ impl HubStore {
     }
 
     /// Notes a device may fetch: everything held in the bereiche it holds a receive grant
-    /// in, changed since `since`. The filter is by grant and not by request, so asking for a
-    /// bereich you were not granted returns nothing rather than an error — a fetch is not a
-    /// place to learn which departments exist.
-    pub fn notes_for_device(&self, device: &str, since: Option<&str>) -> Result<Vec<SyncedNote>> {
+    /// in, taken in after `after` on the hub's count (`sync_clock`). The filter is by grant
+    /// and not by request, so asking for a bereich you were not granted returns nothing
+    /// rather than an error — a fetch is not a place to learn which departments exist.
+    pub fn notes_for_device(&self, device: &str, after: Option<i64>) -> Result<Vec<SyncedNote>> {
         let grants = self.grants_for_device(device)?;
         let mut out = Vec::new();
         // `is_effective`, not `is_active`: a grant nobody countersigned is written down and
@@ -1549,14 +1646,7 @@ impl HubStore {
                     super::sync_access::Direction::Receive | super::sync_access::Direction::Both
                 )
         }) {
-            for n in self.synced_notes(&g.bereich)? {
-                if let Some(s) = since
-                    && n.updated.as_str() <= s
-                {
-                    continue;
-                }
-                out.push(n);
-            }
+            out.extend(self.synced_notes_after(&g.bereich, after)?);
         }
         Ok(out)
     }
@@ -1567,7 +1657,7 @@ impl HubStore {
     pub fn erasures_for_device(
         &self,
         device: &str,
-        since: Option<&str>,
+        after: Option<i64>,
     ) -> Result<Vec<(String, String, String)>> {
         let grants = self.grants_for_device(device)?;
         let mut out = Vec::new();
@@ -1584,10 +1674,10 @@ impl HubStore {
         }) {
             let mut stmt = ix(self.conn.prepare(
                 "SELECT bereich, name, erased_at FROM erasures
-                 WHERE bereich = ? AND (?2 IS NULL OR erased_at > ?2)
+                 WHERE bereich = ? AND (?2 IS NULL OR COALESCE(sync_seq, 0) > ?2)
                  ORDER BY erased_at",
             ))?;
-            let rows = ix(stmt.query_map(params![g.bereich, since], |r| {
+            let rows = ix(stmt.query_map(params![g.bereich, after], |r| {
                 Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             }))?;
             for r in rows {
@@ -1724,9 +1814,13 @@ impl HubStore {
             .optional())?;
         let Some(c) = c else { return Ok(false) };
         if take_offered {
+            // A new number, or the devices that already pulled the held version would never
+            // be told it was replaced.
+            let seq = self.next_sync_seq()?;
             ix(self.conn.execute(
                 "UPDATE synced_notes
-                 SET updated = ?, frontmatter = ?, body = ?, from_device = ?, received_at = ?
+                 SET updated = ?, frontmatter = ?, body = ?, from_device = ?, received_at = ?,
+                     sync_seq = ?
                  WHERE bereich = ? AND name = ?",
                 params![
                     c.offered_updated,
@@ -1734,6 +1828,7 @@ impl HubStore {
                     c.offered_body,
                     c.offered_from_device,
                     now,
+                    seq,
                     c.bereich,
                     c.name
                 ],
@@ -1750,13 +1845,23 @@ impl HubStore {
         Ok(true)
     }
 
-    /// What the hub holds for a bereich, newest first.
+    /// What the hub holds for a bereich, newest first. The program itself reads through
+    /// `synced_notes_after`; this is what the tests ask.
+    #[cfg(test)]
     pub fn synced_notes(&self, bereich: &str) -> Result<Vec<SyncedNote>> {
+        self.synced_notes_after(bereich, None)
+    }
+
+    /// What the hub holds for a bereich and took in after `after` on its own count, newest
+    /// first. Rows from before the count have none and read as 0.
+    fn synced_notes_after(&self, bereich: &str, after: Option<i64>) -> Result<Vec<SyncedNote>> {
         let mut stmt = ix(self.conn.prepare(
             "SELECT id, bereich, name, ring, kind, updated, frontmatter, body, from_device
-             FROM synced_notes WHERE bereich = ? ORDER BY updated DESC",
+             FROM synced_notes
+             WHERE bereich = ?1 AND (?2 IS NULL OR COALESCE(sync_seq, 0) > ?2)
+             ORDER BY updated DESC",
         ))?;
-        let rows = ix(stmt.query_map(params![bereich], |r| {
+        let rows = ix(stmt.query_map(params![bereich, after], |r| {
             Ok(SyncedNote {
                 id: r.get(0)?,
                 bereich: r.get(1)?,

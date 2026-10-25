@@ -12,6 +12,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- **A note pushed late reaches every device again.** The sync cursor was the newest `updated`
+  in the answer, which is the writer's clock, and the hub filtered on it. A note written
+  offline at 12:00 and pushed at 13:00 sat below the cursor of a device that had pulled at
+  12:30 and never arrived there. The hub now numbers what it takes in (notes, erasures, a
+  conflict resolved for the offered version), and the cursor is that number (`#42`). A cursor
+  from an older hub is a timestamp, which is no longer read: the first pull after the upgrade
+  gets everything once, which the device already has or takes again. An older hub handed the
+  new cursor sends everything rather than nothing.
+
 ## [0.7.10] — 2026-10-23
 
 - **MCP 2026-07-28.** The server is now dual-era: a request that names its protocol version in
