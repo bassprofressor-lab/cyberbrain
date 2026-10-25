@@ -76,10 +76,17 @@ pub fn count_files_independently(root: &Path) -> Result<usize> {
 }
 
 /// Match a plan pattern against a relative path. A pattern without `/` is matched
-/// against the file name; one with `/` against the whole relative path.
+/// against the file name; one with `/` against the whole relative path. A leading `/`
+/// anchors at the root, so `/*.md` is the files directly in it and nothing below; such a
+/// pattern never matched anything before, so giving it this meaning changes no plan.
 pub fn glob_match(pattern: &str, rel: &str) -> bool {
     let pattern = pattern.trim_end_matches('/');
-    if pattern.contains('/') {
+    if let Some(anchored) = pattern.strip_prefix('/') {
+        segments_match(
+            &anchored.split('/').collect::<Vec<_>>(),
+            &rel.split('/').collect::<Vec<_>>(),
+        )
+    } else if pattern.contains('/') {
         segments_match(
             &pattern.split('/').collect::<Vec<_>>(),
             &rel.split('/').collect::<Vec<_>>(),
@@ -150,6 +157,10 @@ mod tests {
     fn globs() {
         assert!(glob_match("*.md", "a.md"));
         assert!(glob_match("*.md", "deep/er/a.md"));
+        // A leading `/` anchors at the root: only files directly there.
+        assert!(glob_match("/*.md", "a.md"));
+        assert!(!glob_match("/*.md", "deep/a.md"));
+        assert!(glob_match("/docs/*.md", "docs/a.md"));
         assert!(!glob_match("*.md", "a.mdx"));
         assert!(glob_match("PREREG_*.md", "PREREG_va_2026-08-25.md"));
         assert!(!glob_match("PREREG_*.md", "prereg_x.md"));
