@@ -723,6 +723,39 @@ fn bash_verdict(cmd: &str) -> Option<String> {
     ))
 }
 
+/// Whether one argument of `sed` or `perl` asks for in-place editing.
+///
+/// `-i` bundles with other short options (`sed -ni`, `perl -pi`, `perl -0777 -pi`), so a short
+/// cluster is read letter by letter until a letter that takes an argument: after that, the
+/// rest of the cluster is that argument (`perl -Mstrict` names a module, not `-i`).
+fn edits_in_place(prog: &str, arg: &str) -> bool {
+    if arg == "--in-place" || arg.starts_with("--in-place=") {
+        return true;
+    }
+    let Some(cluster) = arg.strip_prefix('-').filter(|c| !c.starts_with('-')) else {
+        return false;
+    };
+    for c in cluster.chars() {
+        if c == 'i' {
+            return true;
+        }
+        // The letters that take an argument differ: `sed -E` is a flag, `perl -E` a script.
+        let takes_argument = match prog {
+            "sed" => matches!(c, 'e' | 'f' | 'l'),
+            _ => {
+                matches!(
+                    c,
+                    'e' | 'E' | 'M' | 'm' | 'I' | 'l' | 'x' | 'C' | 'd' | 'D' | 'F'
+                ) || c.is_ascii_digit()
+            }
+        };
+        if takes_argument {
+            return false;
+        }
+    }
+    false
+}
+
 /// The arguments of one simple command that it writes to, deletes or replaces.
 ///
 /// Leading assignments and wrappers (`sudo`, `env`, `nohup`, …) are skipped to reach the
@@ -750,7 +783,7 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
             paths().collect()
         }
         "cp" | "rsync" | "install" | "ln" => paths().next_back().into_iter().collect(),
-        "sed" | "perl" if args.iter().any(|a| a.starts_with("-i")) => paths().collect(),
+        "sed" | "perl" if args.iter().any(|a| edits_in_place(prog, a)) => paths().collect(),
         "dd" => args.iter().filter_map(|a| a.strip_prefix("of=")).collect(),
         "tar"
             if args.iter().any(|a| {
@@ -1050,6 +1083,30 @@ mod bash_tests {
             "dd if=/dev/zero of=.cyberbrain/audit.db bs=1 count=1",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// In-place editing hides in bundled short options as often as it stands alone:
+    /// `sed -ni`, `perl -pi -e`, `perl -0777 -pi`, `sed --in-place`. Only `-i` was seen.
+    #[test]
+    fn in_place_edits_in_bundled_options_are_refused() {
+        for cmd in [
+            "sed -ni 's/a/b/p' .cyberbrain/notes/r1/engine.md",
+            "sed -Ei.bak 's/a/b/' .cyberbrain/notes/r0/a.md",
+            "sed --in-place 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "sed --in-place=.bak 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "perl -pi -e 's/a/b/' .cyberbrain/notes/r1/engine.md",
+            "perl -0777 -pi -e 's/a/b/' .cyberbrain/notes/r1/engine.md",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        // Reading with options that merely contain an `i` after an argument letter.
+        for cmd in [
+            "sed -n 's/a/b/p' .cyberbrain/notes/r1/engine.md",
+            "sed -e 's/i/j/' .cyberbrain/notes/r1/engine.md",
+            "perl -Mstrict -ne 'print' .cyberbrain/notes/r1/engine.md",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
     }
 
