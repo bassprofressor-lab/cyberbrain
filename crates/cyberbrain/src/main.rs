@@ -2123,6 +2123,36 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                     )?;
                     Ok(0)
                 }
+                PrincipalCommand::Unassign {
+                    principal,
+                    bereich,
+                    data,
+                } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let stamp = now();
+                    let done = store.unassign_bereich(principal, bereich)?;
+                    if done {
+                        store.record(
+                            "cli",
+                            "principal.unassigned",
+                            serde_json::json!({ "principal": principal, "bereich": bereich }),
+                            &stamp,
+                        )?;
+                    }
+                    out.emit(
+                        &serde_json::json!({
+                            "principal": principal, "bereich": bereich, "removed": done
+                        }),
+                        |v| {
+                            if v["removed"].as_bool().unwrap_or(false) {
+                                format!("{principal} no longer sees conflicts in {bereich}\n")
+                            } else {
+                                format!("{principal} was not responsible for {bereich}\n")
+                            }
+                        },
+                    )?;
+                    Ok(if done { 0 } else { 1 })
+                }
                 PrincipalCommand::Add { name, role, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let role = hub::access::Role::parse(role)?;

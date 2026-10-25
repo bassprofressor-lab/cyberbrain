@@ -1162,6 +1162,15 @@ pub enum PrincipalCommand {
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },
+    /// Take a bereich away from an editor.
+    Unassign {
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        bereich: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
     /// Register a person and print their credential once.
     Add {
         name: String,
