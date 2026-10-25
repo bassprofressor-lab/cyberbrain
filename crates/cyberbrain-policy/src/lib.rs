@@ -40,7 +40,7 @@ pub mod write_gate;
 
 pub use audit::{
     Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, AuditSink, ExportFormat,
-    MemoryAuditSink, bundle, verify_chain_from,
+    MemoryAuditSink, bundle, verify_chain_from, verify_each,
 };
 pub use config::PolicyConfig;
 pub use egress::{Egress, EgressEntry, EgressTicket, Locality};

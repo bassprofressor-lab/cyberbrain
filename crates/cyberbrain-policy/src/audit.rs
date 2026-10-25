@@ -503,12 +503,15 @@ impl AuditLog {
     /// and an access that leaves no trace is the one nobody can ask about later.
     pub fn export_bundle(&self, actor: &Actor, filter: &AuditFilter, tool: &str) -> Result<String> {
         let rows = self.sink.read(filter)?;
-        let out = bundle::render(
+        let out = bundle::render_with(
             &rows,
-            filter.since.map(|t| t.to_string()),
-            filter.until.map(|t| t.to_string()),
-            tool,
-            &jiff::Timestamp::now().to_string(),
+            &bundle::Spec {
+                from: filter.since.map(|t| t.to_string()),
+                to: filter.until.map(|t| t.to_string()),
+                tool: tool.to_string(),
+                exported_at: jiff::Timestamp::now().to_string(),
+                selection: bundle::Selection::of(filter),
+            },
         );
         self.record(
             actor,
@@ -561,13 +564,79 @@ impl AuditLog {
 /// whatever language is normal by then. `scripts/verify-audit-export.py` is that check,
 /// written once as proof it can be.
 pub mod bundle {
-    use super::{AuditEvent, GENESIS, verify_chain_from};
+    use super::{AuditEvent, AuditFilter, GENESIS, verify_chain_from, verify_each};
     use cyberbrain_core::{Error, Result};
     use serde::{Deserialize, Serialize};
 
     pub const KIND: &str = "cyberbrain.audit.export";
     pub const KIND_END: &str = "cyberbrain.audit.export.end";
+    /// The format every bundle had before selections and signatures, and still the one
+    /// written when a bundle needs neither, so a reader that only knows it keeps working.
     pub const VERSION: u32 = 1;
+    /// Adds the selection (`filter` in the header). Written only when a bundle uses it.
+    pub const VERSION_2: u32 = 2;
+
+    /// Which rows of the period a bundle holds, when it is not all of them.
+    ///
+    /// The rows of one action are not consecutive in the chain, so a selection cannot be
+    /// walked as a chain: it is checked row by row, each against the hash it names as its
+    /// predecessor. That proves every row is as it was written. It cannot prove that the
+    /// selection is complete, which is why the header says it is one.
+    #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+    pub struct Selection {
+        /// The action, or its family: `note` selects `note.*`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub action: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub subject: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub contains: Option<String>,
+    }
+
+    impl Selection {
+        /// The selection a filter makes, or `None` when it selects by period alone.
+        pub fn of(filter: &AuditFilter) -> Option<Selection> {
+            let s = Selection {
+                action: filter.action.clone(),
+                subject: filter.subject.clone(),
+                contains: filter.contains.clone(),
+            };
+            (s != Selection::default()).then_some(s)
+        }
+
+        /// Whether a row belongs in this selection. The same rules the store's reader
+        /// applies, so a bundle it wrote passes and a row slipped in from elsewhere does not.
+        pub fn admits(&self, e: &AuditEvent) -> bool {
+            if let Some(a) = &self.action
+                && !(e.action == *a || e.action.starts_with(&format!("{a}.")))
+            {
+                return false;
+            }
+            if let Some(s) = &self.subject
+                && e.subject != *s
+            {
+                return false;
+            }
+            if let Some(c) = &self.contains {
+                let hay =
+                    format!("{} {} {} {}", e.actor, e.action, e.subject, e.detail).to_lowercase();
+                if !hay.contains(&c.to_lowercase()) {
+                    return false;
+                }
+            }
+            true
+        }
+    }
+
+    /// Everything about a bundle that is not its rows.
+    #[derive(Debug, Clone, Default)]
+    pub struct Spec {
+        pub from: Option<String>,
+        pub to: Option<String>,
+        pub tool: String,
+        pub exported_at: String,
+        pub selection: Option<Selection>,
+    }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
     pub struct Header {
@@ -585,6 +654,9 @@ pub mod bundle {
         /// beginning of the log.
         pub anchor: String,
         pub rows: usize,
+        /// Present when the bundle holds a selection rather than the whole period.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub filter: Option<Selection>,
     }
 
     #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -610,6 +682,11 @@ pub mod bundle {
         pub last_hash: Option<String>,
         pub tool: String,
         pub exported_at: String,
+        pub version: u32,
+        /// The selection the rows were taken by, when they are not the whole period. The
+        /// rows were then checked one by one; gaps between them are expected.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        pub filter: Option<Selection>,
     }
 
     /// Render rows as a bundle. `tool` names the writer, `exported_at` is its own timestamp.
@@ -620,6 +697,20 @@ pub mod bundle {
         tool: &str,
         exported_at: &str,
     ) -> String {
+        render_with(
+            rows,
+            &Spec {
+                from,
+                to,
+                tool: tool.to_string(),
+                exported_at: exported_at.to_string(),
+                selection: None,
+            },
+        )
+    }
+
+    /// [`render`], with everything a bundle can say about itself.
+    pub fn render_with(rows: &[AuditEvent], spec: &Spec) -> String {
         // The anchor comes out of the first row rather than a second read of the log: a row
         // already carries the hash it follows. One source, no chance of the two disagreeing.
         let anchor = rows
@@ -627,15 +718,23 @@ pub mod bundle {
             .and_then(|r| r.chain_prev())
             .unwrap_or(GENESIS)
             .to_string();
+        // The lowest version that can say what this bundle says. A plain period stays at 1,
+        // so a reader written against 1 checks it as before.
+        let version = if spec.selection.is_some() {
+            VERSION_2
+        } else {
+            VERSION
+        };
         let header = Header {
             kind: KIND.to_string(),
-            version: VERSION,
-            tool: tool.to_string(),
-            exported_at: exported_at.to_string(),
-            from,
-            to,
+            version,
+            tool: spec.tool.clone(),
+            exported_at: spec.exported_at.clone(),
+            from: spec.from.clone(),
+            to: spec.to.clone(),
             anchor,
             rows: rows.len(),
+            filter: spec.selection.clone(),
         };
         let footer = Footer {
             kind: KIND_END.to_string(),
@@ -680,11 +779,18 @@ pub mod bundle {
                 header.kind
             )));
         }
-        if header.version != VERSION {
+        if header.version != VERSION && header.version != VERSION_2 {
             return Err(bad(format!(
-                "format version {} is not {VERSION}; use a reader that knows it",
+                "format version {} is not {VERSION} or {VERSION_2}; use a reader that knows it",
                 header.version
             )));
+        }
+        // A version-1 reader would walk a selection as a chain and fail, so a selection in a
+        // file that claims version 1 is a file somebody edited.
+        if header.version == VERSION && header.filter.is_some() {
+            return Err(bad(
+                "a version 1 file carries a selection, which version 1 cannot express".into(),
+            ));
         }
 
         let rest: Vec<&str> = lines.collect();
@@ -723,7 +829,24 @@ pub mod bundle {
                 rows.len()
             )));
         }
-        let verified = verify_chain_from(&header.anchor, &rows)?;
+        let verified = match &header.filter {
+            None => verify_chain_from(&header.anchor, &rows)?,
+            Some(sel) => {
+                let first_prev = rows.first().and_then(|r| r.chain_prev()).unwrap_or(GENESIS);
+                if first_prev != header.anchor {
+                    return Err(bad(
+                        "the anchor is not the hash the first row follows".into()
+                    ));
+                }
+                if let Some(i) = rows.iter().position(|r| !sel.admits(r)) {
+                    return Err(bad(format!(
+                        "row {} does not belong to the selection the header names",
+                        i + 1
+                    )));
+                }
+                verify_each(&rows)?
+            }
+        };
 
         let last_hash = rows.last().and_then(|r| r.chain_hash()).map(str::to_owned);
         if footer.last_hash != last_hash {
@@ -742,6 +865,8 @@ pub mod bundle {
                 last_hash,
                 tool: header.tool,
                 exported_at: header.exported_at,
+                version: header.version,
+                filter: header.filter,
             },
             rows,
         ))
@@ -809,32 +934,57 @@ pub fn verify_chain_from(anchor: &str, rows: &[AuditEvent]) -> Result<usize> {
     let mut prev = anchor.to_string();
     for (i, row) in rows.iter().enumerate() {
         // The reader counts from one, and so does every listing this number is compared
-        // against; a zero-based index here sent someone looking at the wrong row. Not
-        // named `at`: that is already the chain's own timestamp, three lines down.
-        let row_no = i + 1;
-        let (Some(p), Some(h), Some(at)) = (row.chain_prev(), row.chain_hash(), row.chain_at())
-        else {
+        // against; a zero-based index here sent someone looking at the wrong row.
+        prev = check_row(&prev, row, i + 1)?.to_string();
+    }
+    Ok(rows.len())
+}
+
+/// One row against the hash it must follow. Returns the row's own hash, which the next row
+/// must name.
+fn check_row<'r>(prev: &str, row: &'r AuditEvent, row_no: usize) -> Result<&'r str> {
+    // Not named `at` in the message: that is already the chain's own timestamp.
+    let (Some(p), Some(h), Some(at)) = (row.chain_prev(), row.chain_hash(), row.chain_at()) else {
+        return Err(Error::Index(format!(
+            "audit chain broken at row {row_no} ({} {} {}): row carries no _chain",
+            row.ts, row.action, row.subject
+        )));
+    };
+    if p != prev {
+        return Err(Error::Index(format!(
+            "audit chain broken at row {row_no} ({} {} {}): prev does not match the row \
+             before it; a row was removed, reordered or inserted",
+            row.ts, row.action, row.subject
+        )));
+    }
+    let expect = row.compute_hash(prev, at);
+    if h != expect {
+        return Err(Error::Index(format!(
+            "audit chain broken at row {row_no} ({} {} {}): content does not match its hash; \
+             the row was edited",
+            row.ts, row.action, row.subject
+        )));
+    }
+    Ok(h)
+}
+
+/// Check rows that are a selection rather than a stretch of the chain: each one against the
+/// hash it names as its predecessor, without asking that predecessor to be the row before.
+///
+/// Proves that every row is as it was written. It does not prove that nothing between them
+/// is missing, because missing rows are what a selection is.
+pub fn verify_each(rows: &[AuditEvent]) -> Result<usize> {
+    for (i, row) in rows.iter().enumerate() {
+        let Some(prev) = row.chain_prev() else {
             return Err(Error::Index(format!(
-                "audit chain broken at row {row_no} ({} {} {}): row carries no _chain",
-                row.ts, row.action, row.subject
+                "audit row {} ({} {} {}): row carries no _chain",
+                i + 1,
+                row.ts,
+                row.action,
+                row.subject
             )));
         };
-        if p != prev {
-            return Err(Error::Index(format!(
-                "audit chain broken at row {row_no} ({} {} {}): prev does not match the row \
-                 before it; a row was removed, reordered or inserted",
-                row.ts, row.action, row.subject
-            )));
-        }
-        let expect = row.compute_hash(&prev, at);
-        if h != expect {
-            return Err(Error::Index(format!(
-                "audit chain broken at row {row_no} ({} {} {}): content does not match its hash; \
-                 the row was edited",
-                row.ts, row.action, row.subject
-            )));
-        }
-        prev = h.to_string();
+        check_row(prev, row, i + 1)?;
     }
     Ok(rows.len())
 }
@@ -1316,5 +1466,88 @@ mod tests {
         let rows = log.read(&AuditFilter::default()).unwrap();
         assert!(!render(&rows, ExportFormat::Text).contains("_chain"));
         assert!(render(&rows, ExportFormat::Jsonl).contains("_chain"));
+    }
+
+    /// K10: `policy audit --action X --export f` wrote a file that its own check then
+    /// refused, because the rows of one action are not consecutive in the chain and the
+    /// check walked them as if they were. Calibrated against the state before the fix:
+    /// `verify` failed with "a row was removed, reordered or inserted" on row 2.
+    #[test]
+    fn a_bundle_filtered_by_action_verifies() {
+        let (log, _) = AuditLog::in_memory();
+        for (action, subject) in [
+            (AuditAction::NoteWrite, "a"),
+            (AuditAction::PolicyRefusal, "x"),
+            (AuditAction::NoteWrite, "b"),
+            (AuditAction::PolicyRefusal, "y"),
+            (AuditAction::NoteWrite, "c"),
+        ] {
+            log.record(&Actor::Operator, action, subject, json!({}))
+                .unwrap();
+        }
+        let filter = AuditFilter {
+            action: Some("note.write".into()),
+            ..Default::default()
+        };
+        let text = log
+            .export_bundle(&Actor::Operator, &filter, "test")
+            .unwrap();
+        let report = bundle::verify(&text).expect("a filtered export verifies");
+        assert_eq!(report.rows, 3);
+    }
+
+    fn selection_bundle() -> (String, Vec<AuditEvent>) {
+        let (log, sink) = AuditLog::in_memory();
+        for (action, subject) in [
+            (AuditAction::NoteWrite, "a"),
+            (AuditAction::PolicyRefusal, "x"),
+            (AuditAction::NoteWrite, "b"),
+        ] {
+            log.record(&Actor::Operator, action, subject, json!({}))
+                .unwrap();
+        }
+        let filter = AuditFilter {
+            action: Some("note.write".into()),
+            ..Default::default()
+        };
+        let text = log
+            .export_bundle(&Actor::Operator, &filter, "test")
+            .unwrap();
+        (text, sink.rows())
+    }
+
+    /// A selection is checked row by row, which still catches an edit.
+    #[test]
+    fn an_edited_row_in_a_selection_is_refused() {
+        let (text, _) = selection_bundle();
+        assert!(
+            text.contains("\"version\":2"),
+            "a selection needs version 2"
+        );
+        let bad = text.replace("\"subject\":\"b\"", "\"subject\":\"c\"");
+        let err = bundle::verify(&bad).unwrap_err().to_string();
+        assert!(err.contains("row 2") && err.contains("edited"), "{err}");
+    }
+
+    /// And a row that does not belong to the selection cannot ride along in it.
+    #[test]
+    fn a_row_outside_the_selection_is_refused() {
+        let (text, rows) = selection_bundle();
+        let foreign = serde_json::to_string(&rows[1]).unwrap();
+        let mut lines: Vec<&str> = text.lines().collect();
+        lines.insert(2, &foreign);
+        let patched = lines.join("\n").replace("\"rows\":2", "\"rows\":3");
+        let err = bundle::verify(&patched).unwrap_err().to_string();
+        assert!(err.contains("selection"), "{err}");
+    }
+
+    /// Calling a selection version 1 does not make a version-1 reader walk it as a chain.
+    #[test]
+    fn a_selection_cannot_pass_as_version_one() {
+        let (text, _) = selection_bundle();
+        let err = bundle::verify(&text.replace("\"version\":2", "\"version\":1"))
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("version 1"), "{err}");
     }
 }

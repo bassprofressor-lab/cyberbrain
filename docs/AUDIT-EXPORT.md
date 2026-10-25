@@ -67,6 +67,28 @@ and getting it wrong looks like every row failing at once.
 and a chain that depended on it would break for a reason that has nothing to do with
 tampering. The chain's own timestamp is `_chain.at`.
 
+### A selection: `--action`, `--subject`
+
+```console
+$ cyberbrain policy audit --action note.erase --export erasures.jsonl
+```
+
+The rows of one action are not neighbours in the chain, so a selection cannot be walked as
+one. Such a file is written as **version 2** and its header names the selection:
+
+```json
+{"kind":"cyberbrain.audit.export","version":2,…,"anchor":"…","rows":4,"filter":{"action":"note.erase"}}
+```
+
+It is checked row by row, each row against the hash it names as its predecessor (`_chain.prev`),
+and every row has to belong to the selection. **What this proves:** each row is exactly as it
+was written. **What it cannot prove:** that the selection is complete, because the rows between
+them are not in the file. A full period proves both; hand over the full period when completeness
+is the question. A hub refuses a selection as a delivery for the same reason.
+
+A plain period without a selection is still written as version 1, byte for byte as before, so
+a reader that only knows version 1 keeps working.
+
 ## Checking it without Cyberbrain
 
 The retention period for this evidence is measured in years, and no program is a safe

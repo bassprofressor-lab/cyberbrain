@@ -5010,3 +5010,42 @@ async fn the_administrators_page_lists_people_and_fleet_invitations() {
     assert!(page.contains("Rollout"));
     assert!(!page.contains("cbp_"), "a credential is never on the page");
 }
+
+/// A selection verifies row by row since K10, and gaps between its rows are what a selection
+/// is. A hub that took one would store a device's chain with holes in it, so a delivery has to
+/// be a whole stretch of the log.
+#[test]
+fn a_selection_is_not_a_delivery() {
+    let (mut hub, _, token) = hub_with_device();
+    let client = Client::new();
+    client.act("a");
+    client
+        .log
+        .record(
+            &Actor::Operator,
+            AuditAction::PolicyRefusal,
+            "x",
+            serde_json::json!({}),
+        )
+        .unwrap();
+    client.act("b");
+    let filter = cyberbrain_policy::AuditFilter {
+        action: Some("note.write".into()),
+        ..Default::default()
+    };
+    let selection = client
+        .log
+        .export_bundle(&Actor::Operator, &filter, "test-client")
+        .unwrap();
+    assert!(
+        bundle::verify(&selection).is_ok(),
+        "the file itself is sound"
+    );
+
+    let refused = ingest(&mut hub, &collecting(), Some(&token), &selection, None, NOW);
+    assert!(
+        matches!(&refused, Err(Refusal::BadBundle(m)) if m.contains("selection")),
+        "{refused:?}"
+    );
+    assert_eq!(hub.total_entries().unwrap(), 0);
+}

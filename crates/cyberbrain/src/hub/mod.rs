@@ -601,6 +601,15 @@ pub fn ingest(
 
     let (report, rows) =
         bundle::verify_rows(body).map_err(|e| note(Refusal::BadBundle(e.to_string())))?;
+    // A selection verifies row by row, gaps and all, which is right for a file handed to an
+    // auditor and wrong for a device's record: the hub would store a chain with holes in it.
+    if report.filter.is_some() {
+        return Err(note(Refusal::BadBundle(
+            "this bundle is a selection of rows, not a stretch of the log; send it without \
+             --action/--subject"
+                .into(),
+        )));
+    }
 
     // Where in this delivery does the part the hub does not have yet begin?
     //

@@ -755,7 +755,27 @@ pub fn find(r: &FindReport) -> String {
 /// what was checked, over which period, and the anchor it started from.
 pub fn verify_export(r: &cyberbrain_policy::bundle::Report) -> String {
     let mut s = String::new();
-    s.push_str(&format!("chain holds over {} row(s)\n", r.rows));
+    match &r.filter {
+        None => s.push_str(&format!("chain holds over {} row(s)\n", r.rows)),
+        Some(f) => {
+            let mut by = Vec::new();
+            if let Some(a) = &f.action {
+                by.push(format!("action {a}"));
+            }
+            if let Some(x) = &f.subject {
+                by.push(format!("subject {x}"));
+            }
+            if let Some(c) = &f.contains {
+                by.push(format!("containing {c:?}"));
+            }
+            s.push_str(&format!(
+                "each of {} selected row(s) is as it was written\nselection: {}\n\
+                 (rows between them are not in the file, so it cannot show they are all there)\n",
+                r.rows,
+                by.join(", ")
+            ));
+        }
+    }
     let period = match (&r.from, &r.to) {
         (Some(f), Some(t)) => format!("{f} to {t}"),
         (Some(f), None) => format!("{f} onwards"),

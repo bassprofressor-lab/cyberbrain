@@ -1497,6 +1497,52 @@ fn the_independent_python_checker_agrees() {
     assert!(stdout.contains("chain holds over 4 row(s)"), "{stdout}");
 }
 
+/// K10: an export narrowed by `--action` wrote its file, then failed its own check, because
+/// the rows of one action are not consecutive in the chain. Now the file says it is a
+/// selection, verifies row by row, and the independent checker agrees.
+#[test]
+fn an_export_narrowed_by_action_verifies_here_and_in_python() {
+    let cb = Cb::new();
+    cb.write("2", "eins", "erste notiz");
+    cb.write("2", "zwei", "zweite notiz");
+    cb.ok(&["forget", "eins"]);
+    cb.write("2", "drei", "dritte notiz");
+
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("writes.jsonl");
+    let out = cb.run(&[
+        "policy",
+        "audit",
+        "--action",
+        "note.write",
+        "--export",
+        file.to_str().unwrap(),
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let check = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
+    let said = text(&check);
+    assert!(check.status.success(), "{said}");
+    assert!(said.contains("selected row(s)"), "{said}");
+
+    let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../scripts/verify-audit-export.py");
+    match Command::new("python3")
+        .args(["-c", "import blake3"])
+        .output()
+    {
+        Ok(o) if o.status.success() => {
+            let py = Command::new("python3")
+                .arg(&script)
+                .arg(&file)
+                .output()
+                .unwrap();
+            assert!(py.status.success(), "python disagrees: {}", text(&py));
+        }
+        _ => eprintln!("SKIPPED the python half: no python3 with blake3 here"),
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // propose / review: a note somebody else has to accept.
 

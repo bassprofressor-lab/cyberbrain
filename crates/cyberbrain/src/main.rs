@@ -2788,11 +2788,19 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 })?;
                 let report = cyberbrain_policy::bundle::verify(&text)?;
                 out.emit(&report, |r| {
+                    let checked = if r.filter.is_some() {
+                        "each selected row is as it was written (a selection, gaps expected)"
+                            .to_string()
+                    } else {
+                        format!(
+                            "chain holds from anchor {}",
+                            &r.anchor[..r.anchor.len().min(12)]
+                        )
+                    };
                     format!(
-                        "wrote {} row(s) to {}\nchecked as written: chain holds from anchor {}\n",
+                        "wrote {} row(s) to {}\nchecked as written: {checked}\n",
                         r.rows,
                         path.display(),
-                        &r.anchor[..r.anchor.len().min(12)]
                     )
                 })?;
                 return Ok(0);

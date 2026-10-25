@@ -28,7 +28,7 @@ except ImportError:
 
 KIND = "cyberbrain.audit.export"
 KIND_END = "cyberbrain.audit.export.end"
-VERSION = 1
+VERSIONS = (1, 2)
 
 
 def canonical(detail):
@@ -40,6 +40,24 @@ def canonical(detail):
     """
     d = {k: v for k, v in detail.items() if k != "_chain"}
     return json.dumps(d, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+
+
+def admits(selection, row):
+    """The selection rules of the writer: an action selects itself and its `action.*`
+    family, a subject matches exactly, `contains` is a case-insensitive substring."""
+    a = selection.get("action")
+    if a is not None and not (row["action"] == a or row["action"].startswith(a + ".")):
+        return False
+    s = selection.get("subject")
+    if s is not None and row["subject"] != s:
+        return False
+    c = selection.get("contains")
+    if c is not None:
+        detail = json.dumps(row["detail"], separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+        hay = f"{row['actor']} {row['action']} {row['subject']} {detail}".lower()
+        if c.lower() not in hay:
+            return False
+    return True
 
 
 def row_hash(row, prev):
@@ -60,8 +78,11 @@ def main(path):
     header = json.loads(lines[0])
     if header.get("kind") != KIND:
         return 2, f"first line is {header.get('kind')!r}, expected {KIND!r}"
-    if header.get("version") != VERSION:
-        return 2, f"format version {header.get('version')} is not {VERSION}"
+    if header.get("version") not in VERSIONS:
+        return 2, f"format version {header.get('version')} is not one of {VERSIONS}"
+    selection = header.get("filter")
+    if selection is not None and header["version"] < 2:
+        return 1, "a version 1 file carries a selection, which version 1 cannot express"
 
     footer = json.loads(lines[-1])
     if footer.get("kind") != KIND_END:
@@ -73,11 +94,21 @@ def main(path):
     if footer["rows"] != len(rows):
         return 1, f"footer says {footer['rows']} rows, file carries {len(rows)}"
 
+    if selection is not None:
+        first_prev = rows[0]["detail"]["_chain"]["prev"] if rows else "genesis"
+        if first_prev != header["anchor"]:
+            return 1, "the anchor is not the hash the first row follows"
+
     prev = header["anchor"]
     for i, row in enumerate(rows, start=1):
         chain = row.get("detail", {}).get("_chain")
         if not chain:
             return 1, f"row {i} carries no _chain"
+        if selection is not None:
+            # A selection: each row against the hash it names, gaps between them expected.
+            if not admits(selection, row):
+                return 1, f"row {i} does not belong to the selection the header names"
+            prev = chain["prev"]
         if chain["prev"] != prev:
             return 1, f"row {i}: prev does not match the row before it"
         want = row_hash(row, prev)
@@ -93,8 +124,13 @@ def main(path):
         if ("from" in header or "to" in header)
         else "the whole log"
     )
+    head = (
+        f"each of {len(rows)} selected row(s) is as it was written"
+        if selection is not None
+        else f"chain holds over {len(rows)} row(s)"
+    )
     return 0, (
-        f"chain holds over {len(rows)} row(s)\n"
+        f"{head}\n"
         f"period:   {period}\n"
         f"anchor:   {header['anchor']}\n"
         f"written:  {header['exported_at']} by {header['tool']}"
