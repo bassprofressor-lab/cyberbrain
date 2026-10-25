@@ -942,6 +942,7 @@ fn oversized_reason(r: OversizedReason) -> &'static str {
     match r {
         OversizedReason::CodeFence => "a fenced code block is never split",
         OversizedReason::UnbreakableRun => "a single run of characters longer than the limit",
+        OversizedReason::Headings => "headings with nothing between them, longer than the limit",
     }
 }
 
