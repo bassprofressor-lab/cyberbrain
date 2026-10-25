@@ -233,7 +233,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
         // business, and the window is where the person reviewing already is.
         | Command::Propose { .. }
         | Command::ProposeSession { .. }
-        | Command::Review { .. } => None,
+        | Command::Review { .. }
+        // This store's own decoys. Nothing here prints a value, and `push` goes only to the
+        // governance service the store is configured with.
+        | Command::Canary { .. } => None,
 
         // Not the whole of `policy`: one of its subcommands writes a file wherever it is
         // pointed, and this surface has no authentication.

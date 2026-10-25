@@ -783,9 +783,10 @@ cyberbrain hub alerts off
 ```
 
 What is posted: grants, access requests and purges waiting for a countersignature, the licence
-ending, expired, missing or invalid, devices that have not delivered for 48 hours, and devices
-whose governance calls (AgentGuard) failed in the last 24 hours. Counts, ids, kinds and device
-names; never a note and never an activity row. The body is JSON with a `text` field, which is
+ending, expired, missing or invalid, devices that have not delivered for 48 hours, devices
+whose governance calls (AgentGuard) failed in the last 24 hours, and decoys (`cyberbrain
+canary`) used on a device in that time, by fingerprint. Counts, ids, kinds and device names;
+never a note, never an activity row and never a decoy's value. The body is JSON with a `text` field, which is
 what Slack, Mattermost and Teams incoming webhooks show.
 
 The running hub looks every 15 minutes. A condition is posted when it appears and reminded

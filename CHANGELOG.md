@@ -94,6 +94,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - **`forget --report FILE [--sign]` writes an erasure report somebody else can check:** what
   was removed, whether the WAL was emptied, and the chain hashes of the two audit rows that
   record it, signed with the store's key when asked. `verify-export` checks it.
+- **Decoys (`cyberbrain canary plant|list|remove|push`).** A store can plant a credential nobody
+  uses (an API key, an IBAN with a valid check sum and no bank behind it, a password, a token)
+  in a note that reads like the real thing and is tagged `canary` for people. A use of it
+  anywhere but its own note is refused: in any tool call the pre-tool-use hook sees, before the
+  governance service is asked, and in any note written or proposed. Each use is counted and
+  recorded as `canary.hit`, and a hub that receives the row raises an alert. The value is never
+  in the audit log, a refusal, an alert or an answer of `serve`; they carry its fingerprint (12
+  hex digits of SHA-256). `push` hands the decoys to AgentGuard (`POST /v1/koeder`, key scope
+  `koeder:write`). The value lives in `keys/canaries.json`, owner-only and kept out of git.
 
 ### Fixed
 

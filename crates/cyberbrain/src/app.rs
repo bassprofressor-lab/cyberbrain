@@ -2626,6 +2626,9 @@ impl App {
             path: PathBuf::from(format!("{name}.md")),
             reason: why,
         })?;
+        // A decoy copied into another note is a use of it. Before anything else is decided,
+        // so it is refused whoever writes and wherever the write would have gone.
+        crate::canary::guard_note(self, &name, &req.body, "write")?;
         // C2, 2026-10-03: content from outside that an agent files goes to `proposals/`,
         // where a person reads it before any agent can recall it. Also when the note it
         // would replace is marked untrusted: rewriting it without the tag would otherwise
@@ -3144,6 +3147,8 @@ impl App {
 
         // SPEC §12.4: the scan runs before any byte is written, here as anywhere.
         self.refuse_pii_in_tags(policy, &req.tags)?;
+        // As in `write`: a decoy in a proposal is a use of it, whoever reads it later.
+        crate::canary::guard_note(self, &name, &req.body, "propose")?;
         let (body, pii, redacted) = match policy.check_write(&name, &req.body)? {
             WriteVerdict::Proceed { pii, .. } => (req.body.clone(), pii, 0),
             WriteVerdict::Held { findings } => {

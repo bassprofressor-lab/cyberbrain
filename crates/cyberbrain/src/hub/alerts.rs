@@ -11,7 +11,8 @@
 //! then only there. The request goes through the egress gate like every other path
 //! (`EgressPurpose::HubAlert`): that URL and no other, no redirects, no proxy, loopback or
 //! private range unless the administrator allowed a public address. What it carries is the
-//! state the administrator's page already shows (counts, kinds, device names), never a
+//! state the administrator's page already shows (counts, kinds, device names, decoy
+//! fingerprints), never a
 //! note and never an activity row. Every attempt, sent or failed, is in the hub's own chain.
 //!
 //! # How often
@@ -185,6 +186,20 @@ pub fn collect(hub: &HubStore, now: jiff::Timestamp, hub_version: &str) -> Resul
             key: format!("governance:{id}"),
             text: format!(
                 "Device {name}: {n} governance call(s) failed in the last \
+                 {GOVERNANCE_WINDOW_HOURS} h."
+            ),
+        });
+    }
+
+    // Decoys used on a device (`cyberbrain canary`). Somebody, or some agent, tried to use a
+    // credential that only exists to be found; the fingerprint says which.
+    for (id, name, subject, n) in hub.canary_hits_since(&since.to_string())? {
+        let fp = subject.strip_prefix("canary:").unwrap_or(&subject);
+        out.push(Alert {
+            kind: "canary",
+            key: format!("canary:{id}:{fp}"),
+            text: format!(
+                "Device {name}: decoy {fp} was used {n} time(s) in the last \
                  {GOVERNANCE_WINDOW_HOURS} h."
             ),
         });

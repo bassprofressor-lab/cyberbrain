@@ -1179,6 +1179,26 @@ There is no key by default, and without one nothing changes. Once a store signs,
 that writes or verifies its log — and a hub it delivers to — has to know format 2; an older one
 reports the signed rows as edited.
 
+#### 12.6.2 Decoys
+
+`cyberbrain canary plant [--kind api-key|iban|password|token] [--label L] [--ring 2]` makes a value
+that passes for a credential and is none (an IBAN with a valid check sum and a bank code that
+starts with 0, which no German bank code does; keys and tokens with a prefix no provider
+issues), files it in a ring 2–4 note that reads like the real thing, and keeps it in
+`keys/canaries.json` (owner-only, beside the audit key). The note carries the tag `canary`, so
+a person sees what it is; its text does not say so. It is written with the PII hold answered
+"reviewed", so the gate neither refuses nor redacts it.
+
+The value is watched for in every tool call the pre-tool-use hook sees and in every note
+written or proposed, compared on letters and digits only, case-insensitively. A use anywhere
+but its own note is refused (`deny`, or `PolicyRefusal` for a write) and recorded as
+`canary.hit`; a hub that receives the row raises an alert. The value is never in an audit row,
+a refusal reason, an answer of `serve` (`GET /api/v1/canaries` gives counts, labels and
+fingerprints) or an alert: those name the fingerprint, the first 12 hex digits of SHA-256 over
+the value. `canary push` hands the values to AgentGuard (`POST /v1/koeder`) over the governance
+egress path; its key needs the scope `koeder:write`. `canary list` and `canary remove` (which
+erases the note like `forget`) complete it.
+
 ### 12.7 Model transparency (EU AI Act)
 
 `cyberbrain policy model-card` prints the identity, source, licence, hash, dimension and

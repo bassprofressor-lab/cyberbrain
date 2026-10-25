@@ -5049,3 +5049,26 @@ fn a_selection_is_not_a_delivery() {
     );
     assert_eq!(hub.total_entries().unwrap(), 0);
 }
+
+/// A decoy used on a device is something a person has to hear about at once. The alert
+/// names the device and the fingerprint the device recorded, never a value (which the hub
+/// does not have).
+#[test]
+fn a_canary_used_on_a_device_is_an_alert() {
+    let hub = HubStore::in_memory().unwrap();
+    let (d, _) = hub.add_device("ws-7", NOW).unwrap();
+    hub.conn
+        .execute(
+            "INSERT INTO entries (device, seq, ts, actor, action, subject, detail, hash,
+                 received_at)
+             VALUES (?1, 1, '2026-09-07T11:00:00Z', 'hook:pre-tool-use', 'canary.hit',
+                 'canary:0a1b2c3d4e5f', '{}', 'h', ?2)",
+            rusqlite::params![d.id, NOW],
+        )
+        .unwrap();
+    let now: jiff::Timestamp = NOW.parse().unwrap();
+    let all = alerts::collect(&hub, now, "0.7.10").unwrap();
+    let canary: Vec<_> = all.iter().filter(|a| a.kind == "canary").collect();
+    assert_eq!(canary.len(), 1, "{all:?}");
+    assert!(canary[0].text.contains("ws-7") && canary[0].text.contains("0a1b2c3d4e5f"));
+}

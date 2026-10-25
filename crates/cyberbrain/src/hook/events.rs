@@ -843,6 +843,11 @@ fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
 /// The store's own guard first; when it has nothing to say, the governance service
 /// (`governance.rs`) is asked about the call.
 fn pre_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+    // A decoy in a tool call comes first: it is refused on this machine before the call is
+    // shown to anybody else, the governance service included.
+    if canary_guard(ctx, out) {
+        return Ok(());
+    }
     store_guard(ctx, out)?;
     if !out.stdout.is_empty() {
         return Ok(()); // already denied or asked by the store's guard
@@ -862,6 +867,46 @@ fn pre_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Deny a tool call whose input carries one of this store's decoys. Recorded twice, as a
+/// refusal and as a `canary.hit`, both by fingerprint; the input itself is in neither.
+fn canary_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> bool {
+    let register = crate::canary::load(ctx.app.root()).unwrap_or_default();
+    if register.is_empty() {
+        return false;
+    }
+    let input = ctx.payload.tool_input.to_string();
+    let Some(c) = crate::canary::find(&register, &input) else {
+        return false;
+    };
+    let tool = ctx.payload.tool_name.as_deref().unwrap_or("tool");
+    let reason = crate::canary::refusal(c);
+    crate::canary::record_hit(
+        ctx.app,
+        c,
+        &format!("tool:{tool}"),
+        ctx.payload.session_id.as_deref(),
+    );
+    record_refusal(
+        ctx,
+        out,
+        format!("canary:{}", c.fingerprint),
+        json!({ "tool": tool, "session": ctx.payload.session_id, "reason": reason }),
+    );
+    out.note(format!(
+        "pre-tool-use: deny {tool}: canary {}",
+        c.fingerprint
+    ));
+    out.stdout = json!({
+        "hookSpecificOutput": {
+            "hookEventName": harness_event_name(ctx.event),
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    })
+    .to_string();
+    true
 }
 
 fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {

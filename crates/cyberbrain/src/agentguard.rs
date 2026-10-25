@@ -79,6 +79,51 @@ pub fn submit_memory_write(
     }))
 }
 
+/// Hand canaries to AgentGuard (`POST /v1/koeder`), so it blocks any agent it governs that
+/// uses one. `items` are `{wert, art, label}`. Needs a governance service and a key with the
+/// scope `koeder:write`; a refusal there is passed on with what to do about it.
+pub fn push_koeder(app: &App, actor: &Actor, items: Vec<Value>) -> Result<Value> {
+    let cfg = &app.config().governance;
+    let Some(url) = cfg.url.clone() else {
+        return Err(Error::Config(
+            "no governance service is configured ([governance] url): canaries are watched on \
+             this machine only, and there is no AgentGuard to hand them to"
+                .into(),
+        ));
+    };
+    let key = crate::hook::governance::key().ok_or_else(|| {
+        Error::Config(format!(
+            "no AgentGuard key: set {} or put one in ~/.config/cyberbrain/agentguard.key",
+            crate::hook::governance::KEY_ENV
+        ))
+    })?;
+    let body = json!({
+        "tenant_id": cfg.tenant,
+        "koeder": items,
+        "von": format!("cyberbrain:{}", cfg.agent_id),
+    })
+    .to_string();
+    let endpoint = format!("{}/v1/koeder", url.trim_end_matches('/'));
+    request(
+        app,
+        actor,
+        &endpoint,
+        &key,
+        Some(body),
+        cfg.timeout_ms.max(5000),
+    )
+    .map_err(|e| {
+        let text = e.to_string();
+        if text.contains("HTTP 403") {
+            Error::Config(format!(
+                "{text}; the AgentGuard key needs the scope `koeder:write` to hand over canaries"
+            ))
+        } else {
+            e
+        }
+    })
+}
+
 /// The approval's status: `pending`, `approved`, `rejected`, `expired`.
 pub fn approval_status(app: &App, actor: &Actor, action_id: &str) -> Result<String> {
     let cfg = &app.config().governance;

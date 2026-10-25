@@ -848,6 +848,24 @@ impl HubStore {
         Ok(out)
     }
 
+    /// Decoys used on devices since `since`: device id, device name, the fingerprint as the
+    /// device recorded it (`canary:<fingerprint>`), and how often. The hub never has a value.
+    pub fn canary_hits_since(&self, since: &str) -> Result<Vec<(String, String, String, i64)>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT d.id, d.name, e.subject, COUNT(*) FROM entries e JOIN devices d ON d.id = e.device
+             WHERE e.action = 'canary.hit' AND e.ts >= ?1
+             GROUP BY d.id, d.name, e.subject ORDER BY d.name, e.subject",
+        ))?;
+        let rows = ix(stmt.query_map(params![since], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
     /// The installed licence text, if there is one.
     pub fn licence_text(&self) -> Result<Option<String>> {
         ix(self

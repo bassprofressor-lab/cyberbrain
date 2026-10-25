@@ -353,6 +353,13 @@ pub enum Command {
         http: Option<std::net::SocketAddr>,
     },
 
+    /// Decoys: a note with a credential nobody uses, watched for in every tool call and
+    /// every note. A use anywhere but its own note is refused and recorded, by fingerprint.
+    Canary {
+        #[command(subcommand)]
+        command: CanaryCommand,
+    },
+
     /// The clients that may call `mcp --http`, one token each.
     McpClient {
         #[command(subcommand)]
@@ -1117,6 +1124,28 @@ pub enum LicenceCommand {
         #[arg(long, value_name = "PATH")]
         out: Option<PathBuf>,
     },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum CanaryCommand {
+    /// Make a decoy value, file it in a note that reads like the real thing (tagged
+    /// `canary`), and start watching for it.
+    Plant {
+        #[arg(long, value_enum, default_value = "api-key")]
+        kind: crate::canary::Kind,
+        /// What it is for, in your words; shown in lists and alerts, never in the note.
+        #[arg(long)]
+        label: Option<String>,
+        #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(2..=4))]
+        ring: u8,
+    },
+    /// The decoys, with their hits. Never the values.
+    List,
+    /// Take one away, by fingerprint or note name; its note is erased.
+    Remove { which: String },
+    /// Hand every decoy to AgentGuard, so it watches its agents for them too. Needs
+    /// `[governance] url` and a key with the scope `koeder:write`.
+    Push,
 }
 
 #[derive(Debug, Subcommand)]

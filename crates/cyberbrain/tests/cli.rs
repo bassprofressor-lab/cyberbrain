@@ -4712,3 +4712,87 @@ fn a_client_limited_to_bereiche_sees_and_writes_only_inside_them() {
     let f = std::fs::read_to_string(cb.store.join("notes/r2/finance-note.md")).unwrap();
     assert!(!f.contains("overwritten"), "{f}");
 }
+
+/// Canaries end to end at the command line: planted, listed without their value, handed to
+/// AgentGuard with it, refused in a tool call, and taken away again.
+#[test]
+fn canaries_are_planted_listed_pushed_and_removed() {
+    let cb = Cb::new();
+    let planted = cb.ok(&[
+        "canary",
+        "plant",
+        "--kind",
+        "iban",
+        "--label",
+        "Refund decoy",
+    ]);
+    let fp = planted["fingerprint"].as_str().unwrap().to_string();
+    let note = planted["note"].as_str().unwrap().to_string();
+    let register: Value = serde_json::from_str(
+        &std::fs::read_to_string(cb.store.join("keys/canaries.json")).unwrap(),
+    )
+    .unwrap();
+    let value = register[0]["value"].as_str().unwrap().to_string();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(cb.store.join("keys/canaries.json"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+
+    let listed = cb.ok(&["canary", "list"]);
+    assert_eq!(listed[0]["fingerprint"], fp.as_str());
+    assert!(
+        !listed.to_string().contains(&value),
+        "a list never shows the value"
+    );
+
+    // Without AgentGuard, push says what is missing.
+    let out = cb.run(&["canary", "push"]);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("governance"));
+
+    let approval = std::sync::Arc::new(std::sync::Mutex::new("pending"));
+    let (port, seen) = fake_agentguard(approval);
+    governed(&cb, port, "shadow");
+    let pushed = cb.run(&["canary", "push"]);
+    assert!(
+        pushed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&pushed.stderr)
+    );
+    let req = seen.lock().unwrap().last().cloned().unwrap();
+    assert!(req.starts_with("POST /v1/koeder"), "{req}");
+    assert!(
+        req.contains(&value)
+            && req.contains("\"art\":\"iban\"")
+            && req.contains("\"tenant_id\":\"t1\""),
+        "{req}"
+    );
+
+    // Used in a tool call: refused here, before AgentGuard is asked.
+    let before = seen.lock().unwrap().len();
+    let stdout = pre_tool_use(
+        &cb,
+        "Bash",
+        serde_json::json!({ "command": format!("echo {value}") }),
+    );
+    assert_eq!(decision(&stdout).as_deref(), Some("deny"), "{stdout}");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        before,
+        "the value never went to the governance call"
+    );
+
+    let audit = cb.ok(&["policy", "audit"]).to_string();
+    assert!(audit.contains("canary.planted") && audit.contains("canary.hit"));
+    assert!(audit.contains("canary.pushed"));
+    assert!(!audit.contains(&value), "the value is not in the log");
+
+    cb.ok(&["canary", "remove", &fp]);
+    assert!(cb.ok(&["canary", "list"]).as_array().unwrap().is_empty());
+    assert!(!cb.store.join(format!("notes/r2/{note}.md")).exists());
+}

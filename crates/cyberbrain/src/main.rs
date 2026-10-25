@@ -9,6 +9,7 @@
 mod agentguard;
 mod app;
 mod audit_bridge;
+mod canary;
 mod cli;
 mod daemon;
 mod hook;
@@ -738,6 +739,81 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             })?;
             out.emit(&r, render::invalidated)?;
         }
+        Command::Canary { command } => {
+            use cli::CanaryCommand;
+            match command {
+                CanaryCommand::Plant { kind, label, ring } => {
+                    let ring = cyberbrain_core::Ring::try_from(ring)?;
+                    let p = canary::plant(&app, kind, label.as_deref(), ring)?;
+                    out.emit(&serde_json::json!(p), |v| {
+                        format!(
+                            "canary {} planted ({}, \"{}\") in note {} (ring {})\n\n\
+                             The note is tagged `canary`. A use of its value anywhere but in \
+                             that note is refused and recorded. `cyberbrain canary push` \
+                             hands it to AgentGuard as well.\n",
+                            v["fingerprint"].as_str().unwrap_or_default(),
+                            v["kind"].as_str().unwrap_or_default(),
+                            v["label"].as_str().unwrap_or_default(),
+                            v["note"].as_str().unwrap_or_default(),
+                            v["ring"]
+                        )
+                    })?;
+                }
+                CanaryCommand::List => {
+                    let all = canary::list(&app)?;
+                    out.emit(&serde_json::json!(all), |v| {
+                        let rows = v.as_array().cloned().unwrap_or_default();
+                        if rows.is_empty() {
+                            return "no canaries; `cyberbrain canary plant` makes one\n".into();
+                        }
+                        let mut s = String::new();
+                        for c in rows {
+                            s.push_str(&format!(
+                                "{}  {:<9} {:<24} {:<40} hits {}{}\n",
+                                c["fingerprint"].as_str().unwrap_or_default(),
+                                c["kind"].as_str().unwrap_or_default(),
+                                c["label"].as_str().unwrap_or_default(),
+                                c["note"].as_str().unwrap_or_default(),
+                                c["hits"],
+                                c["last_hit_at"]
+                                    .as_str()
+                                    .map(|t| format!(", last {t}"))
+                                    .unwrap_or_default()
+                            ));
+                        }
+                        s
+                    })?;
+                }
+                CanaryCommand::Remove { which } => {
+                    let c = canary::remove(&app, &which)?;
+                    out.emit(&serde_json::json!(c), |v| {
+                        format!(
+                            "canary {} removed; note {} erased\n",
+                            v["fingerprint"].as_str().unwrap_or_default(),
+                            v["note"].as_str().unwrap_or_default()
+                        )
+                    })?;
+                }
+                CanaryCommand::Push => {
+                    let p = canary::push(&app)?;
+                    out.emit(&serde_json::json!(p), |v| {
+                        format!(
+                            "{} canary(s) handed to AgentGuard ({} new, {} already there)\n",
+                            v["sent"],
+                            v["created"]
+                                .as_u64()
+                                .map(|n| n.to_string())
+                                .unwrap_or("?".into()),
+                            v["already"]
+                                .as_u64()
+                                .map(|n| n.to_string())
+                                .unwrap_or("?".into())
+                        )
+                    })?;
+                }
+            }
+        }
+
         Command::Forget {
             target,
             dry_run,
