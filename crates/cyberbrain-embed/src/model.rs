@@ -129,7 +129,7 @@ impl StaticEmbedder {
 
         let unk_id = resolve_unk(&tokenizer, opts.unk_token.as_deref());
 
-        let profile_id = profile_id(manifest, matrix.dim);
+        let profile_id = profile_id(manifest, matrix.dim, &opts);
         if !w_known {
             // Only a load that got this far — digest, shape, vocabulary, every value finite —
             // may let the next one skip those checks.
@@ -160,7 +160,7 @@ impl StaticEmbedder {
         let (w_map, _) = map_verified(&paths.weights, &manifest.weights_blake3, "weights")?;
         let (_, dim) = tensor_shape(&w_map)?;
         Ok(Description {
-            profile_id: profile_id(manifest, dim),
+            profile_id: profile_id(manifest, dim, &LoadOptions::default()),
             dim,
         })
     }
@@ -288,11 +288,24 @@ pub struct Description {
 }
 
 /// Everything that changes the meaning of a stored vector goes in here: both file digests
-/// (weights and tokenizer), the dimension and the pooling name.
-fn profile_id(manifest: &ArtefactManifest, dim: usize) -> String {
+/// (weights and tokenizer), the dimension, the pooling name, and the load options that
+/// change which tokens are pooled.
+///
+/// The options are hashed only when set, each behind a tag of its own. With the defaults,
+/// which is how the binary loads, the input to the hash is exactly what it was before the
+/// options were part of it, so every index already built keeps its profile.
+fn profile_id(manifest: &ArtefactManifest, dim: usize, opts: &LoadOptions) -> String {
     let mut h = blake3::Hasher::new();
     h.update(manifest.weights_blake3.as_bytes());
     h.update(manifest.tokenizer_blake3.as_bytes());
+    if let Some(max) = opts.max_tokens {
+        h.update(b"\0max_tokens\0");
+        h.update(&(max as u64).to_le_bytes());
+    }
+    if let Some(unk) = &opts.unk_token {
+        h.update(b"\0unk_token\0");
+        h.update(unk.as_bytes());
+    }
     let short = &h.finalize().to_hex()[..16];
     format!("m2v-{POOLING}-d{dim}-{short}")
 }
