@@ -85,7 +85,8 @@ fn err_for(purpose: EgressPurpose, msg: String) -> Error {
 }
 
 fn check(ticket: &EgressTicket, url: &str) -> Result<Url> {
-    let u = Url::parse(url).map_err(|e| Error::Config(format!("{url:?}: {e}")))?;
+    let u = Url::parse(url)
+        .map_err(|e| Error::Config(format!("{:?}: {e}", super::shown_destination(url))))?;
     if !ticket.permits(&u) {
         return Err(ticket.refuse(&format!(
             "request to {}://{}:{} is not covered by ticket {} for {}",
@@ -277,7 +278,12 @@ async fn finish(ticket: &EgressTicket, resp: reqwest::Response) -> Result<Respon
     let body = resp
         .bytes()
         .await
-        .map_err(|e| err_for(ticket.purpose(), format!("reading response body: {e}")))?
+        .map_err(|e| {
+            err_for(
+                ticket.purpose(),
+                format!("reading response body: {}", with_cause(&e.without_url())),
+            )
+        })?
         .to_vec();
     Ok(Response {
         status,
@@ -295,7 +301,7 @@ pub async fn get(ticket: &EgressTicket, url: &str) -> Result<Response> {
         .get(u)
         .send()
         .await
-        .map_err(|e| err_for(ticket.purpose(), format!("GET {}: {e}", redact(url))))?;
+        .map_err(|e| request_failed(ticket, "GET", url, e))?;
     finish(ticket, resp).await
 }
 
@@ -316,7 +322,7 @@ pub async fn get_with_headers(
     let resp = req
         .send()
         .await
-        .map_err(|e| err_for(ticket.purpose(), format!("GET {}: {e}", redact(url))))?;
+        .map_err(|e| request_failed(ticket, "GET", url, e))?;
     finish(ticket, resp).await
 }
 
@@ -391,12 +397,11 @@ async fn post_with(
     for (k, v) in headers {
         req = req.header(*k, *v);
     }
-    let resp = req.body(body).send().await.map_err(|e| {
-        err_for(
-            ticket.purpose(),
-            format!("POST {}: {}", redact(url), with_cause(&e)),
-        )
-    })?;
+    let resp = req
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| request_failed(ticket, "POST", url, e))?;
     finish(ticket, resp).await
 }
 
@@ -469,7 +474,16 @@ pub async fn download(
     }
 }
 
-/// URL without query or fragment, for error messages and audit rows.
+/// A request that did not get an answer, said without the URL `reqwest` puts into its
+/// error. That URL is the whole one, query included, and the message ends up in the
+/// ticket's closing audit row; the redacted URL in front says where it went instead.
+fn request_failed(ticket: &EgressTicket, method: &str, url: &str, e: reqwest::Error) -> Error {
+    err_for(
+        ticket.purpose(),
+        format!("{method} {}: {}", redact(url), with_cause(&e.without_url())),
+    )
+}
+
 /// A request failure with the reason underneath it.
 ///
 /// `reqwest::Error` prints "error sending request for url (…)" and keeps what actually went
@@ -492,6 +506,7 @@ fn with_cause(e: &(dyn std::error::Error + 'static)) -> String {
     out
 }
 
+/// URL without query or fragment, for error messages and audit rows.
 fn redact(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => {
@@ -585,6 +600,30 @@ mod tests {
         );
         assert_eq!(sink.actions(), ["egress.permitted", "egress.completed"]);
         assert_eq!(sink.rows()[1].detail["bytes_in"], 5);
+    }
+
+    /// Would fail if a failed request carried the query of its URL into the error, which
+    /// the caller closes the ticket with and so writes to the audit.
+    #[tokio::test]
+    async fn a_failed_request_does_not_repeat_the_query() {
+        let closed = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = closed.local_addr().unwrap().port();
+        drop(closed);
+        let (g, _) = gate();
+        let url = format!("http://127.0.0.1:{port}/x?token=hunter2");
+        let t = g
+            .open(&Actor::Cli, EgressPurpose::LocalInference, &url)
+            .unwrap();
+        let get_err = get(&t, &url).await.unwrap_err().to_string();
+        let post_err = post_json(&t, &url, &[], "{}".into(), None)
+            .await
+            .unwrap_err()
+            .to_string();
+        for err in [get_err, post_err] {
+            assert!(!err.contains("hunter2"), "{err}");
+            assert!(err.contains(&format!("127.0.0.1:{port}/x")), "{err}");
+        }
+        t.close(Outcome::failed("refused")).unwrap();
     }
 
     /// Would fail if the transport contacted a host the ticket does not cover.

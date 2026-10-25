@@ -622,28 +622,32 @@ impl Destination {
     /// Accepts `scheme://host[:port]/path`, `host:port`, `[v6]:port`.
     pub fn parse(s: &str) -> Result<Self> {
         let s = s.trim();
+        // Every message below goes into the refusal reason, which the gate writes to the
+        // audit, and audit sync can carry it to a hub. So it names the destination without
+        // whatever credentials or query the caller put in it.
+        let shown = shown_destination(s);
         if s.contains("://") {
-            let u = Url::parse(s).map_err(|e| Error::Config(format!("{s:?}: {e}")))?;
+            let u = Url::parse(s).map_err(|e| Error::Config(format!("{shown:?}: {e}")))?;
             let scheme = u.scheme().to_ascii_lowercase();
             if scheme != "http" && scheme != "https" {
                 return Err(Error::Config(format!(
-                    "{s:?}: scheme {scheme} is not http or https"
+                    "{shown:?}: scheme {scheme} is not http or https"
                 )));
             }
             if !u.username().is_empty() || u.password().is_some() {
                 return Err(Error::Config(format!(
-                    "{s:?}: credentials in the URL are not permitted"
+                    "{shown:?}: credentials in the URL are not permitted"
                 )));
             }
             let host = u
                 .host_str()
-                .ok_or_else(|| Error::Config(format!("{s:?}: no host")))?
+                .ok_or_else(|| Error::Config(format!("{shown:?}: no host")))?
                 .trim_matches(|c| c == '[' || c == ']')
                 .trim_end_matches('.')
                 .to_ascii_lowercase();
             let port = u
                 .port_or_known_default()
-                .ok_or_else(|| Error::Config(format!("{s:?}: no port")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: no port")))?;
             return Ok(Self {
                 scheme,
                 host,
@@ -656,27 +660,34 @@ impl Destination {
         let (host, port) = if let Some(rest) = s.strip_prefix('[') {
             let (h, p) = rest
                 .split_once(']')
-                .ok_or_else(|| Error::Config(format!("{s:?}: unterminated [")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: unterminated [")))?;
             let p = p
                 .strip_prefix(':')
-                .ok_or_else(|| Error::Config(format!("{s:?}: expected [host]:port")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: expected [host]:port")))?;
             (h.to_string(), p)
         } else {
             let (h, p) = s
                 .rsplit_once(':')
-                .ok_or_else(|| Error::Config(format!("{s:?}: expected host:port or a URL")))?;
+                .ok_or_else(|| Error::Config(format!("{shown:?}: expected host:port or a URL")))?;
             if h.contains(':') {
                 return Err(Error::Config(format!(
-                    "{s:?}: bracket an IPv6 literal as [addr]:port"
+                    "{shown:?}: bracket an IPv6 literal as [addr]:port"
                 )));
             }
             (h.to_string(), p)
         };
         let port: u16 = port
             .parse()
-            .map_err(|_| Error::Config(format!("{s:?}: port {port:?} is not a number")))?;
+            .map_err(|_| Error::Config(format!("{shown:?}: the port is not a number")))?;
         if host.is_empty() {
-            return Err(Error::Config(format!("{s:?}: no host")));
+            return Err(Error::Config(format!("{shown:?}: no host")));
+        }
+        // `user@host:port` is not a host: the name would go to the resolver and into the
+        // audit as given. Refused like credentials in a URL.
+        if host.contains('@') {
+            return Err(Error::Config(format!(
+                "{shown:?}: credentials in the destination are not permitted"
+            )));
         }
         Ok(Self {
             scheme: "tcp".into(),
@@ -709,6 +720,27 @@ impl Destination {
 
     pub fn origin(&self) -> String {
         format!("{}://{}:{}", self.scheme, self.host, self.port)
+    }
+}
+
+/// A destination as given, fit for an error message or an audit row: query and fragment
+/// cut off, and anything before the last `@` in it replaced, since that is where a user name
+/// and password sit. Works on the raw text rather than a parsed URL, because it is also what
+/// a refusal shows for text that does not parse, and it errs on hiding too much.
+pub(crate) fn shown_destination(s: &str) -> String {
+    let s = s.trim();
+    let (scheme, rest) = match s.split_once("://") {
+        Some((scheme, rest)) => (Some(scheme), rest),
+        None => (None, s),
+    };
+    let rest = match rest.rfind('@') {
+        Some(at) => format!("\u{2026}@{}", &rest[at + 1..]),
+        None => rest.to_string(),
+    };
+    let rest = rest.split(['?', '#']).next().unwrap_or_default();
+    match scheme {
+        Some(scheme) => format!("{scheme}://{rest}"),
+        None => rest.to_string(),
     }
 }
 
@@ -843,7 +875,11 @@ impl Egress {
             Err(e) => {
                 return self.refuse(
                     actor,
-                    &format!("{}:{destination}", purpose_name(purpose)),
+                    &format!(
+                        "{}:{}",
+                        purpose_name(purpose),
+                        shown_destination(destination)
+                    ),
                     purpose,
                     &e.to_string(),
                 );
@@ -1846,6 +1882,31 @@ mod tests {
                 .unwrap()
                 .contains("consent")
         );
+    }
+
+    /// Would fail if a refused URL carried its credentials or query into the audit, where
+    /// audit sync can take them to the hub.
+    #[test]
+    fn a_refused_url_leaves_its_secrets_out_of_the_audit() {
+        let (g, sink) = gate(cfg());
+        for url in [
+            "http://alice:hunter2@127.0.0.1:11434/v1",
+            "ftp://alice:hunter2@127.0.0.1/x?token=hunter2",
+            "http://alice:hunter2@[::1/v1",
+            "alice:hunter2@127.0.0.1:11434",
+            "alice@127.0.0.1:11434",
+        ] {
+            let err = g.permit(EgressPurpose::LocalInference, url).unwrap_err();
+            assert!(matches!(err, Error::PolicyRefusal { .. }), "{url}: {err}");
+            assert!(!err.to_string().contains("hunter2"), "{url}: {err}");
+            assert!(!err.to_string().contains("alice"), "{url}: {err}");
+        }
+        for row in sink.rows() {
+            let text = format!("{} {}", row.subject, row.detail);
+            assert!(!text.contains("hunter2"), "{text}");
+            assert!(!text.contains("alice"), "{text}");
+        }
+        assert_eq!(sink.rows().len(), 5);
     }
 
     /// Would fail if the gate said `Ok` when it could not write the row.
