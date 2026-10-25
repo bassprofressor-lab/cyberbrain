@@ -44,7 +44,7 @@ pub use audit::{
 };
 pub use config::PolicyConfig;
 pub use egress::{Egress, EgressEntry, EgressTicket, Locality};
-pub use erasure::{EraseReason, EraseRequest, Eraser, ErasureReport};
+pub use erasure::{EraseReason, EraseRequest, Eraser, ErasureReport, ScrubStatus, WalStatus};
 pub use model_card::{ModelCard, ModelInventory, ModelRole};
 pub use pii::{Finding, PiiKind};
 pub use policy::{Policy, PolicyStatus};

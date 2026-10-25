@@ -589,6 +589,10 @@ pub struct RetentionReport {
     pub dry_run: bool,
     pub applied: Vec<RetentionOutcome>,
     pub audit_preview: Vec<String>,
+    /// The scrub after the sweep: whether the WAL was emptied. `None` when nothing was
+    /// applied or on a dry run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scrub: Option<cyberbrain_policy::ScrubStatus>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3645,7 +3649,12 @@ impl App {
             index: w.index.as_ref(),
         };
         let mut report = w.policy.get().forget(&mut eraser, &req)?;
-        w.index.scrub()?;
+        // The erasure is in the record by now; whether its pages left the disk is only known
+        // after the checkpoint, so the report says it and the audit row cannot.
+        report.scrub = w.index.scrub()?;
+        if let Some(note) = report.scrub.and_then(|s| s.residue_note()) {
+            report.notes.push(note);
+        }
         if dry_run {
             for a in w.policy.preview() {
                 report
@@ -5007,6 +5016,7 @@ impl App {
             dry_run,
             applied: Vec::new(),
             audit_preview: Vec::new(),
+            scrub: None,
         };
         if !apply {
             return Ok(report);
@@ -5027,7 +5037,7 @@ impl App {
                 result: result.map_err(|e| e.to_string()),
             });
         }
-        w.index.scrub()?;
+        report.scrub = w.index.scrub()?;
 
         report.audit_preview = w.policy.preview();
         Ok(report)

@@ -31,7 +31,7 @@ mod tests;
 pub use audit::{AUDIT_SCHEMA_VERSION, AuditEntry, AuditFilter, AuditStore, NewAuditEntry};
 pub use index::{
     EmbeddingProfile, Erased, Erasure, Index, IndexStats, Link, NoteRecord, NoteStamp,
-    ProfileChange, SharedBlocks, UpsertOutcome, content_hash,
+    ProfileChange, Scrubbed, SharedBlocks, UpsertOutcome, WalCheckpoint, content_hash,
 };
 pub use recall::{DEDUP_MIN_CHARS, RRF_K, RecallOptions, dedup_key};
 pub use schema::SCHEMA_VERSION;

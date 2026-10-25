@@ -85,6 +85,56 @@ pub struct ErasureReport {
     pub vectors_expected: bool,
     /// What the eraser could not confirm, in words. Never empty out of politeness.
     pub notes: Vec<String>,
+    /// What the clean-up after the erasure found in the database file: whether the WAL was
+    /// emptied, or whether pre-erasure pages may still sit in it. `None` on a dry run, which
+    /// erased nothing and scrubbed nothing, and in reports written before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scrub: Option<ScrubStatus>,
+}
+
+/// The index's state after the scrub that follows every erasure (B5, F9).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScrubStatus {
+    /// Pages written before the erasure may still be on disk, in `cyberbrain.db-wal`. They
+    /// go at the next checkpoint nobody blocks; until then a copy of the store carries them.
+    pub residue: bool,
+    /// SQLite's answer to `wal_checkpoint(TRUNCATE)`. `None` where the index has no WAL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wal: Option<WalStatus>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WalStatus {
+    pub busy: bool,
+    pub log_frames: i64,
+    pub checkpointed_frames: i64,
+}
+
+impl ScrubStatus {
+    /// The sentence a reader needs when there is residue, and `None` when there is none.
+    pub fn residue_note(&self) -> Option<String> {
+        if !self.residue {
+            return None;
+        }
+        let detail = match self.wal {
+            Some(w) if w.busy => format!(
+                "another process held the index open, and {} of {} WAL frame(s) reached the main file",
+                w.checkpointed_frames.max(0),
+                w.log_frames.max(0)
+            ),
+            Some(w) => format!(
+                "{} of {} WAL frame(s) reached the main file",
+                w.checkpointed_frames.max(0),
+                w.log_frames.max(0)
+            ),
+            None => "the WAL could not be checked".into(),
+        };
+        Some(format!(
+            "the WAL was not emptied ({detail}): pre-erasure pages may remain in cyberbrain.db-wal \
+             until the next complete checkpoint. SQLite runs one, and removes the WAL, when the last \
+             connection closes: stop `serve`, `mcp` and the daemon to get there"
+        ))
+    }
 }
 
 /// The storage seam. The binary implements it as: remove the file, then
@@ -187,6 +237,13 @@ pub fn render(r: &ErasureReport) -> String {
         r.links_in_unresolved,
         r.derivatives,
     );
+    if let Some(sc) = &r.scrub {
+        s.push_str(if sc.residue {
+            "  wal: NOT emptied, pre-erasure pages may remain\n"
+        } else {
+            "  wal: emptied, nothing of the note left in the database files\n"
+        });
+    }
     for n in &r.notes {
         s.push_str(&format!("  note: {n}\n"));
     }

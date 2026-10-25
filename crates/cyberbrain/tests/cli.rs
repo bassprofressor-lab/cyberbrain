@@ -4006,6 +4006,40 @@ fn forget_leaves_no_trace_of_the_text_in_the_database_file() {
     );
 }
 
+/// B5: `scrub` threw the result of `wal_checkpoint(TRUNCATE)` away. With another process
+/// holding a read transaction on the index (`serve`, `mcp`, the daemon), the checkpoint
+/// cannot reset the WAL, the pre-erasure pages stay in `cyberbrain.db-wal`, and `forget`
+/// still reported a clean erasure. Calibrated against the state before the fix: the report
+/// had no `scrub` block and no note, so the first assertion failed on `null`.
+#[test]
+fn forget_says_when_a_reader_kept_the_wal_from_being_emptied() {
+    let cb = Cb::new();
+    cb.write("2", "doomed", "unique marker text");
+    let reader = rusqlite::Connection::open(cb.store.join("cyberbrain.db")).unwrap();
+    reader.execute_batch("BEGIN").unwrap();
+    let _: i64 = reader
+        .query_row("SELECT count(*) FROM notes", [], |r| r.get(0))
+        .unwrap();
+
+    let f = cb.ok(&["forget", "doomed"]);
+    assert_eq!(f["scrub"]["residue"], true, "{f}");
+    assert_eq!(f["scrub"]["wal"]["busy"], true, "{f}");
+    assert!(
+        f["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n.as_str().unwrap().contains("WAL")),
+        "the reader is told, in words, that pages may remain: {f}"
+    );
+    drop(reader);
+
+    // Without the reader the same erasure leaves nothing behind, and says so.
+    cb.write("2", "doomed-too", "another marker");
+    let f = cb.ok(&["forget", "doomed-too"]);
+    assert_eq!(f["scrub"]["residue"], false, "{f}");
+}
+
 /// 2026-09-29: tags skipped the PII gate. An e-mail address in `--tags` was written with
 /// `pii: none`, indexed and shown unredacted.
 #[test]

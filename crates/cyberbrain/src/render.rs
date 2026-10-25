@@ -655,6 +655,9 @@ pub fn retention(r: &RetentionReport) -> String {
                 }
             }
         }
+        if let Some(note) = r.scrub.and_then(|sc| sc.residue_note()) {
+            let _ = writeln!(s, "  note: {note}");
+        }
     }
     s
 }
