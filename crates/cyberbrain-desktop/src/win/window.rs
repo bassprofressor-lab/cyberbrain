@@ -30,10 +30,10 @@ use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::{PROCESS_PER_MONITOR_DPI_AWARE, SetProcessDpiAwareness};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetClientRect,
-    GetWindowLongPtrW, IsIconic, IsWindow, RegisterClassW, SW_RESTORE, SW_SHOW,
-    SetForegroundWindow, SetWindowLongPtrW, ShowWindow, WINDOW_EX_STYLE, WM_NCDESTROY, WM_SIZE,
-    WNDCLASSW, WS_OVERLAPPEDWINDOW,
+    CW_USEDEFAULT, CreateIconFromResourceEx, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, HICON, IsIconic, IsWindow, LR_DEFAULTCOLOR,
+    RegisterClassW, SW_RESTORE, SW_SHOW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow,
+    WINDOW_EX_STYLE, WM_NCDESTROY, WM_SIZE, WNDCLASSW, WS_OVERLAPPEDWINDOW,
 };
 use windows::core::{PCWSTR, w};
 
@@ -336,6 +336,15 @@ fn prepare_process() {
     }
 }
 
+/// The app's mark for the title bar and the taskbar: the 256 px rendering of the same
+/// picture the tray and the installer's `cyberbrain.ico` are made from. Windows reads a PNG
+/// icon image directly (format version 3); if it ever refuses, the window just has no icon.
+fn window_icon() -> HICON {
+    const PNG: &[u8] = include_bytes!("../../assets/window.png");
+    unsafe { CreateIconFromResourceEx(PNG, true, 0x0003_0000, 256, 256, LR_DEFAULTCOLOR) }
+        .unwrap_or_default()
+}
+
 fn register_class() -> Result<(), String> {
     if CLASS_READY.load(Ordering::SeqCst) {
         return Ok(());
@@ -351,6 +360,9 @@ fn register_class() -> Result<(), String> {
         // a fraction of a second on a light desktop, rather than white being wrong on every
         // dark one.
         hbrBackground: unsafe { CreateSolidBrush(COLORREF(0x00120E0C)) },
+        // Without one the title bar and the taskbar showed Windows' blank program icon next to
+        // the tray's mark. Windows scales this one down for the small slots itself.
+        hIcon: window_icon(),
         hInstance: unsafe { GetModuleHandleW(None) }
             .map(|h| h.into())
             .unwrap_or_default(),

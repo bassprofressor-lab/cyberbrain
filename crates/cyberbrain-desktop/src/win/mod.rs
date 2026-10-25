@@ -993,10 +993,11 @@ fn tail(text: &str, max: usize) -> String {
     format!("…{}", &t[start..])
 }
 
-/// The mark from `ui/public/favicon.svg`, as the tray wants it: straight RGBA.
+/// The app's mark, as the tray wants it: straight RGBA.
 ///
-/// One PNG feeds the tray here and the shortcut through the installer, so the icon in the
-/// notification area and the one on the Start menu cannot drift apart.
+/// `tray.png`, `window.png` and the installer's `cyberbrain.ico` are three renderings of one
+/// picture (the neon brain with its orbit ring, 25.10.2026), so the icon in the notification
+/// area, the window and the one on the Start menu cannot drift apart.
 fn tray_icon() -> Icon {
     const PNG: &[u8] = include_bytes!("../../assets/tray.png");
     let decoder = png::Decoder::new(std::io::Cursor::new(PNG));
