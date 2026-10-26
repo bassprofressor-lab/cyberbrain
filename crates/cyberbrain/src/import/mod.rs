@@ -14,7 +14,7 @@
 
 pub mod plan;
 pub mod report;
-mod slug;
+pub(crate) mod slug;
 mod split;
 pub mod suggest;
 mod walk;

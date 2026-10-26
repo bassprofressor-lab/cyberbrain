@@ -31,6 +31,8 @@ pub enum CallKind {
     EndpointValidation,
     /// `POST /api/embed` on Ollama: block or query text in, vectors out (`embed`).
     Embedding,
+    /// `POST /inference` on whisper-server: audio in, text out (`transcribe`).
+    Transcription,
 }
 
 /// How the call ended. Every variant names its side of the boundary (SPEC §14.3): `Ok`

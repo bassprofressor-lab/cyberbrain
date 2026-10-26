@@ -180,6 +180,106 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .map_err(|e| Error::Index(format!("cannot start the async runtime: {e}")))
 }
 
+/// Store a note the way `write` does: through the daemon when one runs, else here. A write
+/// embeds its note, which costs the same model load a recall does; the daemon has it loaded
+/// (`daemon.rs`). Unlike a recall, a write that reached the daemon is never repeated here:
+/// `daemon::write` says whether it did.
+fn write_note(app: &App, out: Out, req: WriteRequest) -> Result<i32> {
+    match daemon::write(app.root(), &cli_actor(), &req, out.json)? {
+        daemon::Answer::Done {
+            stdout,
+            stderr,
+            code,
+        } => {
+            if let Some(text) = stdout.filter(|_| !out.quiet) {
+                out.print(&text);
+            }
+            if let Some(line) = stderr {
+                eprintln!("{line}");
+            }
+            Ok(code)
+        }
+        daemon::Answer::Local => {
+            let outcome = app.write(req)?;
+            out.emit(&outcome, render_write)?;
+            write_exit(&outcome)
+        }
+    }
+}
+
+/// The label for the multipart part. whisper-server decodes by content, so a wrong guess
+/// costs nothing; it only keeps the server's log readable.
+fn audio_mime(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("wav") => "audio/wav",
+        Some("mp3") => "audio/mpeg",
+        Some("m4a" | "mp4" | "aac") => "audio/mp4",
+        Some("ogg" | "oga" | "opus") => "audio/ogg",
+        Some("webm") => "audio/webm",
+        Some("flac") => "audio/flac",
+        _ => "application/octet-stream",
+    }
+}
+
+/// `transcript-<file stem>-<date>`, made valid the way an import makes names valid.
+fn transcript_name(path: &std::path::Path) -> String {
+    let stem = path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let day = jiff::Zoned::now().date();
+    let base = import::slug::slugify(&format!("transcript {stem} {day}"));
+    let name: String = base.chars().take(80).collect();
+    name.trim_end_matches('-').to_string()
+}
+
+/// The note: one line saying where the text came from, then the text. With `segments`,
+/// one paragraph per stretch of speech, each with its place in the recording, so a
+/// sentence can be found again in the audio.
+fn transcript_body(
+    t: &cyberbrain_llm::Transcript,
+    file_name: &str,
+    segments: bool,
+    header: bool,
+) -> String {
+    fn clock(s: f64) -> String {
+        let s = s.max(0.0).round() as u64;
+        if s >= 3600 {
+            format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+        } else {
+            format!("{}:{:02}", s / 60, s % 60)
+        }
+    }
+    let mut out = String::new();
+    if header {
+        let length = t
+            .duration_s
+            .map(|d| format!(" · {}", clock(d)))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "*Transcribed locally from `{file_name}`{length} · whisper {} · {}*\n\n",
+            t.model,
+            jiff::Zoned::now().date()
+        ));
+    }
+    if segments && !t.segments.is_empty() {
+        let lines: Vec<String> = t
+            .segments
+            .iter()
+            .filter(|s| !s.text.is_empty())
+            .map(|s| format!("[{}] {}", clock(s.start), s.text))
+            .collect();
+        out.push_str(&lines.join("\n\n"));
+    } else {
+        out.push_str(&t.text);
+    }
+    out
+}
+
 fn read_stdin() -> Result<String> {
     let mut s = String::new();
     std::io::stdin()
@@ -582,28 +682,77 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 arriving: None,
                 dry_run,
             };
-            // A write embeds its note, which costs the same model load a recall does; the
-            // daemon has it loaded (`daemon.rs`). Unlike a recall, a write that reached the
-            // daemon is never repeated here: `daemon::write` says whether it did.
-            match daemon::write(app.root(), &cli_actor(), &req, out.json)? {
-                daemon::Answer::Done {
-                    stdout,
-                    stderr,
-                    code,
-                } => {
-                    if let Some(text) = stdout.filter(|_| !out.quiet) {
-                        out.print(&text);
-                    }
-                    if let Some(line) = stderr {
-                        eprintln!("{line}");
-                    }
-                    return Ok(code);
-                }
-                daemon::Answer::Local => {}
+            let code = write_note(&app, out, req)?;
+            if code != 0 {
+                return Ok(code);
             }
-            let outcome = app.write(req)?;
-            out.emit(&outcome, render_write)?;
-            let code = write_exit(&outcome)?;
+        }
+        Command::Transcribe {
+            file,
+            ring,
+            kind,
+            name,
+            tags,
+            bereich,
+            segments,
+            print,
+            force,
+            dry_run,
+        } => {
+            let audio = std::fs::read(&file).map_err(|e| Error::Io {
+                path: file.clone(),
+                source: e,
+            })?;
+            let file_name = file
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "audio".into());
+            if !out.quiet && !out.json {
+                eprintln!(
+                    "transcribing {file_name} ({} MB) locally; on a CPU this takes about a quarter of the recording's length",
+                    audio.len().div_ceil(1024 * 1024)
+                );
+            }
+            let t = runtime()?.block_on(app.transcribe(&audio, &file_name, audio_mime(&file)))?;
+            if print {
+                if out.json {
+                    out.emit(&t, |_| String::new())?;
+                } else if !out.quiet {
+                    out.print(&transcript_body(&t, &file_name, segments, false));
+                }
+                return Ok(0);
+            }
+            if t.text.is_empty() {
+                return Err(Error::Config(format!(
+                    "{file_name}: the server heard no speech; nothing written"
+                )));
+            }
+            let name = match name {
+                Some(n) => n,
+                None => transcript_name(&file),
+            };
+            let req = WriteRequest {
+                ring: Ring::try_from(ring)?,
+                kind: kind.into(),
+                name,
+                body: transcript_body(&t, &file_name, segments, true),
+                tags: if tags.iter().any(|t| t == "transcript") {
+                    tags
+                } else {
+                    tags.into_iter().chain(["transcript".to_string()]).collect()
+                },
+                bereich: bereich.map(Some),
+                retention: None,
+                force,
+                choice: None,
+                expected_updated: None,
+                supersedes: None,
+                valid_from: None,
+                invalid_at: None,
+                arriving: None,
+                dry_run,
+            };
+            let code = write_note(&app, out, req)?;
             if code != 0 {
                 return Ok(code);
             }

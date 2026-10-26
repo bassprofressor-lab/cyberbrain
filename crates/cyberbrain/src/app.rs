@@ -38,7 +38,10 @@ use cyberbrain_index::{
     AuditStore, EmbeddingProfile, Erased, Index, IndexStats, NoteStamp, ProfileChange,
     RecallOptions, content_hash,
 };
-use cyberbrain_llm::{LlmClient, LlmConfig, OllamaEmbedConfig, OllamaEmbedder, Probe};
+use cyberbrain_llm::{
+    LlmClient, LlmConfig, OllamaEmbedConfig, OllamaEmbedder, Probe, Transcript, WhisperClient,
+    WhisperConfig,
+};
 use cyberbrain_policy::profile::ProfileExt;
 use cyberbrain_policy::{
     Actor, AuditAction, AuditFilter, EgressEntry, EraseReason, EraseRequest, ErasureReport,
@@ -1519,6 +1522,54 @@ impl App {
             Ok(c) => LlmState::Ready(Box::new(c)),
             Err(e) => LlmState::Absent(e.to_string()),
         }
+    }
+
+    // ----- transcription -----------------------------------------------------------------
+
+    /// Speech to text through `[transcription]`. Not cached like the inference client: a
+    /// recording is minutes of work, the address check is microseconds, and a server that
+    /// was started after this process should be found without a restart.
+    pub async fn transcribe(
+        &self,
+        audio: &[u8],
+        file_name: &str,
+        mime: &str,
+    ) -> Result<Transcript> {
+        let t = &self.config.transcription;
+        let Some(base_url) = t
+            .base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|u| !u.is_empty())
+        else {
+            return Err(Error::Config(
+                "transcription is off: set transcription.base_url in cyberbrain.toml to a local \
+                 whisper-server (started with --convert), e.g. http://127.0.0.1:8178"
+                    .into(),
+            ));
+        };
+        let limit = t.max_upload_mb.saturating_mul(1024 * 1024);
+        if audio.len() as u64 > limit {
+            return Err(Error::Config(format!(
+                "{file_name} is {} MB; transcription.max_upload_mb allows {}",
+                audio.len() / (1024 * 1024),
+                t.max_upload_mb
+            )));
+        }
+        if audio.is_empty() {
+            return Err(Error::Config(format!("{file_name} is empty")));
+        }
+        let cfg = WhisperConfig {
+            base_url: base_url.to_string(),
+            language: t.language.clone(),
+            model_label: t.model_label.clone(),
+            timeout: std::time::Duration::from_millis(t.timeout_ms),
+            allow_public_endpoint: self.config.inference.allow_public_endpoint,
+            allow_overlay_network: self.config.inference.allow_overlay_network,
+        };
+        let audit: Arc<dyn cyberbrain_llm::AuditSink> = Arc::new(self.policy.audit().clone());
+        let client = WhisperClient::connect(cfg, audit, self.gate.clone()).await?;
+        client.transcribe(audio, file_name, mime).await
     }
 
     // ----- scan --------------------------------------------------------------------------

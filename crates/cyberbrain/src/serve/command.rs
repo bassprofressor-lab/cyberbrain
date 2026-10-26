@@ -242,6 +242,10 @@ fn refuse(command: &Command) -> Option<&'static str> {
         // pointed, and this surface has no authentication.
         Command::Policy { command } => refuse_policy(command),
 
+        Command::Transcribe { .. } => Some(
+            "`transcribe` reads a file wherever it is pointed, and this surface has no \
+             authentication. Use the microphone button to dictate, or transcribe at a prompt.",
+        ),
         Command::Serve { .. } => {
             Some("`serve` is what is answering this: the page you are reading is a running one.")
         }

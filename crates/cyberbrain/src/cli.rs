@@ -133,6 +133,44 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Transcribe a recording locally and keep the text as a note.
+    ///
+    /// The audio goes to the whisper.cpp server named in `[transcription]` (loopback or a
+    /// private address, audited like every inference call) and nowhere else. The text is
+    /// then written exactly as `write` would write it: PII check, audit row, index. With
+    /// --print nothing is written and the text is only shown.
+    Transcribe {
+        /// The recording: WAV, MP3, M4A, OGG, WebM, FLAC, or a video with sound. Anything
+        /// but 16 kHz WAV needs the server started with --convert.
+        file: PathBuf,
+        /// Trust tier, 0 to 4. Default 3, the session record: a transcript is what was
+        /// said, not yet what the project knows.
+        #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(0..=4))]
+        ring: u8,
+        #[arg(long, value_enum, default_value_t = NoteKindArg::Knowledge)]
+        kind: NoteKindArg,
+        /// Slug for the note. Default `transcript-<file name>-<date>`.
+        #[arg(long)]
+        name: Option<String>,
+        /// A tag. Repeat for several; `transcript` is always added.
+        #[arg(long)]
+        tags: Vec<String>,
+        #[arg(long)]
+        bereich: Option<String>,
+        /// One paragraph per stretch of speech, each with its time in the recording.
+        #[arg(long)]
+        segments: bool,
+        /// Only show the text; write nothing.
+        #[arg(long)]
+        print: bool,
+        /// Write despite PII findings, recording them as flagged rather than reviewed.
+        #[arg(long)]
+        force: bool,
+        /// Run the real path with no-op writers and report what would have happened.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Declare that a note stopped holding, from a day on, without rewriting its text.
     ///
     /// Sets `invalid_at` in the note's head (and `superseded_by` with --by), writes one

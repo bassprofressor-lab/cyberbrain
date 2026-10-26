@@ -7,6 +7,7 @@ import { useT } from "@/lib/i18n";
 import { href } from "@/lib/router";
 import { bodyWithTitle, isValidName, slugFromTitle } from "@/lib/slug";
 import { toApiError } from "@/lib/useAsync";
+import { DictateButton, appendDictation } from "@/components/Dictate";
 
 const KINDS: NoteKind[] = ["knowledge", "bug", "lesson", "decision", "reference", "session"];
 
@@ -145,11 +146,15 @@ export function NewNoteForm({ full, onCreated, onCancel }: { full: boolean; onCr
         ) : null}
 
         {full ? (
-          <textarea className="input w-full h-[40vh] p-3 font-mono text-[13px] leading-relaxed resize-y" value={body} spellCheck={false} aria-label={t.note.bodyAria} onChange={(e) => setBody(e.target.value)} />
+          <div className="flex flex-col gap-1">
+            <textarea className="input w-full h-[40vh] p-3 font-mono text-[13px] leading-relaxed resize-y" value={body} spellCheck={false} aria-label={t.note.bodyAria} onChange={(e) => setBody(e.target.value)} />
+            <DictateButton onText={(s) => setBody((b) => appendDictation(b, s, true))} />
+          </div>
         ) : (
           <div className="flex flex-col gap-1">
             <label htmlFor="new-note-text" className="label">{t.newNote.textLabel}</label>
             <textarea id="new-note-text" className="input w-full h-56 p-3 text-sm leading-relaxed resize-y" value={body} placeholder={t.newNote.textPlaceholder} onChange={(e) => setBody(e.target.value)} />
+            <DictateButton onText={(s) => setBody((b) => appendDictation(b, s, true))} />
           </div>
         )}
 

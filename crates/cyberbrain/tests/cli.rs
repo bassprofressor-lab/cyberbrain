@@ -4796,3 +4796,29 @@ fn canaries_are_planted_listed_pushed_and_removed() {
     assert!(cb.ok(&["canary", "list"]).as_array().unwrap().is_empty());
     assert!(!cb.store.join(format!("notes/r2/{note}.md")).exists());
 }
+
+#[test]
+fn transcribe_is_off_until_configured_and_refuses_a_public_server() {
+    let cb = Cb::new();
+    let audio = cb.store.parent().unwrap().join("memo.wav");
+    std::fs::write(&audio, b"RIFF....WAVEfmt ").unwrap();
+
+    // Off by default: nothing is contacted, and the message names the key to set.
+    let (_, code, err) = cb.json(&["transcribe", audio.to_str().unwrap(), "--print"]);
+    assert_eq!(code, 1, "{err}");
+    assert!(err.contains("transcription.base_url"), "{err}");
+
+    // A public address is refused before any byte leaves, as for inference.
+    let toml = cb.store.join("cyberbrain.toml");
+    let cfg = std::fs::read_to_string(&toml).unwrap().replace(
+        "# base_url = \"http://127.0.0.1:8178\"",
+        "base_url = \"http://8.8.8.8:8178\"",
+    );
+    std::fs::write(&toml, cfg).unwrap();
+    let (_, code, err) = cb.json(&["transcribe", audio.to_str().unwrap(), "--print"]);
+    assert_eq!(code, 3, "{err}");
+    let notes = std::fs::read_dir(cb.store.join("notes").join("r3"))
+        .unwrap()
+        .count();
+    assert_eq!(notes, 0, "a refused transcription writes nothing");
+}

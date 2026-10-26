@@ -16,7 +16,7 @@ pub mod store;
 pub mod types;
 
 pub use citation::Citation;
-pub use config::{Config, PolicyProfile};
+pub use config::{Config, PolicyProfile, TranscriptionConfig};
 pub use error::{Error, Result};
 pub use frontmatter::validate_name;
 pub use path::{Slash, slash};

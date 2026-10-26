@@ -36,6 +36,7 @@ pub(crate) mod origin;
 mod peer;
 mod policy;
 mod proposals;
+mod transcribe;
 mod wire;
 
 #[cfg(test)]
@@ -114,6 +115,16 @@ pub fn router_with(
         terminal,
         origins: origins.clone(),
     });
+    // The recording is the one body here measured in megabytes rather than kilobytes.
+    let upload_limit = usize::try_from(
+        state
+            .app
+            .config()
+            .transcription
+            .max_upload_mb
+            .saturating_mul(1024 * 1024),
+    )
+    .unwrap_or(usize::MAX);
     let hosts = Arc::new(origin::hosts_of(&origins));
     let ours = Arc::new(origins);
     let api = Router::new()
@@ -145,6 +156,11 @@ pub fn router_with(
         .route("/usage", get(ops::usage))
         .route("/doctor", get(ops::doctor))
         .route("/scan", post(ops::scan))
+        .route("/transcription", get(transcribe::status))
+        .route(
+            "/transcribe",
+            post(transcribe::dictate).layer(axum::extract::DefaultBodyLimit::max(upload_limit)),
+        )
         .route("/command", post(command::run))
         .route("/terminal", get(crate::terminal::open))
         .route(

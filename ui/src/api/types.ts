@@ -1078,6 +1078,8 @@ export type ApiErrorCode =
   | "policy-refusal"
   /** 500, not 400: an embedding profile mismatch is internal (exit 2). */
   | "profile-mismatch"
+  /** 503: the whisper-server in `[transcription]` did not answer, or answered badly. */
+  | "transcription-unavailable"
   | "internal";
 
 export interface ApiErrorBody {
@@ -1302,6 +1304,22 @@ export interface CanaryReport {
   }[];
 }
 
+/** `GET /transcription`: whether dictation is configured. Says nothing about whether the server answers. */
+export interface TranscriptionStatus {
+  enabled: boolean;
+  language: string;
+  model_label: string;
+  max_upload_mb: number;
+}
+
+/** `POST /transcribe`: the text of one recording. Nothing is stored. */
+export interface Dictated {
+  text: string;
+  language: string | null;
+  duration_s: number | null;
+  elapsed_ms: number;
+}
+
 export interface CyberbrainApi {
   /** "mock" or "http"; shown in the UI so fabricated data is never mistaken for real. */
   readonly transport: "mock" | "http";
@@ -1344,4 +1362,9 @@ export interface CyberbrainApi {
   proposalHistory(limit?: number): Promise<ProposalDecision[]>;
   /** Accept, or reject with a reason. The reviewer is this machine's identity, never the proposer. */
   decideProposal(name: string, accept: boolean, reason?: string): Promise<unknown>;
+
+  /** Whether `[transcription]` is set; the microphone button is drawn only then. */
+  transcription(): Promise<TranscriptionStatus>;
+  /** One recording to text, through the local whisper-server. 503 when it does not answer. */
+  dictate(audio: Blob): Promise<Dictated>;
 }

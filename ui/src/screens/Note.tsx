@@ -14,6 +14,7 @@ import { filterFromRoute, href, navigate, type Route } from "@/lib/router";
 import { useBlockJump } from "@/lib/useBlockJump";
 import { toApiError, useAsync } from "@/lib/useAsync";
 import { Dialog } from "@/components/Dialog";
+import { DictateButton, appendDictation } from "@/components/Dictate";
 
 const KINDS: NoteKind[] = ["knowledge", "bug", "lesson", "decision", "reference", "session"];
 
@@ -334,7 +335,10 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
               spellCheck={false}
               aria-label={t.note.bodyAria}
             />
-            <div className="mt-1.5 text-2xs text-fg-faint">{t.note.bodyNote}</div>
+            <div className="mt-1.5 flex items-center justify-between gap-2">
+              <span className="text-2xs text-fg-faint">{t.note.bodyNote}</span>
+              <DictateButton onText={(s) => setDraft((b) => appendDictation(b, s, true))} />
+            </div>
           </div>
         ) : (
           <div className="mt-5">

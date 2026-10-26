@@ -12,6 +12,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Speech to text, locally
+
+- **`cyberbrain transcribe <file>` turns a recording into a note.** A voice memo, a meeting or
+  a video with sound goes to a whisper.cpp server on your own machine (`whisper-server
+  --convert`), and the text is written the way `write` writes: PII check, audit row, index.
+  Ring 3 by default, tagged `transcript`; `--segments` keeps each stretch of speech with its
+  time in the recording, `--print` only shows the text.
+- **A microphone button in the web page** beside the search field, the new-note text and the
+  note editor. Dictating writes nothing; the text lands in the field and is saved like
+  anything typed. The button only appears once transcription is configured.
+- **Off until `[transcription] base_url` is set**, and held to the same rule as inference:
+  loopback or a private range unless `[inference]` waives it, addresses pinned, every call in
+  the audit log as `transcription`. Each request asks for German (or the configured language),
+  temperature 0 and no carried-over context, the settings that took large-v3-turbo from 5.9 %
+  to 2.0 % word errors in our measurement. No C++ in this build: the model runs in its own
+  process, as embeddings run in Ollama.
+
 ### Windows launcher, installer and web page
 
 - **A new mark: the neon brain with its orbit ring**, in the tray, on the installer and its

@@ -11,6 +11,7 @@ import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { href, navigate, type Route } from "@/lib/router";
 import { toApiError } from "@/lib/useAsync";
+import { DictateButton, appendDictation } from "@/components/Dictate";
 
 export function SearchScreen({ route }: { route: Route }) {
   const t = useT();
@@ -153,6 +154,7 @@ export function SearchScreen({ route }: { route: Route }) {
               <Kbd keys="/" />
             </span>
           </div>
+          <DictateButton onText={(s) => setQ((cur) => appendDictation(cur, s, false))} />
           <select className="input" value={n} onChange={(e) => setN(Number(e.target.value))} aria-label={t.search.nAria} title={t.search.nTitle}>
             {[8, 16, 32, 64].map((v) => (
               <option key={v} value={v}>

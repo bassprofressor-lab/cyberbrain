@@ -44,6 +44,7 @@ pub mod degrade;
 pub mod embed;
 pub mod prompts;
 pub mod tasks;
+pub mod transcribe;
 pub mod types;
 mod wire;
 
@@ -57,4 +58,5 @@ pub use client::{LlmClient, LlmConfig};
 pub use cyberbrain_core::{EgressPurpose, Error, Result};
 pub use degrade::{Degraded, Feature};
 pub use embed::{InstalledModel, OllamaEmbedConfig, OllamaEmbedder, ShownModel};
+pub use transcribe::{Segment, Transcript, WhisperClient, WhisperConfig};
 pub use types::{ChatMessage, ChatRequest, ChatResponse, LoadedModel, ModelInfo, Role, Usage};

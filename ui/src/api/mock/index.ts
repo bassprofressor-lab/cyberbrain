@@ -1222,6 +1222,16 @@ export const mockClient: CyberbrainApi = {
     mockDecisions.unshift({ ts: new Date().toISOString(), name, accepted: accept, by: "mock-reviewer", proposed_by: p?.proposed_by ?? null, reason: reason?.trim() || null });
     return latency({ name, accepted: accept });
   },
+
+  // Off in the mock: there is no whisper-server behind it, and a button that records and
+  // then pretends to have heard something would be the fabrication this transport avoids.
+  async transcription() {
+    return latency({ enabled: false, language: "de", model_label: "large-v3-turbo", max_upload_mb: 200 });
+  },
+
+  async dictate() {
+    throw err(503, "transcription-unavailable", "the mock has no whisper-server", { variant: "llm" });
+  },
 };
 
 const mockProposals: ProposalDetail[] = [

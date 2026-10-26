@@ -25,6 +25,7 @@ import {
   type ObligationsView,
   type PiiHoldResolution,
   type PiiReport,
+  type Dictated,
   type ProposalDecision,
   type ProposalDetail,
   type RecallParams,
@@ -34,6 +35,7 @@ import {
   type ScanReport,
   type StatusReport,
   type SubjectAccessReport,
+  type TranscriptionStatus,
   type UsageReport,
 } from "./types";
 
@@ -49,7 +51,7 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
   return s ? `?${s}` : "";
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, raw?: Blob): Promise<T> {
   const init: RequestInit = {
     method,
     headers: { Accept: "application/json" },
@@ -58,7 +60,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     redirect: "error",
     cache: "no-store",
   };
-  if (body !== undefined) {
+  if (raw !== undefined) {
+    init.headers = { ...init.headers, "Content-Type": raw.type || "application/octet-stream" };
+    init.body = raw;
+  } else if (body !== undefined) {
     init.headers = { ...init.headers, "Content-Type": "application/json" };
     init.body = JSON.stringify(body);
   }
@@ -128,4 +133,7 @@ export const httpClient: CyberbrainApi = {
   proposalHistory: (limit) => request<ProposalDecision[]>("GET", `/proposals/history${qs({ limit })}`),
   decideProposal: (name, accept, reason) =>
     request<unknown>("POST", `/proposals/${encodeURIComponent(name)}/decision`, { accept, reason: reason ?? "" }),
+
+  transcription: () => request<TranscriptionStatus>("GET", "/transcription"),
+  dictate: (audio) => request<Dictated>("POST", "/transcribe", undefined, audio),
 };

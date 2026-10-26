@@ -871,6 +871,13 @@ export const en = {
     emptyHow: "How does something get here?",
     emptyHowBody: "Mostly the assistant writes it while you work with it. You can write one yourself here, or on the command line:",
   },
+  dictate: {
+    start: "Dictate",
+    stop: "Stop",
+    working: "Transcribing…",
+    noMic: "No microphone, or access was refused.",
+    nothingHeard: "Nothing was heard.",
+  },
   newNote: {
     button: "New note",
     heading: "New note",

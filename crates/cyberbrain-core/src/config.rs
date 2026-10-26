@@ -60,6 +60,7 @@ pub struct Config {
     pub retrieval: RetrievalConfig,
     pub embedding: EmbeddingConfig,
     pub inference: InferenceConfig,
+    pub transcription: TranscriptionConfig,
     pub policy: PolicyConfig,
     pub hub: HubConfig,
     pub governance: GovernanceConfig,
@@ -397,6 +398,7 @@ impl Default for Config {
             retrieval: RetrievalConfig::default(),
             embedding: EmbeddingConfig::default(),
             inference: InferenceConfig::default(),
+            transcription: TranscriptionConfig::default(),
             policy: PolicyConfig::default(),
             hub: HubConfig::default(),
             governance: GovernanceConfig::default(),
@@ -471,6 +473,43 @@ impl Default for InferenceConfig {
             timeout_ms: 30_000,
             contradiction_budget_ms: default_contradiction_budget_ms(),
             load_cgroup: None,
+        }
+    }
+}
+
+/// Speech to text through a local whisper.cpp server (2026-10-26).
+///
+/// Off until `base_url` is set: no address is validated and nothing is contacted before
+/// the operator names one, as the inference layer waits for `inference.model`. The model is
+/// whatever the server was started with; `model_label` only names it in the audit log and
+/// in the header of a transcribed note.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TranscriptionConfig {
+    /// Base URL of `whisper-server`, e.g. `http://127.0.0.1:8178`. `None` turns
+    /// transcription off.
+    pub base_url: Option<String>,
+    /// Spoken language as a whisper code, or `auto`.
+    pub language: String,
+    pub model_label: String,
+    /// Whole-request timeout. An hour of speech is about 15 minutes on a 12-core CPU.
+    pub timeout_ms: u64,
+    /// The largest recording accepted, in megabytes, from the CLI and from the browser.
+    pub max_upload_mb: u64,
+    // No waivers of its own: the egress register decides public and overlay addresses by
+    // `inference.allow_public_endpoint` and `inference.allow_overlay_network`, so a second
+    // pair here would read as consent and change nothing. The recording is the same kind
+    // of egress as a prompt, and one agreement covers both.
+}
+
+impl Default for TranscriptionConfig {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            language: "de".into(),
+            model_label: "large-v3-turbo".into(),
+            timeout_ms: 1_800_000,
+            max_upload_mb: 200,
         }
     }
 }
@@ -552,6 +591,18 @@ contradiction_budget_ms = 3000
 # through a container runtime's proxy process, and an attribution that is wrong but looks
 # exact is worse than none.
 # load_cgroup = "/sys/fs/cgroup/system.slice/docker-<id>.scope"
+
+[transcription]
+# Speech to text with a local whisper.cpp server (`whisper-server --convert`), for
+# `cyberbrain transcribe` and the dictation button in the web UI. Off until base_url is
+# set. Same rule as [inference]: loopback or a private range only, every call audited,
+# and the waivers there (allow_public_endpoint, allow_overlay_network) apply here too.
+# base_url = "http://127.0.0.1:8178"
+language = "de"
+# Names the model the server was started with, for the audit log and the note header.
+model_label = "large-v3-turbo"
+timeout_ms = 1800000
+max_upload_mb = 200
 
 [hub]
 # Set by `cyberbrain hub enrol <invitation>`. Without a url this store sends nothing, and

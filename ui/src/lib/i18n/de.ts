@@ -860,6 +860,13 @@ export const de: Dict = {
     emptyHow: "Wie kommt etwas hierher?",
     emptyHowBody: "Meistens schreibt es der Assistent, während du mit ihm arbeitest. Selbst schreiben geht hier oder auf der Kommandozeile:",
   },
+  dictate: {
+    start: "Diktieren",
+    stop: "Stopp",
+    working: "Wird abgeschrieben …",
+    noMic: "Kein Mikrofon, oder der Zugriff wurde verweigert.",
+    nothingHeard: "Es war nichts zu hören.",
+  },
   newNote: {
     button: "Neue Notiz",
     heading: "Neue Notiz",
