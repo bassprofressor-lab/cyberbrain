@@ -160,7 +160,7 @@ Vier Wege hinein, alle aus derselben Binärdatei:
 | | |
 |---|---|
 | `cyberbrain <befehl>` | alles ist von der Kommandozeile aus erreichbar, überall mit `--json` |
-| `cyberbrain hook <ereignis>` | sechs Lebenszyklus-Ereignisse des Agenten; gemessenes p99 von 4 ms inklusive Prozessstart, bei einem Budget von 15 ms |
+| `cyberbrain hook <ereignis>` | sechs Lebenszyklus-Ereignisse des Agenten; an einem Store mit 1.300 Notizen und 105.000 Audit-Zeilen ein p99 von 7 bis 9 ms inklusive Prozessstart, bei einem Budget von 15 ms (`session-start`, der die Ringe 0 und 1 übergibt: 17 ms bei 150 ms) |
 | `cyberbrain mcp` | Model Context Protocol über stdio, für jeden Client, der es spricht |
 | `cyberbrain serve` | Weboberfläche und HTTP-API, auf Loopback, ohne Anmeldung, weil nichts davon den Rechner verlässt; unter Linux kommt nur das eigene Konto (und root) hinein |
 

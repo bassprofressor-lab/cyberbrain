@@ -153,7 +153,7 @@ Four ways in, all from the same binary:
 | | |
 |---|---|
 | `cyberbrain <command>` | everything is reachable from the command line, `--json` on all of it |
-| `cyberbrain hook <event>` | six agent lifecycle events; measured p99 of 4 ms including process start, against a 15 ms budget |
+| `cyberbrain hook <event>` | six agent lifecycle events; on a store of 1,300 notes and 105,000 audit rows a p99 of 7 to 9 ms including process start, against a 15 ms budget (`session-start`, which hands over rings 0 and 1: 17 ms against 150 ms) |
 | `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
 | `cyberbrain serve` | the web page and the HTTP API, on loopback, with no login because it never leaves the machine; on Linux only your own account (and root) can connect |
 
