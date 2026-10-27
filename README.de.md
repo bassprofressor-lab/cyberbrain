@@ -371,6 +371,13 @@ Compliance ist ein Teilsystem, kein Abschnitt in der Dokumentation. `cyberbrain 
 druckt jeden Weg, auf dem Bytes den Rechner verlassen können, was jeder trägt und ob er an
 ist. Heute hat diese Liste neun Einträge und endet mit „Telemetry does not exist."
 
+Ein Store liegt in einem Repository, also schreibt seine `cyberbrain.toml`, wer das Repository
+geschrieben hat. Die drei Schalter, mit denen Notizen auf einen anderen Rechner gehen dürfen
+(`allow_public_endpoint`, `allow_overlay_network`, `allow_public_hub`), gelten deshalb nur, wenn
+du sie für diesen Store auch in deiner eigenen `~/.config/cyberbrain/waivers.toml` freigegeben
+hast. `cyberbrain trust` zeigt, was ein Store verlangt, `cyberbrain trust --grant` gibt genau das
+frei, `--revoke` nimmt es zurück. Ein geklontes Projekt kann sie nicht selbst einschalten.
+
 - **Löschung, die löscht** (DSGVO Art. 17): `cyberbrain forget` entfernt die Notiz, ihre
   Blöcke, ihre Vektoren, ihre Indexzeilen und ihre Ableitungen in einer Transaktion und
   druckt, was weg ist. `--report DATEI --sign` schreibt einen Löschbericht, den jemand
@@ -424,7 +431,7 @@ dem Netz.
 
 ## Stand
 
-**v0.8.1, und jung.** 1.069 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
+**v0.8.2, und jung.** 1.075 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
 Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux,
 Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen
 den echten Korpus eines einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst

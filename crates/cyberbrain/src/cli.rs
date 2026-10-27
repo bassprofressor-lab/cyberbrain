@@ -296,6 +296,20 @@ pub enum Command {
     /// Report dangling links, ring-cap pressure, a stale index and orphaned vectors.
     Doctor,
 
+    /// Show which waivers this store's cyberbrain.toml asks for (allow_public_endpoint,
+    /// allow_overlay_network, allow_public_hub) and whether you granted them. Since 0.8.2 they
+    /// take effect only when granted in your own waivers.toml, never by the store's file alone:
+    /// a store lives in a repository, and whoever wrote the repository should not decide where
+    /// your notes are sent.
+    Trust {
+        /// Grant exactly what the store asks for now.
+        #[arg(long, conflicts_with = "revoke")]
+        grant: bool,
+        /// Remove every grant for this store.
+        #[arg(long)]
+        revoke: bool,
+    },
+
     /// Measure the installed embedding models on this machine and say which one fits it:
     /// query latency and full-rebuild time on a sample of this store's blocks, against a
     /// table of measured retrieval quality. Asks the local Ollama; downloads nothing.

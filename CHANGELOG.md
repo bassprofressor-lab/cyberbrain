@@ -12,6 +12,42 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.8.2] — 2026-10-27
+
+### Security
+
+- **A cloned repository can no longer send your notes to a server of its choosing.** Up to
+  0.8.1, `inference.allow_public_endpoint`, `inference.allow_overlay_network` and
+  `hub.allow_public_hub` were read from the store's own `cyberbrain.toml` and nowhere else.
+  A store lives in a repository, so a project whose `.cyberbrain/cyberbrain.toml` set
+  `allow_public_endpoint = true` and an embedding or inference endpoint on the internet had
+  `write`, `scan` and `recall` send note text there, and the egress gate recorded it as
+  permitted. Reproduced against 0.8.1 with a stand-in Ollama on a public address: it received
+  the text of a freshly written note.
+- From 0.8.2 each of the three keys takes effect only when the store asks for it **and** you
+  granted it for that store in `~/.config/cyberbrain/waivers.toml`
+  (`%APPDATA%\cyberbrain\waivers.toml` on Windows, or wherever `CYBERBRAIN_WAIVERS` points).
+  A key the store sets without your grant is switched off; `doctor` says which, and the
+  refusal names the way to grant it. Nothing that decides the grant is read from the store.
+- **`cyberbrain trust`** shows what the store asks for and what you granted; `--grant` grants
+  exactly what it asks for now, `--revoke` removes the store's entry. Both are recorded in the
+  audit log. The web page shows it but will not grant or revoke.
+- A running `recall` daemon retires itself when the waivers file changes, as it already did for
+  `cyberbrain.toml`, so a revoked grant stops counting at the next request.
+
+- **In enforce mode the pre-tool-use hook fails closed.** `cyberbrain install` now writes
+  `"onFailure": "block"` on that one hook when the store's `[governance] mode` is `enforce`
+  (Claude Code 2.1.295 and later): a hook that cannot start, times out or prints output that
+  does not parse blocks the tool call instead of letting it through unchecked. Before, a
+  moved or deleted binary quietly switched AgentGuard off. Shadow mode and every other hook
+  keep the default, so a missing binary there does not stop every edit. Run
+  `cyberbrain install` again in an enforce project to get the field.
+
+### Upgrading
+
+Stores that set one of the three keys to `true` need one `cyberbrain trust --grant` in that
+store after the upgrade. Until then the endpoint is refused with a message saying so.
+
 ## [0.8.1] — 2026-10-27
 
 ### Fixed
@@ -1973,7 +2009,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.1...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.2...HEAD
+[0.8.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.10...v0.8.0
 [0.7.10]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.9...v0.7.10

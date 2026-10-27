@@ -381,7 +381,8 @@ pub async fn validate_endpoint(
                 "llm.base_url {base_url} resolves into the shared address space ({}). That \
                  range is carrier-grade NAT, where the address is usually somebody else's \
                  machine, but it is also what Tailscale and similar overlays hand out for \
-                 your own. Set allow_overlay_network = true if this endpoint is yours",
+                 your own. Set allow_overlay_network = true if this endpoint is yours, and grant it \
+                 for this store with `cyberbrain trust --grant`",
                 overlay.join(", ")
             ),
         });
@@ -397,7 +398,8 @@ pub async fn validate_endpoint(
             reason: format!(
                 "llm.base_url {base_url} resolves to a non-local address ({}); every address \
                  must be loopback, RFC 1918, RFC 4193 or link-local. Set \
-                 allow_public_endpoint = true only if you mean to send note text there",
+                 allow_public_endpoint = true only if you mean to send note text there, and grant it \
+                 for this store with `cyberbrain trust --grant`",
                 offenders.join(", ")
             ),
         });

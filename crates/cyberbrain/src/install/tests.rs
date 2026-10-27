@@ -103,6 +103,30 @@ fn the_hooks_land_in_the_project_and_come_back_out() {
     );
 }
 
+/// 0.8.2: in enforce mode the pre-tool-use hook fails closed (`onFailure: "block"`), and
+/// only that one; in shadow mode no hook carries the field.
+#[test]
+fn enforce_mode_makes_only_the_pre_tool_use_hook_fail_closed() {
+    for (mode, want) in [("shadow", false), ("enforce", true)] {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut o = opts(tmp.path(), bare_env(tmp.path()));
+        o.clients = vec![Client::ClaudeCode];
+        fs::write(
+            o.store.join("cyberbrain.toml"),
+            format!("[governance]\nurl = \"http://127.0.0.1:18095\"\nmode = \"{mode}\"\n"),
+        )
+        .unwrap();
+        run(&o).unwrap();
+        let v = read(&paths::claude_code(&o.project));
+        for (event, _, _) in EVENTS {
+            for h in v["hooks"][event][0]["hooks"].as_array().unwrap() {
+                let block = h.get("onFailure").and_then(Value::as_str) == Some("block");
+                assert_eq!(block, want && event == "PreToolUse", "{mode} {event}: {h}");
+            }
+        }
+    }
+}
+
 #[test]
 fn a_second_run_changes_nothing_and_makes_no_backup() {
     let tmp = tempfile::tempdir().unwrap();

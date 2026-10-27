@@ -503,6 +503,19 @@ pub struct DoctorFinding {
     pub detail: String,
 }
 
+/// `cyberbrain trust` (0.8.2): which waivers this store's file asks for and which this user
+/// granted it. See `cyberbrain_core::waivers`.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustReport {
+    pub store: String,
+    pub waivers_file: Option<String>,
+    pub requested: Vec<String>,
+    pub granted: Vec<String>,
+    /// `grant`, `revoke` or `show`.
+    pub action: &'static str,
+    pub problem: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct DoctorReport {
     pub clean: bool,
@@ -1201,10 +1214,17 @@ impl App {
     /// configuration and the model manifest (the binary is the daemon's own business).
     #[cfg_attr(not(unix), allow(dead_code))] // the daemon is Unix only
     pub fn watched_files(&self) -> Vec<PathBuf> {
-        vec![
+        let mut files = vec![
             cyberbrain_core::config::Config::path_in(&self.root),
             self.config.model_dir().join(MANIFEST_FILE),
-        ]
+        ];
+        // The user's waivers decide where this store may send notes (0.8.2). A daemon that
+        // kept the grants it started with would go on honouring a revoked one until it idled
+        // out, so a change there retires it like a change to cyberbrain.toml does.
+        if let Some(w) = cyberbrain_core::waivers::path() {
+            files.push(w);
+        }
+        files
     }
 
     #[allow(dead_code)]
@@ -3785,6 +3805,67 @@ impl App {
 
     // ----- doctor ------------------------------------------------------------------------
 
+    /// Show, grant or revoke this store's waivers in the user's waivers file (0.8.2).
+    ///
+    /// `--grant` grants exactly what the store's file asks for now, nothing more, and records
+    /// it in the audit log; a key the store later adds needs a new grant. `--revoke` removes the
+    /// store's entry. Neither touches the store's own file.
+    pub fn trust(&self, grant: bool, revoke: bool) -> Result<TrustReport> {
+        use cyberbrain_core::waivers;
+        let requested = Config::waivers_requested(&self.root)?;
+        let file = waivers::path();
+        let action = if grant {
+            "grant"
+        } else if revoke {
+            "revoke"
+        } else {
+            "show"
+        };
+        if grant || revoke {
+            let Some(path) = &file else {
+                return Err(Error::Config(
+                    "no waivers file: neither CYBERBRAIN_WAIVERS nor a home directory is set"
+                        .into(),
+                ));
+            };
+            let mut g = waivers::Grant::default();
+            if grant {
+                for k in &requested {
+                    g.set(k, true);
+                }
+            }
+            waivers::save_grant(path, &self.root, g).map_err(|e| Error::Io {
+                path: path.clone(),
+                source: e,
+            })?;
+            self.policy.audit().record_raw(
+                &self.actor.to_string(),
+                if grant {
+                    "waiver.grant"
+                } else {
+                    "waiver.revoke"
+                },
+                format!("store:{}", Slash(&self.root)),
+                json!({ "keys": if grant { requested.clone() } else { Vec::new() },
+                        "file": path.to_string_lossy().replace('\\', "/") }),
+            )?;
+        }
+        let (w, problem) = waivers::load();
+        let g = waivers::grant_for(&w, &self.root);
+        Ok(TrustReport {
+            store: waivers::store_key(&self.root),
+            waivers_file: file.map(|p| p.to_string_lossy().replace('\\', "/")),
+            granted: waivers::KEYS
+                .iter()
+                .filter(|k| g.allows(k))
+                .map(|k| k.to_string())
+                .collect(),
+            requested,
+            action,
+            problem,
+        })
+    }
+
     pub fn doctor(&self) -> Result<DoctorReport> {
         let mut findings = Vec::new();
         let mut checks = Vec::new();
@@ -3795,6 +3876,21 @@ impl App {
                 detail,
             })
         };
+
+        checks.push("waivers");
+        for key in &self.config.waivers_ignored {
+            push(
+                "warning",
+                "waivers",
+                format!(
+                    "{key} is set in cyberbrain.toml but not granted for this store, so it is off; \
+                     `cyberbrain trust` shows what the store asks for, `cyberbrain trust --grant` grants it"
+                ),
+            );
+        }
+        if let Some(p) = &self.config.waivers_problem {
+            push("warning", "waivers", p.clone());
+        }
 
         checks.push("notes tree");
         let listing = self.store.list()?;

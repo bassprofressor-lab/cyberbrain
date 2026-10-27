@@ -349,6 +349,13 @@ Compliance is a subsystem, not a section in the docs. `cyberbrain policy egress`
 every path by which bytes can leave the machine, what each carries, and whether it is on.
 Today that list has nine entries, and it ends with "Telemetry does not exist."
 
+A store lives in a repository, so its `cyberbrain.toml` is written by whoever wrote the
+repository. The three keys that let notes leave for another machine
+(`allow_public_endpoint`, `allow_overlay_network`, `allow_public_hub`) therefore count only
+when you have also granted them for that store in your own `~/.config/cyberbrain/waivers.toml`.
+`cyberbrain trust` shows what a store asks for, `cyberbrain trust --grant` grants exactly
+that, `--revoke` takes it back; a cloned project cannot switch them on by itself.
+
 - **Erasure that erases** (GDPR Art. 17): `cyberbrain forget` removes the note, its blocks,
   its vectors, its index rows and its derivatives in one transaction, and prints what went.
   `--report FILE --sign` writes an erasure report somebody else can check.
@@ -398,7 +405,7 @@ the network.
 
 ## Status
 
-**v0.8.1, and young.** 1,069 tests, 18 browser tests, seven crates on crates.io plus the
+**v0.8.2, and young.** 1,075 tests, 18 browser tests, seven crates on crates.io plus the
 Windows launcher, clippy and rustfmt clean. Binaries for Linux, Windows and macOS (Apple
 silicon) on the release page, and an installer beside them. It has been run against one
 operator's real corpus, 1,086 notes across five projects, and not much else. Expect rough

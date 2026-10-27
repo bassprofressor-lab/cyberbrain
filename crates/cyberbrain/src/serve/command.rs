@@ -242,6 +242,17 @@ fn refuse(command: &Command) -> Option<&'static str> {
         // pointed, and this surface has no authentication.
         Command::Policy { command } => refuse_policy(command),
 
+        // Showing is harmless. Granting writes the user's own waivers file, the one thing a
+        // store must not be able to decide for itself, so it is done at a prompt by a person.
+        Command::Trust {
+            grant: false,
+            revoke: false,
+        } => None,
+        Command::Trust { .. } => Some(
+            "`trust --grant` and `--revoke` change your own waivers file, which decides where \
+             this store may send notes; that is done at a terminal, not from a page without \
+             authentication.",
+        ),
         Command::Transcribe { .. } => Some(
             "`transcribe` reads a file wherever it is pointed, and this surface has no \
              authentication. Use the microphone button to dictate, or transcribe at a prompt.",

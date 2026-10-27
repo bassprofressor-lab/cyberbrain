@@ -1055,6 +1055,10 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             let r = app.doctor()?;
             out.emit(&r, render::doctor)?;
         }
+        Command::Trust { grant, revoke } => {
+            let r = app.trust(grant, revoke)?;
+            out.emit(&r, render::trust)?;
+        }
         Command::BenchEmbedding { sample } => {
             let r = app.bench_embedding(sample)?;
             out.emit(&r, render::bench_embedding)?;

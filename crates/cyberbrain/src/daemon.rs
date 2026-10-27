@@ -16,7 +16,7 @@
 //!   local path.
 //! - One `App` per actor, all sharing one loaded model: the audit log still names who asked.
 //! - It leaves after `--idle-secs` without a request, and at once when the binary,
-//!   `cyberbrain.toml` or the model manifest changes (answering the request that noticed
+//!   `cyberbrain.toml`, the user's `waivers.toml` or the model manifest changes (answering the request that noticed
 //!   with "stale", so the client runs it locally).
 //! - The socket is `0600`. The client's actor is taken as sent, except that the daemon reads
 //!   the connecting process's own environment (`SO_PEERCRED`, then `/proc/<pid>/environ`) and

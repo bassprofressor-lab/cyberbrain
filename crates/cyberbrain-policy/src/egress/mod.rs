@@ -1175,7 +1175,8 @@ impl Egress {
                     Locality::Overlay => {
                         return Err(format!(
                             "{} resolves to {a}, which is in 100.64.0.0/10 (carrier-grade NAT or an overlay \
-                             such as Tailscale). Set allow_overlay_network only if that machine is yours",
+                             such as Tailscale). Set allow_overlay_network only if that machine is yours, \
+                             and grant it with `cyberbrain trust --grant`",
                             dest.host
                         ));
                     }

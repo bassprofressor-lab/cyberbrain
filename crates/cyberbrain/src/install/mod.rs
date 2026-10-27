@@ -249,6 +249,13 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
     }
 
     let whose = "settings.json";
+    // In enforce mode the pre-tool-use hook is the gate in front of AgentGuard, so it fails
+    // closed (0.8.2): a hook that cannot start or times out blocks the tool call instead of
+    // letting it through. Shadow mode never stops anything, and a missing binary there should
+    // not stop every edit either. An unreadable store config counts as shadow.
+    let fail_closed = cyberbrain_core::config::Config::load(&opts.store)
+        .map(|c| c.governance.mode == cyberbrain_core::config::GovernanceMode::Enforce)
+        .unwrap_or(false);
     let change = edit(
         &path,
         "the hooks are per project, so this is the project you named",
@@ -269,7 +276,8 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
                         touched |= had;
                         continue;
                     }
-                    let entry = hook_entry(binary, matcher, arg);
+                    let entry =
+                        hook_entry(binary, matcher, arg, fail_closed && event == "PreToolUse");
                     changed |= before.as_ref() != Some(&entry);
                     touched = true;
                     list.push(entry);
@@ -305,16 +313,25 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
     })
 }
 
-fn hook_entry(binary: &Path, matcher: &str, args: &[&str]) -> Value {
+/// `fail_closed` adds `"onFailure": "block"` (Claude Code 2.1.295 and later): a hook that
+/// cannot start, times out or prints output that does not parse then blocks the action, as
+/// exit code 2 would. Our hooks always exit 0 and report problems on stdout, so a store that
+/// cannot be opened still answers; what this catches is a binary that is gone or hangs.
+/// Older Claude Code versions do not know the field.
+fn hook_entry(binary: &Path, matcher: &str, args: &[&str], fail_closed: bool) -> Value {
     let hooks: Vec<Value> = args
         .iter()
         .map(|arg| {
-            json!({
+            let mut h = json!({
                 "type": "command",
                 "command": binary.display().to_string(),
                 "args": ["hook", arg],
                 "timeout": HOOK_TIMEOUT_SECS,
-            })
+            });
+            if fail_closed {
+                h["onFailure"] = json!("block");
+            }
+            h
         })
         .collect();
     json!({

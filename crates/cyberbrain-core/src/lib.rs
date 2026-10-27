@@ -14,6 +14,7 @@ pub mod path_serde;
 pub mod provenance;
 pub mod store;
 pub mod types;
+pub mod waivers;
 
 pub use citation::Citation;
 pub use config::{Config, PolicyProfile, TranscriptionConfig};

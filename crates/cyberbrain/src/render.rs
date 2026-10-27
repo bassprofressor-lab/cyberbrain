@@ -436,6 +436,57 @@ pub fn bench_embedding(r: &crate::app::EmbedBenchReport) -> String {
     s
 }
 
+pub fn trust(r: &crate::app::TrustReport) -> String {
+    let mut s = String::new();
+    let _ = writeln!(s, "store: {}", r.store);
+    let _ = writeln!(
+        s,
+        "waivers file: {}",
+        r.waivers_file
+            .as_deref()
+            .unwrap_or("(none: no home directory and no CYBERBRAIN_WAIVERS)")
+    );
+    if r.requested.is_empty() {
+        let _ = writeln!(s, "this store asks for no waivers");
+    }
+    for k in &r.requested {
+        let state = if r.granted.contains(k) {
+            "granted"
+        } else {
+            "NOT granted, so off"
+        };
+        let _ = writeln!(s, "  {k}: {state}");
+    }
+    for k in r.granted.iter().filter(|k| !r.requested.contains(k)) {
+        let _ = writeln!(s, "  {k}: granted, not asked for (has no effect)");
+    }
+    if let Some(p) = &r.problem {
+        let _ = writeln!(s, "problem: {p}");
+    }
+    match r.action {
+        "grant" => {
+            let _ = writeln!(
+                s,
+                "granted what this store asks for; recorded in the audit log"
+            );
+        }
+        "revoke" => {
+            let _ = writeln!(
+                s,
+                "revoked every waiver for this store; recorded in the audit log"
+            );
+        }
+        _ if r.requested.iter().any(|k| !r.granted.contains(k)) => {
+            let _ = writeln!(
+                s,
+                "grant with: cyberbrain trust --grant   (only if you trust whoever wrote this store's cyberbrain.toml)"
+            );
+        }
+        _ => {}
+    }
+    s
+}
+
 pub fn doctor(r: &DoctorReport) -> String {
     let mut s = String::new();
     if r.findings.is_empty() {

@@ -66,6 +66,15 @@ pub struct Config {
     pub governance: GovernanceConfig,
     pub provenance: ProvenanceConfig,
     pub clients: ClientsConfig,
+    /// Keys this store's file sets to `true` that its user did not grant in the waivers file,
+    /// and which [`Config::load`] therefore switched off (0.8.2, see [`crate::waivers`]). Not
+    /// a key in the file: a store cannot declare its own waivers granted.
+    #[serde(skip)]
+    pub waivers_ignored: Vec<String>,
+    /// Why the waivers file could not be used, when it exists and could not be read or parsed.
+    /// Then nothing in it counts.
+    #[serde(skip)]
+    pub waivers_problem: Option<String>,
 }
 
 /// What a client may see and write (2026-10-03).
@@ -404,6 +413,8 @@ impl Default for Config {
             governance: GovernanceConfig::default(),
             provenance: ProvenanceConfig::default(),
             clients: ClientsConfig::default(),
+            waivers_ignored: Vec::new(),
+            waivers_problem: None,
         }
     }
 }
@@ -644,7 +655,51 @@ impl Config {
         };
         let mut cfg = Self::parse(&text, &path)?;
         cfg.store = store.to_path_buf();
+        let (waivers, problem) = crate::waivers::load();
+        cfg.apply_waivers(crate::waivers::grant_for(&waivers, store));
+        cfg.waivers_problem = problem;
         Ok(cfg)
+    }
+
+    /// Switch off every waiver key the store sets and `grant` does not cover, and list it in
+    /// [`Config::waivers_ignored`]. Both have to say yes: the store's file that it needs the
+    /// waiver, the user's file that this store may have it (0.8.2, [`crate::waivers`]).
+    pub fn apply_waivers(&mut self, grant: crate::waivers::Grant) {
+        self.waivers_ignored.clear();
+        for key in crate::waivers::KEYS {
+            let flag = match key {
+                "inference.allow_public_endpoint" => &mut self.inference.allow_public_endpoint,
+                "inference.allow_overlay_network" => &mut self.inference.allow_overlay_network,
+                "hub.allow_public_hub" => &mut self.hub.allow_public_hub,
+                _ => continue,
+            };
+            if *flag && !grant.allows(key) {
+                *flag = false;
+                self.waivers_ignored.push(key.to_string());
+            }
+        }
+    }
+
+    /// The waiver keys this store's file asks for, granted or not. Read from the file again,
+    /// because [`Config::load`] has already switched off the ungranted ones.
+    pub fn waivers_requested(store: &Path) -> Result<Vec<String>> {
+        let path = Self::path_in(store);
+        let text = match std::fs::read_to_string(&path) {
+            Ok(t) => t,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(Error::Io { path, source: e }),
+        };
+        let raw = Self::parse(&text, &path)?;
+        Ok(crate::waivers::KEYS
+            .iter()
+            .filter(|k| match **k {
+                "inference.allow_public_endpoint" => raw.inference.allow_public_endpoint,
+                "inference.allow_overlay_network" => raw.inference.allow_overlay_network,
+                "hub.allow_public_hub" => raw.hub.allow_public_hub,
+                _ => false,
+            })
+            .map(|k| k.to_string())
+            .collect())
     }
 
     /// Parse config text. `path` only names the file in errors.
@@ -783,7 +838,7 @@ impl Config {
                 format!(
                     "host `{host}` is not loopback or a private range; project notes would \
                      be sent off the machine. Set inference.allow_public_endpoint = true \
-                     only if that is what you want (SPEC §11)"
+                     only if that is what you want, and grant it with `cyberbrain trust --grant` (SPEC §11)"
                 ),
             ));
         }
@@ -916,6 +971,49 @@ pub fn host_is_overlay(host: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// 0.8.2: a waiver the store's file sets is off unless the user granted it, and listed
+    /// as ignored; a granted one stays on; a grant the store did not ask for opens nothing.
+    #[test]
+    fn a_waiver_counts_only_when_the_store_asks_and_the_user_grants() {
+        use crate::waivers::Grant;
+        let text = "[inference]\nbase_url = \"https://llm.example.org/v1\"\nallow_public_endpoint = true\n\n[hub]\nallow_public_hub = true\n";
+        let mut cfg = Config::parse(text, Path::new("cyberbrain.toml")).unwrap();
+        cfg.apply_waivers(Grant::default());
+        assert!(!cfg.inference.allow_public_endpoint);
+        assert!(!cfg.hub.allow_public_hub);
+        assert_eq!(
+            cfg.waivers_ignored,
+            ["inference.allow_public_endpoint", "hub.allow_public_hub"]
+        );
+
+        let mut cfg = Config::parse(text, Path::new("cyberbrain.toml")).unwrap();
+        let mut g = Grant::default();
+        g.set("inference.allow_public_endpoint", true);
+        g.set("inference.allow_overlay_network", true);
+        cfg.apply_waivers(g);
+        assert!(cfg.inference.allow_public_endpoint);
+        assert!(
+            !cfg.inference.allow_overlay_network,
+            "a grant alone switches nothing on"
+        );
+        assert_eq!(cfg.waivers_ignored, ["hub.allow_public_hub"]);
+    }
+
+    #[test]
+    fn waivers_requested_reads_the_file_not_the_effective_config() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            "[inference]\nallow_overlay_network = true\n",
+        )
+        .unwrap();
+        assert_eq!(
+            Config::waivers_requested(dir.path()).unwrap(),
+            ["inference.allow_overlay_network"]
+        );
+    }
+
     use super::*;
 
     fn p() -> &'static Path {
