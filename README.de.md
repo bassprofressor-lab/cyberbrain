@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="docs/images/logo.svg" width="88" alt="">
+<img src="docs/images/logo.png" width="96" alt="Cyberbrain-Logo: ein Neon-Gehirn mit Umlaufring">
 
 # Cyberbrain
 
@@ -10,14 +10,14 @@
 [![crates.io](https://img.shields.io/crates/v/cyberbrain?label=crates.io&color=b7410e)](https://crates.io/crates/cyberbrain)
 [![Lizenz: FSL-1.1-ALv2](https://img.shields.io/badge/Lizenz-FSL--1.1--ALv2-blue)](LICENSE.md)
 [![Rust 1.98+](https://img.shields.io/badge/rust-1.98%2B-b7410e)](rust-toolchain.toml)
-[![Linux und Windows](https://img.shields.io/badge/l%C3%A4uft%20auf-Linux%20%C2%B7%20Windows-333)](#installieren)
+[![Linux, Windows, macOS](https://img.shields.io/badge/l%C3%A4uft%20auf-Linux%20%C2%B7%20Windows%20%C2%B7%20macOS-333)](#installieren)
 [![Keine Telemetrie](https://img.shields.io/badge/Telemetrie-gibt%20es%20nicht-2ea44f)](#für-die-eu-gebaut-abschaltbar)
 
 [English](README.md) · **Deutsch**
 
-[Installieren](#installieren) · [Fünf Minuten](#fünf-minuten) · [Wie es arbeitet](#wie-es-arbeitet) ·
-[Was es braucht](#was-es-braucht) · [Compliance](#für-die-eu-gebaut-abschaltbar) ·
-[Spezifikation](docs/SPEC.md) · [Changelog](CHANGELOG.md) · [Mitarbeiten](CONTRIBUTING.md)
+[Installieren](#installieren) · [Fünf Minuten](#fünf-minuten) · [Funktionen](#auf-einen-blick) ·
+[Wie es arbeitet](#wie-es-arbeitet) · [Was es braucht](#was-es-braucht) ·
+[Compliance](#für-die-eu-gebaut-abschaltbar) · [Changelog](CHANGELOG.md) · [Spezifikation](docs/SPEC.md)
 
 </div>
 
@@ -25,11 +25,45 @@ Eine native Binärdatei. Deine Notizen bleiben reines Markdown, lesbar, editierb
 Nichts verlässt den Rechner, außer du sagst es, und jeder Weg, auf dem etwas hinaus könnte,
 steht an einer Stelle, die du dir ausdrucken lassen kannst.
 
-<img src="docs/images/search.png" alt="Suche über die Notizen eines Projekts: jeder Treffer trägt seinen Ring, sein Zitat und seinen Wert">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/notes-dark.png">
+  <img src="docs/images/notes-light.png" alt="Die Notizen-Ansicht: eine Liste mit Ring und Art, eine Notiz offen mit Kennung, Pfad, Aufbewahrung, Bereich, Zitat und Verweisen">
+</picture>
 
-<sub>Eine Frage in den Worten, die du Monate später benutzen würdest. Jeder Treffer trägt den
-Ring, aus dem er kommt, ein Zitat, das auf den Block zurückführt, und seinen Wert. Die
-Screenshots stammen aus einem Demo-Store, die Notizen darin sind erfunden.</sub>
+<sub>Die Weboberfläche, die in der Binärdatei steckt. Die Screenshots stammen aus einem
+Demo-Store, die Notizen darin sind erfunden.</sub>
+
+## Neu in 0.8.0
+
+- **Sprache zu Text, lokal.** `cyberbrain transcribe <datei>` macht aus einer Sprachnotiz
+  oder einer Besprechung eine Notiz, über einen whisper.cpp-Server auf deinem eigenen
+  Rechner, und die Seite bekommt einen Mikrofon-Knopf zum Diktieren.
+  [Mehr dazu unten](#sprache-zu-text).
+- **Ein signiertes Audit-Log.** `policy audit-key --init` gibt einem Store einen
+  Ed25519-Schlüssel; jede neue Zeile wird signiert, und `verify-export` prüft ein
+  exportiertes Bündel gegen den Fingerabdruck, den der Empfänger bekommen hat.
+- **Köder.** `cyberbrain canary plant` legt ein Zugangsdatum, das niemand benutzt, in eine
+  Notiz. Jede Verwendung außerhalb dieser Notiz wird abgewiesen und als `canary.hit`
+  festgehalten.
+- **Tokens mit Ablaufdatum**, für MCP-Clients, Zugänge zur Zentraleinheit und Gerätetokens.
+- **Ein neues Gesicht.** Eine Weboberfläche im Stil von Windows 11, ein Neon-Gehirn als
+  Symbol, und Starter und Installationsprogramm sprechen auf einem deutschen Windows Deutsch.
+- Viele Korrekturen beim Abgleich, im Governance-Notbetrieb, beim Schwärzen von PII und bei
+  Dateirechten: [CHANGELOG](CHANGELOG.md#080--2026-10-27), samt dem, worauf man beim
+  Aktualisieren achten muss.
+
+## Auf einen Blick
+
+| | |
+|---|---|
+| **Zitiert** | jeder Treffer trägt eine Kennung wie `r2-867ef2a8cd01`, die auf genau den Quellblock zurückführt |
+| **Vertrauensgestuft** | Notizen liegen in den Ringen 0 bis 4; bei Widerspruch gewinnt der niedrigere Ring, und der Konflikt wird gemeldet |
+| **Lokal zuerst** | Einbettungen werden auf deinem Rechner gerechnet; der Kern macht kein Netzwerk-I/O |
+| **Hybride Suche** | SQLite FTS5 für die Wörter und lokale Vektoren für die Bedeutung, zu einer Rangfolge verschmolzen |
+| **Ehrliche Ergebnisse** | jede Antwort sagt als Caveat, was *nicht* geprüft wurde |
+| **Vier Wege hinein** | Kommandozeile, Agenten-Hooks, MCP-Server, Weboberfläche mit HTTP-API |
+| **Zentraleinheit, optional** | ein Rechner sammelt die Nachweise der übrigen ein; Notizen teilen nur, wenn eingeschaltet |
+| **Compliance eingebaut** | Ausgangsregister, Löschung, Auskunft, PII-Prüfung, signiertes Audit-Log mit Hashkette |
 
 ```console
 $ cyberbrain recall 'postgres data directory'
@@ -41,7 +75,12 @@ caveat: contradiction check skipped: no inference model is configured
 ```
 
 Die letzte Zeile ist genauso der Punkt wie der Treffer selbst. Das Werkzeug sagt, was es
-**nicht** geprüft hat.
+**nicht** geprüft hat. Die Seite macht es genauso:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/search-dark.png">
+  <img src="docs/images/search-light.png" alt="Suche in der Weboberfläche: ein Treffer mit Ring, Zitat und Wert, darunter der Hinweis, dass die semantische Suche übersprungen wurde">
+</picture>
 
 ## Installieren
 
@@ -51,54 +90,37 @@ $ cyberbrain init
 ```
 
 Oder eine fertige Binärdatei aus dem [letzten Release](https://github.com/bassprofressor-lab/cyberbrain/releases/latest)
-nehmen und gegen die danebenliegende `SHA256SUMS` nachrechnen:
+nehmen (Linux x86_64, Windows x86_64, macOS mit Apple-Chip) und gegen die danebenliegende
+`SHA256SUMS` nachrechnen:
 
 ```console
 $ sha256sum -c SHA256SUMS
 $ ./cyberbrain-linux-x86_64 init
 ```
 
-Linux und Windows. Zur Laufzeit braucht die Binärdatei nichts weiter: kein SQLite aus dem
-System, kein OpenSSL, keinen Modellserver, kein node.
+Zur Laufzeit braucht die Binärdatei nichts weiter: kein SQLite aus dem System, kein OpenSSL,
+keinen Modellserver, kein node.
 
 ### Windows ohne Terminal
 
 Am Release hängt außerdem `cyberbrain-setup-<version>.exe`. Es installiert das
 Kommandozeilenwerkzeug und einen kleinen Starter und legt **Cyberbrain** ins Startmenü. Ein
 Klick darauf fragt einmal, welches Projekt geöffnet werden soll, startet den Server auf einem
-Port, den Windows aussucht, öffnet den Browser darauf und bleibt danach im Infobereich —
-Rechtsklick für den Projektordner, ein anderes Projekt oder Beenden. Wird der Starter
-beendet, endet auch der Server.
-
-Ein zweiter Start, während er schon läuft, bringt kein zweites Symbol: der zweite Aufruf
-öffnet den Browser auf dem bereits laufenden und beendet sich.
+Port, den Windows aussucht, öffnet die Seite und bleibt danach im Infobereich: Rechtsklick
+für den Projektordner, ein anderes Projekt, *Mit Windows starten* (von Haus aus aus) oder
+Beenden. Wird der Starter beendet, endet auch der Server. Ein zweiter Start bringt kein
+zweites Symbol, sondern zeigt die Seite, die schon läuft. Starter und Installationsprogramm
+sprechen auf einem deutschen Windows Deutsch, sonst Englisch.
 
 Signiert ist die Datei nicht, SmartScreen warnt deshalb beim ersten Start: Weitere
-Informationen, dann Trotzdem ausführen. `C:\Program Files\Cyberbrain` trägt das Installationsprogramm in
-den `PATH` der Maschine ein, damit `cyberbrain` auch in einem frischen Fenster läuft. Das
-macht ein kleines PowerShell-Skript und nicht NSIS selbst: NSIS kürzt Zeichenketten ab einer
-festen Länge, und ein Maschinen-PATH ist regelmäßig länger — im Installer gelesen und
-zurückgeschrieben wäre am Ende still etwas abgeschnitten.
+Informationen, dann Trotzdem ausführen. `C:\Program Files\Cyberbrain` trägt das
+Installationsprogramm in den `PATH` der Maschine ein, damit `cyberbrain` auch in einem
+frischen Fenster läuft. Das macht ein kleines PowerShell-Skript und nicht NSIS selbst: NSIS
+kürzt Zeichenketten ab einer festen Länge, und ein Maschinen-PATH ist regelmäßig länger. Im
+Installer gelesen und zurückgeschrieben wäre am Ende still etwas abgeschnitten.
 
-Dasselbe Installationsprogramm richtet auf Wunsch auch **die Zentraleinheit** ein — den einen
-Rechner, der die Nachweise der übrigen einsammelt. Häkchen bei *Hub service (collector)*: es
-trägt einen Windows-Dienst ein, öffnet den Port und legt einen Ordner an, in den die
-Lizenzdatei kommt. Mehr nicht, und keine Kommandozeile. Auf den Arbeitsplätzen nimmt
-*Connect to the company hub…* im Infobereich die Einladungsdatei entgegen, die sie bekommen
-haben. Die Zentraleinheit selbst hat eine Seite unter `http://localhost:7788/`: Lizenz, Plätze, und
-welche Maschinen melden. Der erste Aufruf auf ihrem eigenen Rechner setzt das
-Verwalterkennwort — ein Standardkennwort gibt es nicht — danach geht sie von jedem
-Schreibtisch aus auf, über HTTPS.
-
-Von Haus aus nimmt die Zentraleinheit Nachweiszeilen und sonst nichts: eine Zeile sagt, dass
-eine Notiz geschrieben wurde, nie was darin stand. Wer dieselbe Übergabenotiz auf vier
-Schreibtischen haben will, kann das Teilen einschalten — dann hält die Zentraleinheit auch
-den Text der Notizen, die einen `bereich` tragen. Nie die Ringe 0 und 1, nur für Geräte mit
-einer Freigabe für diesen Bereich, und erst wenn eine zweite Person diese Freigabe
-gegengezeichnet hat, damit wer die Zentraleinheit betreibt nicht eine Abteilung auf einen
-eigenen Rechner leiten kann. Was davon auf Ihrem Rechner an ist, sagt Ihnen `cyberbrain
-policy egress`, ohne jemanden fragen zu müssen. Das ganze Bild steht in
-[`docs/HUB.md`](docs/HUB.md).
+Dasselbe Installationsprogramm richtet mit einem Häkchen bei *Hub service (collector)* auch
+[die Zentraleinheit](#im-team-die-zentraleinheit) ein.
 
 <details>
 <summary>Ohne Weboberfläche, oder aus einem Checkout</summary>
@@ -140,33 +162,35 @@ Vier Wege hinein, alle aus derselben Binärdatei:
 | `cyberbrain <befehl>` | alles ist von der Kommandozeile aus erreichbar, überall mit `--json` |
 | `cyberbrain hook <ereignis>` | sechs Lebenszyklus-Ereignisse des Agenten; gemessenes p99 von 4 ms inklusive Prozessstart, bei einem Budget von 15 ms |
 | `cyberbrain mcp` | Model Context Protocol über stdio, für jeden Client, der es spricht |
-| `cyberbrain serve` | Weboberfläche und HTTP-API, auf Loopback, ohne Anmeldung, weil nichts davon den Rechner verlässt |
+| `cyberbrain serve` | Weboberfläche und HTTP-API, auf Loopback, ohne Anmeldung, weil nichts davon den Rechner verlässt; unter Linux kommt nur das eigene Konto (und root) hinein |
 
 `cyberbrain install` schaltet die ersten beiden ein, ohne dass jemand fremdes JSON bearbeitet:
 es schreibt die Hooks in die Claude-Code-Einstellungen dieses Projekts und einen MCP-Eintrag in
 die Desktop-Clients, die es findet, legt die vorherige Datei daneben, und `--undo` nimmt alles
 wieder heraus. Es schreibt jede gefundene Claude-Desktop-Installation statt nur den
-dokumentierten Pfad — unter Windows sind das nicht dieselbe Datei, und die falsche scheitert
-lautlos.
+dokumentierten Pfad, denn unter Windows sind das nicht dieselbe Datei, und die falsche
+scheitert lautlos. Ein gleichnamiger MCP-Eintrag, der nicht cyberbrain startet, wird als
+`not-ours` gemeldet und in Ruhe gelassen.
 
 Die Seite hat eine eigene Befehlszeile, damit `find`, `export` und alles andere ohne
 Bildschirm nicht bedeuten, dass man in ein Terminal wechselt. Sie startet dasselbe Binary,
 das die Seite ausliefert, gegen deren Store, und gibt Ausgabe, Fehlerausgabe und
 Rückgabewert unverändert zurück.
 
-Die Ringe 0 und 1 gehören dem Betreiber, und `cyberbrain propose` ist der Weg, auf dem alle
-anderen etwas dafür anbieten: die Notiz landet in `proposals/`, außerhalb des Notizbaums,
-wird nicht indiziert und ist über `recall` nicht auffindbar — eine unfreigegebene Invariante,
-die ein Agent findet, ist eine Invariante, der niemand zugestimmt hat. Jemand anderes als der
-Vorschlagende gibt sie mit `cyberbrain review <name> --accept` frei, und das Audit-Log nennt
-beide.
-
-`cyberbrain serve --terminal` setzt ein echtes Terminal in die Seite — eine Shell, `ssh`, ein
+`cyberbrain serve --terminal` setzt ein echtes Terminal in die Seite: eine Shell, `ssh`, ein
 Agent, im Verzeichnis des Projekts. Es ist aus, solange man es nicht verlangt, es braucht
 einen Token, den die Adresse im Fragment trägt, und es weist jede Anfrage von einer anderen
 Herkunft ab. Das Ausgangsregister führt es als den einen Weg, den dieses Programm nicht
-vermittelt — ein Register, das ihn verschwiege, während `ssh` einen Tastendruck weit weg ist,
+vermittelt. Ein Register, das ihn verschwiege, während `ssh` einen Tastendruck weit weg ist,
 wäre falsch.
+
+Die Ringe 0 und 1 gehören dem Betreiber, und `cyberbrain propose` ist der Weg, auf dem alle
+anderen etwas dafür anbieten: die Notiz landet in `proposals/`, außerhalb des Notizbaums,
+wird nicht indiziert und ist über `recall` nicht auffindbar. Eine unfreigegebene Invariante,
+die ein Agent findet, ist eine Invariante, der niemand zugestimmt hat. Jemand anderes als der
+Vorschlagende gibt sie mit `cyberbrain review <name> --accept` frei, die Seite zeigt den
+Zeilenvergleich, wenn ein Vorschlag eine bestehende Notiz ändert, und das Audit-Log nennt
+beide.
 
 ## Wie es arbeitet
 
@@ -183,7 +207,8 @@ Die Notizen sind die Wahrheit und bleiben deine: eine Markdown-Datei je Notiz, i
 lesbar auch ohne dieses Werkzeug. Der Index ist abgeleitet und darf jederzeit gelöscht werden,
 `cyberbrain scan` baut ihn neu. Gesucht wird lexikalisch und semantisch zugleich, SQLite FTS5
 für die Wörter und ein flacher Kosinus-Durchlauf über lokale Einbettungen für die Bedeutung,
-zu einer Rangfolge verschmolzen.
+zu einer Rangfolge verschmolzen. `recall --stand <datum>` sucht im Store, wie er an diesem
+Tag aussah.
 
 ### Drei Eigenschaften, die ein Gedächtnis vertrauenswürdig halten
 
@@ -200,28 +225,58 @@ Blöcke, gewinnt der niedrigere Ring, und der Konflikt wird gemeldet statt still
 überhaupt kein Netzwerk-I/O. Inferenz ist optional und läuft gegen jeden OpenAI-kompatiblen
 Endpunkt, also Ollama, LM Studio, llama.cpp, oder NVIDIA PAIR, das die Arbeit über eine
 RTX-Maschine, einen DGX Spark und einen Apple M4 Mac verteilt. Dieser Endpunkt darf auf einer
-anderen Maschine im eigenen Netz liegen — eine Maschine mit Grafikkarte kann damit ein ganzes
+anderen Maschine im eigenen Netz liegen, eine Maschine mit Grafikkarte kann damit ein ganzes
 Team bedienen: [`docs/SHARED-INFERENCE.md`](docs/SHARED-INFERENCE.md).
 
-<details>
-<summary>Was die Weboberfläche zeigt (Screenshots)</summary>
+### Sprache zu Text
 
-<br>
+`cyberbrain transcribe <datei>` schickt eine Aufnahme an einen
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp)-Server auf deinem eigenen Rechner
+(`whisper-server --convert`) und schreibt den Text so, wie `write` schreibt: PII-Prüfung,
+Audit-Zeile, Index. Von Haus aus in Ring 3, mit dem Tag `transcript`. `--segments` behält
+jeden Redeabschnitt mit seiner Zeit in der Aufnahme, `--print` zeigt den Text nur an. In der
+Seite setzt ein Mikrofon-Knopf neben dem Suchfeld und im Notiz-Editor den diktierten Text ins
+Feld; gespeichert wird erst, wenn du speicherst.
 
-**Status** — was der Store hält, was der Index weiß, welches Modell geladen ist, und eine
-Tafel, die aufzählt, was die Seite *nicht* messen kann.
+Aus ist es, bis du den Server nennst, und es gilt dieselbe Regel wie für die Inferenz:
+Loopback oder privater Bereich, sofern `[inference]` es nicht ausdrücklich erlaubt, jeder
+Aufruf im Audit-Log. Die Sprache ist von Haus aus Deutsch; `language` nimmt jeden
+whisper-Code oder `auto`.
 
-<img src="docs/images/status.png" alt="Status-Ansicht">
+```toml
+# cyberbrain.toml
+[transcription]
+base_url = "http://127.0.0.1:8178"
+```
 
-**Graph** — Notizen und die Verweise dazwischen, nach Ring. Ein Verweis auf eine Notiz, die
-es noch nicht gibt, wird als Absicht gezeichnet, nicht als Fehler.
+Kein C++ in diesem Build: das Modell läuft in einem eigenen Prozess, so wie die Einbettungen
+in Ollama.
 
-<img src="docs/images/graph.png" alt="Graph-Ansicht">
+## Im Team: die Zentraleinheit
 
-Die Seite ist in die Binärdatei kompiliert, spricht Deutsch und Englisch und holt nichts aus
-dem Netz.
+Die Zentraleinheit (Hub) ist der eine Rechner im Team, der die Nachweise der übrigen
+einsammelt. Unter Windows richtet das Installationsprogramm sie mit einem Häkchen ein: es
+trägt einen Dienst ein, öffnet den Port und legt einen Ordner für die Lizenzdatei an. Auf den
+Arbeitsplätzen nimmt *Connect to the company hub…* im Infobereich die Einladungsdatei
+entgegen, die sie bekommen haben. Die Zentraleinheit hat eine Seite unter
+`http://localhost:7788/` für Lizenz, Plätze, Personen, Geräte-Einladungen und welche
+Maschinen melden. Der erste Aufruf auf ihrem eigenen Rechner setzt das Verwalterkennwort (ein
+Standardkennwort gibt es nicht), danach geht sie von jedem Schreibtisch aus auf, über HTTPS.
 
-</details>
+Von Haus aus nimmt die Zentraleinheit Nachweiszeilen und sonst nichts: eine Zeile sagt, dass
+eine Notiz geschrieben wurde, nie was darin stand. Wer dieselbe Übergabenotiz auf vier
+Schreibtischen haben will, kann das Teilen einschalten, dann hält die Zentraleinheit auch
+den Text der Notizen, die einen `bereich` tragen. Nie die Ringe 0 und 1, nur für Geräte mit
+einer Freigabe für diesen Bereich, und erst wenn eine zweite Person diese Freigabe
+gegengezeichnet hat, damit wer die Zentraleinheit betreibt nicht eine Abteilung auf einen
+eigenen Rechner leiten kann.
+
+Zugänge und Gerätetokens können ein Enddatum tragen (`--expires`). Die Zentraleinheit kann,
+was eine Person braucht (wartende Gegenzeichnungen, eine auslaufende Lizenz, seit 48 Stunden
+stille Geräte, ein bald ablaufendes Token), an einen Webhook schicken, den ihr Verwalter
+festlegt; das ist aus, bis eine Adresse eingetragen ist. Was davon auf deinem Rechner an ist,
+sagt dir `cyberbrain policy egress`, ohne jemanden fragen zu müssen. Das ganze Bild steht in
+[`docs/HUB.md`](docs/HUB.md).
 
 ## Was es braucht
 
@@ -266,30 +321,63 @@ $ cyberbrain scan       # 3. Vektoren entstehen beim Indizieren, nicht vorher
 ```
 
 Die Summen sind der Sinn der `manifest.json`: ein Artefakt, das nicht zu dem festgehaltenen
-passt, wird abgewiesen statt geladen — ein unter dem Store ausgetauschtes Modell ändert
+passt, wird abgewiesen statt geladen. Ein unter dem Store ausgetauschtes Modell ändert
 sonst die Bedeutung seiner Vektoren, ohne dass man etwas sieht.
+
+### Bessere Suche für den Preis eines Vorwärtslaufs: ein lokales Ollama
+
+Statische Einbettungen kennen keinen Zusammenhang und keine Wortfolge. Läuft auf dem Rechner
+[Ollama](https://ollama.com), findet ein Transformer-Einbettungsmodell dahinter spürbar mehr:
+bei 34 Fragen über 1.800 deutsche Projektnotizen stand die richtige Notiz mit
+potion-multilingual-128M bei 79 % unter den ersten drei, mit `embeddinggemma:300m-qat-q4_0`
+(245 MB) bei 88 %; auf Platz eins bei 56 % gegen 71 %. Der Preis sind rund 20 ms je Anfrage
+statt weniger, und ein kompletter Neuaufbau dauert Minuten statt Sekunden (zehn auf dem
+Server mit 12 vCPU von oben).
+
+```console
+$ ollama pull embeddinggemma:300m-qat-q4_0   # du lädst es herunter, wie oben
+$ cyberbrain bench-embedding                 # misst, was auf *diesem* Rechner installiert ist
+```
+
+`bench-embedding` misst jeden installierten Kandidaten an einer Stichprobe deiner eigenen
+Blöcke, Antwortzeit und Neuaufbau, und druckt den `[embedding]`-Abschnitt für den passenden,
+samt der Prüfsumme der Gewichte, die Ollama lädt. Diese Summe übernimmt die Rolle des
+Manifests: ändern sich die Gewichte hinter dem Namen je, weist Cyberbrain sie ab, statt ihre
+Vektoren in den Index zu mischen. Die Anfrage läuft durch dasselbe Register und Audit-Log wie
+jeder Inferenz-Aufruf, und antwortet Ollama nicht, fällt die Suche auf lexikalisch zurück und
+sagt das.
 
 ## Für die EU gebaut, abschaltbar
 
-<img src="docs/images/compliance.png" alt="Die Compliance-Ansicht: nichts hat diesen Rechner verlassen, darunter der Pflichtenkatalog">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/compliance-dark.png">
+  <img src="docs/images/compliance-light.png" alt="Die Compliance-Ansicht: nichts ist an ein öffentliches Ziel gegangen, Zähler für Internet, eigenes Netz, Abweisungen und Audit-Zeilen, darunter der Pflichtenkatalog">
+</picture>
 
-<sub>Die Überschrift ist aus dem Ausgangsregister berechnet, nicht hingeschrieben. Darunter
-steht, was das aktive Profil über die Rechtslage behauptet, mit dem Artikel, auf dem jede
-Zeile ruht, und wie sicher sich der Autor ist.</sub>
+<sub>Die Überschrift ist aus dem Ausgangsregister berechnet, nicht hingeschrieben. Was ins
+eigene Netz und an eine Zentraleinheit geht, wird daneben getrennt gezählt. Darunter steht,
+was das aktive Profil über die Rechtslage behauptet, mit dem Artikel, auf dem jede Zeile
+ruht, und wie sicher sich der Autor ist.</sub>
 
 Compliance ist ein Teilsystem, kein Abschnitt in der Dokumentation. `cyberbrain policy egress`
 druckt jeden Weg, auf dem Bytes den Rechner verlassen können, was jeder trägt und ob er an
-ist. Heute hat diese Liste acht Einträge und endet mit „Telemetry does not exist."
+ist. Heute hat diese Liste neun Einträge und endet mit „Telemetry does not exist."
 
 - **Löschung, die löscht** (DSGVO Art. 17): `cyberbrain forget` entfernt die Notiz, ihre
   Blöcke, ihre Vektoren, ihre Indexzeilen und ihre Ableitungen in einer Transaktion und
-  druckt, was weg ist.
+  druckt, was weg ist. `--report DATEI --sign` schreibt einen Löschbericht, den jemand
+  anderes nachprüfen kann.
 - **Auskunft** (Art. 15): `cyberbrain policy subject <kennung>` gibt alles zurück, was zu ihr
   gespeichert ist, mit Zitaten.
 - **Eine PII-Prüfung, bevor eine Notiz geschrieben wird**, die den Schreibvorgang für deine
   Entscheidung anhält, statt hinter deinem Rücken zu schwärzen.
 - **Ein Audit-Log, an das nur angehängt wird**, mit blake3-Hashkette, und ein `verify`, das
-  die erste veränderte Zeile benennt und mit einem Fehlercode endet.
+  die erste veränderte Zeile benennt und mit einem Fehlercode endet. Mit Audit-Schlüssel wird
+  jede neue Zeile zusätzlich signiert, ein Export beweist dann mehr, als dass er in sich
+  stimmig ist.
+- **Köder, die sich melden**: ein ausgelegtes Zugangsdatum, das irgendwo außerhalb seiner
+  Notiz auftaucht, wird abgewiesen, gezählt und festgehalten. Der Wert selbst steht nie im
+  Log oder in einer Meldung.
 - **Aufbewahrungsfristen** je Notiz, angewendet auf Anforderung und nie still im Hintergrund.
 - **Ein Pflichtenkatalog**: `cyberbrain policy obligations` druckt, was das aktive Profil über
   die gesetzlichen Pflichten behauptet, jede Zeile mit Artikel und Sicherheitsgrad.
@@ -299,17 +387,44 @@ ist. Heute hat diese Liste acht Einträge und endet mit „Telemetry does not ex
 erzeugt, die in einem der beiden Länder falsch sind. Was nicht hoch eingestuft ist, steuert
 kein Verhalten.
 
+<details>
+<summary>Mehr von der Weboberfläche (Screenshots)</summary>
+
+<br>
+
+**Im Team**: was geteilt würde und was auf diesem Rechner bleibt. Ohne Zentraleinheit sagt
+die Seite das, und Notizen ohne Bereich werden nie geteilt.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/team-dark.png">
+  <img src="docs/images/team-light.png" alt="Die Team-Ansicht: dieser Rechner ist bei keiner Zentraleinheit angemeldet, darunter Notizen ohne Bereich">
+</picture>
+
+**Graph**: Notizen und die Verweise dazwischen, nach Ring. Ein Verweis auf eine Notiz, die
+es noch nicht gibt, wird als Absicht gezeichnet, nicht als Fehler. Er geht auch mit der
+Tastatur.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/graph-dark.png">
+  <img src="docs/images/graph-light.png" alt="Die Graph-Ansicht: Notizen als Punkte auf Ringen, Verweise dazwischen">
+</picture>
+
+Die Seite ist in die Binärdatei kompiliert, spricht Deutsch und Englisch und holt nichts aus
+dem Netz.
+
+</details>
+
 ## Stand
 
-**v0.7.8, und jung.** 904 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
+**v0.8.0, und jung.** 1.068 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
 Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux,
-Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen den echten Korpus eines
-einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst nicht viel. Mit Kanten ist
-zu rechnen, melde sie.
+Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen
+den echten Korpus eines einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst
+nicht viel. Mit Kanten ist zu rechnen, melde sie.
 
 Die Windows-Seite ist der jüngste und am wenigsten eingelaufene Teil. Sie ist nicht mehr nur
 übersetzt und gelesen: die CI installiert das Installationsprogramm so, wie eine Kundin es
-täte, still, und prüft danach nach, was dabei herauskam — dass die Zentraleinheit sich ein
+täte, still, und prüft danach nach, was dabei herauskam. Dass die Zentraleinheit sich ein
 eigenes Zertifikat ausgestellt hat und es als ihr eigenes wiedererkennt, dass der private
 Schlüssel für gewöhnliche Konten nicht lesbar ist, dass die Diensteintragung das Zertifikat
 mitführt, und dass eine Deinstallation Dienst und PATH-Eintrag wieder mitnimmt und den
