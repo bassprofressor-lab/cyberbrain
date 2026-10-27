@@ -303,6 +303,14 @@ Widerspruchsprüfung: sie braucht einen Inferenz-Endpunkt, und auf diesem Server
 eine Prüfung 126 s gedauert, über dem Budget von 3 s. Also kamen die Treffer ungeprüft
 zurück, und haben das gesagt.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/status-dark.png">
+  <img src="docs/images/status-light.png" alt="Die Statusseite eines Demo-Stores: Speicher, Index, statisches Einbettungsmodell und lokaler Inferenz-Endpunkt arbeiten, doctor ohne Befund, zwei Köder ausgelegt und kein Treffer">
+</picture>
+
+<sub>Die Statusseite: statische Einbettungen geladen, der optionale Inferenz-Endpunkt auf einem
+lokalen Ollama, `doctor` ohne Befund, zwei Köder ausgelegt und nie berührt.</sub>
+
 ### Die semantische Suche braucht ein Modell, und sagt es, wenn sie keines hat
 
 Ohne Zutun ist die Suche lexikalisch, und jedes Ergebnis sagt das als Caveat. Lexikalisch

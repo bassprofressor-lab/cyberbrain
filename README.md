@@ -283,6 +283,14 @@ only part that wants better hardware is the optional contradiction check: it nee
 inference endpoint, and on that CPU-only server one check took 126 s, over the 3 s budget.
 So the hits came back unchecked, and said so.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/status-dark.png">
+  <img src="docs/images/status-light.png" alt="The status screen of a demo store: storage, index, a static embedding model and a local inference endpoint all working, doctor clean, two decoys planted and no hits">
+</picture>
+
+<sub>The status screen: static embeddings loaded, the optional inference endpoint on a local
+Ollama, `doctor` clean, two decoys planted and never touched.</sub>
+
 ### Semantic search needs a model, and it will tell you if it has none
 
 Out of the box search is lexical, and every result says so in a caveat. Lexical means
