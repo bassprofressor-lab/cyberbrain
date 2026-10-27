@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-10-27
+
 ### Speech to text, locally
 
 - **`cyberbrain transcribe <file>` turns a recording into a note.** A voice memo, a meeting or
@@ -1960,7 +1962,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.10...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.10...v0.8.0
 [0.7.10]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.9...v0.7.10
 [0.7.9]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.8...v0.7.9
 [0.7.8]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.7...v0.7.8
