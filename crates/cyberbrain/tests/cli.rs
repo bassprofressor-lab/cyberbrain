@@ -4758,7 +4758,14 @@ fn canaries_are_planted_listed_pushed_and_removed() {
     let approval = std::sync::Arc::new(std::sync::Mutex::new("pending"));
     let (port, seen) = fake_agentguard(approval);
     governed(&cb, port, "shadow");
-    let pushed = cb.run(&["canary", "push"]);
+    // The key comes from here, not from whatever ~/.config of the machine running the tests.
+    let pushed = Cb::bin()
+        .env("CYBERBRAIN_AGENTGUARD_KEY", "agk_testkey")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["canary", "push"])
+        .output()
+        .unwrap();
     assert!(
         pushed.status.success(),
         "{}",
