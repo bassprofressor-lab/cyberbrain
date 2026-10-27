@@ -158,7 +158,7 @@ export interface StatusReport {
     model: string;
     dim: number;
     pooling: string;
-    backend: "static" | "candle";
+    backend: "static" | "ollama";
     /** `true` also when there is nothing to compare (no model or no vectors) — the caveats say so. */
     /** `null` when there is nothing to compare: no model loaded, or no vectors stored.
      *  Not the same as `false`, which means the stored vectors came from a different

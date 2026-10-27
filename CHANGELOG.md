@@ -12,6 +12,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.8.1] — 2026-10-27
+
+### Fixed
+
+- **The status page names the embedding backend that is configured.** 0.8.0 reported
+  `static` for every store, so one embedding through Ollama read "token lookup, no
+  transformer at query time" on its status page, the opposite of what it does.
+  `GET /api/v1/status` now says `static` or `ollama` from `[embedding] backend`, and the page
+  describes the Ollama case as a transformer with a forward pass per block and query. The
+  "candle transformer" text it fell back to before named a backend this build does not have.
+
 ## [0.8.0] — 2026-10-27
 
 ### Speech to text, locally
@@ -1962,7 +1973,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.10...v0.8.0
 [0.7.10]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.9...v0.7.10
 [0.7.9]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.7.8...v0.7.9

@@ -13,6 +13,7 @@ use super::{ServeState, blocking};
 use crate::app::{RecallRequest, ScanOptions};
 use axum::Json;
 use axum::extract::State;
+use cyberbrain_core::config::EmbeddingBackend;
 use cyberbrain_core::store::{DB_FILE, NOTES_DIR};
 use cyberbrain_core::{Ring, slash};
 use cyberbrain_llm::Backend;
@@ -401,7 +402,11 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
                 pooling: embed_card
                     .and_then(|c| c.pooling.clone())
                     .unwrap_or_else(|| "mean, L2-normalised (SPEC §6.2)".into()),
-                backend: "static",
+                // From the configuration, not assumed: 0.8.0 said "static" for an Ollama store.
+                backend: match cfg.embedding.backend {
+                    EmbeddingBackend::Model2vec => "static",
+                    EmbeddingBackend::Ollama => "ollama",
+                },
                 matches_index,
                 model_hash,
                 model_verified_at: None,

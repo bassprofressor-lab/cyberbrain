@@ -248,7 +248,7 @@ export const de: Dict = {
       dimension: "Dimension",
       backend: "Backend",
       backendStatic: "Tabellennachschlag, kein Transformer zur Abfragezeit",
-      backendCandle: "candle-Transformer",
+      backendOllama: "Transformer über ein lokales Ollama, ein Durchlauf je Block und Anfrage",
       hash: "Artefakt-Hash",
       hashNone: "keiner: kein Artefakt und kein Profil festgehalten",
       verified: "geprüft",

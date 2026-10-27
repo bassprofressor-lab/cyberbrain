@@ -75,10 +75,34 @@ impl Fx {
         Fx::with_router(move |app| router_with(app, exe.clone(), None, ours()))
     }
 
+    /// A fixture whose store embeds through a local Ollama. Nothing is contacted: the
+    /// embedder is built without a request, and these tests only read the status.
+    fn with_ollama_embedding() -> Fx {
+        Fx::with_config_and_router(
+            |cfg| {
+                cfg.replacen("[embedding]\n", "[embedding]\nbackend = \"ollama\"\n", 1)
+                    + "\n[embedding.ollama]\nbase_url = \"http://127.0.0.1:11434\"\n\
+                       model = \"embeddinggemma:300m-qat-q4_0\"\ndim = 768\n\
+                       digest = \"9284ddb28f3e32696e612d3bf6bf9666c560c0aa6106f8be01f71d147d5c5cb2\"\n"
+            },
+            |app| router_with(app, PathBuf::new(), None, ours()),
+        )
+    }
+
     fn with_router(make: impl FnOnce(Arc<App>) -> Router) -> Fx {
+        Fx::with_config_and_router(|cfg| cfg, make)
+    }
+
+    fn with_config_and_router(
+        edit: impl FnOnce(String) -> String,
+        make: impl FnOnce(Arc<App>) -> Router,
+    ) -> Fx {
         let dir = tempfile::tempdir().unwrap();
         let store = dir.path().join("store");
         App::init(&store, &Actor::Operator).unwrap();
+        let toml = store.join("cyberbrain.toml");
+        let edited = edit(std::fs::read_to_string(&toml).unwrap());
+        std::fs::write(&toml, edited).unwrap();
         let app = Arc::new(App::open(Some(&store), Actor::Operator).unwrap());
         let router = make(app.clone());
         Fx {
@@ -260,6 +284,16 @@ async fn status_reports_the_store_and_says_what_it_cannot_measure() {
     let s = fx.ok("/api/v1/status").await;
     assert_eq!(s["index"]["stale_notes"], 0);
     assert!(s["index"]["last_scan"].is_string(), "{s}");
+}
+
+/// 0.8.0 reported `static` whatever the configuration said, so a store embedding through
+/// Ollama showed "token lookup, no transformer at query time" on its status page.
+#[tokio::test]
+async fn status_names_the_configured_embedding_backend() {
+    let s = Fx::new().ok("/api/v1/status").await;
+    assert_eq!(s["embedding"]["backend"], "static");
+    let s = Fx::with_ollama_embedding().ok("/api/v1/status").await;
+    assert_eq!(s["embedding"]["backend"], "ollama", "{}", s["embedding"]);
 }
 
 #[tokio::test]

@@ -364,7 +364,7 @@ export function StatusScreen() {
               [t.status.embedding.profileId, <code className="text-xs">{d.embedding.profile_id}</code>],
               [t.status.embedding.model, <code className="text-xs">{d.embedding.model}</code>],
               [t.status.embedding.dimension, `${d.embedding.dim} · ${d.embedding.pooling}`],
-              [t.status.embedding.backend, `${d.embedding.backend} (${d.embedding.backend === "static" ? t.status.embedding.backendStatic : t.status.embedding.backendCandle})`],
+              [t.status.embedding.backend, `${d.embedding.backend} (${d.embedding.backend === "static" ? t.status.embedding.backendStatic : t.status.embedding.backendOllama})`],
               [t.status.embedding.hash, d.embedding.model_hash ? <code className="text-xs break-all">{d.embedding.model_hash}</code> : <span className="text-fg-muted">{t.status.embedding.hashNone}</span>],
               [t.status.embedding.verified, d.embedding.model_verified_at ? <span title={absTime(d.embedding.model_verified_at)}>{t.status.embedding.verifiedAt(relTime(d.embedding.model_verified_at))}</span> : <span className="text-fg-muted">{t.status.embedding.verifiedNoStamp}</span>],
             ])}

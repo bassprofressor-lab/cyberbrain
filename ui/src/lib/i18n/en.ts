@@ -254,7 +254,7 @@ export const en = {
       dimension: "dimension",
       backend: "backend",
       backendStatic: "token lookup, no transformer at query time",
-      backendCandle: "candle transformer",
+      backendOllama: "transformer through a local Ollama, a forward pass per block and query",
       hash: "artefact hash",
       hashNone: "none: no artefact and no profile recorded",
       verified: "verified",

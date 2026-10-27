@@ -33,7 +33,7 @@ steht an einer Stelle, die du dir ausdrucken lassen kannst.
 <sub>Die Weboberfläche, die in der Binärdatei steckt. Die Screenshots stammen aus einem
 Demo-Store, die Notizen darin sind erfunden.</sub>
 
-## Neu in 0.8.0
+## Neu in 0.8
 
 - **Sprache zu Text, lokal.** `cyberbrain transcribe <datei>` macht aus einer Sprachnotiz
   oder einer Besprechung eine Notiz, über einen whisper.cpp-Server auf deinem eigenen
@@ -424,7 +424,7 @@ dem Netz.
 
 ## Stand
 
-**v0.8.0, und jung.** 1.068 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
+**v0.8.1, und jung.** 1.069 Tests, 18 Browsertests, sieben Pakete auf crates.io und dazu der
 Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux,
 Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen
 den echten Korpus eines einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst

@@ -65,6 +65,7 @@ pub struct EmbeddingStatus {
     pub model: String,
     pub dim: usize,
     pub pooling: String,
+    /// `static` (model2vec, in process) or `ollama` (a local Ollama), as configured.
     pub backend: &'static str,
     /// `null` when there is nothing to compare: no model loaded, or no vectors stored.
     ///
