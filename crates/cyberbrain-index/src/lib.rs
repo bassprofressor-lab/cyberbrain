@@ -25,6 +25,10 @@ pub mod recall;
 pub mod schema;
 pub mod vectors;
 
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+pub const PROVENANCE: &str = "cbk-ae5bdfe657bba11e";
+
 #[cfg(test)]
 mod tests;
 

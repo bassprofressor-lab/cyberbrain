@@ -86,3 +86,7 @@ impl std::fmt::Display for Confidence {
         f.write_str(self.as_str())
     }
 }
+
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+pub const PROVENANCE: &str = "cbk-4d5ee526493bf1f1";

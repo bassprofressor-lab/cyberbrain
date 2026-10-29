@@ -3230,6 +3230,11 @@ fn audit_exit_code(view: &AuditView) -> i32 {
     }
 }
 
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+#[allow(dead_code)]
+const PROVENANCE: &str = "cbk-b451e4018329b518";
+
 #[cfg(test)]
 mod tests {
     use super::*;

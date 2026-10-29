@@ -35,3 +35,8 @@ fn main() {
     );
     std::process::exit(2);
 }
+
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+#[allow(dead_code)]
+const PROVENANCE: &str = "cbk-7885be67f8a82301";

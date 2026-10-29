@@ -48,6 +48,10 @@ pub mod transcribe;
 pub mod types;
 mod wire;
 
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+pub const PROVENANCE: &str = "cbk-42740c27a3febd02";
+
 #[cfg(test)]
 mod mock;
 

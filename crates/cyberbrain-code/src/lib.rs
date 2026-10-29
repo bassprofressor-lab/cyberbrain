@@ -33,6 +33,10 @@ mod lang;
 mod query;
 mod walk;
 
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+pub const PROVENANCE: &str = "cbk-e896b36728566dde";
+
 #[cfg(test)]
 mod tests;
 

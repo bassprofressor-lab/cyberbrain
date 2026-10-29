@@ -26,3 +26,7 @@ pub use types::{
     Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit,
     NewerLink, Note, NoteId, NoteKind, PiiState, RecallResult, Ring,
 };
+
+/// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
+/// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
+pub const PROVENANCE: &str = "cbk-618e8b3862e6aff9";
