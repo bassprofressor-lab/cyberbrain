@@ -435,6 +435,12 @@ pub fn serve(_base: App, _idle_secs: u64) -> Result<i32> {
     ))
 }
 
+/// Whether a connection from the account `peer` may use this daemon, run as `me`: the same
+/// account, or root. An account the system does not name is not this one (C29, 2026-10-31).
+pub(crate) fn admits(peer: Option<u32>, me: u32) -> bool {
+    peer.is_some_and(|p| p == me || p == 0)
+}
+
 #[cfg(unix)]
 pub fn serve(base: App, idle_secs: u64) -> Result<i32> {
     server::run(base, idle_secs)
@@ -510,6 +516,27 @@ mod server {
         }
     }
 
+    /// Bind the socket, taking over one a dead daemon left behind. `None`: a live daemon
+    /// already answers there.
+    fn bind_fresh(socket: &std::path::Path) -> Result<Option<UnixListener>> {
+        let io = |source| Error::Io {
+            path: socket.to_path_buf(),
+            source,
+        };
+        match UnixListener::bind(socket) {
+            Ok(l) => Ok(Some(l)),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                if UnixStream::connect(socket).is_ok() {
+                    return Ok(None);
+                }
+                // Left behind by a daemon that did not get to clean up.
+                let _ = std::fs::remove_file(socket);
+                UnixListener::bind(socket).map(Some).map_err(io)
+            }
+            Err(source) => Err(io(source)),
+        }
+    }
+
     pub(super) fn run(base: App, idle_secs: u64) -> Result<i32> {
         if let Some(dir) = socket_path(base.root())
             .as_deref()
@@ -529,25 +556,16 @@ mod server {
                 base.root().join(SOCKET).as_os_str().len()
             )));
         };
-        let listener = match UnixListener::bind(&socket) {
-            Ok(l) => l,
-            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
-                if UnixStream::connect(&socket).is_ok() {
-                    return Ok(0); // another daemon got there first
-                }
-                // Left behind by a daemon that did not get to clean up.
-                let _ = std::fs::remove_file(&socket);
-                UnixListener::bind(&socket).map_err(|source| Error::Io {
-                    path: socket.clone(),
-                    source,
-                })?
-            }
-            Err(source) => {
-                return Err(Error::Io {
-                    path: socket.clone(),
-                    source,
-                });
-            }
+        // The socket is created 0600, not set so after `bind`: in between, a umask of 002
+        // let the group connect (C29). The daemon is its own process; nothing else here
+        // creates files while the mask is narrowed.
+        // SAFETY: umask cannot fail and touches no memory.
+        let mask = unsafe { libc::umask(0o077) };
+        let bound = bind_fresh(&socket);
+        // SAFETY: as above.
+        unsafe { libc::umask(mask) };
+        let Some(listener) = bound? else {
+            return Ok(0); // another daemon got there first
         };
         let _ = std::fs::set_permissions(&socket, std::fs::Permissions::from_mode(0o600));
 
@@ -638,8 +656,45 @@ mod server {
         None
     }
 
+    /// The account of the process at the other end, where the system says it.
+    #[cfg(target_os = "linux")]
+    pub(super) fn peer_uid(stream: &UnixStream) -> Option<u32> {
+        use std::os::fd::AsRawFd;
+        let mut cred = libc::ucred {
+            pid: 0,
+            uid: 0,
+            gid: 0,
+        };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: as in `peer_agent`.
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                (&raw mut cred).cast(),
+                &raw mut len,
+            )
+        };
+        (rc == 0).then_some(cred.uid)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    pub(super) fn peer_uid(stream: &UnixStream) -> Option<u32> {
+        use std::os::fd::AsRawFd;
+        let (mut uid, mut gid) = (0, 0);
+        // SAFETY: `uid` and `gid` are valid for writes, the fd is a live socket.
+        let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+        (rc == 0).then_some(uid)
+    }
+
     fn handle(s: &Shared, stream: UnixStream) {
         s.last.store(now_secs(), Ordering::Relaxed);
+        // SAFETY: geteuid cannot fail and touches no memory.
+        let me = unsafe { libc::geteuid() };
+        if !super::admits(peer_uid(&stream), me) {
+            return; // another account: no answer, nothing carried out
+        }
         let peer = peer_agent(&stream);
         let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
         let mut line = String::new();
@@ -803,6 +858,19 @@ mod tests {
             super::server::peer_agent(&a).map(|x| x.to_string()),
             expected.map(|x| x.to_string())
         );
+    }
+
+    /// C29 (review 2026-10-31): the daemon judged a peer by its environment and never by its
+    /// account. For another account's process `/proc/<pid>/environ` cannot be read, and the
+    /// actor the client claimed (`operator`) was believed; only the socket's mode stood in
+    /// the way, and that was set after `bind`. Calibrated against the old rule first: every
+    /// account was admitted.
+    #[test]
+    fn only_this_account_and_root_are_admitted() {
+        assert!(admits(Some(1000), 1000));
+        assert!(admits(Some(0), 1000));
+        assert!(!admits(Some(1001), 1000));
+        assert!(!admits(None, 1000), "an unknown account is not this one");
     }
 
     #[test]
