@@ -1,0 +1,93 @@
+---
+import "../styles/site.css";
+
+interface Props { title: string; description: string; lang?: "en" | "de"; slug?: string }
+// Markdown pages hand their frontmatter in as `frontmatter`, Astro pages as plain props.
+const p = (Astro.props as any).frontmatter ?? Astro.props;
+const { title, description, lang = "en", slug = "" } = p as Props;
+const base = import.meta.env.BASE_URL.replace(/\/$/, "");
+const de = lang === "de";
+
+// One list for both languages: slug, English title, German title.
+const seiten: [string, string, string][] = [
+  ["", "Overview", "Überblick"],
+  ["install/", "Install", "Installation"],
+  ["quickstart/", "Five minutes", "Fünf Minuten"],
+  ["concepts/", "How it works", "So funktioniert es"],
+  ["commands/", "Commands", "Befehle"],
+  ["claude-code/", "Claude Code: hooks, MCP, guard", "Claude Code: Hooks, MCP, Schutz"],
+  ["search/", "Search and models", "Suche und Modelle"],
+  ["serve/", "Web page and HTTP API", "Weboberfläche und HTTP-API"],
+  ["hub/", "Team hub", "Team-Hub"],
+  ["compliance/", "Running it in the EU", "Betrieb in der EU"],
+  ["light-or-full/", "Light or full", "Light oder voll"],
+  ["changelog/", "Changelog", "Änderungen"],
+];
+const href = (s: string, l: "en" | "de" = lang) => `${base}/${l === "de" ? "de/" : ""}${s}`;
+const i = seiten.findIndex(([s]) => s === slug);
+const prev = i > 0 ? seiten[i - 1] : null;
+const next = i >= 0 && i < seiten.length - 1 ? seiten[i + 1] : null;
+const t = (e: [string, string, string]) => (de ? e[2] : e[1]);
+const canonical = new URL(href(slug), Astro.site).href;
+---
+<!doctype html>
+<html lang={lang}>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{slug ? `${title} · Cyberbrain` : title}</title>
+  <meta name="description" content={description} />
+  <link rel="canonical" href={canonical} />
+  <link rel="alternate" hreflang="en" href={new URL(href(slug, "en"), Astro.site).href} />
+  <link rel="alternate" hreflang="de" href={new URL(href(slug, "de"), Astro.site).href} />
+  <link rel="alternate" hreflang="x-default" href={new URL(href(slug, "en"), Astro.site).href} />
+  <link rel="icon" href={`${base}/favicon.svg`} type="image/svg+xml" />
+  <meta property="og:title" content={title} />
+  <meta property="og:description" content={description} />
+  <meta property="og:type" content="website" />
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href={href("")}><span class="mark">cb</span>Cyberbrain <small>docs</small></a>
+    <nav>
+      <a href={href(slug, de ? "en" : "de")} hreflang={de ? "en" : "de"}>{de ? "English" : "Deutsch"}</a>
+      <a class="gh" href="https://github.com/bassprofressor-lab/cyberbrain">GitHub</a>
+      <a href={de ? "https://www.krynexlabs.de/cyberbrain/" : "https://www.krynexlabs.de/en/cyberbrain/"}>{de ? "Produktseite" : "Product page"}</a>
+    </nav>
+  </header>
+  <div class="wrap">
+    <aside class="side">
+      <details open>
+        <summary>{de ? "Inhalt" : "Contents"}</summary>
+        <div class="label">{de ? "Dokumentation" : "Documentation"}</div>
+        <ul>
+          {seiten.map((e) => (
+            <li><a href={href(e[0])} aria-current={e[0] === slug ? "page" : undefined}>{t(e)}</a></li>
+          ))}
+        </ul>
+      </details>
+      <script is:inline>
+        // On a phone the contents start folded, so the page begins with its text.
+        if (matchMedia("(max-width: 860px)").matches) document.querySelector(".side details").open = false;
+      </script>
+    </aside>
+    <main>
+      <slot />
+      <nav class="pager" aria-label={de ? "Blättern" : "Pages"}>
+        <span>{prev && <a href={href(prev[0])}>← {t(prev)}</a>}</span>
+        <span>{next && <a href={href(next[0])}>{t(next)} →</a>}</span>
+      </nav>
+    </main>
+  </div>
+  <footer class="foot">
+    <div class="in">
+      <span>Cyberbrain · FSL-1.1-ALv2 · © 2026 Krynex Labs UG (haftungsbeschränkt)</span>
+      <span>
+        <a href="https://www.krynexlabs.de/impressum/">{de ? "Impressum" : "Legal notice"}</a> ·
+        <a href="https://www.krynexlabs.de/datenschutz/">{de ? "Datenschutz" : "Privacy"}</a> ·
+        {de ? "Gehostet auf GitHub Pages, ohne Tracking" : "Hosted on GitHub Pages, no tracking"}
+      </span>
+    </div>
+  </footer>
+</body>
+</html>
