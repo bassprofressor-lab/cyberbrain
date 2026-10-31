@@ -687,6 +687,49 @@ fn pre_tool_use_refuses_the_signing_key() {
     }
 }
 
+/// C6 (review 2026-10-31): a link to the store made elsewhere (`ln -s .cyberbrain /tmp/cb`)
+/// was "outside the store" to the lexical check, so `Write /tmp/cb/audit.db` went through.
+/// The file tools now look through links before they decide a path is not ours.
+#[cfg(unix)]
+#[test]
+fn a_link_to_the_store_does_not_hide_its_files() {
+    let f = fixture();
+    let app = f.open();
+    let elsewhere = tempfile::tempdir().unwrap();
+    let link = elsewhere.path().join("cb");
+    std::os::unix::fs::symlink(&f.store, &link).unwrap();
+    for (tool, path) in [
+        ("Write", link.join("audit.db")),
+        ("Edit", link.join("proposals").join("x.md")),
+        ("Write", link.join("notes").join("r0").join("neu.md")),
+    ] {
+        let out = run(
+            Some(&app),
+            HookEvent::PreToolUse,
+            &tool_payload(&f, tool, &path),
+        );
+        assert!(!out.stdout.is_empty(), "{}: {}", path.display(), out.stderr);
+        let (d, why) = decision(&out);
+        assert_eq!(d, "deny", "{}: {why}", path.display());
+    }
+    // A file linked in by itself is seen through as well.
+    let single = elsewhere.path().join("log.db");
+    std::os::unix::fs::symlink(f.store.join("audit.db"), &single).unwrap();
+    let (d, _) = decision(&run(
+        Some(&app),
+        HookEvent::PreToolUse,
+        &tool_payload(&f, "Write", &single),
+    ));
+    assert_eq!(d, "deny");
+    // Somewhere else entirely is still nothing of ours.
+    let out = run(
+        Some(&app),
+        HookEvent::PreToolUse,
+        &tool_payload(&f, "Write", &elsewhere.path().join("x.md")),
+    );
+    assert!(out.stdout.is_empty(), "{}", out.stdout);
+}
+
 /// Make every later audit append fail, the way a full disk or a locked `audit.db` would.
 fn break_the_audit_log(f: &Fixture) {
     let db = rusqlite::Connection::open(f.store.join("audit.db")).unwrap();

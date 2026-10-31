@@ -642,15 +642,48 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
         return None;
     };
     let cwd = ctx.cwd();
-    let Some(target) = paths::classify_host(ctx.root(), &cwd, &file) else {
+    let lexical = paths::classify_host(ctx.root(), &cwd, &file);
+    // Lexically outside, but a link may lead in: `/tmp/cb -> .cyberbrain` made `Write
+    // /tmp/cb/audit.db` "outside the store" (C6, 2026-10-31). Only then is the file system
+    // asked, so a call inside the store or plainly elsewhere pays nothing extra but a few
+    // `stat`s for the path's existing part.
+    let resolved = || {
+        let root = std::fs::canonicalize(ctx.root()).ok()?;
+        let file = resolve_existing_prefix(&cwd.join(&file))?;
+        let target = paths::classify_host(&root, &root, &file)?;
+        Some((target, paths::display_inside(&root, &root, &file)))
+    };
+    if let Some(target) = lexical {
+        return Some((target, paths::display_inside(ctx.root(), &cwd, &file)));
+    }
+    if let Some((target, rel)) = resolved() {
         out.note(format!(
-            "{}: {} is outside the store; nothing to check",
+            "{}: {} leads into the store through a link, as {rel}",
             event_name(ctx.event),
             Slash(&file)
         ));
-        return None;
-    };
-    Some((target, paths::display_inside(ctx.root(), &cwd, &file)))
+        return Some((target, rel));
+    }
+    out.note(format!(
+        "{}: {} is outside the store; nothing to check",
+        event_name(ctx.event),
+        Slash(&file)
+    ));
+    None
+}
+
+/// `path` with its longest existing ancestor (the path itself, when it exists) resolved
+/// through every link, and the part that does not exist yet put back on.
+fn resolve_existing_prefix(path: &Path) -> Option<PathBuf> {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(real) = std::fs::canonicalize(at) {
+            return Some(rest.iter().rev().fold(real, |p, c| p.join(c)));
+        }
+        rest.push(at.file_name()?);
+        at = at.parent()?;
+    }
 }
 
 /// What a shell command would do to the store that the file tools are already refused.
@@ -855,7 +888,10 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
         "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "mv" | "tee" | "sqlite3" => {
             paths().collect()
         }
-        "cp" | "rsync" | "install" | "ln" => paths().next_back().into_iter().collect(),
+        // A link names what it points at as well: `ln -s .cyberbrain /tmp/cb` makes every
+        // guarded file writable under a path the file tools do not know (C6, 2026-10-31).
+        "ln" => paths().collect(),
+        "cp" | "rsync" | "install" => paths().next_back().into_iter().collect(),
         "sed" | "perl" if args.iter().any(|a| edits_in_place(prog, a)) => paths().collect(),
         "dd" => args.iter().filter_map(|a| a.strip_prefix("of=")).collect(),
         "tar"
@@ -1381,6 +1417,21 @@ mod bash_tests {
         ] {
             assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
+    }
+
+    /// C6 (review 2026-10-31): `ln` was read like `cp`, by its last argument only, so a link
+    /// to the store from elsewhere went through; the file tools then saw "outside the store".
+    #[test]
+    fn linking_the_store_or_its_guarded_files_elsewhere_is_refused() {
+        for cmd in [
+            "ln -s \"$PWD/.cyberbrain\" /tmp/cb",
+            "ln -s /root/p/.cyberbrain/notes/r0 /tmp/r0",
+            "ln /root/p/.cyberbrain/audit.db /tmp/log.db",
+            "ln -sf .cyberbrain/proposals /tmp/p",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        assert!(bash_verdict("ln -s .cyberbrain/notes/r2/x.md /tmp/x.md").is_none());
     }
 
     #[test]
