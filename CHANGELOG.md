@@ -12,6 +12,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.8.4] — 2026-10-31
+
+### Fixed
+
+- **`cargo install cyberbrain` works again.** The `cyberbrain` crate 0.8.3 on crates.io was
+  published without the web page in `ui-dist/`, and its build script stops a release build
+  when the page is missing, so installing 0.8.3 from crates.io failed. The GitHub release
+  binaries of 0.8.3 were not affected: the release workflow builds the page itself. 0.8.4 is
+  0.8.3 with the page packaged; nothing else changed.
+
 ## [0.8.3] — 2026-10-31
 
 ### Security
@@ -2075,7 +2085,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.3...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.4...HEAD
+[0.8.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.0...v0.8.1
