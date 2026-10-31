@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.8.5] — 2026-10-31
+
 ### Added
 
 - **Subagents get rings 0 and 1.** A subagent starts without the session's context, and no
@@ -23,6 +25,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   session's state is left alone. Run `cyberbrain install` again to add the hook. The idea of a
   hook at subagent start is taken from ProjectAtlas (styler-ai/ProjectAtlas, MIT), whose Codex
   plugin reminds each subagent of its tool.
+- **The web page's audit filter knows session starts.** `session.start` (rings 0 and 1 shown
+  to a session) and `subagent.start` (shown to a subagent) can be picked in the audit log;
+  before, the rows were there but no filter named them.
+- **Documentation site** at https://bassprofressor-lab.github.io/cyberbrain/, in English and
+  German, built from `site/`.
 
 ## [0.8.4] — 2026-10-31
 
