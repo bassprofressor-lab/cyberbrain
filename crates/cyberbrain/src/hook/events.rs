@@ -715,9 +715,21 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
             "--unset=CLAUDECODE",
             "--unset CLAUDECODE",
             "env -i",
+            // C7 (2026-10-31): `exec -c` clears the environment, `unset -v`/`export -n` drop
+            // the variable under another spelling, and `env -` is `env -i`.
+            "unset -v CLAUDECODE",
+            "export -n CLAUDECODE",
+            "exec -c",
+            "--ignore-environment",
         ]
         .iter()
-        .any(|p| cmd.contains(p));
+        .any(|p| cmd.contains(p))
+        || words.windows(2).any(|w| w == ["env", "-"])
+        // A program that runs the call as another user resets the environment on the way
+        // (`sudo`'s env_reset is the default).
+        || words
+            .iter()
+            .any(|w| matches!(*w, "sudo" | "su" | "doas" | "runuser" | "pkexec"));
     let calls = words
         .iter()
         .any(|t| t.rsplit('/').next() == Some("cyberbrain"));
@@ -739,34 +751,7 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
     // Backslashes count as separators everywhere (a Windows path in a command reads
     // `.cyberbrain\notes\r0`), and on Windows and macOS case does not count either, as it
     // does not for the file system there.
-    let guarded = |t: &str| -> Option<&'static str> {
-        let mut t = t.trim_matches(['\'', '"']).replace('\\', "/");
-        if platform.folds_case() {
-            t = t.to_lowercase();
-        }
-        let t = t.trim_end_matches('/');
-        // `.cyberbrain/proposals` and `.cyberbrain/keys` only under the default store name: a
-        // bare `proposals/` or `keys/` is too common a directory to refuse writes to. The
-        // digest check in `review` is what holds wherever the store lives.
-        let deny = [
-            "notes/r0",
-            "notes/r1",
-            "audit.db",
-            ".cyberbrain/proposals",
-            ".cyberbrain/keys",
-        ]
-        .iter()
-        .any(|g| t.contains(g))
-            || t.ends_with(".cyberbrain")
-            || t.ends_with(".cyberbrain/notes");
-        if deny {
-            Some("deny")
-        } else if t.contains("cyberbrain.toml") {
-            Some("ask")
-        } else {
-            None
-        }
-    };
+    let guarded = |t: &str| guard_of(platform, t);
     // Command by command, and within a command only the arguments that program writes to.
     // The first version looked for a writing program and a guarded path anywhere in the
     // line, and refused `rm -rf /tmp/x; tar -cf - .cyberbrain` and `cp -a .cyberbrain /tmp`
@@ -787,16 +772,45 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
         rest.split(|c: char| c.is_whitespace() || ";|&".contains(c))
             .next()
     });
-    let hits: Vec<(&str, &'static str)> = written
-        .chain(redirected)
-        .filter_map(|t| guarded(t).map(|d| (t, d)))
+    // A relative target after `cd`/`pushd` is read against every directory changed into:
+    // `cd .cyberbrain/notes && echo x > r0/x.md` (C7, 2026-10-31). Over-reading is fail-safe.
+    let dirs: Vec<&str> = cmd
+        .split(|c: char| ";|&()\n".contains(c))
+        .filter_map(|simple| {
+            let mut w = simple
+                .split_whitespace()
+                .map(|w| w.trim_matches(['\'', '"']));
+            matches!(w.next(), Some("cd" | "pushd"))
+                .then(|| w.find(|a| !a.starts_with('-')))
+                .flatten()
+        })
         .collect();
+    let mut hits: Vec<(String, &'static str)> = Vec::new();
+    for t in written.chain(redirected) {
+        if let Some(d) = guarded(t) {
+            hits.push((t.to_string(), d));
+            continue;
+        }
+        let relative = !t.starts_with(['/', '~', '$', '\\']) && !t.contains(':');
+        for dir in dirs.iter().filter(|_| relative) {
+            let joined = format!("{}/{t}", dir.trim_end_matches('/'));
+            if let Some(d) = guarded(&joined) {
+                hits.push((joined, d));
+                break;
+            }
+        }
+    }
+    // Programs whose writes are not in their arguments: an interpreter's inline code, a
+    // shell's `-c` script, `xargs` handing paths to a writer (C7).
+    if let Some(found) = opaque_writes(platform, cmd) {
+        hits.push(found);
+    }
     // A refusal outranks a question: a command that touches both is refused.
     let (hit, decision) = hits
         .iter()
         .find(|(_, d)| *d == "deny")
         .or(hits.first())
-        .copied()?;
+        .cloned()?;
     let hit = hit.trim_matches(['\'', '"']);
     if decision == "ask" {
         return Some(BashVerdict {
@@ -819,6 +833,214 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
              waiting proposal is changed by rejecting it and proposing again."
         ),
     })
+}
+
+/// Whether one word of a command names a guarded store path: `deny` for rings 0/1, the
+/// audit log, proposals, the signing key or a directory holding them, `ask` for the
+/// configuration. Spelled-around forms count too: `.`/`..`/`//` are folded the way the file
+/// system reads them, and a glob counts when what comes before its first wildcard could
+/// still lead to a guarded path (`.cyberbrain/n*/r0`, `.c*`) (C7, 2026-10-31).
+fn guard_of(platform: paths::Platform, word: &str) -> Option<&'static str> {
+    let mut t = word.trim_matches(['\'', '"']).replace('\\', "/");
+    if platform.folds_case() {
+        t = t.to_lowercase();
+    }
+    let t = fold_dots(&t);
+    // `.cyberbrain/proposals` and `.cyberbrain/keys` only under the default store name: a
+    // bare `proposals/` or `keys/` is too common a directory to refuse writes to. The
+    // digest check in `review` is what holds wherever the store lives.
+    const DENY: [&str; 5] = [
+        "notes/r0",
+        "notes/r1",
+        "audit.db",
+        ".cyberbrain/proposals",
+        ".cyberbrain/keys",
+    ];
+    if DENY.iter().any(|g| t.contains(g))
+        || t.ends_with(".cyberbrain")
+        || t.ends_with(".cyberbrain/notes")
+    {
+        return Some("deny");
+    }
+    if t.contains("cyberbrain.toml") {
+        return Some("ask");
+    }
+    let wild = t.find(['*', '?', '[', '{'])?;
+    let head = &t[..wild];
+    const LEADS: [(&str, &str); 8] = [
+        (".cyberbrain/notes/r0", "deny"),
+        (".cyberbrain/notes/r1", "deny"),
+        (".cyberbrain/audit.db", "deny"),
+        (".cyberbrain/proposals", "deny"),
+        (".cyberbrain/keys", "deny"),
+        (".cyberbrain/cyberbrain.toml", "ask"),
+        ("notes/r0", "deny"),
+        ("notes/r1", "deny"),
+    ];
+    let mut verdict = None;
+    let starts = std::iter::once(0).chain(head.match_indices('/').map(|(k, _)| k + 1));
+    for tail in starts.map(|k| &head[k..]).filter(|t| !t.is_empty()) {
+        for (full, d) in LEADS {
+            // Without the store's name a lead needs a directory in it: `a*` is not `audit.db`.
+            if !full.starts_with(".cyberbrain") && !tail.contains('/') {
+                continue;
+            }
+            if full.starts_with(tail) {
+                if d == "deny" {
+                    return Some(d);
+                }
+                verdict = Some(d);
+            }
+        }
+    }
+    verdict
+}
+
+/// Lexical `.`, `..` and `//` folding of a slash path.
+fn fold_dots(t: &str) -> String {
+    let absolute = t.starts_with('/');
+    let mut parts: Vec<&str> = Vec::new();
+    for c in t.split('/') {
+        match c {
+            "" | "." => {}
+            ".." if parts.last().is_some_and(|p| *p != "..") => {
+                parts.pop();
+            }
+            c => parts.push(c),
+        }
+    }
+    let joined = parts.join("/");
+    if absolute {
+        format!("/{joined}")
+    } else {
+        joined
+    }
+}
+
+/// The simple commands of a shell line, split at unquoted `;|&()` and newlines, each as its
+/// words with the quotes taken off. Backslashes are kept as they are (a Windows path is full
+/// of them). Enough to find a quoted script argument whole; not a shell parser.
+fn simple_commands(cmd: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    let mut current: Vec<String> = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    for c in cmd.chars() {
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            } else {
+                word.push(c);
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                quote = Some(c);
+                in_word = true;
+            }
+            ';' | '|' | '&' | '(' | ')' | '\n' => {
+                if in_word {
+                    current.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+                if !current.is_empty() {
+                    out.push(std::mem::take(&mut current));
+                }
+            }
+            c if c.is_whitespace() => {
+                if in_word {
+                    current.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            c => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if in_word {
+        current.push(word);
+    }
+    if !current.is_empty() {
+        out.push(current);
+    }
+    out
+}
+
+/// Writes a command makes that its arguments do not show: a shell's `-c` script (judged
+/// like any command line), an interpreter's inline code (any guarded path in it counts), and
+/// `xargs` handing paths to a writing program (any guarded path in the whole line counts).
+fn opaque_writes(platform: paths::Platform, cmd: &str) -> Option<(String, &'static str)> {
+    let commands = simple_commands(cmd);
+    let scan = |text: &str| {
+        text.split(|c: char| c.is_whitespace() || "'\"(),;=`".contains(c))
+            .filter(|t| !t.is_empty())
+            .find_map(|t| guard_of(platform, t).map(|d| (t.to_string(), d)))
+    };
+    for words in &commands {
+        let words: Vec<&str> = words.iter().map(String::as_str).collect();
+        let Some((prog, args)) = program(&words) else {
+            continue;
+        };
+        let after = |flags: &[&str]| {
+            args.iter()
+                .position(|a| flags.contains(a))
+                .and_then(|i| args.get(i + 1))
+                .copied()
+        };
+        let found = match prog {
+            "sh" | "bash" | "zsh" | "dash" | "ksh" => after(&["-c"])
+                .and_then(|script| bash_verdict_on(platform, script))
+                .map(|v| ("a shell script".to_string(), v.decision)),
+            "eval" => bash_verdict_on(platform, &args.join(" "))
+                .map(|v| ("an eval".to_string(), v.decision)),
+            p if p.starts_with("python") => after(&["-c"]).and_then(scan),
+            "perl" => args
+                .iter()
+                .position(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(['e', 'E']))
+                .and_then(|i| args.get(i + 1))
+                .and_then(|code| scan(code)),
+            "node" | "deno" | "bun" => after(&["-e", "--eval", "-p", "--print"]).and_then(scan),
+            "ruby" => after(&["-e"]).and_then(scan),
+            "php" => after(&["-r"]).and_then(scan),
+            "xargs" => args
+                .iter()
+                .any(|a| WRITERS.contains(&a.rsplit('/').next().unwrap_or(a)))
+                .then(|| commands.iter().flatten().find_map(|w| scan(w)))
+                .flatten(),
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
+        }
+    }
+    None
+}
+
+/// The programs `write_targets` knows to write, for `xargs`.
+const WRITERS: [&str; 15] = [
+    "rm", "rmdir", "unlink", "shred", "truncate", "mv", "tee", "sqlite3", "cp", "rsync", "install",
+    "ln", "sed", "perl", "dd",
+];
+
+/// The program of one simple command and its arguments, past leading assignments and
+/// wrappers (`sudo`, `env`, `nohup`, …).
+fn program<'w, 'a>(words: &'w [&'a str]) -> Option<(&'a str, &'w [&'a str])> {
+    let mut i = 0;
+    while let Some(w) = words.get(i) {
+        let wrapper = matches!(*w, "sudo" | "env" | "command" | "exec" | "nohup" | "time");
+        let assignment = w.contains('=') && !w.starts_with('-');
+        let wrapper_flag = i > 0 && w.starts_with('-') && words[i - 1] == "env";
+        if !(wrapper || assignment || wrapper_flag) {
+            break;
+        }
+        i += 1;
+    }
+    let prog = words.get(i)?;
+    Some((prog.rsplit('/').next().unwrap_or(prog), &words[i + 1..]))
 }
 
 /// What [`bash_verdict`] decided about a shell command, and why.
@@ -869,21 +1091,20 @@ fn edits_in_place(prog: &str, arg: &str) -> bool {
 /// the destination; `sed -i`/`perl -i` their files; `dd` its `of=`; an extracting `tar`
 /// every path, since `-C` names where it writes. Anything else writes nothing we can see.
 fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
-    let mut i = 0;
-    while let Some(w) = words.get(i) {
-        let wrapper = matches!(*w, "sudo" | "env" | "command" | "exec" | "nohup" | "time");
-        let assignment = w.contains('=') && !w.starts_with('-');
-        let wrapper_flag = i > 0 && w.starts_with('-') && words[i - 1] == "env";
-        if !(wrapper || assignment || wrapper_flag) {
-            break;
-        }
-        i += 1;
-    }
-    let Some(prog) = words.get(i).map(|p| p.rsplit('/').next().unwrap_or(p)) else {
+    let Some((prog, args)) = program(words) else {
         return Vec::new();
     };
-    let args = &words[i + 1..];
     let paths = || args.iter().copied().filter(|a| !a.starts_with('-'));
+    // `-t DIR` names the destination of a copy wherever it stands (C7, 2026-10-31).
+    let target_dir = args
+        .iter()
+        .position(|a| *a == "-t" || *a == "--target-directory")
+        .and_then(|i| args.get(i + 1))
+        .copied()
+        .or_else(|| {
+            args.iter()
+                .find_map(|a| a.strip_prefix("--target-directory="))
+        });
     match prog {
         "rm" | "rmdir" | "unlink" | "shred" | "truncate" | "mv" | "tee" | "sqlite3" => {
             paths().collect()
@@ -891,7 +1112,30 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
         // A link names what it points at as well: `ln -s .cyberbrain /tmp/cb` makes every
         // guarded file writable under a path the file tools do not know (C6, 2026-10-31).
         "ln" => paths().collect(),
-        "cp" | "rsync" | "install" => paths().next_back().into_iter().collect(),
+        "cp" | "rsync" | "install" => target_dir
+            .or_else(|| paths().next_back())
+            .into_iter()
+            .collect(),
+        "git" => git_targets(args),
+        // `find` writes through `-delete` and `-exec`; what it writes to is below its
+        // starting points, the arguments before the first expression.
+        "find"
+            if args
+                .iter()
+                .any(|a| matches!(*a, "-delete" | "-exec" | "-execdir" | "-ok" | "-okdir")) =>
+        {
+            args.iter()
+                .copied()
+                .take_while(|a| !a.starts_with(['-', '(', '!']))
+                .collect()
+        }
+        "unzip" => args
+            .iter()
+            .position(|a| *a == "-d")
+            .and_then(|i| args.get(i + 1))
+            .copied()
+            .into_iter()
+            .collect(),
         "sed" | "perl" if args.iter().any(|a| edits_in_place(prog, a)) => paths().collect(),
         "dd" => args.iter().filter_map(|a| a.strip_prefix("of=")).collect(),
         "tar"
@@ -900,6 +1144,59 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
             }) =>
         {
             args.to_vec()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The paths a `git` subcommand writes: the files `checkout`, `restore`, `rm` and `mv` name,
+/// and for `clean -x`/`-X`, which removes ignored files, the store itself unless an `-e`
+/// pattern keeps it out (C7, 2026-10-31).
+fn git_targets<'a>(args: &[&'a str]) -> Vec<&'a str> {
+    let mut i = 0;
+    // `-C dir` and `-c key=value` come before the subcommand and take a value.
+    while let Some(a) = args.get(i) {
+        match *a {
+            "-C" | "-c" => i += 2,
+            a if a.starts_with('-') => i += 1,
+            _ => break,
+        }
+    }
+    let Some(sub) = args.get(i) else {
+        return Vec::new();
+    };
+    let rest = &args[i + 1..];
+    match *sub {
+        "checkout" | "restore" | "rm" | "mv" => rest
+            .iter()
+            .copied()
+            .filter(|a| !a.starts_with('-'))
+            .collect(),
+        "clean" => {
+            let ignored = rest
+                .iter()
+                .any(|a| a.starts_with('-') && !a.starts_with("--") && a.contains(['x', 'X']));
+            let mut kept = false;
+            let mut paths = Vec::new();
+            let mut it = rest.iter().copied();
+            while let Some(a) = it.next() {
+                let pattern = match a {
+                    "-e" | "--exclude" => it.next(),
+                    a => a
+                        .strip_prefix("--exclude=")
+                        .or_else(|| a.strip_prefix("-e"))
+                        .filter(|p| !p.is_empty()),
+                };
+                match pattern {
+                    Some(p) => kept |= p.trim_matches('/').ends_with(".cyberbrain"),
+                    None if !a.starts_with('-') => paths.push(a),
+                    None => {}
+                }
+            }
+            if ignored && !kept {
+                paths.push(".cyberbrain");
+            }
+            paths
         }
         _ => Vec::new(),
     }
@@ -1432,6 +1729,80 @@ mod bash_tests {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
         }
         assert!(bash_verdict("ln -s .cyberbrain/notes/r2/x.md /tmp/x.md").is_none());
+    }
+
+    /// C7 (review 2026-10-31): the cheap ways around the heuristic, each one verified to go
+    /// through before. The heuristic is still not a sandbox; these are the ordinary spellings.
+    #[test]
+    fn the_cheap_ways_around_the_shell_guard_are_closed() {
+        for cmd in [
+            // Path spellings that do not contain the guarded text as it is written.
+            "echo x > .cyberbrain/notes/./r0/x.md",
+            "echo x > .cyberbrain/notes//r0/x.md",
+            "echo x > .cyberbrain/notes/r2/../r0/x.md",
+            "rm .cyberbrain/n*/r0/x.md",
+            "rm .cyberbrain/notes/r[0]/x.md",
+            "rm .cyberbrain/notes/{r0,r1}/x.md",
+            "rm -rf .cyberbrain/a*",
+            "rm -rf .c*",
+            // A directory changed into first.
+            "cd .cyberbrain/notes && echo x > r0/x.md",
+            "cd /root/p/.cyberbrain; rm audit*",
+            "pushd .cyberbrain/notes; rm -rf r1",
+            // A target directory given by option.
+            "cp -t .cyberbrain/notes/r0 /tmp/x.md",
+            "cp --target-directory=.cyberbrain/notes/r0 /tmp/x.md",
+            "mv -t .cyberbrain/notes/r1 /tmp/x.md",
+            "install -t .cyberbrain/keys /tmp/k",
+            // Programs that write and were not known to.
+            "git checkout -- .cyberbrain/notes/r0/x.md",
+            "git restore .cyberbrain/notes/r1/x.md",
+            "git clean -fdx",
+            "git clean -fX",
+            "find .cyberbrain -delete",
+            "find .cyberbrain/notes/r0 -name '*.md' -exec rm {} +",
+            "find .cyberbrain/notes -type f | xargs rm",
+            "ls .cyberbrain/proposals/* | xargs -0 rm -f",
+            "python3 -c \"open('.cyberbrain/audit.db','w')\"",
+            "python3 -c \"import shutil; shutil.rmtree('.cyberbrain')\"",
+            "perl -e 'unlink q(.cyberbrain/audit.db)'",
+            "node -e \"require('fs').rmSync('.cyberbrain/notes/r0',{recursive:true})\"",
+            "sh -c 'rm .cyberbrain/notes/r0/x.md'",
+            "bash -c \"echo x >> .cyberbrain/notes/r1/x.md\"",
+            "unzip -o x.zip -d .cyberbrain/notes/r0",
+            // The agent marker dropped in ways the patterns did not know.
+            "exec -c cyberbrain write --ring 0 --kind decision --name x --body y",
+            "sudo cyberbrain write --ring 0 --kind decision --name x --body y",
+            "unset -v CLAUDECODE; cyberbrain write --ring 0 --name x --body y",
+            "export -n CLAUDECODE; cyberbrain write --ring 0 --name x --body y",
+            "env - PATH=/usr/bin cyberbrain write --ring 0 --name x --body y",
+            "doas cyberbrain write --ring 1 --name x --body y",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+        // What the new rules must not catch.
+        for cmd in [
+            "rm .cyberbrain/notes/r2/*.md",
+            "rm -rf build/* target/*",
+            "rm a*",
+            "cd .cyberbrain/notes && cat r0/x.md",
+            "cd /tmp && rm -rf x",
+            "cp -t /tmp .cyberbrain/notes/r0/x.md",
+            "git checkout main",
+            "git restore src/main.rs",
+            "git clean -fd",
+            "git clean -fdx -e .cyberbrain",
+            "find . -name '*.rs' -newer Cargo.toml",
+            "find .cyberbrain/notes/r0 -name '*.md'",
+            "find /tmp/x -delete",
+            "ls | xargs wc -l",
+            "python3 -c 'print(1)'",
+            "python3 scripts/x.py --out /tmp/y",
+            "sudo systemctl restart nginx",
+            "unzip -o x.zip -d /tmp/x",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
+        }
     }
 
     #[test]
