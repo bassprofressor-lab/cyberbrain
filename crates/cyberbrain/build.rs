@@ -95,8 +95,8 @@ fn main() {
         // rust-embed refuses a folder that does not exist, so the promise above ("no UI")
         // was five compile errors in a fresh checkout (C3, 2026-10-31). An empty folder in
         // OUT_DIR keeps it: the build works, and `serve` says the page was not built in.
-        let empty = Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
-            .join("ui-dist-empty");
+        let empty =
+            Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR")).join("ui-dist-empty");
         std::fs::create_dir_all(&empty).expect("OUT_DIR is writable");
         println!("cargo:rustc-env=CYBERBRAIN_UI_DIR={}", empty.display());
         println!(

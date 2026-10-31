@@ -733,3 +733,33 @@ Body in Markdown. Links to other notes are written [[like-this]].
         }
     }
 }
+
+#[cfg(test)]
+mod bomb_tests {
+    use super::*;
+
+    /// C22 (review 2026-10-31) said the head is materialised as a YAML value before any
+    /// check, so anchors with aliases (nine levels of ten, 10^9 elements from a few hundred
+    /// bytes) would exhaust memory. Measured: serde_norway's repetition limit refuses it in
+    /// well under a second. Kept so that a parser change that loses the limit is noticed.
+    #[test]
+    fn an_alias_bomb_in_the_head_is_refused_quickly() {
+        let mut head = String::from("a: &a [x, x, x, x, x, x, x, x, x, x]\n");
+        let mut prev = 'a';
+        for c in 'b'..='j' {
+            head.push_str(&format!(
+                "{c}: &{c} [*{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}, *{prev}]\n"
+            ));
+            prev = c;
+        }
+        let text = format!("---\n{head}---\nbody\n");
+        let started = std::time::Instant::now();
+        let err = parse(Path::new("notes/r2/bomb.md"), &text).unwrap_err();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+        assert!(err.to_string().contains("repetition limit"), "{err}");
+    }
+}
