@@ -158,6 +158,36 @@ fn content_length(line: &[u8]) -> Option<usize> {
     value.trim().parse().ok()
 }
 
+/// Read one line into `line`, holding at most `max + 1` bytes of it; the rest of an
+/// oversized line is consumed and dropped, so the next read starts at the next line. Returns
+/// how many bytes the line had on the stream (0 at end of stream). Until 2026-10-31 the
+/// whole line was buffered before its size was checked (C11).
+async fn read_line_capped<R: AsyncBufRead + Unpin>(
+    r: &mut R,
+    max: usize,
+    line: &mut Vec<u8>,
+) -> io::Result<usize> {
+    let mut total = 0;
+    loop {
+        let buf = r.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok(total);
+        }
+        let (chunk, done) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => (&buf[..=i], true),
+            None => (buf, false),
+        };
+        let room = (max + 1).saturating_sub(line.len());
+        line.extend_from_slice(&chunk[..chunk.len().min(room)]);
+        let used = chunk.len();
+        total += used;
+        r.consume(used);
+        if done {
+            return Ok(total);
+        }
+    }
+}
+
 /// What `read_frame` found.
 #[derive(Debug)]
 pub enum Frame {
@@ -173,7 +203,7 @@ pub enum Frame {
 pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option<Frame>> {
     loop {
         let mut line = Vec::new();
-        let n = r.read_until(b'\n', &mut line).await?;
+        let n = read_line_capped(r, MAX_FRAME_BYTES, &mut line).await?;
         if n == 0 {
             return Ok(None);
         }
@@ -181,10 +211,7 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(r: &mut R) -> io::Result<Option
             return Ok(Some(Frame::Refused(
                 RpcError::new(
                     INVALID_REQUEST,
-                    format!(
-                        "frame of {} bytes exceeds the {MAX_FRAME_BYTES} byte limit",
-                        line.len()
-                    ),
+                    format!("frame of {n} bytes exceeds the {MAX_FRAME_BYTES} byte limit"),
                 ),
                 Framing::Lines,
             )));
@@ -249,4 +276,27 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
         }
     }
     w.flush().await
+}
+
+#[cfg(test)]
+mod capped_tests {
+    use super::*;
+
+    /// C11 (review 2026-10-31): the whole line was buffered before the size check, so a
+    /// stdio peer that never sends a newline could exhaust memory. Calibrated against the
+    /// uncapped read first: the line held all 4 MiB.
+    #[tokio::test]
+    async fn an_oversized_line_is_not_held_whole() {
+        let mut input = vec![b'a'; 4 << 20];
+        input.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\"}\n");
+        let mut r = tokio::io::BufReader::new(&input[..]);
+        let mut line = Vec::new();
+        let n = read_line_capped(&mut r, 1024, &mut line).await.unwrap();
+        assert_eq!(n, (4 << 20) + 1, "the whole line is consumed");
+        assert!(line.len() <= 1025, "held {} bytes", line.len());
+        // The next line is read from its start.
+        let mut next = Vec::new();
+        read_line_capped(&mut r, 1024, &mut next).await.unwrap();
+        assert_eq!(next, b"{\"jsonrpc\":\"2.0\"}\n");
+    }
 }
