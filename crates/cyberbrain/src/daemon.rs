@@ -437,6 +437,7 @@ pub fn serve(_base: App, _idle_secs: u64) -> Result<i32> {
 
 /// Whether a connection from the account `peer` may use this daemon, run as `me`: the same
 /// account, or root. An account the system does not name is not this one (C29, 2026-10-31).
+#[cfg_attr(not(unix), allow(dead_code))] // only a Unix daemon answers
 pub(crate) fn admits(peer: Option<u32>, me: u32) -> bool {
     peer.is_some_and(|p| p == me || p == 0)
 }
