@@ -260,6 +260,9 @@ pub fn invalidated(r: &crate::app::InvalidatedNote) -> String {
         let _ = writeln!(s, "  before: invalid since {}", day_or_moment(prev));
     }
     let _ = writeln!(s, "  {}", Slash(&r.path));
+    if let Some(why) = &r.index_note {
+        let _ = writeln!(s, "  index: {why}");
+    }
     for line in &r.audit_preview {
         let _ = writeln!(s, "  audit: {line}");
     }
@@ -326,6 +329,9 @@ pub fn written(w: &WrittenNote) -> String {
     let _ = writeln!(s, "id: {}", w.id);
     if let Some(r) = &w.embedder_reason {
         let _ = writeln!(s, "no vectors: {r}");
+    }
+    if let Some(r) = &w.index_failed {
+        let _ = writeln!(s, "not indexed: {r}");
     }
     if w.dry_run && !w.audit_preview.is_empty() {
         let _ = writeln!(
@@ -1096,6 +1102,9 @@ pub fn reviewed(r: &crate::app::ReviewReport) -> String {
             r.blocks,
             r.vectors
         );
+    }
+    if let Some(why) = &r.index_note {
+        let _ = writeln!(s, "  index: {why}");
     }
     if let Some(reason) = &r.reason {
         let _ = writeln!(s, "  reason: {reason}");

@@ -415,6 +415,9 @@ pub struct ReviewReport {
     pub path: Option<PathBuf>,
     pub blocks: usize,
     pub vectors: usize,
+    /// Why the accepted note has no vectors or no index entry, when indexing it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_note: Option<String>,
     pub dry_run: bool,
     pub audit_preview: Vec<String>,
 }
@@ -447,8 +450,21 @@ pub struct InvalidatedNote {
     pub updated: jiff::Timestamp,
     pub blocks: usize,
     pub vectors: usize,
+    /// Why the note has no vectors or no index entry, when indexing it failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_note: Option<String>,
     pub dry_run: bool,
     pub audit_preview: Vec<String>,
+}
+
+/// What indexing a just-written note came to (`App::index_written`).
+#[derive(Debug, Default)]
+struct IndexStep {
+    blocks: usize,
+    vectors: usize,
+    links: usize,
+    embed_failed: Option<String>,
+    index_failed: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -469,6 +485,9 @@ pub struct WrittenNote {
     pub vectors: usize,
     pub links: usize,
     pub embedder_reason: Option<String>,
+    /// Set when the note is on disk and in the audit log but not in the index.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub index_failed: Option<String>,
     pub dry_run: bool,
     pub audit_preview: Vec<String>,
 }
@@ -1491,6 +1510,41 @@ impl App {
             EmbedderState::Remote { embedder } => embedder.embed(texts).map(Some),
             EmbedderState::Absent { .. } => Ok(None),
         }
+    }
+
+    /// Index a note whose file is written and whose audit row is in, without failing. Past
+    /// that point an error would report a write that happened as one that did not, and the
+    /// caller that tries again appends a second row for the same bytes (C15, 2026-10-31).
+    /// So, as in `scan`: a failed embedding costs the note its vectors, not its place in the
+    /// index, and an index that refuses the note is said, with `scan` as the way back.
+    fn index_written(&self, w: &Writers<'_>, note: &Note) -> IndexStep {
+        let (blocks, _) = blocks_of(note, MAX_BLOCK_TOKENS);
+        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
+        let mut step = IndexStep::default();
+        let vectors = match self
+            .declare_profile(w)
+            .and_then(|_| self.embed_blocks(&texts))
+        {
+            Ok(v) => v,
+            Err(e) => {
+                step.embed_failed = Some(e.to_string());
+                None
+            }
+        };
+        match w.index.upsert_note(note, &blocks, vectors.as_deref()) {
+            Ok(o) => {
+                step.blocks = o.blocks;
+                step.vectors = o.vectors;
+                step.links = o.links;
+            }
+            Err(e) => {
+                step.index_failed = Some(format!(
+                    "the file is written and recorded, but the index refused it ({e}); \
+                     `cyberbrain scan` indexes it"
+                ));
+            }
+        }
+        step
     }
 
     // ----- step 7: the inference client, lazily and last ---------------------------------
@@ -2907,11 +2961,7 @@ impl App {
         }
 
         // A write reindexes the note in the same request (§8.1).
-        let (blocks, _) = blocks_of(&note, MAX_BLOCK_TOKENS);
-        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
-        self.declare_profile(&w)?;
-        let vectors = self.embed_blocks(&texts)?;
-        let outcome = w.index.upsert_note(&note, &blocks, vectors.as_deref())?;
+        let step = self.index_written(&w, &note);
         Ok(WriteOutcome::Written(WrittenNote {
             id: note.front.id,
             name,
@@ -2923,10 +2973,11 @@ impl App {
             updated: now,
             pii,
             redacted,
-            blocks: outcome.blocks,
-            vectors: outcome.vectors,
-            links: outcome.links,
-            embedder_reason: self.embedder_summary().reason,
+            blocks: step.blocks,
+            vectors: step.vectors,
+            links: step.links,
+            embedder_reason: step.embed_failed.or(self.embedder_summary().reason),
+            index_failed: step.index_failed,
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         }))
@@ -3026,11 +3077,7 @@ impl App {
             Self::undo_note_write(&w, &note, Some(&existing), &e);
             return Err(e);
         }
-        let (blocks, _) = blocks_of(&note, MAX_BLOCK_TOKENS);
-        let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
-        self.declare_profile(&w)?;
-        let vectors = self.embed_blocks(&texts)?;
-        let outcome = w.index.upsert_note(&note, &blocks, vectors.as_deref())?;
+        let step = self.index_written(&w, &note);
         Ok(InvalidatedNote {
             id: note.front.id,
             name,
@@ -3040,8 +3087,9 @@ impl App {
             previous_invalid_at: existing.front.invalid_at,
             superseded_by: note.front.superseded_by,
             updated: now,
-            blocks: outcome.blocks,
-            vectors: outcome.vectors,
+            blocks: step.blocks,
+            vectors: step.vectors,
+            index_note: step.index_failed.or(step.embed_failed),
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         })
@@ -3676,6 +3724,7 @@ impl App {
                 path: None,
                 blocks: 0,
                 vectors: 0,
+                index_note: None,
                 dry_run: req.dry_run,
                 audit_preview: w.policy.preview(),
             });
@@ -3734,8 +3783,8 @@ impl App {
         let bytes = frontmatter::render(&accepted.front, &accepted.body)?.len();
         let ring = accepted.front.ring;
 
-        let (path, blocks, vectors) = if req.dry_run {
-            (self.store.note_path(ring, &name)?, 0, 0)
+        let (path, blocks, vectors, index_note) = if req.dry_run {
+            (self.store.note_path(ring, &name)?, 0, 0, None)
         } else {
             let path = w.notes.write(&accepted)?;
             let accepted = Note {
@@ -3744,15 +3793,16 @@ impl App {
             };
             policy.record_write(&accepted.front, bytes)?;
             self.attest_resident(policy, &accepted, "review accept")?;
-            let (blocks, _) = blocks_of(&accepted, MAX_BLOCK_TOKENS);
-            let texts: Vec<&str> = blocks.iter().map(|b| b.text.as_str()).collect();
-            self.declare_profile(&w)?;
-            let vectors = self.embed_blocks(&texts)?;
-            let outcome = w
-                .index
-                .upsert_note(&accepted, &blocks, vectors.as_deref())?;
+            // The proposal goes before the index is asked: an index failure must not leave
+            // a waiting proposal next to the note it became (C15, 2026-10-31).
             self.store.remove_proposal(&name)?;
-            (path, outcome.blocks, outcome.vectors)
+            let step = self.index_written(&w, &accepted);
+            (
+                path,
+                step.blocks,
+                step.vectors,
+                step.index_failed.or(step.embed_failed),
+            )
         };
 
         policy.audit().record(
@@ -3775,6 +3825,7 @@ impl App {
             path: Some(path),
             blocks,
             vectors,
+            index_note,
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
         })
@@ -6550,5 +6601,108 @@ mod audit_downgrade_tests {
         let app = App::open(Some(&store), Actor::Operator).unwrap();
         let err = app.verify_audit_chain().unwrap_err();
         assert!(err.to_string().contains("no row is signed"), "{err}");
+    }
+}
+
+#[cfg(test)]
+mod index_step_tests {
+    use super::*;
+
+    fn req(ring: Ring, name: &str, body: &str) -> WriteRequest {
+        WriteRequest {
+            ring,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: body.to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+        }
+    }
+
+    /// A store whose embedder is an Ollama nobody listens for: every embedding fails.
+    fn store_with_a_dead_embedder() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let cfg_path = root.join("cyberbrain.toml");
+        let cfg = std::fs::read_to_string(&cfg_path).unwrap();
+        let cfg = cfg.replacen("[embedding]\n", "[embedding]\nbackend = \"ollama\"\n", 1)
+            + "\n[embedding.ollama]\nbase_url = \"http://127.0.0.1:1\"\n\
+               model = \"embeddinggemma:300m-qat-q4_0\"\ndim = 768\n\
+               digest = \"9284ddb28f3e32696e612d3bf6bf9666c560c0aa6106f8be01f71d147d5c5cb2\"\n";
+        std::fs::write(&cfg_path, cfg).unwrap();
+        (dir, root)
+    }
+
+    fn indexed(app: &App, name: &str) -> bool {
+        lock_index(&app.index)
+            .unwrap()
+            .note_by_name(name)
+            .unwrap()
+            .is_some()
+    }
+
+    /// C15 (review 2026-10-31): with the embedder down, `write` put the file on disk and the
+    /// row in the audit log, then failed: exit code not zero, the index without the note, and
+    /// an agent that tried again wrote a second row for the same bytes. Calibrated against the
+    /// broken state first: `write` returned Err.
+    #[test]
+    fn a_failed_embedding_costs_a_written_note_its_vectors_not_its_place() {
+        let (_d, root) = store_with_a_dead_embedder();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        let out = app
+            .write(req(Ring::Knowledge, "t1", "*Für: probe*\n\nhallo welt"))
+            .unwrap();
+        let WriteOutcome::Written(w) = out else {
+            panic!("{out:?}")
+        };
+        assert_eq!(w.vectors, 0);
+        assert!(w.embedder_reason.is_some(), "{w:?}");
+        assert!(indexed(&app, "t1"), "the note is not in the index");
+    }
+
+    /// The same for `review --accept`: the note landed in its ring while the proposal stayed
+    /// and the acceptance row was never written.
+    #[test]
+    fn a_failed_embedding_does_not_leave_an_accepted_proposal_behind() {
+        let (_d, root) = store_with_a_dead_embedder();
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:test".into())).unwrap();
+        agent
+            .propose(
+                req(Ring::Knowledge, "vorschlag", "*Für: probe*\n\nText."),
+                "agent-a",
+            )
+            .unwrap();
+        let op = App::open(Some(&root), Actor::Operator).unwrap();
+        op.review(ReviewRequest {
+            name: "vorschlag".to_string(),
+            accept: true,
+            reason: String::new(),
+            by: "christoph".to_string(),
+            force: false,
+            from_agentguard: false,
+            dry_run: false,
+        })
+        .unwrap();
+        assert!(root.join("notes").join("r2").join("vorschlag.md").exists());
+        assert!(!root.join("proposals").join("vorschlag.md").exists());
+        assert!(indexed(&op, "vorschlag"));
+        let accepted = op
+            .policy()
+            .audit()
+            .read(&cyberbrain_policy::AuditFilter::default())
+            .unwrap()
+            .into_iter()
+            .any(|e| e.action == "note.proposal.accepted");
+        assert!(accepted, "no acceptance row");
     }
 }
