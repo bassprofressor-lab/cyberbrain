@@ -100,9 +100,39 @@ pub fn discover_store_from(start: Option<&Path>) -> Result<PathBuf> {
             source: e,
         })?,
     };
+    discover_store_as(&cwd, current_uid())
+}
+
+#[cfg(unix)]
+fn current_uid() -> Option<u32> {
+    // Safety: geteuid cannot fail and touches no memory.
+    Some(unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> Option<u32> {
+    None
+}
+
+/// The walk itself, as the account `me` (`None`: ownership is not checked, as on Windows).
+///
+/// The first `.cyberbrain` above the working directory wins only if it is this account's:
+/// one that another account owns is refused with its owner named, the way git refuses a
+/// repository it does not own (CVE-2022-24765). Otherwise a store left in a shared place
+/// such as /tmp would collect every other account's notes and session records and lend them
+/// its configuration and its audit key (C17, 2026-10-31). `--store` opens it on purpose.
+fn discover_store_as(cwd: &Path, me: Option<u32>) -> Result<PathBuf> {
     for dir in cwd.ancestors() {
         let candidate = dir.join(DEFAULT_STORE_DIR);
         if is_store(&candidate) {
+            if let Some(owner) = foreign_owner(&candidate, me) {
+                return Err(Error::Config(format!(
+                    "no {DEFAULT_STORE_DIR} store found that is yours: {} belongs to uid {owner}, \
+                     not to this account. Point at it with --store or CYBERBRAIN_STORE if you \
+                     mean to use it, or run `cyberbrain init` in your project root",
+                    Slash(&candidate)
+                )));
+            }
             return Ok(candidate);
         }
     }
@@ -112,6 +142,21 @@ pub fn discover_store_from(start: Option<&Path>) -> Result<PathBuf> {
          CYBERBRAIN_STORE",
         Slash(&cwd)
     )))
+}
+
+/// The owner of `store` when that is neither `me` nor root (a root-owned store is the
+/// machine's own, as a system-wide installation would make it).
+#[cfg(unix)]
+fn foreign_owner(store: &Path, me: Option<u32>) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    let me = me?;
+    let owner = std::fs::metadata(store).ok()?.uid();
+    (owner != me && owner != 0).then_some(owner)
+}
+
+#[cfg(not(unix))]
+fn foreign_owner(_store: &Path, _me: Option<u32>) -> Option<u32> {
+    None
 }
 
 // ---------------------------------------------------------------------------------------
@@ -6785,5 +6830,43 @@ mod review_tests {
             matches!(outcome, Err(Error::PolicyRefusal { .. })),
             "{outcome:?}"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod discovery_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    /// C17 (review 2026-10-31): the walk up from the working directory took the first
+    /// `.cyberbrain` it met, whoever owned it: on a shared machine, a store another account
+    /// left in /tmp received this account's notes and session records and lent it its
+    /// configuration. A store that belongs to somebody else is now refused with its owner
+    /// named, and opened only when asked for by --store. The test plays the other account by
+    /// claiming a uid that is not the directory's. Calibrated against the broken state
+    /// first: the foreign store was returned.
+    #[test]
+    fn a_store_owned_by_another_account_is_not_discovered() {
+        let dir = tempfile::tempdir().unwrap();
+        let shared = dir.path().join("shared");
+        App::init(&shared.join(DEFAULT_STORE_DIR), &Actor::Operator).unwrap();
+        let below = shared.join("projekt").join("src");
+        std::fs::create_dir_all(&below).unwrap();
+        let store = shared.join(DEFAULT_STORE_DIR);
+        // A root-owned store counts as the machine's; run as root, hand it to somebody.
+        if std::fs::metadata(&store).unwrap().uid() == 0 {
+            std::os::unix::fs::chown(&store, Some(65534), None).unwrap();
+        }
+        let owner = std::fs::metadata(&store).unwrap().uid();
+
+        let found = discover_store_as(&below, Some(owner));
+        assert_eq!(found.unwrap(), shared.join(DEFAULT_STORE_DIR));
+
+        let err = discover_store_as(&below, Some(owner.wrapping_add(1))).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("belongs to"), "{msg}");
+        assert!(msg.contains("--store"), "{msg}");
+        // Asked for by name, it opens: the person said which store they mean.
+        assert!(discover_store(Some(&shared.join(DEFAULT_STORE_DIR))).is_ok());
     }
 }
