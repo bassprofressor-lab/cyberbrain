@@ -698,6 +698,8 @@ export const AUDIT_ACTION_FAMILIES: ReadonlyArray<AuditActionFilter> = [
   "store.init",
   "audit.export",
   "consent.model-download",
+  "session.start",
+  "subagent.start",
 ];
 
 /**

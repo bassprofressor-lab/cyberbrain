@@ -106,6 +106,7 @@ pub fn event_name(event: HookEvent) -> &'static str {
         HookEvent::SessionStart => "session-start",
         HookEvent::SessionRings => "session-rings",
         HookEvent::SessionContext => "session-context",
+        HookEvent::SubagentStart => "subagent-start",
         HookEvent::UserPromptSubmit => "user-prompt-submit",
         HookEvent::PreToolUse => "pre-tool-use",
         HookEvent::PostToolUse => "post-tool-use",
@@ -120,6 +121,7 @@ pub fn harness_event_name(event: HookEvent) -> &'static str {
         HookEvent::SessionStart | HookEvent::SessionRings | HookEvent::SessionContext => {
             "SessionStart"
         }
+        HookEvent::SubagentStart => "SubagentStart",
         HookEvent::UserPromptSubmit => "UserPromptSubmit",
         HookEvent::PreToolUse => "PreToolUse",
         HookEvent::PostToolUse => "PostToolUse",
@@ -130,9 +132,10 @@ pub fn harness_event_name(event: HookEvent) -> &'static str {
 
 pub fn budget_ms(event: HookEvent) -> u128 {
     match event {
-        HookEvent::SessionStart | HookEvent::SessionRings | HookEvent::SessionContext => {
-            SESSION_START_BUDGET_MS
-        }
+        HookEvent::SessionStart
+        | HookEvent::SessionRings
+        | HookEvent::SessionContext
+        | HookEvent::SubagentStart => SESSION_START_BUDGET_MS,
         _ => HOT_PATH_BUDGET_MS,
     }
 }

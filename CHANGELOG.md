@@ -12,6 +12,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **Subagents get rings 0 and 1.** A subagent starts without the session's context, and no
+  session start fires for it, so the rules that bind the session reached it only as far as its
+  brief repeated them. The new `hook subagent-start`, installed for Claude Code's
+  `SubagentStart` event, hands it rings 0 and 1 as its opening context, with their citations,
+  and the store's path for a subagent that works in a checkout outside the project, where
+  walking up does not find the store. One audit row `subagent.start` per subagent; the parent
+  session's state is left alone. Run `cyberbrain install` again to add the hook. The idea of a
+  hook at subagent start is taken from ProjectAtlas (styler-ai/ProjectAtlas, MIT), whose Codex
+  plugin reminds each subagent of its tool.
+
 ## [0.8.4] — 2026-10-31
 
 ### Fixed

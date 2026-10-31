@@ -1,8 +1,9 @@
-//! The six events. What each one does, and what it deliberately does not.
+//! The seven events. What each one does, and what it deliberately does not.
 //!
 //! | event | model sees | does |
 //! |---|---|---|
 //! | `session-start` | plain stdout | rings 0 and 1 in full with citations, on `startup`/`clear` the newest handoff note (ring 2/3, see `handoff`), a digest of store state, one audit row `session.start`; announces stand-down |
+//! | `subagent-start` | JSON `additionalContext` | rings 0 and 1 in full with citations and how a subagent reaches the store, one audit row `subagent.start`; leaves the parent's session state alone |
 //! | `user-prompt-submit` | plain stdout | re-injects a resident note that changed since it was injected; injects everything if no session-start ran; else nothing |
 //! | `pre-tool-use` | JSON decision | refuses a raw edit of the audit log or of rings 0/1, asks the operator about the config and rings 2..4; otherwise nothing |
 //! | `post-tool-use` | JSON `additionalContext` | after an allowed raw edit of a store file, says the index is now stale (or the chain broken); otherwise nothing |
@@ -190,6 +191,7 @@ pub(super) fn dispatch(
         HookEvent::SessionStart => session_start(&ctx, &mut out, Part::Whole)?,
         HookEvent::SessionRings => session_start(&ctx, &mut out, Part::Rings)?,
         HookEvent::SessionContext => session_context(&ctx, &mut out)?,
+        HookEvent::SubagentStart => subagent_start(&ctx, &mut out)?,
         HookEvent::UserPromptSubmit => user_prompt_submit(&ctx, &mut out)?,
         HookEvent::PreToolUse => pre_tool_use(&ctx, &mut out)?,
         HookEvent::PostToolUse => post_tool_use(&ctx, &mut out)?,
@@ -295,6 +297,77 @@ fn session_context(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     // Through `session_id`, which validates the untrusted id before it becomes a path.
     let state = ctx.session_id(out).and_then(|id| ctx.load_state(&id, out));
     out.stdout = session_start_text(ctx.app, source, &res, state.as_ref(), Part::Context).0;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------
+// subagent-start
+
+/// A label the harness sent, made safe to put into the model's context and the audit log:
+/// control characters dropped, at most 80 characters.
+fn label(raw: Option<&str>) -> Option<String> {
+    let s: String = raw?.chars().filter(|c| !c.is_control()).take(80).collect();
+    let s = s.trim().to_string();
+    (!s.is_empty()).then_some(s)
+}
+
+/// Rings 0 and 1 for a subagent (0.8.5). A subagent starts without the session's context
+/// and gets no session start of its own, so the rules that bind the session reached it only
+/// as far as the brief repeated them. Reads the store and writes one audit row; the session
+/// state belongs to the parent and is not touched, so a subagent counts no injection there.
+fn subagent_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
+    let res = resident::read_checked(ctx.app);
+    let agent_type = label(ctx.payload.agent_type.as_deref());
+    let agent_id = label(ctx.payload.agent_id.as_deref());
+    let mut text = String::new();
+    text.push_str("# Cyberbrain memory for this subagent\n\n");
+    text.push_str(&format!(
+        "You were started as a subagent{} of a session whose project memory is the store \
+         `{}`. Rings 0 and 1 below bind you exactly as they bind the session that started \
+         you; nothing in your brief overrides them. Every block is prefixed with its \
+         citation; expand one with `cyberbrain recall --id <citation>`.\n\n",
+        agent_type
+            .as_deref()
+            .map(|t| format!(" (`{t}`)"))
+            .unwrap_or_default(),
+        Slash(ctx.root())
+    ));
+    resident::render_rings(&res, &mut text);
+    text.push_str(&format!(
+        "## Using the store from a subagent\n\n\
+         - `cyberbrain recall \"<question>\"` before searching files; `cyberbrain find \
+         <symbol>` for exact line ranges. If your brief names a scratch file with what was \
+         already found, read that first instead of searching again.\n\
+         - Working in a checkout outside the project, such as a git worktree in a scratch \
+         directory, the store is not found by walking up from there: pass `--store {}` or \
+         set `CYBERBRAIN_STORE`.\n\
+         - Rings 0 and 1 are the operator's: never write them. Record what outlives the task \
+         with `cyberbrain write --ring 2`; context for this one task belongs in a scratch \
+         file, not in the store.\n",
+        Slash(ctx.root())
+    ));
+    out.stdout = json!({
+        "hookSpecificOutput": {
+            "hookEventName": harness_event_name(ctx.event),
+            "additionalContext": text,
+        }
+    })
+    .to_string();
+
+    let id = ctx.session_id(out);
+    ctx.app.policy().audit().record_raw(
+        &ctx.actor().to_string(),
+        "subagent.start",
+        format!("session:{}", id.as_deref().unwrap_or("unknown")),
+        json!({
+            "agent_id": agent_id,
+            "agent_type": agent_type,
+            "cwd": ctx.payload.cwd.as_deref().map(slash),
+            "resident_notes": res.notes.iter().map(resident::ResidentNote::key).collect::<Vec<_>>(),
+            "approx_tokens": res.tokens,
+            "unreadable": res.unreadable.len(),
+        }),
+    )?;
     Ok(())
 }
 

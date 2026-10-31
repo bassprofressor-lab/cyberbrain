@@ -23,6 +23,10 @@ pub struct Payload {
     pub tool_name: Option<String>,
     pub tool_input: Value,
     pub stop_hook_active: bool,
+    /// `subagent-start` and any hook that fires inside a subagent: the subagent's id and its
+    /// type (`general-purpose`, `Explore`, a custom agent's name). Untrusted text.
+    pub agent_id: Option<String>,
+    pub agent_type: Option<String>,
     /// Everything odd about the payload, for stderr. Empty for a well-formed one.
     pub notes: Vec<String>,
 }
@@ -61,6 +65,8 @@ impl Payload {
         p.source = string("source");
         p.trigger = string("trigger");
         p.tool_name = string("tool_name");
+        p.agent_id = string("agent_id").filter(|s| !s.trim().is_empty());
+        p.agent_type = string("agent_type").filter(|s| !s.trim().is_empty());
         p.tool_input = obj.get("tool_input").cloned().unwrap_or(Value::Null);
         p.stop_hook_active = obj
             .get("stop_hook_active")

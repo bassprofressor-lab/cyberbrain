@@ -61,7 +61,7 @@ fn the_hooks_land_in_the_project_and_come_back_out() {
     let file = o.project.join(".claude").join("settings.json");
     let v = read(&file);
     let hooks = v["hooks"].as_object().unwrap();
-    assert_eq!(hooks.len(), 6, "one entry per lifecycle event: {v:#}");
+    assert_eq!(hooks.len(), 7, "one entry per lifecycle event: {v:#}");
     for (event, arg, matcher) in EVENTS {
         let entry = &hooks[event][0];
         assert_eq!(entry["matcher"], matcher, "{event}");
@@ -579,7 +579,7 @@ fn with_the_plugin_installed_our_hooks_come_out_and_foreign_ones_stay() {
             "matcher": "", "hooks": [{"type": "command", "command": "/usr/bin/true"}]
         }));
     fs::write(&file, serde_json::to_string_pretty(&v).unwrap()).unwrap();
-    assert_eq!(read(&file)["hooks"].as_object().unwrap().len(), 6);
+    assert_eq!(read(&file)["hooks"].as_object().unwrap().len(), 7);
 
     // Now the plugin arrives.
     let reg = env.home.as_ref().unwrap().join(".claude").join("plugins");

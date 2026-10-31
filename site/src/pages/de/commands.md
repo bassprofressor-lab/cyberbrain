@@ -184,7 +184,7 @@ Trägt dieses Programm in die Einstellungen eines Agenten ein: die Hooks für Cl
 
 ### hook
 
-`cyberbrain hook <EREIGNIS>` liest die Nutzdaten des Werkzeugs von der Standardeingabe und antwortet auf der Standardausgabe. Ereignisse: `session-start`, `session-rings`, `session-context`, `user-prompt-submit`, `pre-tool-use`, `post-tool-use`, `stop`, `pre-compact`. Ein Hook lässt das Werkzeug nie scheitern: Ein interner Fehler wird festgehalten, und der Prozess endet mit 0.
+`cyberbrain hook <EREIGNIS>` liest die Nutzdaten des Werkzeugs von der Standardeingabe und antwortet auf der Standardausgabe. Ereignisse: `session-start`, `session-rings`, `session-context`, `subagent-start`, `user-prompt-submit`, `pre-tool-use`, `post-tool-use`, `stop`, `pre-compact`. Ein Hook lässt das Werkzeug nie scheitern: Ein interner Fehler wird festgehalten, und der Prozess endet mit 0.
 
 ### mcp
 

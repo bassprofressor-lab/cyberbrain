@@ -112,7 +112,7 @@ impl ClientReport {
     }
 }
 
-/// The six lifecycle events, the CLI argument each one takes, and which tool calls it wants
+/// The seven lifecycle events, the CLI argument each one takes, and which tool calls it wants
 /// to see.
 ///
 /// The matcher on the two tool events is not a narrowing for speed: `Payload::edited_file`
@@ -126,8 +126,9 @@ impl ClientReport {
 /// Session start runs as two hooks in one entry (0.7.10): Claude Code caps each hook's output
 /// at 10,000 characters on its own, so rings 0/1 get the whole cap and the handoff and digest
 /// another one, instead of sharing one and pushing the rings into a preview.
-pub(crate) const EVENTS: [(&str, &[&str], &str); 6] = [
+pub(crate) const EVENTS: [(&str, &[&str], &str); 7] = [
     ("SessionStart", &["session-rings", "session-context"], ""),
+    ("SubagentStart", &["subagent-start"], ""),
     ("UserPromptSubmit", &["user-prompt-submit"], ""),
     ("PreToolUse", &["pre-tool-use"], PRE_TOOL_MATCHER),
     ("PostToolUse", &["post-tool-use"], TOOL_MATCHER),

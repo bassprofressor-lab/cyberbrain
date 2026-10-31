@@ -745,6 +745,8 @@ export const en = {
         "store.init": "store.init",
         "audit.export": "audit.export",
         "consent.model-download": "consent.model-download",
+        "session.start": "session.start (rings 0/1 shown to a session)",
+        "subagent.start": "subagent.start (rings 0/1 shown to a subagent)",
       },
       anyAction: "any action",
       actionAria: "Action family",

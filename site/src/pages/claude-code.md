@@ -28,6 +28,7 @@ It writes one entry per event into the project's `.claude/settings.json`. Each e
 | Event | Command | Matcher |
 |---|---|---|
 | `SessionStart` | `hook session-rings`, then `hook session-context` | all |
+| `SubagentStart` | `hook subagent-start` | all |
 | `UserPromptSubmit` | `hook user-prompt-submit` | all |
 | `PreToolUse` | `hook pre-tool-use` | `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash\|WebFetch` |
 | `PostToolUse` | `hook post-tool-use` | `Edit\|Write\|MultiEdit\|NotebookEdit` |
@@ -43,6 +44,8 @@ Without `--client`, `install` sets up every client it finds on this machine: Cla
 A hook never fails the harness. Any internal error is recorded and the process exits 0 with empty output. The budget in the specification is a p99 of 15 ms for every event except session start (150 ms); the README of 0.8.4 reports 7 to 9 ms, and 17 ms for session start, on a store of 1,300 notes, process start included.
 
 **Session start** prints rings 0 and 1, each block with its citation, followed by the newest handoff note, a short digest of the store and how to use it. Claude Code shows each hook's output in full only up to 10,000 characters, so since 0.7.10 this is split over two hooks: `session-rings` first and alone, then `session-context`. Installs from before 0.7.10 call `session-start`, which does both in one.
+
+**Subagent start** hands rings 0 and 1 to every subagent as its opening context, with the store's path for a subagent that works in a checkout outside the project, such as a git worktree in a scratch directory. A subagent gets no session start of its own; before 0.8.5 it knew the rules only as far as its brief repeated them. One audit row `subagent.start` per subagent; the parent session's state is left alone.
 
 The **handoff** is the newest note in ring 2 or 3 whose name contains `handoff` (configurable in `[handoff]`), at most 7 days old. It is shown as what it is: dated, and outranked by rings 0 and 1. A session can then find what the previous one left for it without knowing to ask.
 

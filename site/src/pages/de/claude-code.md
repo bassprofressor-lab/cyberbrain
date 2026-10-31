@@ -29,6 +29,7 @@ Es schreibt je Ereignis einen Eintrag in die `.claude/settings.json` des Projekt
 | Ereignis | Befehl | Matcher |
 |---|---|---|
 | `SessionStart` | `hook session-rings`, dann `hook session-context` | alle |
+| `SubagentStart` | `hook subagent-start` | alle |
 | `UserPromptSubmit` | `hook user-prompt-submit` | alle |
 | `PreToolUse` | `hook pre-tool-use` | `Edit\|Write\|MultiEdit\|NotebookEdit\|Bash\|WebFetch` |
 | `PostToolUse` | `hook post-tool-use` | `Edit\|Write\|MultiEdit\|NotebookEdit` |
@@ -44,6 +45,8 @@ Ohne `--client` richtet `install` jeden Client ein, den es auf dem Rechner finde
 Ein Hook lässt das Werkzeug nie scheitern. Jeder interne Fehler wird festgehalten, und der Prozess endet mit 0 und leerer Ausgabe. Die Spezifikation verlangt im 99. Perzentil 15 ms für jedes Ereignis außer dem Sitzungsstart (150 ms); das README von 0.8.4 nennt 7 bis 9 ms und 17 ms für den Sitzungsstart, an einem Store mit 1.300 Notizen und mit Prozessstart.
 
 **Beim Sitzungsstart** kommen Ring 0 und 1, jeder Abschnitt mit seinem Zitat, danach die neueste Übergabenotiz, eine kurze Übersicht über den Store und wie man ihn benutzt. Claude Code zeigt die Ausgabe eines Hooks nur bis 10.000 Zeichen vollständig, deshalb ist das seit 0.7.10 auf zwei Hooks verteilt: zuerst und allein `session-rings`, danach `session-context`. Installationen von vor 0.7.10 rufen `session-start` auf, das beides auf einmal tut.
+
+**Beim Start eines Unteragenten** bekommt jeder Unteragent Ring 0 und 1 als Startkontext, dazu den Pfad des Stores für einen Unteragenten, der außerhalb des Projekts arbeitet, etwa in einem Git-Worktree im Scratch-Verzeichnis. Ein Unteragent bekommt keinen eigenen Sitzungsstart; vor 0.8.5 kannte er die Regeln nur so weit, wie sein Auftrag sie wiederholte. Je Unteragent eine Audit-Zeile `subagent.start`; der Zustand der Elternsitzung bleibt unberührt.
 
 Die **Übergabe** ist die neueste Notiz in Ring 2 oder 3, deren Name `handoff` enthält (einstellbar unter `[handoff]`), höchstens sieben Tage alt. Sie wird als das gezeigt, was sie ist: datiert und nachrangig zu Ring 0 und 1. Eine Sitzung findet so, was die vorige ihr hinterlassen hat, ohne danach fragen zu müssen.
 

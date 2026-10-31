@@ -1825,3 +1825,79 @@ fn a_canary_note_keeps_its_value_and_wears_its_tag() {
     assert!(!note.body.to_lowercase().contains("canary") && !note.body.contains("decoy"));
     assert!(!audit_text(&app).contains(&c.value));
 }
+
+// ---------------------------------------------------------------------------------------
+// subagent-start
+
+/// 0.8.5: a subagent gets no session start of its own, so rings 0 and 1 reached it only as
+/// far as its brief repeated them. The hook hands them over as `additionalContext` (the
+/// channel Claude Code reads for SubagentStart; plain stdout goes to the debug log), records
+/// the start, and leaves the parent's session state alone.
+#[test]
+fn subagent_start_hands_rings_0_and_1_to_the_subagent_and_leaves_the_session_alone() {
+    let f = fixture();
+    f.write(
+        Ring::Invariant,
+        "never-copy-config",
+        "Never copy config.py to S2.",
+    );
+    f.write(
+        Ring::Protocol,
+        "handoff",
+        "Read the handoff before resuming.",
+    );
+    f.write(Ring::Knowledge, "pg18", "PG 18 moves PGDATA.");
+    let _ = session_start(&f, "startup");
+    let before = f.state().unwrap();
+
+    let app = f.open();
+    let out = run(
+        Some(&app),
+        HookEvent::SubagentStart,
+        &f.payload(serde_json::json!({
+            "hook_event_name": "SubagentStart",
+            "agent_id": "agent-7",
+            "agent_type": "general-\u{1b}[31mpurpose",
+        })),
+    );
+    assert_eq!(out.exit_code, 0);
+    let v: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON, not plain text");
+    assert_eq!(v["hookSpecificOutput"]["hookEventName"], "SubagentStart");
+    let ctx = v["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .unwrap();
+    assert!(ctx.contains("### r0 `never-copy-config`"), "{ctx}");
+    assert!(ctx.contains("Never copy config.py to S2."), "{ctx}");
+    assert!(ctx.contains("### r1 `handoff`"), "{ctx}");
+    assert!(
+        !ctx.contains("PG 18 moves PGDATA"),
+        "ring 2 stays on demand: {ctx}"
+    );
+    assert!(
+        ctx.contains("--store "),
+        "a worktree outside the project needs the path: {ctx}"
+    );
+    assert!(
+        !ctx.contains('\u{1b}'),
+        "a control character from the payload reached the model"
+    );
+    assert!(ctx.contains("(`general-[31mpurpose`)"), "{ctx}");
+
+    assert!(audit_actions(&app).contains(&"subagent.start".to_string()));
+    let after = f.state().unwrap();
+    assert_eq!(
+        after.injections, before.injections,
+        "the parent's count is not the subagent's"
+    );
+}
+
+#[test]
+fn subagent_start_without_a_store_stays_silent_to_the_model() {
+    let out = run(
+        None,
+        HookEvent::SubagentStart,
+        r#"{"hook_event_name":"SubagentStart","agent_id":"a"}"#,
+    );
+    assert_eq!(out.exit_code, 0);
+    assert!(out.stdout.is_empty(), "{}", out.stdout);
+}

@@ -739,6 +739,8 @@ export const de: Dict = {
         "store.init": "store.init",
         "audit.export": "audit.export",
         "consent.model-download": "consent.model-download",
+        "session.start": "session.start (Ring 0/1 an eine Sitzung)",
+        "subagent.start": "subagent.start (Ring 0/1 an einen Unteragenten)",
       },
       anyAction: "jede Aktion",
       actionAria: "Aktionsfamilie",

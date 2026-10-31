@@ -183,7 +183,7 @@ Write this binary into an agent's own configuration: the hooks for Claude Code, 
 
 ### hook
 
-`cyberbrain hook <EVENT>` reads the harness payload on stdin and answers on stdout. Events: `session-start`, `session-rings`, `session-context`, `user-prompt-submit`, `pre-tool-use`, `post-tool-use`, `stop`, `pre-compact`. A hook never fails the harness: an internal error is recorded and the process exits 0.
+`cyberbrain hook <EVENT>` reads the harness payload on stdin and answers on stdout. Events: `session-start`, `session-rings`, `session-context`, `subagent-start`, `user-prompt-submit`, `pre-tool-use`, `post-tool-use`, `stop`, `pre-compact`. A hook never fails the harness: an internal error is recorded and the process exits 0.
 
 ### mcp
 

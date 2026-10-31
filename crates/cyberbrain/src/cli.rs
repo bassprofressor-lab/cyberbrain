@@ -570,6 +570,10 @@ pub enum HookEvent {
     /// Claude Code caps each hook's output at 10,000 characters on its own, so two hooks
     /// for one event double the room before rings 0/1 are cut to a preview (0.7.10).
     SessionContext,
+    /// A subagent was started (0.8.5): rings 0 and 1 and how to reach the store, as the
+    /// subagent's opening context. A subagent gets no session start of its own, so without
+    /// this it knows only what its brief repeats of the rules.
+    SubagentStart,
     UserPromptSubmit,
     PreToolUse,
     PostToolUse,
@@ -694,8 +698,8 @@ mod tests {
 
     #[test]
     fn all_hook_events_exist() {
-        // Six harness events; session start comes whole or in two halves.
-        assert_eq!(HookEvent::value_variants().len(), 8);
+        // Seven harness events; session start comes whole or in two halves.
+        assert_eq!(HookEvent::value_variants().len(), 9);
     }
 }
 
