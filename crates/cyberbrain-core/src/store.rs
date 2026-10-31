@@ -195,6 +195,27 @@ impl Store {
         self.read_proposal_path(&path)
     }
 
+    /// [`read_proposal`](Self::read_proposal), with the blake3 (hex) of the very bytes the
+    /// note was parsed from. A caller that hashes the file and then reads it again can check
+    /// one version and accept another (C16, 2026-10-31); this is one read for both.
+    pub fn read_proposal_digested(&self, name: &str) -> Result<(Note, String)> {
+        let path = self.proposal_path(name)?;
+        if !path.is_file() {
+            return Err(Error::NoSuchNote(name.to_string()));
+        }
+        refuse_symlink(&path)?;
+        let bytes = fs::read(&path).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: e,
+        })?;
+        let digest = blake3::hash(&bytes).to_hex().to_string();
+        let text = String::from_utf8(bytes).map_err(|e| Error::Io {
+            path: path.clone(),
+            source: io::Error::new(io::ErrorKind::InvalidData, e),
+        })?;
+        Ok((self.proposal_from_text(&path, &text)?, digest))
+    }
+
     /// Like [`read_path`](Self::read_path), but the file is checked against the proposals
     /// directory rather than a ring directory — the ring in the frontmatter is where the
     /// note is *destined*, not where it is.
@@ -204,7 +225,11 @@ impl Store {
             path: path.to_path_buf(),
             source: e,
         })?;
-        let parsed = frontmatter::parse(path, &text)?;
+        self.proposal_from_text(path, &text)
+    }
+
+    fn proposal_from_text(&self, path: &Path, text: &str) -> Result<Note> {
+        let parsed = frontmatter::parse(path, text)?;
         let expected = self.proposal_path(&parsed.front.name)?;
         if !same_file_name(&expected, path) {
             return Err(Error::Frontmatter {
