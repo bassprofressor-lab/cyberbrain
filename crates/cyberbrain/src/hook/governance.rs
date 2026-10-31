@@ -302,9 +302,20 @@ fn reads_only(tool: &str, payload: &Payload) -> bool {
     if cmd.contains('`') || cmd.contains("$(") {
         return false;
     }
+    // A descriptor is `>&N` (or `2>&1`) with N standing alone; `> 1.txt` is a file whose
+    // name starts with a digit, and was read as a descriptor until 2026-10-31 (C9).
     let redirects = cmd.match_indices('>').any(|(i, _)| {
-        let rest = cmd[i + 1..].trim_start_matches(['>', '&']).trim_start();
-        !(rest.starts_with("/dev/null") || rest.starts_with(|c: char| c.is_ascii_digit()))
+        let after = cmd[i + 1..].trim_start_matches('>');
+        let duplicates = after.strip_prefix('&').is_some_and(|r| {
+            let digits = r.len() - r.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+            digits > 0
+                && r[digits..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| c.is_whitespace() || ";|&)".contains(c))
+        });
+        let rest = after.trim_start_matches('&').trim_start();
+        !(duplicates || rest.starts_with("/dev/null"))
     });
     if redirects {
         return false;
@@ -620,6 +631,24 @@ mod tests {
         }
         let write = Payload::parse(r#"{"tool_name":"Write","tool_input":{"file_path":"/x"}}"#);
         assert!(!reads_only("Write", &write));
+    }
+
+    /// C9 (review 2026-10-31): a redirect target starting with a digit was taken for a file
+    /// descriptor (`2>&1`), so `cat secrets > 1.txt` counted as a read and went ahead while
+    /// AgentGuard was unreachable in enforce mode.
+    #[test]
+    fn a_file_name_starting_with_a_digit_is_not_a_descriptor() {
+        for cmd in [
+            "cat secrets > 1.txt",
+            "ls > 2026-report.md",
+            "cat a >> 9",
+            "grep x y 2> 1err.log",
+        ] {
+            assert!(!reads_only("Bash", &bash(cmd)), "{cmd}");
+        }
+        for cmd in ["grep x y 2>/dev/null", "ls >/dev/null"] {
+            assert!(reads_only("Bash", &bash(cmd)), "{cmd}");
+        }
     }
 
     /// Commands that look like reading and write anyway. Each of these went through while
