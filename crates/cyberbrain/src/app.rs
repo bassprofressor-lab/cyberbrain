@@ -4568,10 +4568,8 @@ impl App {
         // store unusable, and the person would have no idea what changed.
         cyberbrain_core::config::Config::parse(&updated, &self.root)
             .map_err(|e| Error::Config(format!("enrolment would break the config file: {e}")))?;
-        std::fs::write(&path, updated).map_err(|e| Error::Io {
-            path: path.clone(),
-            source: e,
-        })?;
+        // Atomically: a half-written config would leave a store that no longer opens (C23).
+        write_atomic(&path, updated.as_bytes())?;
         Ok(inference_url.map(str::to_owned))
     }
 
@@ -6868,5 +6866,34 @@ mod discovery_tests {
         assert!(msg.contains("--store"), "{msg}");
         // Asked for by name, it opens: the person said which store they mean.
         assert!(discover_store(Some(&shared.join(DEFAULT_STORE_DIR))).is_ok());
+    }
+}
+
+#[cfg(all(test, unix))]
+mod enrol_tests {
+    use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    /// C23 (review 2026-10-31): enrolment wrote cyberbrain.toml in place, so a crash halfway
+    /// left a truncated file and a store that no longer opens. Written atomically now, the
+    /// file is replaced by rename, which shows as a new inode. Calibrated against the in-place
+    /// write first: the inode stayed.
+    #[test]
+    fn enrolment_replaces_the_config_file_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        let path = root.join("cyberbrain.toml");
+        let before = std::fs::metadata(&path).unwrap().ino();
+        app.enrol_with_hub("https://hub.example:7788", "laptop", None)
+            .unwrap();
+        let after = std::fs::metadata(&path).unwrap().ino();
+        assert_ne!(before, after, "the config was rewritten in place");
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("hub.example")
+        );
     }
 }
