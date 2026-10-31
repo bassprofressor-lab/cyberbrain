@@ -929,6 +929,24 @@ fn path_classification_holds_on_both_platforms() {
         classify(u, "/p/.cyberbrain", "/p", r"\p\.cyberbrain\audit.db"),
         None
     );
+    // Mac: Unix paths, but case folded, as the default file system does (C5, 2026-10-31).
+    let m = Platform::Mac;
+    assert_eq!(
+        classify(m, "/p/.cyberbrain", "/p", "/p/.cyberbrain/notes/R0/a.md"),
+        Some(StoreTarget::ResidentNote(Ring::Invariant))
+    );
+    assert_eq!(
+        classify(m, "/p/.cyberbrain", "/p", "/p/.CYBERBRAIN/Audit.db"),
+        Some(StoreTarget::AuditLog)
+    );
+    assert_eq!(
+        classify(m, "/p/.cyberbrain", "/p", "/p/.cyberbrain/Proposals/x.md"),
+        Some(StoreTarget::Proposal)
+    );
+    assert_eq!(
+        classify(m, "/p/.cyberbrain", "/p", r"\p\.cyberbrain\audit.db"),
+        None
+    );
     // Windows: either separator, case folded, drive letters, the CI job's relative store.
     assert_eq!(
         classify(

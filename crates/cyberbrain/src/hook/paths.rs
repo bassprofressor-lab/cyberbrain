@@ -7,8 +7,9 @@
 //! the agent takes). Symlinked stores are therefore not seen through; documented.
 //!
 //! SPEC §14.8: platform-dependent normalisation is a hazard. The rules are parameterised by
-//! [`Platform`] and both are tested on both hosts: Windows folds case and accepts either
-//! separator and a drive or UNC prefix; Unix folds nothing and splits only on `/`. Getting
+//! [`Platform`] and all are tested on every host: Windows folds case and accepts either
+//! separator and a drive or UNC prefix; Unix folds nothing and splits only on `/`; a Mac
+//! splits like Unix but folds case, as its default file system does (C5, 2026-10-31). Getting
 //! a match wrong here is fail-safe in one direction only — an over-match produces an `ask`
 //! or a `deny` the operator can see, an under-match lets a raw edit through — so the
 //! Windows rules err towards matching.
@@ -19,6 +20,8 @@ use std::path::Path;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
     Unix,
+    /// Unix paths on a file system that, by default (APFS, HFS+), ignores case.
+    Mac,
     Windows,
 }
 
@@ -26,9 +29,16 @@ impl Platform {
     pub fn host() -> Platform {
         if cfg!(windows) {
             Platform::Windows
+        } else if cfg!(target_os = "macos") {
+            Platform::Mac
         } else {
             Platform::Unix
         }
+    }
+
+    /// Whether two names that differ only in case name the same file here.
+    pub fn folds_case(self) -> bool {
+        matches!(self, Platform::Windows | Platform::Mac)
     }
 }
 
@@ -64,9 +74,10 @@ struct Normal {
 }
 
 fn fold(platform: Platform, s: &str) -> String {
-    match platform {
-        Platform::Unix => s.to_string(),
-        Platform::Windows => s.to_lowercase(),
+    if platform.folds_case() {
+        s.to_lowercase()
+    } else {
+        s.to_string()
     }
 }
 
@@ -78,7 +89,7 @@ fn is_sep(platform: Platform, c: char) -> bool {
 /// on Windows.
 pub fn is_absolute(platform: Platform, s: &str) -> bool {
     match platform {
-        Platform::Unix => s.starts_with('/'),
+        Platform::Unix | Platform::Mac => s.starts_with('/'),
         Platform::Windows => {
             let s = s.strip_prefix(r"\\?\").unwrap_or(s);
             let b = s.as_bytes();
@@ -99,7 +110,7 @@ fn normalise(platform: Platform, s: &str) -> Normal {
         s
     };
     let (prefix, rest) = match platform {
-        Platform::Unix => {
+        Platform::Unix | Platform::Mac => {
             if let Some(r) = s.strip_prefix('/') {
                 ("/".to_string(), r)
             } else {

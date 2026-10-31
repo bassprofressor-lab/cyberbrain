@@ -662,6 +662,11 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
 /// way left to write ring 0/1 as the operator. Both are matched on the command text: a
 /// heuristic that catches the ordinary way of doing it, not a sandbox. Reading stays free.
 fn bash_verdict(cmd: &str) -> Option<BashVerdict> {
+    bash_verdict_on(paths::Platform::host(), cmd)
+}
+
+/// [`bash_verdict`] for a given platform's file names, so each is tested on every host.
+fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> {
     let words: Vec<&str> = cmd
         .split(|c: char| c.is_whitespace() || ";|&()`'\"".contains(c))
         .filter(|t| !t.is_empty())
@@ -699,11 +704,11 @@ fn bash_verdict(cmd: &str) -> Option<BashVerdict> {
     // takes all of it). The configuration is asked about rather than refused, as it is for the
     // file tools: the operator edits it, but one bad line stops every hook (C4, 2026-10-31).
     // Backslashes count as separators everywhere (a Windows path in a command reads
-    // `.cyberbrain\notes\r0`), and on Windows case does not count either, as it does not
-    // for the file system there.
+    // `.cyberbrain\notes\r0`), and on Windows and macOS case does not count either, as it
+    // does not for the file system there.
     let guarded = |t: &str| -> Option<&'static str> {
         let mut t = t.trim_matches(['\'', '"']).replace('\\', "/");
-        if cfg!(windows) {
+        if platform.folds_case() {
             t = t.to_lowercase();
         }
         let t = t.trim_end_matches('/');
@@ -1306,6 +1311,23 @@ mod bash_tests {
         ] {
             assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
+    }
+
+    /// C5 (review 2026-10-31): APFS ignores case by default, and the guard on a Mac did not:
+    /// `rm .cyberbrain/Audit.db` removed the audit log and was allowed.
+    #[test]
+    fn on_a_mac_the_guard_ignores_case() {
+        use super::{bash_verdict_on, paths::Platform};
+        for cmd in [
+            "rm .cyberbrain/Audit.db",
+            "echo x > .cyberbrain/notes/R0/x.md",
+            "echo x > /Users/a/p/.CYBERBRAIN/notes/r1/x.md",
+            "rm -rf .Cyberbrain",
+        ] {
+            assert!(bash_verdict_on(Platform::Mac, cmd).is_some(), "{cmd}");
+        }
+        // Linux file systems keep case, and so does the guard there.
+        assert!(bash_verdict_on(Platform::Unix, "rm .cyberbrain/Audit.db").is_none());
     }
 
     /// Windows file names do not care about case, so neither does the guard there.
