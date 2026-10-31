@@ -1750,6 +1750,29 @@ async fn a_command_may_not_write_a_file_wherever_it_is_pointed() {
     assert_eq!(v["exit_code"], 0, "{v:#}");
 }
 
+/// C25 (review 2026-10-31): `propose-session --transcript <PATH>` was let through, and reads
+/// whatever file it is pointed at (and says whether it exists). `--latest` stays: it reads
+/// this store's own project's newest transcript, found by the program, not named by a request.
+#[tokio::test]
+async fn propose_session_does_not_take_a_path_here() {
+    let fx = Fx::new();
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "propose-session --transcript /etc/hostname --dry-run" })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::BAD_REQUEST, "{v:#}");
+    assert!(
+        v["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("--transcript"),
+        "{v:#}"
+    );
+}
+
 /// The one way this endpoint could reach a store the person is not looking at.
 #[tokio::test]
 async fn naming_another_store_is_refused() {

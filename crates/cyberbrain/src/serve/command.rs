@@ -217,6 +217,16 @@ fn refuse(command: &Command) -> Option<&'static str> {
             "`forget --report` writes a file wherever it is pointed, and this surface has no \
              authentication. Forget without it, or write the report at a prompt.",
         ),
+        // The same for a transcript named by path: it reads any file it is pointed at and
+        // says whether one exists (C25, 2026-10-31). `--latest` finds this project's own.
+        Command::ProposeSession {
+            transcript: Some(_),
+            ..
+        } => Some(
+            "`propose-session --transcript` reads a file wherever it is pointed, and this \
+             surface has no authentication. Use `propose-session --latest`, or name the file \
+             at a prompt.",
+        ),
         // Fine here: they read or change this store, which is what this window is.
         Command::Scan { .. }
         | Command::Recall { .. }
