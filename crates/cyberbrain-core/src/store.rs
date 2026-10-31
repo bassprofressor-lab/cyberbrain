@@ -502,6 +502,9 @@ impl Store {
         let ring = note.front.ring;
         let name = &note.front.name;
         let target = self.note_path(ring, name)?;
+        // `list` does not follow a ring directory that is a link, so a write through one
+        // would land where `scan` never looks (C21, 2026-10-31).
+        refuse_symlink(&self.ring_dir(ring))?;
 
         for other in Ring::ALL.iter().filter(|r| **r != ring) {
             let p = self.note_path(*other, name)?;
@@ -1023,6 +1026,23 @@ mod tests {
         // uses, followed the link. Calibrated against the broken state first: it read it.
         let err = store.read_path_fingerprinted(&link).unwrap_err();
         assert!(err.to_string().contains("symbolic link"), "{err}");
+    }
+
+    /// C21 (review 2026-10-31): a ring directory replaced by a link was skipped by `list`
+    /// (and so by `scan`), while `write` followed it and wrote elsewhere: a store that half
+    /// works without saying why. Calibrated against the broken state first: the write went
+    /// through the link.
+    #[cfg(unix)]
+    #[test]
+    fn a_ring_directory_that_is_a_link_is_refused_for_writing() {
+        let (dir, store) = fresh();
+        let elsewhere = dir.path().join("elsewhere-r3");
+        let ring = store.ring_dir(Ring::Session);
+        fs::rename(&ring, &elsewhere).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &ring).unwrap();
+        let err = store.write(&note(Ring::Session, "s1", "x")).unwrap_err();
+        assert!(err.to_string().contains("symbolic link"), "{err}");
+        assert!(!elsewhere.join("s1.md").exists());
     }
 
     #[test]
