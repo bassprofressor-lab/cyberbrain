@@ -272,6 +272,18 @@ const READERS: [&str; 32] = [
     "sort", "uniq", "cut", "tr", "diff", "jq", "tree", "realpath",
 ];
 
+/// For a hook that cannot open its store (C4, 2026-10-31): may this call go ahead without
+/// asking? A tool this module sends to the service is judged as for an unreachable service in
+/// enforce mode; a call without a tool name is not understood and so is no. Any other tool is
+/// not one the pre-tool-use matcher hands over for writing (Read, Grep, …).
+pub fn reads_only_call(payload: &Payload) -> bool {
+    match payload.tool_name.as_deref() {
+        None => false,
+        Some(t) if TOOLS.contains(&t) => reads_only(t, payload),
+        Some(_) => true,
+    }
+}
+
 /// For an unreachable service in enforce mode: may this call go ahead without asking?
 ///
 /// Fail-closed: a yes needs every part of the command to be understood as looking only. A

@@ -49,6 +49,8 @@ pub enum StoreTarget {
     SessionState,
     /// `proposals/*`: notes waiting for somebody else to accept them.
     Proposal,
+    /// `keys/*`: the audit log's signing key.
+    SigningKey,
     /// Inside the store, none of the above (`models/`, a stray file).
     Other,
 }
@@ -225,6 +227,9 @@ pub fn classify(
     }
     if inside.len() >= 2 && inside[0] == "proposals" {
         return Some(StoreTarget::Proposal);
+    }
+    if inside.len() >= 2 && inside[0] == "keys" {
+        return Some(StoreTarget::SigningKey);
     }
     if inside.len() >= 3 && inside[0] == "notes" {
         let ring = Ring::ALL.iter().copied().find(|r| r.dir() == inside[1]);

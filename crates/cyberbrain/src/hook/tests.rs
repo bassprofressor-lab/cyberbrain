@@ -388,6 +388,39 @@ fn an_unreadable_store_is_announced_with_the_reason() {
     assert!(out.stdout.contains("could not be opened"), "{}", out.stdout);
 }
 
+/// C4 (review 2026-10-31): a store that is there but cannot be opened (one bad line in
+/// `cyberbrain.toml` is enough) left `pre-tool-use` with an empty answer, which the harness
+/// reads as allow: store guard, decoys and AgentGuard all off for the rest of the session.
+/// A call that changes something is now put to a person; a read goes ahead.
+#[test]
+fn an_unreadable_store_asks_before_a_tool_call_that_changes_something() {
+    let f = fixture();
+    std::fs::write(f.store.join("cyberbrain.toml"), "x = \n").unwrap();
+    let err = match App::open(Some(&f.store), Actor::Hook("test".into())) {
+        Err(e) => e,
+        Ok(_) => panic!("a store with a broken cyberbrain.toml opened"),
+    };
+    for input in [
+        serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}}),
+        serde_json::json!({"tool_name": "Write", "tool_input": {"file_path": "/tmp/x", "content": "y"}}),
+    ] {
+        let out = run_with(None, Some(&err), HookEvent::PreToolUse, &f.payload(input));
+        assert_eq!(out.exit_code, 0);
+        assert!(
+            !out.stdout.is_empty(),
+            "no answer is an allow: {}",
+            out.stderr
+        );
+        let (d, why) = decision(&out);
+        assert_eq!(d, "ask", "{why}");
+        assert!(why.contains("could not be opened"), "{why}");
+    }
+    // Looking stays free, and with no store at all there is nothing to guard.
+    let read = serde_json::json!({"tool_name": "Bash", "tool_input": {"command": "ls -la"}});
+    let out = run_with(None, Some(&err), HookEvent::PreToolUse, &f.payload(read));
+    assert!(out.stdout.is_empty(), "{}", out.stdout);
+}
+
 #[test]
 fn disabled_by_environment_is_announced() {
     let f = fixture();
@@ -631,6 +664,27 @@ fn pre_tool_use_refuses_ring_0_and_the_audit_log_and_records_the_refusal() {
         actions[before..].iter().all(|a| a == "policy.refusal"),
         "{actions:?}"
     );
+}
+
+/// C4 (review 2026-10-31): the signing key under `keys/` was "inside the store but not a
+/// file the hooks guard", so `Write` could replace it and `Edit` could empty it. Without it
+/// every later audit row is unsigned.
+#[test]
+fn pre_tool_use_refuses_the_signing_key() {
+    let f = fixture();
+    let app = f.open();
+    let key = f.store.join("keys").join("audit.ed25519");
+    for tool in ["Write", "Edit"] {
+        let out = run(
+            Some(&app),
+            HookEvent::PreToolUse,
+            &tool_payload(&f, tool, &key),
+        );
+        assert!(!out.stdout.is_empty(), "{tool}: {}", out.stderr);
+        let (d, why) = decision(&out);
+        assert_eq!(d, "deny", "{tool}: {why}");
+        assert!(why.contains("signing key"), "{why}");
+    }
 }
 
 /// Make every later audit append fail, the way a full disk or a locked `audit.db` would.

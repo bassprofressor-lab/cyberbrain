@@ -141,6 +141,29 @@ pub(super) fn dispatch(
     }
 
     if let Some(sd) = stand_down {
+        // C4 (2026-10-31): a store that is there but cannot be opened left pre-tool-use with
+        // an empty answer, which the harness reads as allow. One bad line in cyberbrain.toml
+        // thus switched off the store guard, the decoys and AgentGuard for the rest of the
+        // session. A call that changes something is put to a person instead; a read goes on.
+        if let (HookEvent::PreToolUse, StandDown::Unreadable(_)) = (event, &sd)
+            && !super::governance::reads_only_call(&payload)
+        {
+            let reason = format!(
+                "{} While the store cannot be opened, its guard and any governance check \
+                 cannot run, so a call that changes something is put to a person.",
+                sd.announce()
+            );
+            out.note(format!("hook {} standing down: ask", event_name(event)));
+            out.stdout = json!({
+                "hookSpecificOutput": {
+                    "hookEventName": harness_event_name(event),
+                    "permissionDecision": "ask",
+                    "permissionDecisionReason": reason,
+                }
+            })
+            .to_string();
+            return Ok(out);
+        }
         match event {
             HookEvent::SessionStart | HookEvent::SessionRings => out.stdout = sd.announce(),
             // The first half says it; saying it twice is noise.
@@ -638,7 +661,7 @@ fn edited_store_file(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<(StoreTarget
 /// (`cli_actor` in main.rs), dropping that variable next to a `cyberbrain` call is the one
 /// way left to write ring 0/1 as the operator. Both are matched on the command text: a
 /// heuristic that catches the ordinary way of doing it, not a sandbox. Reading stays free.
-fn bash_verdict(cmd: &str) -> Option<String> {
+fn bash_verdict(cmd: &str) -> Option<BashVerdict> {
     let words: Vec<&str> = cmd
         .split(|c: char| c.is_whitespace() || ";|&()`'\"".contains(c))
         .filter(|t| !t.is_empty())
@@ -661,34 +684,50 @@ fn bash_verdict(cmd: &str) -> Option<String> {
         .iter()
         .any(|t| t.rsplit('/').next() == Some("cyberbrain"));
     if sheds && calls {
-        return Some(
-            "this command drops CLAUDECODE around a cyberbrain call. The CLI reads that \
+        return Some(BashVerdict {
+            decision: "deny",
+            reason: "this command drops CLAUDECODE around a cyberbrain call. The CLI reads that \
              variable to tell an agent from the operator (rings 0 and 1 are the operator's, \
              SPEC §3.2); without it the call would be recorded as the operator. Run it with the \
              variable in place, or propose the text: `cyberbrain propose --ring <n> --kind … \
              --name …`."
                 .to_string(),
-        );
+        });
     }
-    // A path is guarded when it names ring 0/1 or the audit log, or a directory that holds
-    // them: the store itself, or its notes/ tree (`rm -rf .cyberbrain` takes all of it).
+    // A path is guarded when it names ring 0/1, the audit log or the signing key, or a
+    // directory that holds them: the store itself, or its notes/ tree (`rm -rf .cyberbrain`
+    // takes all of it). The configuration is asked about rather than refused, as it is for the
+    // file tools: the operator edits it, but one bad line stops every hook (C4, 2026-10-31).
     // Backslashes count as separators everywhere (a Windows path in a command reads
     // `.cyberbrain\notes\r0`), and on Windows case does not count either, as it does not
     // for the file system there.
-    let guarded = |t: &str| {
+    let guarded = |t: &str| -> Option<&'static str> {
         let mut t = t.trim_matches(['\'', '"']).replace('\\', "/");
         if cfg!(windows) {
             t = t.to_lowercase();
         }
         let t = t.trim_end_matches('/');
-        // `.cyberbrain/proposals` only under the default store name: a bare `proposals/`
-        // is too common a directory to refuse writes to. The digest check in `review` is
-        // what holds wherever the store lives.
-        ["notes/r0", "notes/r1", "audit.db", ".cyberbrain/proposals"]
-            .iter()
-            .any(|g| t.contains(g))
+        // `.cyberbrain/proposals` and `.cyberbrain/keys` only under the default store name: a
+        // bare `proposals/` or `keys/` is too common a directory to refuse writes to. The
+        // digest check in `review` is what holds wherever the store lives.
+        let deny = [
+            "notes/r0",
+            "notes/r1",
+            "audit.db",
+            ".cyberbrain/proposals",
+            ".cyberbrain/keys",
+        ]
+        .iter()
+        .any(|g| t.contains(g))
             || t.ends_with(".cyberbrain")
-            || t.ends_with(".cyberbrain/notes")
+            || t.ends_with(".cyberbrain/notes");
+        if deny {
+            Some("deny")
+        } else if t.contains("cyberbrain.toml") {
+            Some("ask")
+        } else {
+            None
+        }
     };
     // Command by command, and within a command only the arguments that program writes to.
     // The first version looked for a writing program and a guarded path anywhere in the
@@ -696,31 +735,60 @@ fn bash_verdict(cmd: &str) -> Option<String> {
     // on its first day — both only read the store.
     let written = cmd
         .split(|c: char| ";|&()\n".contains(c))
-        .filter_map(|simple| {
+        .flat_map(|simple| {
             let words: Vec<&str> = simple
                 .split_whitespace()
                 .map(|w| w.trim_matches(['\'', '"']))
                 .collect();
-            write_targets(&words).into_iter().find(|t| guarded(t))
-        })
-        .next();
+            write_targets(&words)
+        });
     // A redirect only counts when it points into the guarded path, so that
     // `cat notes/r0/x.md 2>/dev/null` stays a read.
-    let redirected = cmd.match_indices('>').find_map(|(i, _)| {
+    let redirected = cmd.match_indices('>').filter_map(|(i, _)| {
         let rest = cmd[i + 1..].trim_start_matches(['>', '|']).trim_start();
         rest.split(|c: char| c.is_whitespace() || ";|&".contains(c))
             .next()
-            .filter(|t| guarded(t))
     });
-    let hit = written.or(redirected)?;
-    Some(format!(
-        "this command writes to `{}` inside the cyberbrain store. The audit log is \
-         append-only evidence and rings 0 and 1 are the operator's (SPEC §3.2, §12.6); the \
-         file tools are refused the same edit. Reading is fine. For a note, use `cyberbrain \
-         write` (rings 2–4) or `cyberbrain propose` (rings 0/1); a waiting proposal is changed by \
-         rejecting it and proposing again.",
-        hit.trim_matches(['\'', '"'])
-    ))
+    let hits: Vec<(&str, &'static str)> = written
+        .chain(redirected)
+        .filter_map(|t| guarded(t).map(|d| (t, d)))
+        .collect();
+    // A refusal outranks a question: a command that touches both is refused.
+    let (hit, decision) = hits
+        .iter()
+        .find(|(_, d)| *d == "deny")
+        .or(hits.first())
+        .copied()?;
+    let hit = hit.trim_matches(['\'', '"']);
+    if decision == "ask" {
+        return Some(BashVerdict {
+            decision,
+            reason: format!(
+                "this command writes to `{hit}`, the cyberbrain configuration. It holds consent, \
+                 egress and governance settings (SPEC §12.1), and a line that does not parse \
+                 stops every cyberbrain command, the hooks that guard the store included. The \
+                 operator edits it; `cyberbrain policy consent` is the command for consent."
+            ),
+        });
+    }
+    Some(BashVerdict {
+        decision,
+        reason: format!(
+            "this command writes to `{hit}` inside the cyberbrain store. The audit log and its \
+             signing key are append-only evidence and rings 0 and 1 are the operator's (SPEC \
+             §3.2, §12.6); the file tools are refused the same edit. Reading is fine. For a \
+             note, use `cyberbrain write` (rings 2–4) or `cyberbrain propose` (rings 0/1); a \
+             waiting proposal is changed by rejecting it and proposing again."
+        ),
+    })
+}
+
+/// What [`bash_verdict`] decided about a shell command, and why.
+#[derive(Debug)]
+struct BashVerdict {
+    /// `deny` or `ask`.
+    decision: &'static str,
+    reason: String,
 }
 
 /// Whether one argument of `sed` or `perl` asks for in-place editing.
@@ -817,22 +885,26 @@ fn record_refusal(ctx: &Ctx<'_>, out: &mut HookOutput, subject: String, detail: 
 }
 
 fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
-    let Some(reason) = bash_verdict(cmd) else {
+    let Some(BashVerdict { decision, reason }) = bash_verdict(cmd) else {
         out.note("pre-tool-use: Bash command does not touch guarded store files; allowing");
         return Ok(());
     };
-    // The command itself is not recorded: it may carry anything, a secret included.
-    record_refusal(
-        ctx,
-        out,
-        "bash".to_string(),
-        json!({ "tool": "Bash", "session": ctx.payload.session_id, "reason": reason }),
-    );
-    out.note("pre-tool-use: deny Bash on guarded store files");
+    if decision == "deny" {
+        // The command itself is not recorded: it may carry anything, a secret included.
+        record_refusal(
+            ctx,
+            out,
+            "bash".to_string(),
+            json!({ "tool": "Bash", "session": ctx.payload.session_id, "reason": reason }),
+        );
+    }
+    out.note(format!(
+        "pre-tool-use: {decision} Bash on guarded store files"
+    ));
     out.stdout = json!({
         "hookSpecificOutput": {
             "hookEventName": harness_event_name(ctx.event),
-            "permissionDecision": "deny",
+            "permissionDecision": decision,
             "permissionDecisionReason": reason,
         }
     })
@@ -984,6 +1056,15 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
                  propose again."
             ),
         ),
+        StoreTarget::SigningKey => (
+            "deny",
+            format!(
+                "`{rel}` is the audit log's signing key. Every audit row is signed with it \
+                 (SPEC §12.6); replaced or removed, later rows are unsigned or signed by \
+                 somebody else, and the chain no longer proves who wrote it. The operator \
+                 manages it with `cyberbrain policy audit-key`."
+            ),
+        ),
         StoreTarget::Other => {
             out.note(format!(
                 "pre-tool-use: {rel} is inside the store but not a file the hooks guard; allowing"
@@ -1047,6 +1128,11 @@ fn post_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         StoreTarget::Proposal => format!(
             "cyberbrain: `{rel}` is a waiting proposal and was changed directly. `review \
              --accept` will refuse it now; reject it and propose again."
+        ),
+        StoreTarget::SigningKey => format!(
+            "cyberbrain: `{rel}`, the audit log's signing key, was written to by a tool. Rows \
+             from now on may be signed by another key or not at all; `cyberbrain doctor` checks \
+             the chain. Tell the operator."
         ),
         StoreTarget::IndexCache | StoreTarget::SessionState | StoreTarget::Other => {
             out.note(format!("post-tool-use: {rel} edited; nothing to add"));
@@ -1241,6 +1327,37 @@ mod bash_tests {
             "sh -c 'unset CLAUDECODE; cyberbrain write --ring 0 --name x --body y'",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// C4 (review 2026-10-31): the shell could break `cyberbrain.toml` (after which every
+    /// hook stood down, store guard and governance included) or delete the signing key, and
+    /// neither was guarded. The file tools were already asked about the configuration.
+    #[test]
+    fn shell_writes_to_the_config_and_the_signing_key_are_stopped() {
+        for cmd in [
+            "echo 'x = ' >> .cyberbrain/cyberbrain.toml",
+            "sed -i 's/enforce/shadow/' /root/p/.cyberbrain/cyberbrain.toml",
+            "cp /tmp/c.toml .cyberbrain/cyberbrain.toml",
+            r"echo x > C:\proj\.cyberbrain\cyberbrain.toml",
+        ] {
+            assert_eq!(bash_verdict(cmd).map(|v| v.decision), Some("ask"), "{cmd}");
+        }
+        for cmd in [
+            "rm -rf .cyberbrain/keys",
+            "rm .cyberbrain/keys/audit.ed25519",
+            "mv /tmp/other.ed25519 /root/p/.cyberbrain/keys/audit.ed25519",
+            "echo x > .cyberbrain/keys/audit.ed25519",
+        ] {
+            assert_eq!(bash_verdict(cmd).map(|v| v.decision), Some("deny"), "{cmd}");
+        }
+        for cmd in [
+            "cat .cyberbrain/cyberbrain.toml",
+            "ls -la .cyberbrain/keys",
+            "cp .cyberbrain/cyberbrain.toml /tmp/",
+            "rm -rf /tmp/keys",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
     }
 
