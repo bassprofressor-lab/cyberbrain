@@ -140,7 +140,7 @@ fn discover_store_as(cwd: &Path, me: Option<u32>) -> Result<PathBuf> {
         "no {DEFAULT_STORE_DIR} store found in {} or any directory above it; run \
          `cyberbrain init` in the project root, or point at one with --store or \
          CYBERBRAIN_STORE",
-        Slash(&cwd)
+        Slash(cwd)
     )))
 }
 
@@ -3723,17 +3723,16 @@ impl App {
         // Rejecting a changed file stays possible: it is how the queue is cleared of it.
         if req.accept
             && let Some(expected) = &open.blake3
+            && on_disk != *expected
         {
-            if on_disk != *expected {
-                return Err(Error::PolicyRefusal {
-                    profile: "review".to_string(),
-                    reason: format!(
-                        "{name} was changed after {proposer} proposed it: the file no longer \
-                         matches the digest recorded in the audit log. Accepting would approve \
-                         text nobody proposed. Reject it with a reason, and propose again"
-                    ),
-                });
-            }
+            return Err(Error::PolicyRefusal {
+                profile: "review".to_string(),
+                reason: format!(
+                    "{name} was changed after {proposer} proposed it: the file no longer \
+                     matches the digest recorded in the audit log. Accepting would approve \
+                     text nobody proposed. Reject it with a reason, and propose again"
+                ),
+            });
         }
 
         let w = self.writers(req.dry_run)?;
