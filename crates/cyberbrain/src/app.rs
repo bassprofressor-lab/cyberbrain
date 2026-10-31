@@ -2527,6 +2527,29 @@ impl App {
         existing: Option<&Note>,
         dry_run: bool,
     ) -> Result<()> {
+        self.refuse_resident_change(name, ring, existing, dry_run, false)
+    }
+
+    /// The same owner rule for erasing a note: what an agent may not write, it may not
+    /// remove either (C2, 2026-10-31 — `forget` had no such check, so a ring 0 rule that
+    /// bound an agent could be erased by that agent through Bash).
+    fn refuse_resident_erase_unless_operator(
+        &self,
+        name: &str,
+        ring: Ring,
+        dry_run: bool,
+    ) -> Result<()> {
+        self.refuse_resident_change(name, ring, None, dry_run, true)
+    }
+
+    fn refuse_resident_change(
+        &self,
+        name: &str,
+        ring: Ring,
+        existing: Option<&Note>,
+        dry_run: bool,
+        erase: bool,
+    ) -> Result<()> {
         let surface_refuses = self
             .resident_writes_refused
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -2537,7 +2560,23 @@ impl App {
         let Some(r) = held.or(Some(ring).filter(|r| r.is_resident())) else {
             return Ok(());
         };
-        let reason = if surface_refuses && matches!(self.actor, Actor::Operator | Actor::Cli) {
+        let reason = if erase {
+            if surface_refuses && matches!(self.actor, Actor::Operator | Actor::Cli) {
+                format!(
+                    "ring {} is not erased over HTTP (note {name}): this server cannot tell the \
+                     operator from any other program on this machine. Erase it at a terminal \
+                     with `cyberbrain forget {name}`",
+                    r.as_u8(),
+                )
+            } else {
+                format!(
+                    "ring {} belongs to the operator; {} may not erase it (note {name}). The \
+                     operator erases it at a terminal with `cyberbrain forget {name}`",
+                    r.as_u8(),
+                    self.actor,
+                )
+            }
+        } else if surface_refuses && matches!(self.actor, Actor::Operator | Actor::Cli) {
             format!(
                 "ring {} is not written over HTTP (note {name}): this server cannot tell the \
                  operator from any other program on this machine. Write it at a terminal with \
@@ -3747,6 +3786,7 @@ impl App {
     /// `Policy`; this method is the operator's entry to it.
     pub fn forget(&self, target: &str, dry_run: bool) -> Result<ErasureReport> {
         let req = self.erase_request(target, EraseReason::OperatorForget, dry_run)?;
+        self.refuse_resident_erase_unless_operator(&req.name, req.ring, dry_run)?;
         let w = self.writers(dry_run)?;
         let mut eraser = StoreEraser {
             notes: w.notes.as_ref(),
@@ -5918,6 +5958,34 @@ mod ring_owner_tests {
             assert!(matches!(err, Error::PolicyRefusal { .. }), "{err}");
         }
         agent.write(req(Ring::Knowledge, "direkt")).unwrap();
+    }
+
+    /// C2 (review 2026-10-31): `forget` had no ring-owner check, so an agent that may not
+    /// write ring 0 could still erase it with `cyberbrain forget` through Bash. Calibrated
+    /// against the broken state first: the agent's forget succeeded and the file was gone.
+    #[test]
+    fn an_agent_cannot_forget_a_ring_0_or_1_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let op = App::open(Some(&store), Actor::Operator).unwrap();
+        op.write(req(Ring::Invariant, "regel")).unwrap();
+        op.write(req(Ring::Protocol, "ablauf")).unwrap();
+        let agent = App::open(Some(&store), Actor::Agent("claude-code:test".into())).unwrap();
+        for (name, dir) in [("regel", "r0"), ("ablauf", "r1")] {
+            let err = agent.forget(name, false).unwrap_err();
+            assert!(
+                matches!(&err, Error::PolicyRefusal { profile, .. } if profile == "ring-owner"),
+                "{err}"
+            );
+            let path = store.join("notes").join(dir).join(format!("{name}.md"));
+            assert!(path.exists(), "{name} was erased by an agent");
+        }
+        // Ring 2 stays the agent's to forget, and the operator still forgets ring 0.
+        agent.write(req(Ring::Knowledge, "wissen")).unwrap();
+        agent.forget("wissen", false).unwrap();
+        op.forget("regel", false).unwrap();
+        assert!(!store.join("notes").join("r0").join("regel.md").exists());
     }
 }
 
