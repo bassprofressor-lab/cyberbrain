@@ -91,7 +91,7 @@ pub fn is_absolute(platform: Platform, s: &str) -> bool {
     match platform {
         Platform::Unix | Platform::Mac => s.starts_with('/'),
         Platform::Windows => {
-            let s = s.strip_prefix(r"\\?\").unwrap_or(s);
+            let s = &*long_form(s);
             let b = s.as_bytes();
             (b.len() >= 3
                 && b[0].is_ascii_alphabetic()
@@ -105,10 +105,11 @@ pub fn is_absolute(platform: Platform, s: &str) -> bool {
 
 fn normalise(platform: Platform, s: &str) -> Normal {
     let s = if platform == Platform::Windows {
-        s.strip_prefix(r"\\?\").unwrap_or(s)
+        long_form(s)
     } else {
-        s
+        std::borrow::Cow::Borrowed(s)
     };
+    let s = &*s;
     let (prefix, rest) = match platform {
         Platform::Unix | Platform::Mac => {
             if let Some(r) = s.strip_prefix('/') {
@@ -150,6 +151,24 @@ fn normalise(platform: Platform, s: &str) -> Normal {
         }
     }
     Normal { prefix, parts }
+}
+
+/// A Windows path without its long-path prefix: `\\?\UNC\server\share\x` is
+/// `\\server\share\x`, and `\\?\C:\x` and the device form `\\.\C:\x` are `C:\x`. Only the
+/// `\\?\` prefix was taken off before 2026-10-31, and `UNC\server\…` then read as a relative
+/// path (C8).
+fn long_form(s: &str) -> std::borrow::Cow<'_, str> {
+    for unc in [r"\\?\UNC\", r"\\?\unc\", "//?/UNC/", "//?/unc/"] {
+        if let Some(rest) = s.strip_prefix(unc) {
+            return std::borrow::Cow::Owned(format!(r"\\{rest}"));
+        }
+    }
+    for prefix in [r"\\?\", r"\\.\", "//?/", "//./"] {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            return std::borrow::Cow::Borrowed(rest);
+        }
+    }
+    std::borrow::Cow::Borrowed(s)
 }
 
 /// `C:x`: a drive letter and no separator after it.

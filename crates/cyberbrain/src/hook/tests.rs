@@ -990,6 +990,26 @@ fn path_classification_holds_on_both_platforms() {
         classify(m, "/p/.cyberbrain", "/p", r"\p\.cyberbrain\audit.db"),
         None
     );
+    // Windows long-path forms (C8, 2026-10-31): `\\?\UNC\server\share` is `\\server\share`,
+    // and `\\.\C:\` is `C:\`; both were glued onto the working directory as relative paths.
+    assert_eq!(
+        classify(
+            w,
+            r"\\srv\share\p\.cyberbrain",
+            r"C:\x",
+            r"\\?\UNC\srv\share\p\.cyberbrain\audit.db"
+        ),
+        Some(StoreTarget::AuditLog)
+    );
+    assert_eq!(
+        classify(
+            w,
+            r"C:\p\.cyberbrain",
+            r"C:\x",
+            r"\\.\C:\p\.cyberbrain\notes\r0\a.md"
+        ),
+        Some(StoreTarget::ResidentNote(Ring::Invariant))
+    );
     // Windows: either separator, case folded, drive letters, the CI job's relative store.
     assert_eq!(
         classify(
