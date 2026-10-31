@@ -426,6 +426,8 @@ impl Store {
             path: path.to_path_buf(),
             source,
         };
+        // Like every other read of a note (C20, 2026-10-31: this one followed a link).
+        refuse_symlink(path)?;
         let bytes = fs::read(path).map_err(io_err)?;
         let mtime = fs::metadata(path).ok().and_then(|m| m.modified().ok());
         let fingerprint = Fingerprint::of_bytes(mtime, &bytes);
@@ -1017,6 +1019,10 @@ mod tests {
         let err = store.read_path(&link).unwrap_err();
         assert!(err.to_string().contains("symbolic link"), "{err}");
         assert!(store.read("outside").is_err());
+        // C20 (review 2026-10-31): the fingerprinting read, which the resident injection
+        // uses, followed the link. Calibrated against the broken state first: it read it.
+        let err = store.read_path_fingerprinted(&link).unwrap_err();
+        assert!(err.to_string().contains("symbolic link"), "{err}");
     }
 
     #[test]
