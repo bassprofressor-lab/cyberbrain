@@ -704,32 +704,13 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
         .split(|c: char| c.is_whitespace() || ";|&()`'\"".contains(c))
         .filter(|t| !t.is_empty())
         .collect();
-    // An assignment only as a word of its own (`CLAUDECODE= cyberbrain …`, `export
-    // CLAUDECODE=`), and a call only where a word IS the binary: as substrings they also
-    // matched `grep '^CLAUDECODE='` and a path through /root/cyberbrain/ — both only look.
-    let sheds = words.iter().any(|t| t.starts_with("CLAUDECODE="))
-        || [
-            "unset CLAUDECODE",
-            "-u CLAUDECODE",
-            "-uCLAUDECODE",
-            "--unset=CLAUDECODE",
-            "--unset CLAUDECODE",
-            "env -i",
-            // C7 (2026-10-31): `exec -c` clears the environment, `unset -v`/`export -n` drop
-            // the variable under another spelling, and `env -` is `env -i`.
-            "unset -v CLAUDECODE",
-            "export -n CLAUDECODE",
-            "exec -c",
-            "--ignore-environment",
-        ]
-        .iter()
-        .any(|p| cmd.contains(p))
-        || words.windows(2).any(|w| w == ["env", "-"])
-        // A program that runs the call as another user resets the environment on the way
-        // (`sudo`'s env_reset is the default).
-        || words
-            .iter()
-            .any(|w| matches!(*w, "sudo" | "su" | "doas" | "runuser" | "pkexec"));
+    // Only a word in command position, outside quotes, drops the marker: an assignment
+    // before the program (`CLAUDECODE= cyberbrain …`), `env -u|-i|-`, `exec -c`, `unset`,
+    // `export -n`, or a program that runs the rest as another user. Matched anywhere in the
+    // line, the name in a note's quoted body was refused as if it were dropped (C33,
+    // 2026-10-31), and `grep '^CLAUDECODE='` before that. A quoted `sh -c` script is judged
+    // as a command line of its own (`opaque_writes`).
+    let sheds = simple_commands(cmd).iter().any(|w| drops_marker(w));
     let calls = words
         .iter()
         .any(|t| t.rsplit('/').next() == Some("cyberbrain"));
@@ -1041,6 +1022,61 @@ fn program<'w, 'a>(words: &'w [&'a str]) -> Option<(&'a str, &'w [&'a str])> {
     }
     let prog = words.get(i)?;
     Some((prog.rsplit('/').next().unwrap_or(prog), &words[i + 1..]))
+}
+
+/// Whether one simple command (quote-aware words) drops `CLAUDECODE` for what it runs.
+fn drops_marker(words: &[String]) -> bool {
+    const VAR: &str = "CLAUDECODE";
+    let mut i = 0;
+    while let Some(w) = words.get(i).map(String::as_str) {
+        let next = words.get(i + 1).map(String::as_str);
+        match w {
+            "sudo" | "su" | "doas" | "runuser" | "pkexec" => return true,
+            "nohup" | "time" | "command" => i += 1,
+            "exec" => {
+                if next.is_some_and(|n| n.starts_with('-') && n.contains('c')) {
+                    return true;
+                }
+                i += 1;
+            }
+            "env" => {
+                i += 1;
+                while let Some(f) = words.get(i).map(String::as_str) {
+                    let value = words.get(i + 1).map(String::as_str);
+                    match f {
+                        "-i" | "-" | "--ignore-environment" => return true,
+                        "-u" | "--unset" if value == Some(VAR) => return true,
+                        "-uCLAUDECODE" | "--unset=CLAUDECODE" => return true,
+                        "-u" | "--unset" | "-C" | "--chdir" | "-S" | "--split-string" => i += 2,
+                        f if f.starts_with('-') => i += 1,
+                        f if f.contains('=') => {
+                            if f.starts_with("CLAUDECODE=") {
+                                return true;
+                            }
+                            i += 1;
+                        }
+                        _ => break,
+                    }
+                }
+            }
+            "unset" => return words[i + 1..].iter().any(|a| a == VAR),
+            "export" | "declare" | "typeset" => {
+                let args = &words[i + 1..];
+                let removes = args.iter().any(|a| a == "-n" || a == "+x");
+                return args
+                    .iter()
+                    .any(|a| a.starts_with("CLAUDECODE=") || (removes && a == VAR));
+            }
+            w if w.contains('=') && !w.starts_with('-') => {
+                if w.starts_with("CLAUDECODE=") {
+                    return true;
+                }
+                i += 1;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// What [`bash_verdict`] decided about a shell command, and why.
@@ -1802,6 +1838,30 @@ mod bash_tests {
             "unzip -o x.zip -d /tmp/x",
         ] {
             assert!(bash_verdict(cmd).is_none(), "{cmd}");
+        }
+    }
+
+    /// C33 (2026-10-31): the marker check matched the variable's name anywhere in the line,
+    /// so a note *about* it was refused as if it dropped it. Only a word in command position
+    /// outside quotes drops it; the real ways stay refused (`dropping_the_agent_marker_…`).
+    #[test]
+    fn the_marker_named_in_quoted_text_is_not_dropping_it() {
+        for cmd in [
+            "cyberbrain write --ring 2 --kind lesson --name x --body 'Der Hook setzt CLAUDECODE=1.'",
+            "cyberbrain write --ring 2 --kind lesson --name x --body \"unset CLAUDECODE; env -u CLAUDECODE und env -i sind Abstreifen\"",
+            "cyberbrain recall 'CLAUDECODE= cyberbrain'",
+            "echo 'export -n CLAUDECODE' | cyberbrain write --ring 3 --name y --body -",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
+        }
+        for cmd in [
+            "env -u CLAUDECODE cyberbrain write --ring 0 --name x --body y",
+            "CLAUDECODE= cyberbrain write --ring 0 --name x --body y",
+            "unset CLAUDECODE; cyberbrain write --ring 0 --name x --body y",
+            "nohup env --unset=CLAUDECODE cyberbrain write --ring 0 --name x --body y",
+            "env -u CLAUDECODE sh -c 'cyberbrain write --ring 0 --name x --body y'",
+        ] {
+            assert!(bash_verdict(cmd).is_some(), "{cmd}");
         }
     }
 
