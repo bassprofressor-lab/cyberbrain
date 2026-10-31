@@ -616,3 +616,47 @@ fn another_plugin_whose_name_starts_alike_is_not_ours() {
     .unwrap();
     assert_eq!(plugin_installed(&env), None);
 }
+
+/// C12 (review 2026-10-31): settings.json was written in place, so an interrupted write left
+/// a truncated file and the harness loaded no hooks at all, other programs' included. It is
+/// replaced by rename now (a new inode); a settings file that is a link (a dotfile manager's)
+/// stays a link, and its target gets the new text. Calibrated against the in-place write
+/// first: the inode stayed.
+#[cfg(unix)]
+#[test]
+fn settings_are_replaced_whole_and_a_link_stays_a_link() {
+    use std::os::unix::fs::MetadataExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let file = tmp.path().join("settings.json");
+    fs::write(&file, "{\"theirs\": 1}\n").unwrap();
+    let before = fs::metadata(&file).unwrap().ino();
+    let add = |m: &mut serde_json::Map<String, Value>| {
+        m.insert("ours".into(), Value::from(2));
+        Ok(edit::Action::Added)
+    };
+    edit::edit(&file, "test", false, add).unwrap();
+    assert_ne!(
+        fs::metadata(&file).unwrap().ino(),
+        before,
+        "written in place"
+    );
+    let v: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+    assert_eq!(
+        (v["theirs"].clone(), v["ours"].clone()),
+        (Value::from(1), Value::from(2))
+    );
+
+    let real = tmp.path().join("dotfiles-settings.json");
+    fs::write(&real, "{}\n").unwrap();
+    let link = tmp.path().join("linked").join("settings.json");
+    fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    edit::edit(&link, "test", false, add).unwrap();
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(fs::read_to_string(&real).unwrap().contains("ours"));
+}

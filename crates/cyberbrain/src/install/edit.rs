@@ -109,10 +109,26 @@ pub fn edit(
     let text = serde_json::to_string_pretty(&Value::Object(root))
         .map_err(|e| Error::Index(format!("the configuration does not serialise: {e}")))?
         + "\n";
-    std::fs::write(path, text).map_err(|e| Error::Io {
-        path: path.to_path_buf(),
-        source: e,
-    })?;
+    // Replaced whole, by rename (C12, 2026-10-31): written in place, an interrupted write
+    // left a truncated file, and the harness then loads no hooks at all, other programs'
+    // included. A link (a dotfile manager's) is followed, so it stays a link, and the file
+    // keeps its permissions.
+    let target = if existed {
+        std::fs::canonicalize(path).map_err(|e| Error::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?
+    } else {
+        path.to_path_buf()
+    };
+    let mode = std::fs::metadata(&target).ok().map(|m| m.permissions());
+    cyberbrain_core::store::write_atomic(&target, text.as_bytes())?;
+    if let Some(mode) = mode {
+        std::fs::set_permissions(&target, mode).map_err(|e| Error::Io {
+            path: target.clone(),
+            source: e,
+        })?;
+    }
     Ok(change)
 }
 
