@@ -12,6 +12,70 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Security
+
+- **An agent can no longer erase the rules that bind it.** `write`, `invalidate` and `review
+  --accept` kept rings 0 and 1 for the operator, but `forget` did not: an agent could run
+  `cyberbrain forget <ring-0-note>` through Bash and the rule was gone from the next session.
+  `forget` now gives the same ring-owner refusal, recorded in the audit log.
+- **One bad line in `cyberbrain.toml` no longer switches the hooks off.** The shell guard did
+  not know the configuration or the signing key, and a store whose configuration does not
+  parse left the pre-tool-use hook without an answer, which Claude Code reads as "allow": the
+  store's guard, the decoys and AgentGuard were off for the rest of the session. A shell write
+  to `cyberbrain.toml` is now asked about, one under `.cyberbrain/keys` refused (the file tools
+  refuse `keys/` too), and while a store cannot be opened every call that changes something is
+  put to a person; reading goes on.
+- **A store with a signing key whose rows carry no signature is no longer reported intact.**
+  Stripping every signature and recomputing the older hash format needs no key, and left the
+  key check with nothing to judge. `doctor` and `policy audit --verify` now say so.
+- **On macOS the store's guard ignores case, as the file system does.** `.cyberbrain/Audit.db`
+  and `notes/R0/` reached the real files and were allowed. Linux still compares exactly.
+- **A link to the store no longer hides its files.** `ln -s .cyberbrain /tmp/cb` and then
+  `Write /tmp/cb/audit.db` was "outside the store". `ln` is judged by every path it names, and a
+  file tool's path outside the store is resolved through links before it is let go.
+- **The shell guard catches the ordinary ways around it.** Path spellings (`notes/./r0`,
+  `r2/../r0`, globs such as `n*/r0` or `.c*`), a `cd` into the store first, `cp -t`, `git
+  checkout|restore|rm|mv`, `git clean -x` without `-e .cyberbrain`, `find -delete|-exec`,
+  `xargs rm`, `unzip -d`, inline code of python, perl, node, ruby and php, `sh -c` scripts, and
+  dropping `CLAUDECODE` through `exec -c`, `unset -v`, `export -n`, `env -` or `sudo`. It is
+  still a heuristic over the command text, not a sandbox.
+- **`review --accept` accepts the text whose digest it checked.** The digest was checked over a
+  second read of the proposal, so a file swapped back in between passed with text nobody
+  proposed. One read now serves both.
+- **A store another account owns is no longer opened by walking up.** Without `--store`, the
+  first `.cyberbrain` above the working directory was used whoever owned it, so a store left in
+  `/tmp` on a shared machine collected other accounts' notes and lent them its configuration.
+  On Unix it is now refused with its owner named; `--store` still opens it on purpose.
+- **The recall daemon answers only its own account.** It believed the actor a client claimed
+  when it could not read the client's environment, which is the case for another account's
+  process, and its socket was created in the umask's mode before it was narrowed to 0600.
+- **`propose-session --transcript <path>` is refused over the page's command endpoint**, like
+  every other command there that takes a path; `--latest` still works.
+- **With AgentGuard unreachable, `cat secrets > 1.txt` is no longer taken for a read.** A file
+  name starting with a digit was mistaken for a descriptor (`2>&1`).
+- **Windows long paths** (`\\?\UNC\server\share\…`, `\\.\C:\…`) are classified like the
+  paths they name.
+
+### Fixed
+
+- **A note that was written is no longer reported as failed when embedding or indexing it
+  fails.** `write`, `invalidate` and `review --accept` put the file and the audit row in place
+  and then exited with an error, so an agent tried again and the log got a second row for the
+  same bytes; `review` also left the proposal waiting next to the note it had become. Now, as in
+  `scan`, a failed embedding costs the note its vectors and the reason is shown, and an index
+  that refuses the note is named with `cyberbrain scan` as the way back.
+- **A note about `CLAUDECODE` can be written.** The shell guard refused `cyberbrain write --body
+  '… CLAUDECODE=1 …'` as if the variable were being dropped; only a word in command position,
+  outside quotes, counts now.
+- **`install` and hub enrolment replace their files whole.** Settings files and
+  `cyberbrain.toml` were written in place, so an interrupted write left a truncated file: no
+  hooks at all, or a store that no longer opens. A settings file that is a link stays a link.
+- **The MCP stdio transport no longer buffers an oversized line whole** before refusing it.
+- **A write into a ring directory that is a link is refused**, as `scan` already skipped it.
+- **Every read of a note refuses a symbolic link**, the session-start injection's included.
+- **A debug build without `ui/dist` builds**, as its warning always said; `serve` then says the
+  page was not built in. Release builds still refuse.
+
 ## [0.8.2] — 2026-10-27
 
 ### Security
