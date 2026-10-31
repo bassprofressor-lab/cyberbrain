@@ -76,7 +76,7 @@ Ein voreingestelltes Passwort gibt es nicht. Das Konto heißt `admin`, und **der
 
 „Vom Rechner des Hubs aus“ heißt: eine Verbindung über Loopback, deren `Host`-Kopfzeile ebenfalls Loopback nennt. So kann eine Seite mit DNS-Rebinding einen Hub ohne Passwort nicht für sich beanspruchen.
 
-> **Offener Punkt in 0.8.4: ein Reverse Proxy und die erste Anmeldung.** Ein Reverse Proxy auf dem Rechner des Hubs verbindet sich über Loopback, und je nachdem, welchen `Host` er weitergibt, kann die Regel für den ersten Besuch falsch beurteilen, ob eine Anfrage vom Rechner selbst kommt. Wie der Hub diesen Fall behandeln soll, ist noch nicht entschieden. Bis dahin das Administratorpasswort direkt am Rechner festlegen, unter `http://localhost:7788/` und nicht über den Proxy, bevor ein Proxy davorkommt, und den Proxy den ursprünglichen `Host` weitergeben lassen.
+> **Offener Punkt in 0.8.4: ein Reverse Proxy und die erste Anmeldung.** Ein Reverse Proxy auf dem Rechner des Hubs verbindet sich über Loopback, und je nachdem, welchen `Host` er weitergibt, kann die Regel für den ersten Besuch falsch beurteilen, ob eine Anfrage vom Rechner selbst kommt. Wie der Hub diesen Fall behandeln soll, ist noch nicht entschieden. Bis dahin das Administratorpasswort direkt am Rechner festlegen, unter `http://localhost:7788/` und nicht über den Proxy, bevor ein Proxy davorkommt, und den Proxy den ursprünglichen `Host` weitergeben lassen. Bei nginx ist das `proxy_set_header Host $host;`. Ohne diese Zeile schickt nginx die Adresse des Hubs, `127.0.0.1:7788`, und die sieht aus wie der Rechner selbst.
 
 ## Nachweise liefern
 

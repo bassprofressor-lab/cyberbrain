@@ -75,7 +75,7 @@ There is no default password. The account is `admin`, and the **first visit from
 
 "From the machine the hub runs on" means a loopback connection whose `Host` header also names loopback. That keeps a DNS-rebinding page from claiming an unclaimed hub.
 
-> **Open point in 0.8.4: a reverse proxy and the first sign-in.** A reverse proxy on the hub's own machine connects from loopback, and depending on the `Host` it forwards, the first-visit rule above can misjudge whether a request comes from the machine. How the hub should treat that case is not settled yet. Until it is, set the administrator password directly at the machine, at `http://localhost:7788/` and not through the proxy, before you put a proxy in front, and let the proxy pass the original `Host`.
+> **Open point in 0.8.4: a reverse proxy and the first sign-in.** A reverse proxy on the hub's own machine connects from loopback, and depending on the `Host` it forwards, the first-visit rule above can misjudge whether a request comes from the machine. How the hub should treat that case is not settled yet. Until it is, set the administrator password directly at the machine, at `http://localhost:7788/` and not through the proxy, before you put a proxy in front, and let the proxy pass the original `Host`. With nginx that is `proxy_set_header Host $host;`: its default sends the upstream address, `127.0.0.1:7788`, which looks like the machine itself.
 
 ## Delivering to it
 
