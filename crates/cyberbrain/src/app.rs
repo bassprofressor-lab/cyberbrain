@@ -5194,6 +5194,22 @@ impl App {
                 }
             }
         }
+        // The loop above only judges keys that signed something. With every signature
+        // stripped and the format-1 hashes recomputed — no key needed for that — there is
+        // nothing left for it to judge, and the chain read as intact (C1, 2026-10-31). A store
+        // with a key has signed rows from the one that recorded the key onwards, so none at all
+        // is not a store that never signed.
+        if let Some(key) = self.policy.audit().key()
+            && report.signed == 0
+        {
+            let fp = key.fingerprint();
+            return Err(Error::Index(format!(
+                "this store has a signing key ({fp}) at {AUDIT_KEY_FILE}, but no row is signed: \
+                 the signatures were removed and the chain rewritten, or the key file was put \
+                 here after the log was written. Compare with an earlier export \
+                 (`verify-export --expect-key`)"
+            )));
+        }
         Ok(report)
     }
 
@@ -6470,4 +6486,69 @@ struct OpenProposal {
     blake3: Option<String>,
     /// The AgentGuard action this proposal was reported as, if it was (A2).
     agentguard_action: Option<String>,
+}
+
+#[cfg(test)]
+mod audit_downgrade_tests {
+    use super::*;
+
+    /// Rewrite every row as format 1 (no key, no signature) with hashes recomputed by the
+    /// format-1 rule: what anybody who can write the audit database can do without the key.
+    fn strip_every_signature(store: &Path) {
+        let db = rusqlite::Connection::open(store.join("audit.db")).unwrap();
+        db.execute_batch("DROP TRIGGER IF EXISTS audit_no_update;")
+            .unwrap();
+        let rows: Vec<(i64, String, String, String, String)> = db
+            .prepare(
+                "SELECT seq, actor, action, COALESCE(subject, ''), detail FROM audit ORDER BY seq",
+            )
+            .unwrap()
+            .query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        let mut prev = "genesis".to_string();
+        for (seq, actor, action, subject, detail) in rows {
+            let mut d: serde_json::Value = serde_json::from_str(&detail).unwrap();
+            let at = d["_chain"]["at"].as_str().unwrap().to_string();
+            d.as_object_mut().unwrap().remove("_chain");
+            let mut h = blake3::Hasher::new();
+            for part in [prev.as_str(), at.as_str(), &actor, &action, &subject] {
+                h.update(part.as_bytes());
+                h.update(b"\n");
+            }
+            h.update(d.to_string().as_bytes());
+            let hash = h.finalize().to_hex().to_string();
+            d["_chain"] = serde_json::json!({ "prev": prev, "hash": hash, "at": at });
+            db.execute(
+                "UPDATE audit SET detail = ?1 WHERE seq = ?2",
+                rusqlite::params![d.to_string(), seq],
+            )
+            .unwrap();
+            prev = hash;
+        }
+    }
+
+    /// C1 (review 2026-10-31): with every signature stripped and the format-1 hashes
+    /// recomputed, a store that holds a key reported its chain as intact: the key check only
+    /// looked at keys that signed rows, and there were none left. Calibrated against the
+    /// broken state first: `verify_audit_chain` returned Ok.
+    #[test]
+    fn a_store_with_a_key_and_no_signed_row_is_not_intact() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        App::init(&store, &Actor::Operator).unwrap();
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        app.audit_key(true).unwrap();
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        app.verify_audit_chain().unwrap();
+        assert!(app.verify_audit_chain().unwrap().signed > 0);
+        drop(app);
+        strip_every_signature(&store);
+        let app = App::open(Some(&store), Actor::Operator).unwrap();
+        let err = app.verify_audit_chain().unwrap_err();
+        assert!(err.to_string().contains("no row is signed"), "{err}");
+    }
 }
