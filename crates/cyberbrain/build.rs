@@ -53,7 +53,7 @@ fn main() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ui = ui_dir(manifest);
     // rust-embed reads this: the folder is `$CYBERBRAIN_UI_DIR`, expanded at compile time.
-    println!("cargo:rustc-env=CYBERBRAIN_UI_DIR={}", ui.display());
+    // Printed once below, when it is known which folder it is.
     println!("cargo:rerun-if-changed={}", ui.display());
     println!(
         "cargo:rerun-if-changed={}",
@@ -63,6 +63,7 @@ fn main() {
 
     if std::env::var("CYBERBRAIN_ALLOW_MOCK_UI").is_ok_and(|v| v == "1") {
         println!("cargo:warning=embedding a MOCK web UI on purpose; do not ship this binary");
+        println!("cargo:rustc-env=CYBERBRAIN_UI_DIR={}", ui.display());
         return;
     }
 
@@ -91,9 +92,20 @@ fn main() {
                 advice
             );
         }
-        println!("cargo:warning=ui/dist is missing; `cyberbrain serve` will have no UI");
+        // rust-embed refuses a folder that does not exist, so the promise above ("no UI")
+        // was five compile errors in a fresh checkout (C3, 2026-10-31). An empty folder in
+        // OUT_DIR keeps it: the build works, and `serve` says the page was not built in.
+        let empty = Path::new(&std::env::var("OUT_DIR").expect("cargo sets OUT_DIR"))
+            .join("ui-dist-empty");
+        std::fs::create_dir_all(&empty).expect("OUT_DIR is writable");
+        println!("cargo:rustc-env=CYBERBRAIN_UI_DIR={}", empty.display());
+        println!(
+            "cargo:warning=ui/dist is missing; `cyberbrain serve` will have no UI \
+             (cd ui && npm ci && npm run build)"
+        );
         return;
     }
+    println!("cargo:rustc-env=CYBERBRAIN_UI_DIR={}", ui.display());
 
     match std::fs::read_to_string(ui.join("transport.txt")) {
         Ok(t) if t.trim() == "http" => {}
