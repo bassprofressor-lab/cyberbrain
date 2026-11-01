@@ -96,26 +96,14 @@ fn age_words(secs: i64) -> String {
 
 pub fn render(h: &Handoff, cfg: &HandoffConfig, out: &mut String) {
     let f = &h.note.front;
-    out.push_str(&format!("## Latest handoff ({}, not resident)\n\n", f.ring));
     out.push_str(&format!(
-        "The newest note in rings 2/3 whose name contains {}, updated {} ({}). It is what an \
-         earlier session left for the next one, not an invariant: rings 0 and 1 outrank it, \
-         and what it calls open may have been done since. Before acting on it, check for \
-         newer notes with `cyberbrain recall`.\n\n",
-        cfg.name_contains
-            .iter()
-            .map(|p| format!("`{p}`"))
-            .collect::<Vec<_>>()
-            .join(" or "),
-        f.updated.strftime("%Y-%m-%d %H:%M UTC"),
-        age_words(h.age_secs)
-    ));
-    out.push_str(&format!(
-        "### {} `{}` (kind: {}, updated: {})\n",
+        "## Latest handoff ({}, not resident)\n\n`{}`, {} ({}). Left by an earlier session; \
+         rings 0/1 outrank it and what it calls open may be done. Check newer notes with \
+         `cyberbrain recall` before acting on it.\n\n",
         f.ring,
         f.name,
-        super::resident::kind_name(f.kind),
-        f.updated.strftime("%Y-%m-%d")
+        f.updated.strftime("%Y-%m-%d %H:%M UTC"),
+        age_words(h.age_secs)
     ));
     let mut used = 0usize;
     let mut left_out: Vec<String> = Vec::new();

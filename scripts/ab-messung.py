@@ -68,7 +68,7 @@ def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int) -> di
         err, code = "timeout", -1
     wall = time.monotonic() - t0
 
-    result, tools_used, denied = None, [], 0
+    result, tools_used, denied, denials = None, [], 0, []
     for line in out.splitlines():
         try:
             ev = json.loads(line)
@@ -80,7 +80,8 @@ def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int) -> di
                     tools_used.append(c.get("name"))
         elif ev.get("type") == "result":
             result = ev
-            denied = len(ev.get("permission_denials") or [])
+            denials = ev.get("permission_denials") or []
+            denied = len(denials)
     answer = (result or {}).get("result") or ""
     usage = (result or {}).get("usage") or {}
     correct = all(re.search(rx, answer, re.I | re.S) for rx in task["muss"])
@@ -96,6 +97,7 @@ def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int) -> di
         "output_tokens": usage.get("output_tokens"),
         "cost_usd_equiv": (result or {}).get("total_cost_usd"),
         "tool_calls": len(tools_used), "tools": tools_used, "denied": denied,
+        "denials": [json.dumps(d, ensure_ascii=False)[:300] for d in denials],
     }
 
 

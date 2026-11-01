@@ -206,14 +206,6 @@ fn now() -> String {
     t.round(jiff::Unit::Second).unwrap_or(t).to_string()
 }
 
-fn ts_of(t: SystemTime) -> String {
-    jiff::Timestamp::try_from(t)
-        .ok()
-        .and_then(|t| t.round(jiff::Unit::Second).ok())
-        .map(|t| t.to_string())
-        .unwrap_or_else(|| "unknown time".into())
-}
-
 // ---------------------------------------------------------------------------------------
 // session-start
 
@@ -419,15 +411,17 @@ fn session_start_text(
         if let Some(h) = &handoff {
             handoff::render(h, &app.config().handoff, &mut text);
         }
-        digest(app, res, state, cwd, source, &mut text);
+        digest(app, res, state, cwd, &mut text);
         usage(&mut text);
         return (text, handoff);
     }
     text.push_str("# Cyberbrain memory\n\n");
+    // Every character here is paid on every turn of the session (0.9: measured against a
+    // control group, the start context cost 6,550 tokens per request). Say what binds and
+    // how to cite it; the rest is in the tool's help.
     text.push_str(&format!(
-        "Store: `{}`. Rings 0 and 1 below are resident: they apply to everything you do in \
-         this project. Every block is prefixed with its citation; quote it when you rely on \
-         it, and expand one with `cyberbrain recall --id <citation>`.\n\n",
+        "Store `{}`. Rings 0 and 1 apply to everything in this project; quote a block's \
+         citation when you rely on it.\n\n",
         Slash(app.root())
     ));
     match source {
@@ -465,7 +459,7 @@ fn session_start_text(
     if let Some(h) = &handoff {
         handoff::render(h, &app.config().handoff, &mut text);
     }
-    digest(app, res, state, cwd, source, &mut text);
+    digest(app, res, state, cwd, &mut text);
     usage(&mut text);
     (text, handoff)
 }
@@ -475,88 +469,56 @@ fn digest(
     res: &Resident,
     state: Option<&SessionState>,
     cwd: Option<&Path>,
-    source: &str,
     text: &mut String,
 ) {
+    // Only what asks for action (0.9). A line that says all is well is paid for on every
+    // turn and changes nothing; "nothing needs attention" says the same in four words.
     let store = app.store();
     let cap = store.resident_cap();
-    text.push_str("## Store digest\n\n");
-    let pct = (res.tokens * 100).checked_div(cap).unwrap_or(0);
-    text.push_str(&format!(
-        "- resident: {} note(s) in rings 0/1, ~{} of {} tokens ({pct}%){}\n",
-        res.notes.len(),
-        res.tokens,
-        cap,
-        if res.tokens > cap {
-            "; OVER THE CAP, a hand edit crossed it (SPEC §3.2): tell the operator"
-        } else {
-            ""
-        }
-    ));
+    let mut lines: Vec<String> = Vec::new();
+    if res.tokens > cap {
+        lines.push(format!(
+            "rings 0/1 hold ~{} tokens, OVER THE CAP of {cap}: a hand edit crossed it (SPEC §3.2). \
+             Tell the operator.",
+            res.tokens
+        ));
+    }
     if res.other_files > 0 {
-        text.push_str(&format!(
-            "- {} entr{} in notes/r0 or notes/r1 that are not `.md` notes were passed over\n",
+        lines.push(format!(
+            "{} entr{} in notes/r0 or notes/r1 that are not `.md` notes were passed over",
             res.other_files,
             if res.other_files == 1 { "y" } else { "ies" }
         ));
     }
-    // Proposals, because a proposal nobody is told about is a file in a folder. Counted
-    // from the directory rather than the index — they are deliberately not in it — and a
-    // directory read is cheap enough for a hook with a 150 ms budget.
+    // Proposals, because a proposal nobody is told about is a file in a folder. Counted from
+    // the directory rather than the index: they are deliberately not in it.
     if let Ok(waiting) = store.list_proposals()
         && !waiting.is_empty()
     {
-        let names: Vec<&str> = waiting
-            .iter()
-            .map(|n| n.front.name.as_str())
-            .take(5)
-            .collect();
-        text.push_str(&format!(
-            "- **{} proposal(s) waiting** for somebody to accept or reject: {}{}. They are \
-             not in the index and `recall` cannot return them; `cyberbrain review` lists \
-             them. Tell the operator.\n",
-            waiting.len(),
-            names.join(", "),
-            if waiting.len() > names.len() {
-                ", …"
-            } else {
-                ""
-            }
+        lines.push(format!(
+            "**{} proposal(s) waiting** for review (`cyberbrain review`); not searchable until \
+             accepted. Tell the operator.",
+            waiting.len()
         ));
     }
-
     // Installation drift (0.9): hook entries from an older install, processes on a replaced
-    // binary. Silent when everything is in step, which is the usual case.
+    // binary. The payload's directory first: the two halves of session start may run at
+    // once, and the second cannot count on the state the first is still writing.
     let fail_closed =
         app.config().governance.mode == cyberbrain_core::config::GovernanceMode::Enforce;
-    // The payload's directory first: the two halves of session start may run at once, and
-    // the second cannot count on the state the first is still writing.
     let cwd = cwd.or_else(|| state.and_then(|s| s.cwd.as_deref()).map(Path::new));
-    for line in super::drift::report(app.root(), cwd, fail_closed) {
-        text.push_str(&format!("- {line}\n"));
+    lines.extend(super::drift::report(app.root(), cwd, fail_closed));
+    if !app.policy().status().pii_scan_active {
+        lines.push(format!(
+            "PII scan on writes is off (profile {})",
+            app.policy().profile().as_str()
+        ));
     }
-
-    let policy = app.policy();
-    text.push_str(&format!(
-        "- policy profile: {} (PII scan on writes: {})\n",
-        policy.profile().as_str(),
-        if policy.status().pii_scan_active {
-            "on"
-        } else {
-            "off"
-        }
-    ));
-
     // Index freshness, as far as two stats can tell: the cache's mtime against the
     // resident files'. Anything wider costs a walk of the store.
     match std::fs::metadata(store.db_path()) {
         Ok(md) => {
             let written = md.modified().ok();
-            text.push_str(&format!(
-                "- index: cyberbrain.db last written {} ({} KB)\n",
-                written.map(ts_of).unwrap_or_else(|| "unknown".into()),
-                md.len() / 1024
-            ));
             let newer: Vec<&str> = res
                 .notes
                 .iter()
@@ -567,72 +529,49 @@ fn digest(
                 .map(|n| n.note.front.name.as_str())
                 .collect();
             if !newer.is_empty() {
-                text.push_str(&format!(
-                    "- resident note(s) changed after the last index write: {}; run `cyberbrain scan` \
-                     before relying on recall for them (only rings 0/1 were checked)\n",
+                lines.push(format!(
+                    "resident note(s) changed after the last index write: {}; run `cyberbrain scan` \
+                     before relying on recall for them",
                     newer.join(", ")
                 ));
             }
         }
-        Err(_) => text.push_str(
-            "- index: cyberbrain.db is absent; `recall` has nothing to search until `cyberbrain scan` runs\n",
+        Err(_) => lines.push(
+            "cyberbrain.db is absent; `recall` has nothing to search until `cyberbrain scan` runs"
+                .to_string(),
         ),
     }
     let embedding = &app.config().embedding;
-    if let (cyberbrain_core::config::EmbeddingBackend::Ollama, Some(o)) =
-        (embedding.backend, embedding.ollama.as_ref())
-    {
-        text.push_str(&format!(
-            "- semantic search: {} via Ollama at {} (not contacted by this hook; `recall` asks \
-             it and falls back to lexical search if it does not answer)\n",
-            o.model, o.base_url
-        ));
-    } else {
+    if embedding.backend != cyberbrain_core::config::EmbeddingBackend::Ollama {
         let model_dir = app.config().model_dir();
         let model_present = model_dir.join("model.safetensors").is_file()
             && model_dir.join("tokenizer.json").is_file();
-        text.push_str(&format!(
-            "- semantic search: model artefact {} at {}{}\n",
-            if model_present { "present" } else { "absent" },
-            Slash(&model_dir),
-            if model_present {
-                " (not loaded by this hook; `recall` loads it)"
-            } else {
-                "; recall is lexical only until one is placed"
-            }
-        ));
+        if !model_present {
+            lines.push(format!(
+                "no embedding model at {}: recall is lexical only",
+                Slash(&model_dir)
+            ));
+        }
     }
-    match state {
-        Some(s) => text.push_str(&format!(
-            "- session {}: source {source}, injection #{}, {} turn(s), {} compaction(s)\n",
-            s.session_id, s.injections, s.turns, s.compactions
-        )),
-        None => text.push_str(
-            "- session: no usable session_id in the payload, so nothing is tracked across \
-             events for this session\n",
-        ),
+    // No line for a missing session state: with session start split in two, the second half
+    // may run before the first has saved it, and the model can do nothing about either.
+    text.push_str("## Store digest\n\n");
+    if lines.is_empty() {
+        text.push_str("- nothing needs attention\n");
+    }
+    for l in lines {
+        text.push_str(&format!("- {l}\n"));
     }
     text.push('\n');
 }
 
 fn usage(text: &mut String) {
-    text.push_str("## Using the store\n\n");
     text.push_str(
-        "- `cyberbrain recall \"<question>\"` searches rings 2 to 4 (hybrid; every hit carries a \
-         citation such as `r2-a91f2c33e1bd` and a `conflict` marker when a lower ring \
-         disagrees). `cyberbrain recall --id <citation>` expands one.\n\
-         - `cyberbrain find <symbol>` gives exact line ranges from the code index; read the slice, \
-         not the file.\n\
-         - `cyberbrain write --ring 2 --kind knowledge|bug|lesson|decision|reference --name <kebab-slug> \
-         --body '...'` records what you learn. Ring 2 is project knowledge, ring 3 a session \
-         record. Rings 0 and 1 are the operator's: never write them directly.\n\
-         - `cyberbrain propose --ring 0 --kind decision --name <slug> --body '...'` is how you \
-         offer one instead. It goes to `proposals/`, outside the notes tree, so it is not \
-         indexed and nobody retrieves it as though it were agreed; a person other than the \
-         proposer accepts it with `cyberbrain review <name> --accept`.\n\
-         - Do not edit files under the store with Edit/Write. The pre-tool-use hook refuses the \
-         audit log and rings 0/1 and asks the operator about the rest, because a raw edit skips \
-         the PII gate, the audit row and the reindex that `cyberbrain write` performs.\n\n",
+        "## Using the store\n\n- `cyberbrain recall \"<question>\"` before searching files \
+         (`--id <citation>` expands a hit); `cyberbrain find <symbol>` for line ranges instead \
+         of whole files; `cyberbrain write --ring 2 --kind <kind> --name <slug> --body '...'` \
+         to record. Rings 0/1 are the operator's (`cyberbrain propose`); never edit files \
+         under the store directly.\n\n",
     );
 }
 

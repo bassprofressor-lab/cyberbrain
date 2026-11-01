@@ -159,8 +159,8 @@ fn session_start_injects_rings_0_and_1_with_citations_and_a_digest() {
     assert_eq!(expanded.note.front.name, "never-copy-config");
     // Digest and usage.
     assert!(s.contains("## Store digest"), "{s}");
-    assert!(s.contains("resident: 2 note(s)"), "{s}");
-    assert!(s.contains("policy profile: eu"), "{s}");
+    // 0.9: only what asks for action; a healthy profile is not repeated on every turn.
+    assert!(!s.contains("policy profile"), "{s}");
     assert!(s.contains("cyberbrain recall"), "{s}");
     // The record.
     assert!(audit_actions(&app).contains(&"session.start".to_string()));
@@ -263,7 +263,7 @@ fn session_start_names_the_store_with_forward_slashes() {
     let f = fixture();
     let out = session_start(&f, "startup");
     assert_eq!(out.exit_code, 0);
-    let line = format!("Store: `{}`.", cyberbrain_core::slash(f.open().root()));
+    let line = format!("Store `{}`.", cyberbrain_core::slash(f.open().root()));
     assert!(out.stdout.contains(&line), "{}", out.stdout);
     assert!(!out.stdout.contains('\\'), "{}", out.stdout);
 }
@@ -275,11 +275,6 @@ fn session_start_on_an_empty_store_says_the_rings_are_empty() {
     assert_eq!(out.exit_code, 0);
     assert!(out.stdout.contains("(ring 0 is empty)"), "{}", out.stdout);
     assert!(out.stdout.contains("(ring 1 is empty)"), "{}", out.stdout);
-    assert!(
-        out.stdout.contains("cyberbrain.db last written"),
-        "{}",
-        out.stdout
-    );
 }
 
 #[test]
@@ -1564,14 +1559,14 @@ fn session_start_shows_the_newest_handoff_with_citations() {
     let out = session_start(&f, "startup");
     let s = &out.stdout;
     assert!(s.contains("## Latest handoff (r3, not resident)"), "{s}");
-    assert!(s.contains("### r3 `handoff-tuesday`"), "{s}");
+    assert!(s.contains("`handoff-tuesday`, "), "{s}");
     assert!(s.contains("after the reboot run check.sh first"), "{s}");
     // Only the newest, and nothing else from rings 2 and 3.
     assert!(!s.contains("Monday: run the old script"), "{s}");
     assert!(!s.contains("PG 18 moves PGDATA"), "{s}");
     // It comes after the resident rings and says it does not outrank them.
     assert!(s.find("## Latest handoff").unwrap() > s.find("## Ring 0").unwrap());
-    assert!(s.contains("rings 0 and 1 outrank it"), "{s}");
+    assert!(s.contains("rings 0/1 outrank it"), "{s}");
     // The citation resolves like a resident one.
     let cit = s
         .lines()
@@ -1656,7 +1651,6 @@ fn handoff_names_are_configurable_and_an_empty_list_turns_it_off() {
     set_handoff_config(&f, r#"name_contains = ["Uebergabe", "handoff"]"#);
     let s = session_start(&f, "startup").stdout;
     assert!(s.contains("Morgen zuerst pruefen."), "{s}");
-    assert!(s.contains("`Uebergabe` or `handoff`"), "{s}");
     set_handoff_config(&f, "name_contains = []");
     assert!(
         !session_start(&f, "startup")

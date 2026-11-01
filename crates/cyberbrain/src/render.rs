@@ -157,6 +157,30 @@ pub fn scan(r: &ScanReport) -> String {
     s
 }
 
+/// How much of each hit the text form prints (0.9). Measured against a control group, one
+/// recall printed 9,500 characters, and every one of them stays in the agent's context for
+/// the rest of the session. The first hits carry the answer most of the time, so they get
+/// room; the rest are a list to pick from. `--id` expands any of them, `--json` is uncut.
+const RECALL_FULL_HITS: usize = 3;
+const RECALL_TOP_CHARS: usize = 700;
+const RECALL_REST_CHARS: usize = 160;
+
+/// `text` cut to about `max` characters at a line or word boundary; true when something was
+/// left out.
+fn excerpt(text: &str, max: usize) -> (String, bool) {
+    let text = text.trim_end();
+    if text.chars().count() <= max {
+        return (text.to_string(), false);
+    }
+    let head: String = text.chars().take(max).collect();
+    let at = head
+        .rfind('\n')
+        .filter(|&p| p > max / 2)
+        .or_else(|| head.rfind(' '))
+        .unwrap_or(head.len());
+    (head[..at].trim_end().to_string(), true)
+}
+
 pub fn recall(r: &RecallResult) -> String {
     let mut s = String::new();
     if r.hits.is_empty() {
@@ -213,8 +237,21 @@ pub fn recall(r: &RecallResult) -> String {
                 names.join(", ")
             );
         }
-        for line in h.text.lines() {
+        let budget = if i < RECALL_FULL_HITS {
+            RECALL_TOP_CHARS
+        } else {
+            RECALL_REST_CHARS
+        };
+        let (body, cut) = excerpt(&h.text, budget);
+        for line in body.lines() {
             let _ = writeln!(s, "     {line}");
+        }
+        if cut {
+            let _ = writeln!(
+                s,
+                "     … (`cyberbrain recall --id {}` for the rest)",
+                h.citation
+            );
         }
     }
     for c in &r.conflicts {

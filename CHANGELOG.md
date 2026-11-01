@@ -12,6 +12,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Changed
+
+- **Smaller start context and shorter recall output, because both are paid on every turn.**
+  Measured against a control group (`scripts/ab-messung.py`), Cyberbrain added 6,550 tokens to
+  every request of a session, and one recall printed 9,500 characters that then stayed in the
+  context. Session start now says only what asks for action: the store digest lists
+  problems and otherwise reads "nothing needs attention" (no more healthy policy, index and
+  embedding lines, no proposal names), the head and usage texts are a few lines, and the
+  handoff note is capped at 1,000 tokens instead of 1,500 (its header shortened). Text-form
+  `recall` prints the first three hits up to 700 characters and the rest up to 160, each cut
+  hit naming the `recall --id` that expands it; `--json` and MCP `structuredContent` stay
+  uncut. A store whose `cyberbrain.toml` sets `handoff.max_tokens` keeps its own value.
+
 ### Added
 
 - **Session start names installation drift.** Two ways an update leaves a machine half on
