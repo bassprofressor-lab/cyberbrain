@@ -57,6 +57,7 @@ pub struct Config {
     pub store: PathBuf,
     pub rings: RingsConfig,
     pub handoff: HandoffConfig,
+    pub loops: LoopsConfig,
     pub retrieval: RetrievalConfig,
     pub embedding: EmbeddingConfig,
     pub inference: InferenceConfig,
@@ -206,6 +207,24 @@ pub struct HandoffConfig {
     /// Blocks beyond this many (approximate) tokens are left out, with their citations
     /// listed so the rest can be expanded with `recall --id`.
     pub max_tokens: usize,
+}
+
+/// The loop hint (0.9): post-tool-use tells the agent when it is searching in circles.
+///
+/// Measured against a control group, the expensive runs were not the ones with a long
+/// answer but the ones that searched on: 6 to 16 searches in a row, every round re-reading
+/// the whole context. Two patterns, both visible in a tool call's input and result: the same
+/// search again, and search after search that finds nothing. Silent otherwise, so it costs
+/// no tokens until it fires.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoopsConfig {
+    pub enabled: bool,
+    /// The hint fires when a search is this many times nearly the same one in the session's
+    /// recent calls, counting itself.
+    pub repeat: usize,
+    /// The hint fires after this many searches in a row that found nothing.
+    pub empty_streak: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -404,6 +423,7 @@ impl Default for Config {
             store: PathBuf::from(DEFAULT_STORE_DIR),
             rings: RingsConfig::default(),
             handoff: HandoffConfig::default(),
+            loops: LoopsConfig::default(),
             retrieval: RetrievalConfig::default(),
             embedding: EmbeddingConfig::default(),
             inference: InferenceConfig::default(),
@@ -433,6 +453,16 @@ impl Default for HandoffConfig {
             name_contains: vec!["handoff".to_string()],
             max_age_days: 7,
             max_tokens: 200,
+        }
+    }
+}
+
+impl Default for LoopsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            repeat: 3,
+            empty_streak: 5,
         }
     }
 }
@@ -556,6 +586,13 @@ max_age_days = 7
 # The first block is always shown. Every token here is paid on every request of the session,
 # so the default shows the opening block and points at the rest.
 max_tokens = 200
+
+[loops]
+# After a tool call, tell the agent when it searches in circles: the same search for the
+# `repeat`th time, or `empty_streak` searches in a row that found nothing. Silent otherwise.
+enabled = true
+repeat = 3
+empty_streak = 5
 
 [retrieval]
 # Hybrid search: lexical (BM25) and semantic candidates, fused by reciprocal rank
@@ -732,6 +769,12 @@ impl Config {
         }
         if self.handoff.max_tokens == 0 {
             return Err(bad("handoff.max_tokens", "must be greater than 0".into()));
+        }
+        if self.loops.repeat < 2 {
+            return Err(bad("loops.repeat", "must be at least 2".into()));
+        }
+        if self.loops.empty_streak < 2 {
+            return Err(bad("loops.empty_streak", "must be at least 2".into()));
         }
         if self
             .handoff

@@ -131,7 +131,7 @@ pub(crate) const EVENTS: [(&str, &[&str], &str); 7] = [
     ("SubagentStart", &["subagent-start"], ""),
     ("UserPromptSubmit", &["user-prompt-submit"], ""),
     ("PreToolUse", &["pre-tool-use"], PRE_TOOL_MATCHER),
-    ("PostToolUse", &["post-tool-use"], TOOL_MATCHER),
+    ("PostToolUse", &["post-tool-use"], POST_TOOL_MATCHER),
     ("Stop", &["stop"], ""),
     ("PreCompact", &["pre-compact"], ""),
 ];
@@ -140,10 +140,28 @@ pub(crate) const EVENTS: [(&str, &[&str], &str); 7] = [
 /// (budget_ms); 30 s leaves room for a cold disk and a slow AgentGuard, which has its own
 /// shorter timeout inside the hook.
 pub(crate) const HOOK_TIMEOUT_SECS: u64 = 30;
-const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
+/// The file-editing tools post-tool-use checks for edits to the store.
+macro_rules! edit_tools {
+    () => {
+        "Edit|Write|MultiEdit|NotebookEdit"
+    };
+}
+/// The searches the loop hint reads (0.9, `hook::loops::classify`). A hook process per
+/// search is the price; it answers in milliseconds and says nothing unless a loop completes.
+macro_rules! loop_tools {
+    () => {
+        "Grep|Glob|Read|Bash|mcp__.*cyberbrain.*__recall|mcp__.*cyberbrain.*__find"
+    };
+}
+#[cfg(test)]
+const TOOL_MATCHER: &str = edit_tools!();
+#[cfg(test)]
+pub(crate) const LOOP_MATCHER: &str = loop_tools!();
+/// Post-tool-use: the edit notice and the loop hint.
+const POST_TOOL_MATCHER: &str = concat!(edit_tools!(), "|", loop_tools!());
 /// Pre-tool-use also reads `Bash` (2026-09-25): a shell command can do what the file tools
 /// are refused, and it is where an agent would drop `CLAUDECODE` (`hook::events::bash_verdict`).
-/// Post-tool-use has nothing to do for a shell command and keeps the narrow matcher.
+/// Post-tool-use reads shell commands only for the loop hint (0.9), see `LOOP_MATCHER`.
 /// WebFetch since the governance check (2026-09-25, `hook::governance::TOOLS`).
 const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|WebFetch";
 

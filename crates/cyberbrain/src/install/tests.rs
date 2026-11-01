@@ -243,6 +243,25 @@ fn the_matcher_covers_every_tool_the_hook_reads() {
             "{tool} is not in the matcher; if the hook now reads it, the matcher is wrong"
         );
     }
+    // Post-tool-use also reads the searches, for the loop hint, and nothing else.
+    let search = |tool: &str| {
+        Payload::parse(&format!(
+            r#"{{"tool_name":"{tool}","tool_input":{{"pattern":"x","command":"grep x","query":"x","file_path":"/x"}},"tool_response":{{}}}}"#
+        ))
+    };
+    let named = |m: &str| m.replace(".*", "");
+    for tool in LOOP_MATCHER.split('|').map(named) {
+        assert!(
+            crate::hook::loops::classify(&search(&tool)).is_some(),
+            "{tool} is in the post-tool-use matcher, so the loop hint has to read it"
+        );
+    }
+    for tool in ["WebFetch", "Task", "TodoWrite", "mcp__cyberbrain__write"] {
+        assert!(
+            crate::hook::loops::classify(&search(tool)).is_none(),
+            "{tool} is not in the matcher; if the loop hint now reads it, the matcher is wrong"
+        );
+    }
     // Pre-tool-use additionally reads the Bash command line, and nothing else.
     let bash = |tool: &str| {
         Payload::parse(&format!(

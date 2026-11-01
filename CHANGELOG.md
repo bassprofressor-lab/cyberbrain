@@ -28,6 +28,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Added
 
+- **A hint when the agent searches in circles.** Against a control group the expensive runs
+  were the ones that searched on, 6 to 16 searches in a row, each round re-reading the whole
+  context. After a tool call, post-tool-use now says one sentence when that call is the third
+  search for nearly the same thing in the session, or the fifth search in a row that found
+  nothing, and then stays quiet for a few calls. It never blocks a call and costs no tokens
+  until it fires. Searches are Grep, Glob, `recall`/`find` over MCP and Bash lines that run
+  grep, rg, find and the like; Read ends a dry streak but never counts as a repeat. The
+  post-tool-use matcher widens accordingly, so an existing install shows as drift until
+  `cyberbrain install` is run again. `[loops]` in `cyberbrain.toml` sets the two thresholds
+  or turns it off.
+
 - **Session start names installation drift.** Two ways an update leaves a machine half on
   the old version, both seen on our own server: hook entries in `.claude/settings.json` from
   an older `cyberbrain install` (a binary on 0.8.5 next to entries from 0.8.4 never ran the

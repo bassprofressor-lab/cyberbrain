@@ -39,6 +39,7 @@ pub mod events;
 pub mod governance;
 pub mod guard;
 pub mod handoff;
+pub mod loops;
 pub mod paths;
 pub mod payload;
 pub mod resident;

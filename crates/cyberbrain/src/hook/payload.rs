@@ -22,6 +22,9 @@ pub struct Payload {
     pub trigger: Option<String>,
     pub tool_name: Option<String>,
     pub tool_input: Value,
+    /// `post-tool-use`: what the tool returned (an object for the built-in tools, a string
+    /// for an MCP tool). Read only by the loop hint, for "found nothing".
+    pub tool_response: Value,
     pub stop_hook_active: bool,
     /// `subagent-start` and any hook that fires inside a subagent: the subagent's id and its
     /// type (`general-purpose`, `Explore`, a custom agent's name). Untrusted text.
@@ -68,6 +71,7 @@ impl Payload {
         p.agent_id = string("agent_id").filter(|s| !s.trim().is_empty());
         p.agent_type = string("agent_type").filter(|s| !s.trim().is_empty());
         p.tool_input = obj.get("tool_input").cloned().unwrap_or(Value::Null);
+        p.tool_response = obj.get("tool_response").cloned().unwrap_or(Value::Null);
         p.stop_hook_active = obj
             .get("stop_hook_active")
             .and_then(Value::as_bool)
