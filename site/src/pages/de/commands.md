@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: "Befehle"
-description: "Alle Befehle und Optionen von cyberbrain 0.8.5: init, write, recall, find, propose, review, forget, scan, status, doctor, trust, install, serve, mcp, hook, policy, canary, hub und weitere."
+description: "Alle Befehle und Optionen von cyberbrain 0.9.0: init, write, recall, find, propose, review, forget, scan, status, doctor, trust, install, serve, mcp, hook, policy, canary, hub und weitere."
 lang: de
 slug: "commands/"
 ---

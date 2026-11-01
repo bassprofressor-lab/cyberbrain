@@ -12,28 +12,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
-### Changed
-
-- **MCP: the call shapes come with the server instructions.** Claude Code lists an MCP
-  server's tools by name and loads a schema only on demand. An agent that called `recall`
-  straight away sent `{}`, got "argument `query` is required" and left the memory unused for
-  the rest of the task (2 of 8 measured runs with an MCP call). The instructions now name
-  every tool with its required arguments (`recall {"query": …}`, generated from the
-  schemas), and a missing-argument error names the call shape too. The caveat and held-write
-  explanations they replace are in the tool descriptions already: the instructions shrink
-  from 712 to 572 characters.
-
-- **Smaller start context, because it is paid on every request.** Measured against a control
-  group (`scripts/ab-messung.py`), Cyberbrain added 6,550 tokens to every request of a session.
-  Session start now says only what asks for action: the store digest lists problems and
-  otherwise reads "nothing needs attention" (no more healthy policy, index and embedding
-  lines, no proposal names), the head and usage texts are a few lines, and the handoff note
-  shows its first block and lists the rest by citation (`handoff.max_tokens` default 200
-  instead of 1,500). A store whose `cyberbrain.toml` sets `handoff.max_tokens` keeps its own
-  value. Recall output is deliberately left whole: a version that cut hits to 700 and 160
-  characters made memory questions *more* expensive in the same measurement (median 139k
-  instead of 110k tokens, one run 16 tool calls), because every extra round re-reads the
-  whole context, and it answered fewer of them.
+## [0.9.0] — 2026-11-01
 
 ### Added
 
@@ -65,6 +44,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   Records correctness against regular expressions, turns, tool calls, tokens and time, and
   resumes an interrupted series. A ledger of lines not read says what the tool returned; only
   a control group says what the agent would have done without it.
+
+### Changed
+
+- **MCP: the call shapes come with the server instructions.** Claude Code lists an MCP
+  server's tools by name and loads a schema only on demand. An agent that called `recall`
+  straight away sent `{}`, got "argument `query` is required" and left the memory unused for
+  the rest of the task (2 of 8 measured runs with an MCP call). The instructions now name
+  every tool with its required arguments (`recall {"query": …}`, generated from the
+  schemas), and a missing-argument error names the call shape too. The caveat and held-write
+  explanations they replace are in the tool descriptions already: the instructions shrink
+  from 712 to 572 characters.
+
+- **Smaller start context, because it is paid on every request.** Measured against a control
+  group (`scripts/ab-messung.py`), Cyberbrain added 6,550 tokens to every request of a session.
+  Session start now says only what asks for action: the store digest lists problems and
+  otherwise reads "nothing needs attention" (no more healthy policy, index and embedding
+  lines, no proposal names), the head and usage texts are a few lines, and the handoff note
+  shows its first block and lists the rest by citation (`handoff.max_tokens` default 200
+  instead of 1,500). A store whose `cyberbrain.toml` sets `handoff.max_tokens` keeps its own
+  value. Recall output is deliberately left whole: a version that cut hits to 700 and 160
+  characters made memory questions *more* expensive in the same measurement (median 139k
+  instead of 110k tokens, one run 16 tool calls), because every extra round re-reads the
+  whole context, and it answered fewer of them.
 
 ## [0.8.5] — 2026-10-31
 
@@ -2158,7 +2160,9 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.4...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.5...v0.9.0
+[0.8.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.3...v0.8.4
 [0.8.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.1...v0.8.2
