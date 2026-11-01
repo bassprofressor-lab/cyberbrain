@@ -319,7 +319,7 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
 /// exit code 2 would. Our hooks always exit 0 and report problems on stdout, so a store that
 /// cannot be opened still answers; what this catches is a binary that is gone or hangs.
 /// Older Claude Code versions do not know the field.
-fn hook_entry(binary: &Path, matcher: &str, args: &[&str], fail_closed: bool) -> Value {
+pub(crate) fn hook_entry(binary: &Path, matcher: &str, args: &[&str], fail_closed: bool) -> Value {
     let hooks: Vec<Value> = args
         .iter()
         .map(|arg| {

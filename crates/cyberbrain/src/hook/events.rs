@@ -250,7 +250,14 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput, part: Part) -> Result<()> 
         s.resident = resident::marks(&res);
     }
 
-    let (text, handoff) = session_start_text(ctx.app, source, &res, state.as_ref(), part);
+    let (text, handoff) = session_start_text(
+        ctx.app,
+        source,
+        &res,
+        state.as_ref(),
+        ctx.payload.cwd.as_deref(),
+        part,
+    );
     out.stdout = text;
 
     // The record: which invariants were shown to which session, when (§12.6 is the seam
@@ -296,7 +303,15 @@ fn session_context(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     let res = resident::read_checked(ctx.app);
     // Through `session_id`, which validates the untrusted id before it becomes a path.
     let state = ctx.session_id(out).and_then(|id| ctx.load_state(&id, out));
-    out.stdout = session_start_text(ctx.app, source, &res, state.as_ref(), Part::Context).0;
+    out.stdout = session_start_text(
+        ctx.app,
+        source,
+        &res,
+        state.as_ref(),
+        ctx.payload.cwd.as_deref(),
+        Part::Context,
+    )
+    .0;
     Ok(())
 }
 
@@ -375,7 +390,7 @@ fn subagent_start(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
 /// session, an audit row or any state. For `doctor`'s size check.
 pub(crate) fn startup_text(app: &App, part: Part) -> String {
     let res = resident::read_checked(app);
-    session_start_text(app, "startup", &res, None, part).0
+    session_start_text(app, "startup", &res, None, None, part).0
 }
 
 /// The text `session-start` prints on stdout, and the handoff it carried. Reads the store,
@@ -385,6 +400,7 @@ fn session_start_text(
     source: &str,
     res: &Resident,
     state: Option<&SessionState>,
+    cwd: Option<&Path>,
     part: Part,
 ) -> (String, Option<handoff::Handoff>) {
     let mut text = String::new();
@@ -403,7 +419,7 @@ fn session_start_text(
         if let Some(h) = &handoff {
             handoff::render(h, &app.config().handoff, &mut text);
         }
-        digest(app, res, state, source, &mut text);
+        digest(app, res, state, cwd, source, &mut text);
         usage(&mut text);
         return (text, handoff);
     }
@@ -449,7 +465,7 @@ fn session_start_text(
     if let Some(h) = &handoff {
         handoff::render(h, &app.config().handoff, &mut text);
     }
-    digest(app, res, state, source, &mut text);
+    digest(app, res, state, cwd, source, &mut text);
     usage(&mut text);
     (text, handoff)
 }
@@ -458,6 +474,7 @@ fn digest(
     app: &App,
     res: &Resident,
     state: Option<&SessionState>,
+    cwd: Option<&Path>,
     source: &str,
     text: &mut String,
 ) {
@@ -506,6 +523,17 @@ fn digest(
                 ""
             }
         ));
+    }
+
+    // Installation drift (0.9): hook entries from an older install, processes on a replaced
+    // binary. Silent when everything is in step, which is the usual case.
+    let fail_closed =
+        app.config().governance.mode == cyberbrain_core::config::GovernanceMode::Enforce;
+    // The payload's directory first: the two halves of session start may run at once, and
+    // the second cannot count on the state the first is still writing.
+    let cwd = cwd.or_else(|| state.and_then(|s| s.cwd.as_deref()).map(Path::new));
+    for line in super::drift::report(app.root(), cwd, fail_closed) {
+        text.push_str(&format!("- {line}\n"));
     }
 
     let policy = app.policy();

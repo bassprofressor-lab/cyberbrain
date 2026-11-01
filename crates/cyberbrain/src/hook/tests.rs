@@ -1901,3 +1901,51 @@ fn subagent_start_without_a_store_stays_silent_to_the_model() {
     assert_eq!(out.exit_code, 0);
     assert!(out.stdout.is_empty(), "{}", out.stdout);
 }
+
+/// 0.9: hook entries from an older `cyberbrain install` are named in the digest, with the
+/// command that repairs them. The real case was a binary on 0.8.5 next to entries from 0.8.4,
+/// so `SubagentStart` never ran and nothing said so.
+#[test]
+fn session_context_names_hook_entries_an_older_install_left_behind() {
+    let f = fixture();
+    let project = f.store.parent().unwrap().to_path_buf();
+    let mut hooks = serde_json::Map::new();
+    for (event, args, matcher) in crate::install::EVENTS {
+        if event == "SubagentStart" {
+            continue;
+        }
+        let e = crate::install::hook_entry(
+            Path::new("/usr/local/bin/cyberbrain"),
+            matcher,
+            args,
+            false,
+        );
+        hooks.insert(event.to_string(), serde_json::json!([e]));
+    }
+    std::fs::create_dir_all(project.join(".claude")).unwrap();
+    let settings = project.join(".claude").join("settings.json");
+    std::fs::write(&settings, serde_json::json!({ "hooks": hooks }).to_string()).unwrap();
+
+    let out = session_part(&f, HookEvent::SessionContext, "startup");
+    assert!(
+        out.stdout.contains("hook entries out of date"),
+        "{}",
+        out.stdout
+    );
+    assert!(
+        out.stdout.contains("missing SubagentStart"),
+        "{}",
+        out.stdout
+    );
+
+    // Repaired: the line goes away.
+    let e = crate::install::hook_entry(Path::new("/x/cyberbrain"), "", &["subagent-start"], false);
+    hooks.insert("SubagentStart".into(), serde_json::json!([e]));
+    std::fs::write(&settings, serde_json::json!({ "hooks": hooks }).to_string()).unwrap();
+    let out = session_part(&f, HookEvent::SessionContext, "startup");
+    assert!(
+        !out.stdout.contains("hook entries out of date"),
+        "{}",
+        out.stdout
+    );
+}

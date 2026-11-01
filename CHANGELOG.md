@@ -12,6 +12,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **Session start names installation drift.** Two ways an update leaves a machine half on
+  the old version, both seen on our own server: hook entries in `.claude/settings.json` from
+  an older `cyberbrain install` (a binary on 0.8.5 next to entries from 0.8.4 never ran the
+  new `SubagentStart` hook, and nothing said so), and a long-running `cyberbrain mcp --http`
+  or `daemon` still running a binary that has since been replaced. The store digest now names
+  either, with the command that repairs it, and says nothing when everything is in step. The
+  hook entries are compared with what `install` writes today, without the binary path; a
+  settings file without any entry of ours, or an installed plugin, is left alone. Replaced
+  binaries are found through the ` (deleted)` mark Linux puts on a process's executable;
+  other systems stay silent rather than guess. Nothing is repaired automatically. Idea from
+  ProjectAtlas (styler-ai, MIT).
+
 ## [0.8.5] — 2026-10-31
 
 ### Added
