@@ -16,9 +16,9 @@
 //! until it fires. It never blocks a call: the agent may have a reason.
 //!
 //! What counts as a search: Grep, Glob, `cyberbrain recall`/`find` over MCP, and Bash command
-//! lines that run grep, rg, find and the like. Read is not a search, but finding something by
-//! definition, it ends a dry streak. Hybrid recall
-//! always returns its nearest neighbours, so it can repeat but never be "empty".
+//! lines that run grep, rg, find and the like. Read is neither. Hybrid recall always returns
+//! its nearest neighbours, answer or not, so its hits neither count as empty nor end a dry
+//! streak: a recall followed by five empty greps is the very case the hint is for.
 //!
 //! State is a small file per session (and per subagent) next to the session state. Parallel
 //! tool calls race for it and the last write wins; a lost entry delays a hint by one call,
@@ -114,11 +114,11 @@ pub fn classify(p: &Payload) -> Option<Call> {
             empty: resp.get("numFiles").and_then(Value::as_u64).map(|n| n == 0),
             shown: s("pattern").to_string(),
         }),
-        // Reading a file again after an edit is ordinary work, not a loop: Read only ends a
-        // dry streak (it found a file by definition) and never counts as a repeat.
+        // Reading a file again after an edit is ordinary work, not a loop, and reading one
+        // is no sign the answer was in it: Read neither repeats nor ends a dry streak.
         "Read" => Some(Call {
             key: Vec::new(),
-            empty: Some(false),
+            empty: None,
             shown: s("file_path").to_string(),
         }),
         "Bash" => {
@@ -127,11 +127,21 @@ pub fn classify(p: &Payload) -> Option<Call> {
                 return None;
             }
             let out = resp.get("stdout").and_then(Value::as_str);
+            let recall = cmd.split_whitespace().nth(1) == Some("recall")
+                && cmd.split_whitespace().next() == Some("cyberbrain");
             Some(Call {
                 key: words(cmd, SEARCH_VERBS),
-                empty: out.map(|o| {
+                empty: out.and_then(|o| {
                     let o = o.trim();
-                    o.is_empty() || o == "no hits" || o.starts_with("no definition of")
+                    if o.is_empty() || o == "no hits" || o.starts_with("no definition of") {
+                        Some(true)
+                    } else if recall {
+                        // Hybrid recall prints its nearest neighbours whether or not one of
+                        // them answers: hits are no sign of a find.
+                        None
+                    } else {
+                        Some(false)
+                    }
                 }),
                 shown: short(cmd),
             })
@@ -144,6 +154,8 @@ pub fn classify(p: &Payload) -> Option<Call> {
                 .and_then(Value::as_str)
                 .unwrap_or("");
             // The MCP result is the JSON text of the report; `"hits":[]` is nothing found.
+            // Hits from `recall` are its nearest neighbours, answer or not, so only `find`
+            // (exact symbols) counts as a find.
             let text = match resp {
                 Value::String(t) => t.clone(),
                 other => other.to_string(),
@@ -152,7 +164,7 @@ pub fn classify(p: &Payload) -> Option<Call> {
                 key: words(q, &[]),
                 empty: if text.contains("\"hits\":[]") {
                     Some(true)
-                } else if text.contains("\"hits\":[{") {
+                } else if t.ends_with("__find") && text.contains("\"hits\":[{") {
                     Some(false)
                 } else {
                     None
@@ -348,15 +360,34 @@ mod tests {
     }
 
     #[test]
-    fn mcp_recall_repeats_but_is_never_empty_by_its_nearest_neighbours() {
+    fn recall_hits_are_no_sign_of_a_find() {
         let r = payload(
             "mcp__cyberbrain__recall",
             json!({"query": "zzqqxx wbvv"}),
             Value::String("{\"caveats\":[],\"hits\":[{\"citation\":\"r2-1\"}]}".into()),
         );
         let c = classify(&r).unwrap();
-        assert_eq!(c.empty, Some(false));
+        assert_eq!(c.empty, None);
         assert_eq!(c.key, vec!["wbvv", "zzqqxx"]);
+        let bash = payload(
+            "Bash",
+            json!({"command": "cyberbrain recall \"zzqqxx\""}),
+            json!({"stdout": "1. r2-1 ...", "stderr": ""}),
+        );
+        assert_eq!(classify(&bash).unwrap().empty, None);
+        // A recall in between does not end a dry streak.
+        let mut st = LoopState::default();
+        for (i, q) in ["a1", "b1", "c1", "d1"].iter().enumerate() {
+            assert_eq!(
+                observe(&mut st, classify(&grep(q, 0)).unwrap(), &cfg()),
+                None
+            );
+            if i == 1 {
+                assert_eq!(observe(&mut st, classify(&r).unwrap(), &cfg()), None);
+            }
+        }
+        let h = observe(&mut st, classify(&grep("e1", 0)).unwrap(), &cfg());
+        assert_eq!(h, Some(Hint::Dry { count: 5 }));
     }
 
     #[test]
