@@ -34,6 +34,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   its own files (`.git`, `commondir`), not by running `git`; submodules and anything
   unusual keep the old behaviour. `find` keeps no index, so there is nothing to build per
   worktree. Split taken from ProjectAtlas ("each worktree keeps its own map").
+- **`scripts/ab-messung.py`: measurement with a control group.** The same tasks for Claude
+  Code with Cyberbrain and without it, same model, same files, `--strict-mcp-config` so a
+  user-wide MCP server cannot leak into the control, the two arms of a task in random order.
+  Records correctness against regular expressions, turns, tool calls, tokens and time, and
+  resumes an interrupted series. A ledger of lines not read says what the tool returned; only
+  a control group says what the agent would have done without it.
 
 ## [0.8.5] — 2026-10-31
 
