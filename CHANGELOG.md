@@ -14,6 +14,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ### Changed
 
+- **MCP: the call shapes come with the server instructions.** Claude Code lists an MCP
+  server's tools by name and loads a schema only on demand. An agent that called `recall`
+  straight away sent `{}`, got "argument `query` is required" and left the memory unused for
+  the rest of the task (2 of 8 measured runs with an MCP call). The instructions now name
+  every tool with its required arguments (`recall {"query": …}`, generated from the
+  schemas), and a missing-argument error names the call shape too. The caveat and held-write
+  explanations they replace are in the tool descriptions already: the instructions shrink
+  from 712 to 572 characters.
+
 - **Smaller start context, because it is paid on every request.** Measured against a control
   group (`scripts/ab-messung.py`), Cyberbrain added 6,550 tokens to every request of a session.
   Session start now says only what asks for action: the store digest lists problems and

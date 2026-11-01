@@ -206,6 +206,11 @@ async fn stateless_2026_07_28_discover_list_and_call_without_initialize() {
             "cyberbrain"
         );
         assert!(r["instructions"].as_str().unwrap().contains("caveats"));
+        // The call shapes, for a client that defers the schemas (0.9).
+        let ins = r["instructions"].as_str().unwrap();
+        assert!(ins.contains(r#"recall {"query": …}"#), "{ins}");
+        assert!(ins.contains(r#"recall_id {"citation": …}"#), "{ins}");
+        assert!(ins.contains("status {}"), "{ins}");
         assert!(
             !r["instructions"]
                 .as_str()
@@ -824,6 +829,14 @@ async fn protocol_errors_are_jsonrpc_errors() {
                 .as_str()
                 .unwrap()
                 .contains("`query` is required"),
+            "{e}"
+        );
+        // The error carries the call shape, so an agent without the schema can retry.
+        assert!(
+            e["message"]
+                .as_str()
+                .unwrap()
+                .contains(r#"call it as recall {"query": …}"#),
             "{e}"
         );
         let e = c

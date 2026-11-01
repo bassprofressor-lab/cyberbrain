@@ -227,6 +227,25 @@ pub fn catalogue() -> Vec<Tool> {
     ]
 }
 
+/// `recall {"query": "…"}`: the tool with its required arguments, the short form the server
+/// instructions and a missing-argument error give an agent that has not loaded the schema.
+pub fn call_shape(t: &Tool) -> String {
+    let required: Vec<String> = t.input_schema["required"]
+        .as_array()
+        .map(|r| {
+            r.iter()
+                .filter_map(Value::as_str)
+                .map(|k| format!("\"{k}\": …"))
+                .collect()
+        })
+        .unwrap_or_default();
+    if required.is_empty() {
+        format!("{} {{}}", t.name)
+    } else {
+        format!("{} {{{}}}", t.name, required.join(", "))
+    }
+}
+
 /// The `tools/list` result.
 pub fn list_value() -> Value {
     let tools: Vec<Value> = catalogue()
@@ -299,7 +318,16 @@ impl<'a> Args<'a> {
 
     fn required<T>(&self, key: &str, v: Option<T>) -> Result<T, RpcError> {
         v.ok_or_else(|| {
-            RpcError::invalid_params(format!("tool {}: argument `{key}` is required", self.tool))
+            let shape = catalogue()
+                .iter()
+                .find(|t| t.name == self.tool)
+                .map(call_shape)
+                .map(|s| format!("; call it as {s}"))
+                .unwrap_or_default();
+            RpcError::invalid_params(format!(
+                "tool {}: argument `{key}` is required{shape}",
+                self.tool
+            ))
         })
     }
 

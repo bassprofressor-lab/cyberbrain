@@ -64,15 +64,28 @@ const LIST_TTL_MS: u64 = 3_600_000;
 
 /// What the agent is told at `initialize`. MCP-only text: it describes the envelope, not
 /// the operations, which the tool descriptions cover from the CLI help.
-const INSTRUCTIONS: &str = "Cyberbrain is a cited, trust-tiered memory of this project. \
-Every recall hit carries a citation (`r2-...`); expand one with recall_id. Every recall \
-result carries `caveats`: read them before trusting the hits. A caveat saying the \
-contradiction check was skipped means the hits were not checked against each other, so an \
-unchecked result must not be treated as a checked one. Rings: 0 operator invariants, 1 \
-protocol, 2 curated knowledge, 3 session records, 4 unverified external material; lower \
-wins a contradiction. A write with `isError` and `outcome: held` is a decision, not a \
-failure: the body contained something that looks like personal data, nothing was written, \
-and you must choose (see the write tool).";
+const INSTRUCTIONS_HEAD: &str = "Cyberbrain is a cited, trust-tiered memory of this project.";
+const INSTRUCTIONS_TAIL: &str = "Every recall hit carries a citation (`r2-...`); read a \
+result's `caveats` before trusting its hits. Rings: 0 operator invariants, 1 protocol, 2 \
+curated knowledge, 3 session records, 4 unverified external material; lower wins a \
+contradiction. A write held for personal data is a decision, not a failure (see the write tool).";
+
+/// What the client shows its model, always, even while it defers the tool schemas (0.9).
+///
+/// Claude Code lists an MCP server's tools by name only and loads a schema on demand. An agent
+/// that called `recall` straight away sent `{}`, got "argument `query` is required" and gave up
+/// on the memory for the rest of the task (2 of 8 runs with an MCP call in the measurement of
+/// 2026-11-01). The call shapes go here, generated from the catalogue so they cannot drift
+/// from the schemas; the caveat and held-write explanations they replace are in the tool
+/// descriptions already, so the fixed cost does not grow.
+pub fn instructions() -> String {
+    let shapes: Vec<String> = tools::catalogue().iter().map(tools::call_shape).collect();
+    format!(
+        "{INSTRUCTIONS_HEAD} Call shapes, usable before the full schema is loaded: {}. \
+         {INSTRUCTIONS_TAIL}",
+        shapes.join(" · ")
+    )
+}
 
 /// Serve on the process's stdin and stdout until the client closes stdin or asks to shut
 /// down. Returns when the session is over; an I/O failure on the streams is the only error.
@@ -327,7 +340,7 @@ impl Session {
                 json!({
                     "supportedVersions": supported,
                     "capabilities": { "tools": {} },
-                    "instructions": INSTRUCTIONS,
+                    "instructions": instructions(),
                     "ttlMs": LIST_TTL_MS,
                     "cacheScope": "public",
                 })
@@ -386,8 +399,8 @@ impl Session {
         diag!("initialize from {client}: protocol {version}");
         self.protocol = Some(version.clone());
         let instructions = match note {
-            Some(n) => format!("{INSTRUCTIONS}\n\n{n}"),
-            None => INSTRUCTIONS.to_string(),
+            Some(n) => format!("{}\n\n{n}", instructions()),
+            None => instructions(),
         };
         json!({
             "protocolVersion": version,
