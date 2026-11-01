@@ -6878,9 +6878,15 @@ mod discovery_tests {
     /// the first refused ("no store found") and the second answered from another branch.
     #[test]
     fn a_linked_worktree_shares_the_store_and_finds_its_own_code() {
+        // Reached through a symlink, as macOS reaches every temporary directory
+        // (/var/folders -> /private/var/folders): CI on macOS failed the first version of this
+        // test, which compared the resolved path with the unresolved one as strings.
         let dir = tempfile::tempdir().unwrap();
-        let main = dir.path().join("main");
-        let wt = dir.path().join("elsewhere").join("wt");
+        std::fs::create_dir(dir.path().join("real")).unwrap();
+        std::os::unix::fs::symlink(dir.path().join("real"), dir.path().join("link")).unwrap();
+        let base = dir.path().join("link");
+        let main = base.join("main");
+        let wt = base.join("elsewhere").join("wt");
         let admin = main.join(".git").join("worktrees").join("wt");
         std::fs::create_dir_all(&admin).unwrap();
         std::fs::create_dir_all(main.join("src")).unwrap();
@@ -6895,13 +6901,13 @@ mod discovery_tests {
         )
         .unwrap();
 
+        // The same directories, however they are spelled: compare them resolved.
+        let same = |p: &Path| p.canonicalize().unwrap();
         let store = discover_store_as(&wt.join("src"), None).unwrap();
-        assert_eq!(store, main.join(DEFAULT_STORE_DIR));
+        assert_eq!(same(&store), same(&main.join(DEFAULT_STORE_DIR)));
 
-        assert_eq!(
-            crate::worktree::code_root_for(&main, &wt.join("src")),
-            Some(wt.clone())
-        );
+        let root = crate::worktree::code_root_for(&main, &wt.join("src")).expect("the worktree");
+        assert_eq!(same(&root), same(&wt));
         let hits = cyberbrain_code::find(&wt, "only_on_branch", 5, &Default::default()).unwrap();
         assert_eq!(hits.hits.len(), 1);
     }
