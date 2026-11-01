@@ -121,7 +121,8 @@ pub fn render(h: &Handoff, cfg: &HandoffConfig, out: &mut String) {
     }
     if !left_out.is_empty() {
         out.push_str(&format!(
-            "Left out over handoff.max_tokens ({}): {}. Expand with `cyberbrain recall --id`.\n\n",
+            "Left out over handoff.max_tokens ({}): {}. Expand them with `cyberbrain recall \
+             --id` before you pick up where that session stopped.\n\n",
             cfg.max_tokens,
             left_out.join(", ")
         ));

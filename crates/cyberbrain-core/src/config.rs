@@ -432,7 +432,7 @@ impl Default for HandoffConfig {
         Self {
             name_contains: vec!["handoff".to_string()],
             max_age_days: 7,
-            max_tokens: 1000,
+            max_tokens: 200,
         }
     }
 }
@@ -553,7 +553,9 @@ name_contains = ["handoff"]
 # Older than this, a handoff is not shown at all.
 max_age_days = 7
 # Longer than this (approximate tokens), the remaining blocks are listed by citation only.
-max_tokens = 1000
+# The first block is always shown. Every token here is paid on every request of the session,
+# so the default shows the opening block and points at the rest.
+max_tokens = 200
 
 [retrieval]
 # Hybrid search: lexical (BM25) and semantic candidates, fused by reciprocal rank
