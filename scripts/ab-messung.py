@@ -12,6 +12,8 @@ Two arms, each a directory with a `projekt/` checkout and an `mcp.json`:
     <arm>/projekt/   identical files in both arms; the "with" arm additionally has the store,
                      the hook entries (`cyberbrain install`) and the instructions file
     <arm>/mcp.json   the MCP servers of the arm; `{"mcpServers":{}}` for the control
+    <arm>/pfad/      optional: put first on PATH for this arm's runs, so two arms can run
+                     two builds of the same command
 
 Runs `claude -p` once per task, arm and repetition, the two arms of a task in random order,
 with `--strict-mcp-config` so a user-wide MCP server cannot leak into the control. Records the
@@ -29,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import statistics
@@ -47,8 +50,9 @@ BASE_TOOLS = ["Read", "Grep", "Glob"]
 WITH_TOOLS = ["Bash(cyberbrain recall:*)", "Bash(cyberbrain find:*)", "mcp__cyberbrain"]
 
 
-def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int) -> dict:
-    tools = BASE_TOOLS + (WITH_TOOLS if arm == "with" else [])
+def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int,
+            raw: Path | None = None, tools_both: bool = False) -> dict:
+    tools = BASE_TOOLS + (WITH_TOOLS if arm == "with" or tools_both else [])
     cmd = [
         "claude", "-p", PREFIX + task["prompt"],
         "--output-format", "stream-json", "--verbose",
@@ -58,15 +62,21 @@ def run_one(arm_dir: Path, arm: str, task: dict, model: str, timeout: int) -> di
         "--permission-mode", "default",
         "--allowedTools", *tools,
     ]
+    env = dict(os.environ)
+    if (arm_dir / "pfad").is_dir():
+        env["PATH"] = f"{arm_dir / 'pfad'}{os.pathsep}{env.get('PATH', '')}"
     t0 = time.monotonic()
     try:
         p = subprocess.run(cmd, cwd=arm_dir / "projekt", capture_output=True, text=True,
-                           timeout=timeout)
+                           timeout=timeout, env=env)
         out, err, code = p.stdout, p.stderr, p.returncode
     except subprocess.TimeoutExpired as e:
         out = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
         err, code = "timeout", -1
     wall = time.monotonic() - t0
+    if raw is not None:
+        raw.parent.mkdir(parents=True, exist_ok=True)
+        raw.write_text(out)
 
     result, tools_used, denied, denials = None, [], 0, []
     for line in out.splitlines():
@@ -146,6 +156,9 @@ def main() -> int:
     ap.add_argument("--only", default="")
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--timeout", type=int, default=420)
+    ap.add_argument("--tools-both", action="store_true",
+                    help="give both arms the Cyberbrain tools: two builds against each other. "
+                         "Without it the --without arm is refused every cyberbrain call.")
     a = ap.parse_args()
     a.with_dir, a.without, a.out = a.with_dir.resolve(), a.without.resolve(), a.out.resolve()
 
@@ -181,8 +194,10 @@ def main() -> int:
         if count[key] <= have.get(key, 0):
             continue
         d = a.with_dir if arm == "with" else a.without
-        r = run_one(d, arm, t, a.model, a.timeout)
+        raw = a.out / "raw" / f"{t['id']}-{arm}-{count[key]}.jsonl"
+        r = run_one(d, arm, t, a.model, a.timeout, raw, a.tools_both)
         r["rep"] = rep
+        r["raw"] = str(raw.relative_to(a.out))
         with log.open("a") as f:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
         done.append(r)
