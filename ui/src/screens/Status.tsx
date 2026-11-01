@@ -9,6 +9,7 @@ import { absTime, bytes, num, relTime } from "@/lib/format";
 import { type Dict, useT } from "@/lib/i18n";
 import { canaryState } from "@/lib/canary";
 import { useShortcuts } from "@/lib/keys";
+import { Markdown } from "@/lib/markdown";
 import { href, navigate } from "@/lib/router";
 import { toApiError, useAsync } from "@/lib/useAsync";
 
@@ -109,8 +110,13 @@ export function StatusScreen() {
   const infState: State = !infConfigured ? "idle" : endpointTone === "danger" || d.inference.reachable === false ? "danger" : endpointTone === "warn" ? "warn" : infUnchecked ? "idle" : "ok";
 
   const infLabel = !infConfigured ? dd.state.idle : infUnchecked ? dd.state.unchecked : d.inference.reachable === false ? dd.card.infDown : endpointTone === "danger" ? dd.card.infRefused : endpointTone === "warn" ? dd.card.infPublic : dd.card.infOk;
+  // installation: hook entries or processes out of step with this binary. A warning, never an
+  // error: memory works, but a hook added in this version may not run. A server that does not
+  // send the field (older than 0.9) adds no area rather than claiming "in step".
+  const drift = d.drift ?? [];
   const areas: Array<{ key: string; name: string; state: State; unchecked?: boolean }> = [
     { key: "store", name: dd.area.store, state: "ok" },
+    ...(d.drift ? [{ key: "install", name: dd.area.install, state: (drift.length ? "warn" : "ok") as State }] : []),
     { key: "index", name: dd.area.index, state: indexState },
     { key: "embedding", name: dd.area.embedding, state: embState },
     { key: "inference", name: dd.area.inference, state: infState, unchecked: infUnchecked },
@@ -423,6 +429,23 @@ export function StatusScreen() {
           )}
         </Card>
       </div>
+
+      {drift.length ? (
+        <section className="card px-5 py-4 text-sm border-warn" role="alert" aria-labelledby="drift-title">
+          <div className="flex items-center gap-2">
+            <Icon name="alert" size={18} className="text-warn" />
+            <h2 id="drift-title" className="font-medium">{dd.drift.title}</h2>
+          </div>
+          <p className="mt-1 text-fg-muted max-w-[60rem]">{dd.drift.lead}</p>
+          <ul className="mt-3 divide-y divide-line max-w-[60rem]">
+            {drift.map((line, i) => (
+              <li key={i} className="py-2 leading-relaxed wrap-soft">
+                <Markdown source={line} resolves={() => false} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
 
       <CanaryCard />
 

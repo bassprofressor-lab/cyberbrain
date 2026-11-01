@@ -418,6 +418,7 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
                 pii_scan: s.policy.pii_scan_active,
                 audit_rows: s.audit.rows,
             },
+            drift: s.drift.clone(),
             caveats,
         }))
     })

@@ -297,7 +297,11 @@ export const en = {
     status: {
       searchPlaceholder: "Search Cyberbrain…",
       searchAria: "Open search",
-      area: { store: "Local store", index: "Index", embedding: "Embedding model", inference: "Inference endpoint" },
+      area: { store: "Local store", install: "Installation", index: "Index", embedding: "Embedding model", inference: "Inference endpoint" },
+      drift: {
+        title: "Installation out of step with this version",
+        lead: "Memory works, but hook entries or running processes do not match this binary, so a hook new in this version does not run. Each line names the command that repairs it; nothing is repaired automatically.",
+      },
       headline: {
         ok: "All good",
         unchecked: (n: number) => `Ready – ${n} ${n === 1 ? "area" : "areas"} not checked yet`,

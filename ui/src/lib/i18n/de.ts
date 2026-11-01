@@ -291,7 +291,11 @@ export const de: Dict = {
     status: {
       searchPlaceholder: "In Cyberbrain suchen…",
       searchAria: "Suche öffnen",
-      area: { store: "Lokaler Speicher", index: "Index", embedding: "Einbettungsmodell", inference: "Inferenz-Endpunkt" },
+      area: { store: "Lokaler Speicher", install: "Installation", index: "Index", embedding: "Einbettungsmodell", inference: "Inferenz-Endpunkt" },
+      drift: {
+        title: "Installation nicht auf dem Stand dieser Version",
+        lead: "Das Gedächtnis arbeitet, aber Hooks oder laufende Prozesse passen nicht zu diesem Programm. Ein mit dieser Version neuer Hook läuft dann nicht. Jede Zeile nennt den Befehl, der es behebt; repariert wird nichts automatisch.",
+      },
       headline: {
         ok: "Alles in Ordnung",
         unchecked: (n: number) => `Bereit – ${n} ${n === 1 ? "Bereich" : "Bereiche"} noch nicht geprüft`,

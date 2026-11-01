@@ -656,6 +656,10 @@ pub struct StatusReport {
     /// Whether a daemon answers for this store (2026-09-29; before, a store whose path was
     /// too long for a socket simply never had one, and nothing said so).
     pub daemon: String,
+    /// Installation drift (0.9): hook entries `cyberbrain install` of this version would
+    /// write differently, processes still running a replaced binary. One line each, with the
+    /// repair command; empty when everything is in step. The same lines session start shows.
+    pub drift: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4430,6 +4434,11 @@ impl App {
             resident_tokens: self.store.resident_tokens()?,
             resident_cap: self.store.resident_cap(),
             daemon: crate::daemon::state(&self.root),
+            drift: crate::hook::drift::report(
+                &self.root,
+                None,
+                self.config.governance.mode == cyberbrain_core::config::GovernanceMode::Enforce,
+            ),
             index_stale: not_indexed + changed + gone > 0,
             index,
             audit: AuditSummary {

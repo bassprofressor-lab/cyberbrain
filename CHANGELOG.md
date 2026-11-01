@@ -37,8 +37,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   hook entries are compared with what `install` writes today, without the binary path; a
   settings file without any entry of ours, or an installed plugin, is left alone. Replaced
   binaries are found through the ` (deleted)` mark Linux puts on a process's executable;
-  other systems stay silent rather than guess. Nothing is repaired automatically. Idea from
-  ProjectAtlas (styler-ai, MIT).
+  other systems stay silent rather than guess. Nothing is repaired automatically. The same
+  lines appear in `cyberbrain status`, in `/api/v1/status` (`drift`) and as a warning card with
+  its own "Installation" area on the web UI's status page. Idea from ProjectAtlas (styler-ai,
+  MIT).
 - **Git worktrees share the memory and keep their own code.** A linked worktree outside the
   project found no store above it, so `recall` refused and the hooks stood down in every
   session started there; and with the store named by `--store`, `find` scanned the main

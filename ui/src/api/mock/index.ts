@@ -729,6 +729,7 @@ export const mockClient: CyberbrainApi = {
       embedding: { profile_id: PROFILE_ID, model: MODEL_NAME, dim: 256, pooling: "mean, L2-normalised (SPEC §6.2)", backend: "static", matches_index: true, model_hash: MODEL_HASH, model_verified_at: null, loaded: true },
       inference: { configured: true, base_url: INFERENCE_URL, endpoint_class: "loopback", allow_public_endpoint: false, model: "qwen3:8b", last_backend: "ollama", last_backend_evidence: 'response header "x-ollama-version: 0.12.3"; model list shape', last_call: lastInference?.ts ?? null, reachable: true, reachable_checked_at: new Date().toISOString() },
       policy: { profile: PROFILE, pii_scan: true, audit_rows: events.length },
+      drift: [],
       caveats,
     });
   },

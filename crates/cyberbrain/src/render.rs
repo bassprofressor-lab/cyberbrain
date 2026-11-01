@@ -564,6 +564,9 @@ pub fn status(r: &StatusReport) -> String {
     }
     let _ = writeln!(s, "embedding: {}", embedder_line(&r.embedding.embedder));
     let _ = writeln!(s, "daemon: {}", r.daemon);
+    for line in &r.drift {
+        let _ = writeln!(s, "drift: {line}");
+    }
     let remote = r
         .embedding
         .embedder

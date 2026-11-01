@@ -190,6 +190,10 @@ export interface StatusReport {
     pii_scan: boolean;
     audit_rows: number;
   };
+  /** Installation drift (0.9): hook entries `cyberbrain install` of this version would write
+   *  differently, processes still running a replaced binary. One Markdown line each, naming the
+   *  command that repairs it; empty when everything is in step. Optional for older servers. */
+  drift?: string[];
   /** Which members above are not measured by this build, and why. Render them. */
   caveats: string[];
 }

@@ -269,6 +269,8 @@ async fn status_reports_the_store_and_says_what_it_cannot_measure() {
     assert!(s["policy"]["audit_rows"].as_u64().unwrap() >= 3);
     let caveats = s["caveats"].as_array().unwrap();
     assert!(!caveats.is_empty(), "unmeasured members must be named");
+    // Always present, so the UI can tell "in step" from "not reported by this build".
+    assert!(s["drift"].is_array(), "{s}");
 
     // A hand edit makes the index stale, and the count is the real scan's.
     let p = fx.note_path(2, "redis-limits");

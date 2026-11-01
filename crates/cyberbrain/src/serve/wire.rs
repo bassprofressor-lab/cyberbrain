@@ -109,6 +109,9 @@ pub struct StatusReport {
     pub embedding: EmbeddingStatus,
     pub inference: InferenceStatus,
     pub policy: PolicyStatus,
+    /// Additive (0.9): installation drift, one line each with the command that repairs it;
+    /// empty when the hook entries and running processes match this binary.
+    pub drift: Vec<String>,
     /// Additive: which members above are not measured by this build, and why. A number
     /// that is not measured is still shown, so this says which ones to read with care.
     pub caveats: Vec<String>,
