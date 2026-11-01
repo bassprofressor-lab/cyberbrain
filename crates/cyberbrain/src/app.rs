@@ -122,19 +122,16 @@ fn current_uid() -> Option<u32> {
 /// such as /tmp would collect every other account's notes and session records and lend them
 /// its configuration and its audit key (C17, 2026-10-31). `--store` opens it on purpose.
 fn discover_store_as(cwd: &Path, me: Option<u32>) -> Result<PathBuf> {
-    for dir in cwd.ancestors() {
-        let candidate = dir.join(DEFAULT_STORE_DIR);
-        if is_store(&candidate) {
-            if let Some(owner) = foreign_owner(&candidate, me) {
-                return Err(Error::Config(format!(
-                    "no {DEFAULT_STORE_DIR} store found that is yours: {} belongs to uid {owner}, \
-                     not to this account. Point at it with --store or CYBERBRAIN_STORE if you \
-                     mean to use it, or run `cyberbrain init` in your project root",
-                    Slash(&candidate)
-                )));
-            }
-            return Ok(candidate);
-        }
+    if let Some(found) = walk_up_for_store(cwd, me) {
+        return found;
+    }
+    // A linked git worktree outside the project has no store above it; the project's is in
+    // the main checkout (0.9, `worktree`). Notes are the project's, so every checkout of it
+    // reads and writes the one store.
+    if let Some(main) = crate::worktree::main_checkout_for(cwd)
+        && let Some(found) = walk_up_for_store(&main, me)
+    {
+        return found;
     }
     Err(Error::Config(format!(
         "no {DEFAULT_STORE_DIR} store found in {} or any directory above it; run \
@@ -142,6 +139,26 @@ fn discover_store_as(cwd: &Path, me: Option<u32>) -> Result<PathBuf> {
          CYBERBRAIN_STORE",
         Slash(cwd)
     )))
+}
+
+/// The first store above `dir`: `None` when there is none, an error when the first one
+/// belongs to another account.
+fn walk_up_for_store(dir: &Path, me: Option<u32>) -> Option<Result<PathBuf>> {
+    for d in dir.ancestors() {
+        let candidate = d.join(DEFAULT_STORE_DIR);
+        if is_store(&candidate) {
+            if let Some(owner) = foreign_owner(&candidate, me) {
+                return Some(Err(Error::Config(format!(
+                    "no {DEFAULT_STORE_DIR} store found that is yours: {} belongs to uid {owner}, \
+                     not to this account. Point at it with --store or CYBERBRAIN_STORE if you \
+                     mean to use it, or run `cyberbrain init` in your project root",
+                    Slash(&candidate)
+                ))));
+            }
+            return Some(Ok(candidate));
+        }
+    }
+    None
 }
 
 /// The owner of `store` when that is neither `me` nor root (a root-owned store is the
@@ -4450,7 +4467,12 @@ impl App {
             .file_name()
             .is_some_and(|n| n == DEFAULT_STORE_DIR);
         match (is_default_store, self.root.parent()) {
-            (true, Some(parent)) if !parent.as_os_str().is_empty() => parent.to_path_buf(),
+            // Standing in another worktree of the project's repository: that checkout is the
+            // code the caller is working on, not the main one (0.9, `worktree`).
+            (true, Some(parent)) if !parent.as_os_str().is_empty() => std::env::current_dir()
+                .ok()
+                .and_then(|cwd| crate::worktree::code_root_for(parent, &cwd))
+                .unwrap_or_else(|| parent.to_path_buf()),
             (true, Some(_)) => PathBuf::from("."),
             _ => std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         }
@@ -6842,6 +6864,39 @@ mod discovery_tests {
     /// named, and opened only when asked for by --store. The test plays the other account by
     /// claiming a uid that is not the directory's. Calibrated against the broken state
     /// first: the foreign store was returned.
+    /// 0.9: a linked git worktree outside the project finds the project's store in the main
+    /// checkout, and `find` there reads the worktree's files, not the main checkout's. Before,
+    /// the first refused ("no store found") and the second answered from another branch.
+    #[test]
+    fn a_linked_worktree_shares_the_store_and_finds_its_own_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        let wt = dir.path().join("elsewhere").join("wt");
+        let admin = main.join(".git").join("worktrees").join("wt");
+        std::fs::create_dir_all(&admin).unwrap();
+        std::fs::create_dir_all(main.join("src")).unwrap();
+        std::fs::create_dir_all(wt.join("src")).unwrap();
+        std::fs::write(admin.join("commondir"), "../..\n").unwrap();
+        std::fs::write(wt.join(".git"), format!("gitdir: {}\n", admin.display())).unwrap();
+        App::init(&main.join(DEFAULT_STORE_DIR), &Actor::Operator).unwrap();
+        std::fs::write(main.join("src").join("lib.rs"), "fn only_on_main() {}\n").unwrap();
+        std::fs::write(
+            wt.join("src").join("lib.rs"),
+            "\n\nfn only_on_branch() {}\n",
+        )
+        .unwrap();
+
+        let store = discover_store_as(&wt.join("src"), None).unwrap();
+        assert_eq!(store, main.join(DEFAULT_STORE_DIR));
+
+        assert_eq!(
+            crate::worktree::code_root_for(&main, &wt.join("src")),
+            Some(wt.clone())
+        );
+        let hits = cyberbrain_code::find(&wt, "only_on_branch", 5, &Default::default()).unwrap();
+        assert_eq!(hits.hits.len(), 1);
+    }
+
     #[test]
     fn a_store_owned_by_another_account_is_not_discovered() {
         let dir = tempfile::tempdir().unwrap();

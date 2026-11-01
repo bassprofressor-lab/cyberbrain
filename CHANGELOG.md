@@ -25,6 +25,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   binaries are found through the ` (deleted)` mark Linux puts on a process's executable;
   other systems stay silent rather than guess. Nothing is repaired automatically. Idea from
   ProjectAtlas (styler-ai, MIT).
+- **Git worktrees share the memory and keep their own code.** A linked worktree outside the
+  project found no store above it, so `recall` refused and the hooks stood down in every
+  session started there; and with the store named by `--store`, `find` scanned the main
+  checkout, another branch, and handed back line ranges of files nobody was editing. Store
+  discovery now falls back to the main checkout of a linked worktree, and `find` reads the
+  worktree the caller stands in when it belongs to the store's repository. Git is read from
+  its own files (`.git`, `commondir`), not by running `git`; submodules and anything
+  unusual keep the old behaviour. `find` keeps no index, so there is nothing to build per
+  worktree. Split taken from ProjectAtlas ("each worktree keeps its own map").
 
 ## [0.8.5] — 2026-10-31
 

@@ -25,6 +25,7 @@ mod serve;
 mod terminal;
 mod transcript;
 mod usage;
+mod worktree;
 mod writers;
 
 use app::{
