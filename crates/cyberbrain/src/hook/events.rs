@@ -1514,16 +1514,6 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
 }
 
 fn post_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
-    if let Some(hint) = loop_hint(ctx, out) {
-        out.stdout = json!({
-            "hookSpecificOutput": {
-                "hookEventName": harness_event_name(ctx.event),
-                "additionalContext": hint,
-            }
-        })
-        .to_string();
-        return Ok(());
-    }
     let Some((target, rel)) = edited_store_file(ctx, out) else {
         return Ok(());
     };
@@ -1574,27 +1564,6 @@ fn post_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     })
     .to_string();
     Ok(())
-}
-
-/// The loop hint (0.9, [`super::loops`]): one sentence when this call completes a loop,
-/// nothing otherwise. Searches never edit a store file, so this and the edit notice below
-/// never both have something to say.
-fn loop_hint(ctx: &Ctx<'_>, out: &mut HookOutput) -> Option<String> {
-    let cfg = &ctx.app.config().loops;
-    if !cfg.enabled {
-        return None;
-    }
-    let call = super::loops::classify(ctx.payload)?;
-    let id = ctx.session_id(out)?;
-    let path = super::loops::path(ctx.root(), &id, ctx.payload.agent_id.as_deref());
-    let mut state = super::loops::load(&path);
-    let hint = super::loops::observe(&mut state, call, cfg);
-    if let Err(e) = super::loops::save(&path, &state) {
-        out.note(format!("post-tool-use: loop state not saved: {e}"));
-    }
-    let hint = hint?;
-    out.note(format!("post-tool-use: loop hint ({hint:?})"));
-    Some(super::loops::text(&hint))
 }
 
 // ---------------------------------------------------------------------------------------
