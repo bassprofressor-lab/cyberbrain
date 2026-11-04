@@ -1603,6 +1603,37 @@ fn the_handoff_is_shown_on_clear_but_not_after_compaction_or_on_resume() {
     }
 }
 
+/// Audit 2026-11-04: `updated` in the future (a hand edit, a clock ahead on the machine that
+/// wrote it, a note pulled from elsewhere) made that note the newest handoff until the date
+/// came round, and it was shown as "0 min ago", so a stale plan read as fresh. Calibrated
+/// against the old code first: it showed `handoff-from-the-future`, "0 min ago".
+#[test]
+fn a_handoff_dated_in_the_future_does_not_pass_for_fresh() {
+    let f = fixture();
+    f.write(
+        Ring::Session,
+        "handoff-from-the-future",
+        "Old plan, wrong clock.",
+    );
+    edit_front(
+        &f,
+        Ring::Session,
+        "handoff-from-the-future",
+        "updated",
+        "2099-01-01T00:00:00Z",
+    );
+    f.write(Ring::Session, "handoff-today", "Current plan.");
+    let s = session_start(&f, "startup").stdout;
+    assert!(s.contains("`handoff-today`, "), "{s}");
+    assert!(!s.contains("Old plan, wrong clock."), "{s}");
+    // Alone, it is still shown, and it says what is wrong with its date.
+    std::fs::remove_file(f.store.join("notes/r3/handoff-today.md")).unwrap();
+    let s = session_start(&f, "startup").stdout;
+    assert!(s.contains("`handoff-from-the-future`, "), "{s}");
+    assert!(s.contains("dated in the future"), "{s}");
+    assert!(!s.contains("0 min ago"), "{s}");
+}
+
 #[test]
 fn an_old_or_invalidated_handoff_is_not_shown() {
     let f = fixture();

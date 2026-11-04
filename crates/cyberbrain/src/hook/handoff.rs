@@ -21,9 +21,14 @@ use cyberbrain_core::{Block, Note, Ring, Store};
 pub struct Handoff {
     pub note: Note,
     pub blocks: Vec<Block>,
-    /// Seconds between the note's `updated` and now; never negative.
+    /// Seconds between the note's `updated` and now. Negative when the note is dated in
+    /// the future, which [`render`] says rather than calling it fresh.
     pub age_secs: i64,
 }
+
+/// How far ahead of this clock a note's `updated` may be and still count as written now:
+/// two machines' clocks rarely agree to the second. Past this the date is wrong, not early.
+const FUTURE_TOLERANCE_SECS: i64 = 300;
 
 /// The newest note in ring 2 or 3 whose file name matches, if one is young enough. A note
 /// whose `invalid_at` has passed is not a handoff any more, whatever its name says.
@@ -62,14 +67,17 @@ pub fn latest(store: &Store, cfg: &HandoffConfig, now: jiff::Timestamp) -> Optio
             if note.front.invalid_at.is_some_and(|t| t <= now) {
                 continue;
             }
-            let age = (now.as_second() - note.front.updated.as_second()).max(0);
+            let age = now.as_second() - note.front.updated.as_second();
             if age > max_age {
                 continue;
             }
+            // A note dated in the future would otherwise be the newest until that date came
+            // round, whatever was written after it: a correctly dated note comes first.
+            let key = |n: &Note, age: i64| (age >= -FUTURE_TOLERANCE_SECS, n.front.updated);
             let newer = match &best {
                 None => true,
-                Some((b, _)) => {
-                    (note.front.updated, &note.front.name) > (b.front.updated, &b.front.name)
+                Some((b, b_age)) => {
+                    (key(&note, age), &note.front.name) > (key(b, *b_age), &b.front.name)
                 }
             };
             if newer {
@@ -88,6 +96,10 @@ pub fn latest(store: &Store, cfg: &HandoffConfig, now: jiff::Timestamp) -> Optio
 
 fn age_words(secs: i64) -> String {
     match secs {
+        s if s < -FUTURE_TOLERANCE_SECS => {
+            "dated in the future: a clock or a hand edit is wrong, its age is unknown".into()
+        }
+        s if s < 0 => "0 min ago".into(),
         s if s < 3_600 => format!("{} min ago", s / 60),
         s if s < 2 * 86_400 => format!("{} h ago", s / 3_600),
         s => format!("{} days ago", s / 86_400),
