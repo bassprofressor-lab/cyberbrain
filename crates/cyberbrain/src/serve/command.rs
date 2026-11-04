@@ -84,9 +84,19 @@ pub async fn run(
     let exe = st.self_exe.clone();
     let root = st.app.root().to_path_buf();
     let args = argv.clone();
+    // The child is a fresh process and would be the operator with nothing refused: rings 0
+    // and 1 written and erased over HTTP after all, which the note routes refuse (audit
+    // 2026-11-04). It inherits the refusal, and answers locally, because a resident daemon
+    // has its own `App` that knows nothing of it.
+    let refuses = st.app.refuses_resident_writes();
 
     let out = blocking(move || {
-        let mut child = std::process::Command::new(&exe)
+        let mut cmd = std::process::Command::new(&exe);
+        if refuses {
+            cmd.env(crate::app::REFUSE_RESIDENT_ENV, "1")
+                .env("CYBERBRAIN_NO_DAEMON", "1");
+        }
+        let mut child = cmd
             .arg("--store")
             .arg(&root)
             .args(&args)

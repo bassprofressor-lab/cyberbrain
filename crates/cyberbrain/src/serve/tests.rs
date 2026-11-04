@@ -2040,6 +2040,53 @@ async fn a_served_store_does_not_write_rings_zero_and_one() {
     assert_eq!(s, StatusCode::CREATED, "{v}");
 }
 
+/// Audit 2026-11-04: the refusal above held for the note routes and not for `POST /command`,
+/// which hands the line to a fresh `cyberbrain` process. That process is the operator and
+/// knew nothing of the served store's refusal, so `write --ring 0` and `forget` of a ring 0
+/// note over HTTP did what `POST /notes` refuses. Calibrated against the old code first: the
+/// write exited 0 and the note stood in `notes/r0`.
+#[tokio::test]
+async fn a_served_store_does_not_write_rings_zero_and_one_through_the_command_line() {
+    let fx = Fx::with_cli();
+    // Written before the refusal, as the operator at a terminal would have.
+    fx.create(0, "r0-kept", "Written at a terminal.").await;
+    fx.app.refuse_resident_writes();
+    let (code, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "write --ring 0 --kind decision --name r0-per-command --body 'per curl'" })),
+        )
+        .await;
+    assert_eq!(code, StatusCode::OK, "{v:#}");
+    assert_ne!(v["exit_code"], 0, "{v:#}");
+    assert!(
+        !fx.store.join("notes/r0/r0-per-command.md").exists(),
+        "{v:#}"
+    );
+
+    // Erasing is the same rule.
+    let (_, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "forget r0-kept" })),
+        )
+        .await;
+    assert_ne!(v["exit_code"], 0, "{v:#}");
+    assert!(fx.store.join("notes/r0/r0-kept.md").exists(), "{v:#}");
+
+    // Ring 2 is still written from the window.
+    let (_, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "write --ring 2 --kind knowledge --name r2-per-command --body 'fine'" })),
+        )
+        .await;
+    assert_eq!(v["exit_code"], 0, "{v:#}");
+}
+
 /// C5, 2026-10-03: the review screen's routes. An agent's untrusted write waits; the list
 /// shows who proposed it, where it came from and that the file is intact; a decision goes
 /// through `App::review` with this machine's identity as reviewer; the history names both.

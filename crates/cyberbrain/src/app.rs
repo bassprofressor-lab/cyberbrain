@@ -61,6 +61,10 @@ use std::time::Instant;
 /// artefact: `<model_dir>/manifest.json` = `{"weights_blake3": ..., "tokenizer_blake3": ...}`.
 pub const MANIFEST_FILE: &str = "manifest.json";
 
+/// Set by `serve` on the processes its command line starts, when the served store refuses
+/// resident writes: the child opens its store with the same refusal.
+pub const REFUSE_RESIDENT_ENV: &str = "CYBERBRAIN_REFUSE_RESIDENT_WRITES";
+
 // ---------------------------------------------------------------------------------------
 // Store discovery
 
@@ -1214,7 +1218,7 @@ impl App {
         let gate = policy.gate();
         // 5. The cache.
         let index = Index::open(&root.join(DB_FILE))?;
-        Ok(App {
+        let app = App {
             root,
             config,
             store,
@@ -1227,7 +1231,13 @@ impl App {
             identity: OnceLock::new(),
             llm: Mutex::new(None),
             resident_writes_refused: std::sync::atomic::AtomicBool::new(false),
-        })
+        };
+        // A process started by `serve` for its command line inherits the served store's
+        // refusal (`serve::command`). Only ever narrows: whoever sets it refuses themselves.
+        if std::env::var_os(REFUSE_RESIDENT_ENV).is_some_and(|v| !v.is_empty()) {
+            app.refuse_resident_writes();
+        }
+        Ok(app)
     }
 
     /// Create a store. Refuses to touch a directory that already is one.
@@ -2638,6 +2648,12 @@ impl App {
     pub fn refuse_resident_writes(&self) {
         self.resident_writes_refused
             .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Whether [`refuse_resident_writes`](Self::refuse_resident_writes) is in force.
+    pub fn refuses_resident_writes(&self) -> bool {
+        self.resident_writes_refused
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn refuse_resident_unless_operator(

@@ -4829,3 +4829,41 @@ fn transcribe_is_off_until_configured_and_refuses_a_public_server() {
         .count();
     assert_eq!(notes, 0, "a refused transcription writes nothing");
 }
+
+/// Audit 2026-11-04: `serve` refuses resident writes over HTTP unless started with
+/// `--allow-resident-writes`, but its command line (`POST /api/v1/command`) hands the line to
+/// a fresh process, which is the operator and knew nothing of the refusal: `write --ring 0`
+/// and `forget` of a ring 0 note went through. The child is now started with
+/// `CYBERBRAIN_REFUSE_RESIDENT_WRITES` and opens its store with the same refusal. This is the
+/// child's half, as the operator; `serve::tests` has the route's half. Calibrated against the
+/// old code first: the write exited 0 and the note stood in `notes/r0`.
+#[test]
+fn a_process_started_for_a_served_store_inherits_its_resident_refusal() {
+    let cb = Cb::new();
+    let ring0 = |name: &str, refused: bool| {
+        let mut c = Cb::bin();
+        if refused {
+            c.env("CYBERBRAIN_REFUSE_RESIDENT_WRITES", "1");
+        }
+        c.arg("--store")
+            .arg(&cb.store)
+            .args(["write", "--ring", "0", "--kind", "decision", "--name", name])
+            .args(["--body", "A rule."])
+            .output()
+            .unwrap()
+    };
+    let out = ring0("at-a-terminal", false);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = ring0("over-http", true);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(!cb.store.join("notes/r0/over-http.md").exists());
+    let forget = Cb::bin()
+        .env("CYBERBRAIN_REFUSE_RESIDENT_WRITES", "1")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["forget", "at-a-terminal"])
+        .output()
+        .unwrap();
+    assert!(!forget.status.success(), "{}", text(&forget));
+    assert!(cb.store.join("notes/r0/at-a-terminal.md").exists());
+}
