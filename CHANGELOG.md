@@ -12,6 +12,29 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Security
+
+- **`serve`'s command line keeps the store's refusal of rings 0 and 1.** A served store does
+  not write or erase rings 0 and 1 unless started with `--allow-resident-writes`, because any
+  program on the machine reaches it without credentials. `POST /api/v1/command` hands the
+  typed line to a fresh process, and that process was the operator with nothing refused:
+  `write --ring 0`, `forget` of a ring 0 note and `review --accept` of a ring 0 proposal went
+  through the window after all. The process now inherits the refusal and answers without the
+  daemon.
+
+### Fixed
+
+- **A handoff dated in the future no longer passes for the newest, or for fresh.** A note whose
+  `updated` lay ahead of the clock (a hand edit, a machine whose clock runs ahead) stayed the
+  handoff shown at session start until that date came round, labelled "0 min ago". A
+  correctly dated handoff now comes first, and one alone says its date is wrong. Five minutes
+  of clock difference are tolerated.
+
+### Changed
+
+- Bundled SQLite 3.53.2 → 3.54.1 (rusqlite 0.41), and the semver-compatible dependency
+  updates of 2026-11-04.
+
 ## [0.9.0] — 2026-11-01
 
 ### Added
