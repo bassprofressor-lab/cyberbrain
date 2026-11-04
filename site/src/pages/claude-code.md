@@ -92,7 +92,10 @@ tenant = "…"
 agent_id = "claude-code"
 mode = "shadow"                 # or "enforce"
 timeout_ms = 1000
+# tools = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "mcp__*"]
 ```
+
+`tools` (since 0.9.1) names the tools whose calls are sent. A name matches exactly; one ending in `*` matches by prefix, so `mcp__*` is every MCP tool and `mcp__github__*` one server's. Left out, it is the six above. A tool added here reaches the hook only once the pre-tool-use matcher hands it over: run `cyberbrain install` again, which widens the matcher from this list; until then session start reports the hook entry as out of step. In `enforce`, a call of an added tool is asked about while the service is unreachable.
 
 The key comes from `CYBERBRAIN_AGENTGUARD_KEY` or `~/.config/cyberbrain/agentguard.key`, never from the store.
 

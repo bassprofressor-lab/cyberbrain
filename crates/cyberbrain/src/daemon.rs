@@ -22,7 +22,9 @@
 //!   the connecting process's own environment (`SO_PEERCRED`, then `/proc/<pid>/environ`) and
 //!   a process started as an agent is an agent whatever it claims (2026-09-29; before, a
 //!   Python script at the socket that sent `"actor":"operator"` wrote ring 0). That is the
-//!   same trust the CLI's environment gets, now checked rather than asserted.
+//!   same trust the CLI's environment gets, now checked rather than asserted. Since 0.9.1
+//!   the walk goes on up the peer's ancestors (`lineage.rs`): a client started under `env -i`
+//!   from the session's shell is still that session's.
 //!   `CYBERBRAIN_NO_DAEMON=1` turns all of this off.
 //!
 //! Unix only. Elsewhere the client always answers locally and `daemon` refuses to start.
@@ -640,16 +642,9 @@ mod server {
         if rc != 0 || cred.pid <= 0 {
             return None;
         }
-        let raw = std::fs::read(format!("/proc/{}/environ", cred.pid)).ok()?;
-        let vars: std::collections::HashMap<String, String> = raw
-            .split(|b| *b == 0)
-            .filter_map(|kv| {
-                let kv = String::from_utf8_lossy(kv);
-                kv.split_once('=')
-                    .map(|(k, v)| (k.to_string(), v.to_string()))
-            })
-            .collect();
-        crate::agent_from_env(|k| vars.get(k).cloned())
+        // The peer and everything that started it: a client started under `env -i` from
+        // the session's shell is still that session's (F1, `lineage.rs`).
+        crate::lineage::agent_at_or_above(cred.pid as u32)
     }
 
     #[cfg(not(target_os = "linux"))]
@@ -854,7 +849,8 @@ mod tests {
     #[test]
     fn the_peer_is_judged_by_its_own_environment() {
         let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
-        let expected = crate::agent_from_env(|k| std::env::var(k).ok());
+        let expected = crate::agent_from_env(|k| std::env::var(k).ok())
+            .or_else(crate::lineage::agent_above_self);
         assert_eq!(
             super::server::peer_agent(&a).map(|x| x.to_string()),
             expected.map(|x| x.to_string())

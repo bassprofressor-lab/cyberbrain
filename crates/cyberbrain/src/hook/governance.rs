@@ -31,15 +31,9 @@ use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// The tools whose calls are sent. The pre-tool-use matcher must name at least these.
-pub const TOOLS: [&str; 6] = [
-    "Bash",
-    "Edit",
-    "Write",
-    "MultiEdit",
-    "NotebookEdit",
-    "WebFetch",
-];
+/// The tools whose calls are sent by default (`[governance] tools` widens or narrows it).
+/// The pre-tool-use matcher must name at least these.
+pub const TOOLS: [&str; 6] = cyberbrain_core::config::GOVERNED_TOOLS_DEFAULT;
 
 pub const KEY_ENV: &str = "CYBERBRAIN_AGENTGUARD_KEY";
 
@@ -87,7 +81,7 @@ pub fn decide(
     let Some(url) = cfg.url.as_deref() else {
         return Verdict::Proceed("governance: not configured".into());
     };
-    let Some(tool) = payload.tool_name.as_deref().filter(|t| TOOLS.contains(t)) else {
+    let Some(tool) = payload.tool_name.as_deref().filter(|t| cfg.governs(t)) else {
         return Verdict::Proceed("governance: tool not sent".into());
     };
     let answer = key

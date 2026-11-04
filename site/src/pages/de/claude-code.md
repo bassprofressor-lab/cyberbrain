@@ -93,7 +93,10 @@ tenant = "…"
 agent_id = "claude-code"
 mode = "shadow"                 # oder "enforce"
 timeout_ms = 1000
+# tools = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "mcp__*"]
 ```
+
+`tools` (seit 0.9.1) nennt die Werkzeuge, deren Aufrufe geschickt werden. Ein Name gilt genau, einer mit `*` am Ende als Anfang: `mcp__*` sind alle MCP-Werkzeuge, `mcp__github__*` die eines Servers. Fehlt der Schlüssel, sind es die sechs oben. Ein hinzugefügtes Werkzeug erreicht den Hook erst, wenn der Matcher von `pre-tool-use` es weitergibt: `cyberbrain install` noch einmal ausführen, das den Matcher aus dieser Liste erweitert; bis dahin meldet der Sitzungsstart den Hook-Eintrag als nicht im Gleichschritt. Unter `enforce` wird zu einem hinzugefügten Werkzeug gefragt, solange der Dienst nicht erreichbar ist.
 
 Der Schlüssel kommt aus `CYBERBRAIN_AGENTGUARD_KEY` oder `~/.config/cyberbrain/agentguard.key`, nie aus dem Store.
 

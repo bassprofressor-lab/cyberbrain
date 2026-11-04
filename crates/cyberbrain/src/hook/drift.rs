@@ -28,13 +28,17 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 /// Everything out of step, one line each, ready for the digest. Empty when nothing is.
-pub(crate) fn report(store_root: &Path, cwd: Option<&Path>, fail_closed: bool) -> Vec<String> {
+pub(crate) fn report(
+    store_root: &Path,
+    cwd: Option<&Path>,
+    gov: &cyberbrain_core::config::GovernanceConfig,
+) -> Vec<String> {
     let env = Env::current();
     let mut lines = Vec::new();
     if install::plugin_installed(&env).is_none() {
         for project in projects(store_root, cwd) {
             let path = project.join(".claude").join("settings.json");
-            if let Some(line) = hook_drift(&path, fail_closed) {
+            if let Some(line) = hook_drift(&path, gov) {
                 lines.push(line);
             }
         }
@@ -85,7 +89,11 @@ fn strip_command(entry: &Value) -> Value {
 /// Compares our entries in one settings file with what this binary would write. A file
 /// without any entry of ours is not drift: the hooks then come from somewhere else (user
 /// settings, a managed file) or are not installed, and neither is this check's business.
-pub(crate) fn hook_drift(path: &Path, fail_closed: bool) -> Option<String> {
+pub(crate) fn hook_drift(
+    path: &Path,
+    gov: &cyberbrain_core::config::GovernanceConfig,
+) -> Option<String> {
+    let fail_closed = gov.mode == cyberbrain_core::config::GovernanceMode::Enforce;
     let text = std::fs::read_to_string(path).ok()?;
     let root: Value = serde_json::from_str(&text).ok()?;
     let hooks = root.get("hooks")?.as_object()?;
@@ -112,7 +120,11 @@ pub(crate) fn hook_drift(path: &Path, fail_closed: bool) -> Option<String> {
         match entry {
             None => missing.push(event.to_string()),
             Some(e) => {
-                let want = expected(args, matcher, fail_closed && event == "PreToolUse");
+                let want = expected(
+                    args,
+                    &install::matcher_for(event, matcher, gov),
+                    fail_closed && event == "PreToolUse",
+                );
                 if strip_command(e) != want {
                     changed.push(event.to_string());
                 }
@@ -237,6 +249,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn gov(enforce: bool) -> cyberbrain_core::config::GovernanceConfig {
+        cyberbrain_core::config::GovernanceConfig {
+            mode: if enforce {
+                cyberbrain_core::config::GovernanceMode::Enforce
+            } else {
+                cyberbrain_core::config::GovernanceMode::Shadow
+            },
+            ..Default::default()
+        }
+    }
+
     fn current_settings(fail_closed: bool) -> Value {
         let mut hooks = serde_json::Map::new();
         for (event, args, matcher) in EVENTS {
@@ -262,9 +285,9 @@ mod tests {
     fn entries_as_install_writes_them_are_not_drift_whatever_the_binary_path() {
         let d = tempfile::tempdir().unwrap();
         let p = write(d.path(), &current_settings(false));
-        assert_eq!(hook_drift(&p, false), None);
+        assert_eq!(hook_drift(&p, &gov(false)), None);
         let p = write(d.path(), &current_settings(true));
-        assert_eq!(hook_drift(&p, true), None);
+        assert_eq!(hook_drift(&p, &gov(true)), None);
     }
 
     #[test]
@@ -274,7 +297,7 @@ mod tests {
         let mut v = current_settings(false);
         v["hooks"].as_object_mut().unwrap().remove("SubagentStart");
         let p = write(d.path(), &v);
-        let line = hook_drift(&p, false).expect("drift");
+        let line = hook_drift(&p, &gov(false)).expect("drift");
         assert!(line.contains("missing SubagentStart"), "{line}");
         assert!(
             line.contains("cyberbrain install --client claude-code"),
@@ -293,7 +316,7 @@ mod tests {
         v["hooks"]["Notification"] =
             json!([{ "matcher": "", "hooks": [], "_managedBy": "cyberbrain" }]);
         let p = write(d.path(), &v);
-        let line = hook_drift(&p, false).expect("drift");
+        let line = hook_drift(&p, &gov(false)).expect("drift");
         assert!(line.contains("different SessionStart"), "{line}");
         assert!(line.contains("no longer used Notification"), "{line}");
         assert!(!line.contains("missing"), "{line}");
@@ -303,21 +326,21 @@ mod tests {
     fn enforce_mode_without_fail_closed_entry_is_drift() {
         let d = tempfile::tempdir().unwrap();
         let p = write(d.path(), &current_settings(false));
-        let line = hook_drift(&p, true).expect("drift");
+        let line = hook_drift(&p, &gov(true)).expect("drift");
         assert!(line.contains("different PreToolUse"), "{line}");
     }
 
     #[test]
     fn a_file_without_our_entries_or_without_a_file_says_nothing() {
         let d = tempfile::tempdir().unwrap();
-        assert_eq!(hook_drift(&d.path().join("none.json"), false), None);
+        assert_eq!(hook_drift(&d.path().join("none.json"), &gov(false)), None);
         let p = write(
             d.path(),
             &json!({ "hooks": { "Stop": [{ "matcher": "", "hooks": [] }] } }),
         );
-        assert_eq!(hook_drift(&p, false), None);
+        assert_eq!(hook_drift(&p, &gov(false)), None);
         let p = write(d.path(), &json!({ "permissions": {} }));
-        assert_eq!(hook_drift(&p, false), None);
+        assert_eq!(hook_drift(&p, &gov(false)), None);
     }
 
     #[test]
@@ -354,5 +377,18 @@ mod tests {
     fn long_command_lines_are_cut_and_control_characters_dropped() {
         let s = short(&format!("cyberbrain\u{1b}[31m {}", "x".repeat(200)));
         assert!(s.chars().count() <= 70 && !s.contains('\u{1b}'), "{s}");
+    }
+
+    /// F3: a store that names more governed tools than its installed matcher hands over is
+    /// out of step, and says so, because those calls never reach the hook.
+    #[test]
+    fn governed_tools_the_matcher_does_not_cover_are_drift() {
+        let d = tempfile::tempdir().unwrap();
+        let p = write(d.path(), &current_settings(false));
+        let mut wider = gov(false);
+        wider.tools.push("mcp__*".into());
+        let line = hook_drift(&p, &wider).expect("drift");
+        assert!(line.contains("PreToolUse"), "{line}");
+        assert_eq!(hook_drift(&p, &gov(false)), None);
     }
 }

@@ -132,7 +132,23 @@ pub struct GovernanceConfig {
     pub mode: GovernanceMode,
     /// How long a tool call waits for the answer before it counts as unreachable.
     pub timeout_ms: u64,
+    /// The tools whose calls are sent (F3, 2026-11-04). A name matches exactly; a name ending
+    /// in `*` matches by prefix, so `mcp__*` is every MCP tool and `mcp__github__*` one
+    /// server's. The default is the list the hook has always sent. A tool added here reaches
+    /// the hook only once `cyberbrain install` has widened the pre-tool-use matcher, which it
+    /// does from this list; until then the session start names the drift.
+    pub tools: Vec<String>,
 }
+
+/// The tools sent to the governance service unless `[governance] tools` says otherwise.
+pub const GOVERNED_TOOLS_DEFAULT: [&str; 6] = [
+    "Bash",
+    "Edit",
+    "Write",
+    "MultiEdit",
+    "NotebookEdit",
+    "WebFetch",
+];
 
 impl Default for GovernanceConfig {
     fn default() -> Self {
@@ -142,8 +158,30 @@ impl Default for GovernanceConfig {
             agent_id: "claude-code".to_string(),
             mode: GovernanceMode::Shadow,
             timeout_ms: 1000,
+            tools: GOVERNED_TOOLS_DEFAULT.map(String::from).to_vec(),
         }
     }
+}
+
+impl GovernanceConfig {
+    /// Whether a call of `tool` is sent.
+    pub fn governs(&self, tool: &str) -> bool {
+        self.tools.iter().any(|t| match t.strip_suffix('*') {
+            Some(prefix) => tool.starts_with(prefix),
+            None => t == tool,
+        })
+    }
+}
+
+/// Whether `entry` is a usable `[governance] tools` entry: letters, digits, `_` and `-`, and at
+/// most one `*`, at the end. Anything else would also be read as a regular expression by the
+/// harness's matcher.
+pub fn valid_tool_pattern(entry: &str) -> bool {
+    let name = entry.strip_suffix('*').unwrap_or(entry);
+    !name.is_empty()
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -728,6 +766,20 @@ impl Config {
             return Err(bad(
                 "rings.resident_cap_tokens",
                 "must be greater than 0".into(),
+            ));
+        }
+        if let Some(t) = self
+            .governance
+            .tools
+            .iter()
+            .find(|t| !valid_tool_pattern(t))
+        {
+            return Err(bad(
+                "governance.tools",
+                format!(
+                    "{t:?} is not a tool name; use letters, digits, `_` and `-`, with an \
+                     optional `*` at the end (`mcp__*`)"
+                ),
             ));
         }
         if self.handoff.max_tokens == 0 {

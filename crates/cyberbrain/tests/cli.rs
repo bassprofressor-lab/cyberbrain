@@ -50,6 +50,9 @@ impl Cb {
         // These tests are the operator at a terminal. Run from inside Claude Code they would
         // otherwise be an agent (`cli_actor` in main.rs) and meet the ring-owner check.
         c.env_remove("CLAUDECODE").env_remove("CYBERBRAIN_AGENT");
+        // And not one by ancestry either (`lineage.rs`): the test process may itself run under
+        // an agent. Honoured by debug builds only.
+        c.env("CYBERBRAIN_TEST_IGNORE_LINEAGE", "1");
         // Each test is one process against a throwaway store: no resident daemon (daemon.rs).
         c.env("CYBERBRAIN_NO_DAEMON", "1");
         c
@@ -4866,4 +4869,172 @@ fn a_process_started_for_a_served_store_inherits_its_resident_refusal() {
         .unwrap();
     assert!(!forget.status.success(), "{}", text(&forget));
     assert!(cb.store.join("notes/r0/at-a-terminal.md").exists());
+}
+
+/// F1, audit 2026-11-04: four ways an agent dropped `CLAUDECODE` that the pre-tool-use text
+/// guard let through, each run from a shell that carries the marker, the way Claude Code's
+/// Bash tool does. Each one wrote ring 0 as the operator; the walk up the process tree
+/// (`lineage.rs`) now finds the agent in the shell above. Calibrated against the old
+/// `cli_actor` first: all four notes stood in `notes/r0`. Linux only, where `/proc` is.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_agent_that_sheds_its_marker_is_still_an_agent() {
+    let cb = Cb::new();
+    let exe = env!("CARGO_BIN_EXE_cyberbrain");
+    let (dir, _) = exe.rsplit_once('/').unwrap();
+    let store = cb.store.display().to_string();
+    let args = |name: &str| {
+        format!("--store {store} write --ring 0 --kind decision --name {name} --body Rule.")
+    };
+    let mut lines = vec![
+        (
+            "quoted-apart",
+            format!(
+                "env -i CYBERBRAIN_NO_DAEMON=1 bash -c '{dir}/cyber''brain {}'",
+                args("quoted-apart")
+            ),
+        ),
+        (
+            "through-a-variable",
+            format!(
+                "X={exe}; env -i CYBERBRAIN_NO_DAEMON=1 $X {}",
+                args("through-a-variable")
+            ),
+        ),
+        (
+            "escaped",
+            format!(
+                "env -i CYBERBRAIN_NO_DAEMON=1 {dir}/cyber\\brain {}",
+                args("escaped")
+            ),
+        ),
+    ];
+    let python = Command::new("python3").arg("--version").output().is_ok();
+    if python {
+        lines.push((
+            "from-python",
+            format!(
+                "python3 -c \"import os; os.environ.pop('CLAUDECODE'); \
+                 os.system('{exe} {}')\"",
+                args("from-python")
+            ),
+        ));
+    }
+    let mut passed_as_operator = Vec::new();
+    for (name, line) in &lines {
+        // The shell is the session's: it carries the marker, and it stays the parent (the
+        // trailing `true` keeps it from exec'ing the command in its place).
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("{line}; true"))
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_CODE_SESSION_ID", "f1f1f1f1-test")
+            .env("CYBERBRAIN_NO_DAEMON", "1")
+            .env_remove("CYBERBRAIN_TEST_IGNORE_LINEAGE")
+            .output()
+            .unwrap();
+        if cb.store.join(format!("notes/r0/{name}.md")).exists()
+            || !String::from_utf8_lossy(&out.stderr).contains("agent:claude-code")
+        {
+            passed_as_operator.push(format!("{line}\n{}", text(&out)));
+        }
+    }
+    assert!(
+        passed_as_operator.is_empty(),
+        "{} of {} wrote ring 0 as the operator:\n{}",
+        passed_as_operator.len(),
+        lines.len(),
+        passed_as_operator.join("\n\n")
+    );
+}
+
+/// F3, 2026-11-04: which tools go to AgentGuard is `[governance] tools`. The default is the
+/// list it always was, so an MCP tool's call and WebSearch stay unsent until a store names
+/// them; named, they are sent and the service's deny is carried out.
+#[test]
+fn the_governed_tools_are_the_stores_to_choose_and_default_to_the_old_list() {
+    let cb = Cb::new();
+    let (port, seen) = fake_governance(DENY);
+    governed(&cb, port, "enforce");
+    let mcp = serde_json::json!({"owner": "x", "repo": "y", "title": "z"});
+    let out = pre_tool_use(&cb, "mcp__github__create_issue", mcp.clone());
+    assert_eq!(decision(&out), None, "{out}");
+    let out = pre_tool_use(&cb, "WebSearch", serde_json::json!({"query": "q"}));
+    assert_eq!(decision(&out), None, "{out}");
+    assert!(
+        seen.lock().unwrap().is_empty(),
+        "nothing was sent by default"
+    );
+
+    let path = cb.store.join("cyberbrain.toml");
+    let toml = std::fs::read_to_string(&path).unwrap().replacen(
+        "timeout_ms = 2000\n",
+        "timeout_ms = 2000\ntools = [\"Bash\", \"Edit\", \"Write\", \"MultiEdit\", \
+         \"NotebookEdit\", \"WebFetch\", \"WebSearch\", \"mcp__github__*\"]\n",
+        1,
+    );
+    std::fs::write(&path, toml).unwrap();
+    // Other inputs than above: the hook stands down for a run identical to one it answered.
+    let mcp = serde_json::json!({"owner": "x", "repo": "y", "title": "second"});
+    let out = pre_tool_use(&cb, "mcp__github__create_issue", mcp);
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    let out = pre_tool_use(&cb, "WebSearch", serde_json::json!({"query": "q2"}));
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    // Another server's tools are not in the pattern.
+    let out = pre_tool_use(&cb, "mcp__slack__post", serde_json::json!({}));
+    assert_eq!(decision(&out), None, "{out}");
+    let sent = seen.lock().unwrap().join("\n");
+    assert!(
+        sent.contains(r#""tool":"mcp__github__create_issue""#),
+        "{sent}"
+    );
+
+    // A pattern the harness would read as something else is refused at load.
+    let toml = std::fs::read_to_string(&path).unwrap().replacen(
+        "\"mcp__github__*\"",
+        "\"mcp__(github|slack)\"",
+        1,
+    );
+    std::fs::write(&path, toml).unwrap();
+    let (_, code, err) = cb.json(&["status"]);
+    assert_ne!(code, 0, "{err}");
+    assert!(err.contains("governance.tools"), "{err}");
+}
+
+/// F4, 2026-11-04: `doctor` names a note dated ahead of this clock; it ranks as newer than it
+/// is and nothing else says so.
+#[test]
+fn doctor_names_a_note_dated_in_the_future() {
+    let cb = Cb::new();
+    cb.write("2", "from-the-future", "Plan.");
+    cb.write("2", "today", "Plan.");
+    let p = cb.note_path("2", "from-the-future");
+    let text = std::fs::read_to_string(&p).unwrap();
+    let edited: String = text
+        .lines()
+        .map(|l| {
+            if l.starts_with("updated:") {
+                "updated: 2099-01-01T00:00:00Z".to_string()
+            } else {
+                l.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    std::fs::write(&p, edited).unwrap();
+    cb.ok(&["scan"]);
+    let d = cb.ok(&["doctor"]);
+    let future: Vec<&Value> = d["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| f["check"] == "dates in the future")
+        .collect();
+    assert_eq!(future.len(), 1, "{d}");
+    let detail = future[0]["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("from-the-future") && detail.contains("2099-01-01"),
+        "{d}"
+    );
 }

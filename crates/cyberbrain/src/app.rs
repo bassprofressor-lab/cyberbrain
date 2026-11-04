@@ -4092,6 +4092,34 @@ impl App {
             );
         }
 
+        // F4, 2026-11-04: a date ahead of this clock makes a note look newer than what was
+        // written after it: recall's recency, "newer notes link here", the handoff shown at
+        // session start. It comes from a hand edit or a machine whose clock runs ahead, and
+        // nothing else names it. Five minutes of clock difference are not a finding.
+        checks.push("dates in the future");
+        let horizon = jiff::Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_secs(300))
+            .unwrap_or_else(|_| jiff::Timestamp::now());
+        for e in &listing.entries {
+            let Ok(n) = self.store.read_path(&e.path) else {
+                continue; // reported above as unreadable
+            };
+            for (field, at) in [("updated", n.front.updated), ("created", n.front.created)] {
+                if at > horizon {
+                    push(
+                        "warning",
+                        "dates in the future",
+                        format!(
+                            "{}: `{field}` is {} UTC, ahead of this clock; recall ranks it as \
+                             newer than it is. Correct the head or the clock",
+                            Slash(&e.path),
+                            at.strftime("%Y-%m-%d %H:%M")
+                        ),
+                    );
+                }
+            }
+        }
+
         // Two different facts, and lumping them together hides the actionable one. A link
         // to a name that could exist is intent: somebody will write that note. A link to a
         // name that can never be a note — underscores, capitals, a path — is a typo or a
@@ -4450,11 +4478,7 @@ impl App {
             resident_tokens: self.store.resident_tokens()?,
             resident_cap: self.store.resident_cap(),
             daemon: crate::daemon::state(&self.root),
-            drift: crate::hook::drift::report(
-                &self.root,
-                None,
-                self.config.governance.mode == cyberbrain_core::config::GovernanceMode::Enforce,
-            ),
+            drift: crate::hook::drift::report(&self.root, None, &self.config.governance),
             index_stale: not_indexed + changed + gone > 0,
             index,
             audit: AuditSummary {

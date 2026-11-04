@@ -504,10 +504,12 @@ fn digest(
     // Installation drift (0.9): hook entries from an older install, processes on a replaced
     // binary. The payload's directory first: the two halves of session start may run at
     // once, and the second cannot count on the state the first is still writing.
-    let fail_closed =
-        app.config().governance.mode == cyberbrain_core::config::GovernanceMode::Enforce;
     let cwd = cwd.or_else(|| state.and_then(|s| s.cwd.as_deref()).map(Path::new));
-    lines.extend(super::drift::report(app.root(), cwd, fail_closed));
+    lines.extend(super::drift::report(
+        app.root(),
+        cwd,
+        &app.config().governance,
+    ));
     if !app.policy().status().pii_scan_active {
         lines.push(format!(
             "PII scan on writes is off (profile {})",

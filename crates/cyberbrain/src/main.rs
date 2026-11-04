@@ -19,6 +19,7 @@ mod hub;
 mod identity;
 mod import;
 mod install;
+mod lineage;
 mod mcp;
 mod render;
 mod serve;
@@ -140,7 +141,12 @@ fn write_exit(o: &WriteOutcome) -> Result<i32> {
 /// against an agent that sets out to lie: it controls its own environment. Unsetting the
 /// variable next to a `cyberbrain` call is what the pre-tool-use hook refuses for Bash.
 fn cli_actor() -> Actor {
-    agent_from_env(|k| std::env::var(k).ok()).unwrap_or(Actor::Operator)
+    // The environment first; then, on Linux, the processes that started this one, because an
+    // agent can drop the marker from its own environment but not from its ancestors' (F1,
+    // audit 2026-11-04; `lineage.rs` says what that does not cover).
+    agent_from_env(|k| std::env::var(k).ok())
+        .or_else(lineage::agent_above_self)
+        .unwrap_or(Actor::Operator)
 }
 
 fn agent_from_env(var: impl Fn(&str) -> Option<String>) -> Option<Actor> {

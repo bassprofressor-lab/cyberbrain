@@ -660,3 +660,22 @@ fn settings_are_replaced_whole_and_a_link_stays_a_link() {
     );
     assert!(fs::read_to_string(&real).unwrap().contains("ours"));
 }
+
+/// F3, 2026-11-04: with the default `[governance] tools` the matcher is the one every
+/// installation already has, so nothing reads as drift; extra entries widen it.
+#[test]
+fn the_pre_tool_matcher_widens_only_for_extra_governed_tools() {
+    let mut gov = cyberbrain_core::config::GovernanceConfig::default();
+    assert_eq!(super::pre_tool_matcher(&gov), super::PRE_TOOL_MATCHER);
+    gov.tools.push("mcp__*".into());
+    gov.tools.push("WebSearch".into());
+    gov.tools.push("Bash".into());
+    assert_eq!(
+        super::pre_tool_matcher(&gov),
+        format!("{}|mcp__.*|WebSearch", super::PRE_TOOL_MATCHER)
+    );
+    assert_eq!(
+        super::matcher_for("PostToolUse", "Edit|Write", &gov),
+        "Edit|Write"
+    );
+}

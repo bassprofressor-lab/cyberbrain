@@ -147,6 +147,42 @@ const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// WebFetch since the governance check (2026-09-25, `hook::governance::TOOLS`).
 const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|WebFetch";
 
+/// The pre-tool-use matcher for a store whose `[governance] tools` may name more than the
+/// default (F3, 2026-11-04): the default, plus each extra entry as a pattern (`mcp__*` →
+/// `mcp__.*`). With the default list it is exactly [`PRE_TOOL_MATCHER`], so an installation
+/// that does not use the setting writes, and is compared against, what it always was.
+pub(crate) fn pre_tool_matcher(gov: &cyberbrain_core::config::GovernanceConfig) -> String {
+    let mut m = PRE_TOOL_MATCHER.to_string();
+    let listed: Vec<&str> = PRE_TOOL_MATCHER.split('|').collect();
+    for t in &gov.tools {
+        if !cyberbrain_core::config::valid_tool_pattern(t) || listed.contains(&t.as_str()) {
+            continue;
+        }
+        let pattern = match t.strip_suffix('*') {
+            Some(prefix) => format!("{prefix}.*"),
+            None => t.clone(),
+        };
+        if !m.split('|').any(|p| p == pattern) {
+            m.push('|');
+            m.push_str(&pattern);
+        }
+    }
+    m
+}
+
+/// The matcher `install` writes for `event`, given the store's governance settings.
+pub(crate) fn matcher_for(
+    event: &str,
+    matcher: &str,
+    gov: &cyberbrain_core::config::GovernanceConfig,
+) -> String {
+    if event == "PreToolUse" {
+        pre_tool_matcher(gov)
+    } else {
+        matcher.to_string()
+    }
+}
+
 pub fn run(opts: &Options) -> Result<Report> {
     let binary = current_binary();
     let store = absolute(&opts.store);
@@ -254,9 +290,10 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
     // closed (0.8.2): a hook that cannot start or times out blocks the tool call instead of
     // letting it through. Shadow mode never stops anything, and a missing binary there should
     // not stop every edit either. An unreadable store config counts as shadow.
-    let fail_closed = cyberbrain_core::config::Config::load(&opts.store)
-        .map(|c| c.governance.mode == cyberbrain_core::config::GovernanceMode::Enforce)
-        .unwrap_or(false);
+    let gov = cyberbrain_core::config::Config::load(&opts.store)
+        .map(|c| c.governance)
+        .unwrap_or_default();
+    let fail_closed = gov.mode == cyberbrain_core::config::GovernanceMode::Enforce;
     let change = edit(
         &path,
         "the hooks are per project, so this is the project you named",
@@ -277,8 +314,12 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
                         touched |= had;
                         continue;
                     }
-                    let entry =
-                        hook_entry(binary, matcher, arg, fail_closed && event == "PreToolUse");
+                    let entry = hook_entry(
+                        binary,
+                        &matcher_for(event, matcher, &gov),
+                        arg,
+                        fail_closed && event == "PreToolUse",
+                    );
                     changed |= before.as_ref() != Some(&entry);
                     touched = true;
                     list.push(entry);

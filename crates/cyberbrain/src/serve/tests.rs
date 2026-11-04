@@ -70,9 +70,26 @@ impl Fx {
 
     /// A fixture whose `POST /command` runs the real `cyberbrain` this test run built,
     /// rather than the test harness that `current_exe()` would name here.
+    ///
+    /// The child is the operator on purpose, whoever runs the suite (F5): from inside Claude
+    /// Code it would otherwise inherit `CLAUDECODE` and be an agent, and a test of what the
+    /// operator may do would pass for the wrong reason.
     fn with_cli() -> Fx {
+        Fx::with_cli_env(operator_env())
+    }
+
+    /// [`with_cli`](Self::with_cli), with the child an agent on purpose.
+    fn with_cli_as_agent() -> Fx {
+        let mut env = operator_env();
+        env.push(("CLAUDECODE".into(), Some("1".into())));
+        Fx::with_cli_env(env)
+    }
+
+    fn with_cli_env(env: Vec<(String, Option<String>)>) -> Fx {
         let exe = cli_binary();
-        Fx::with_router(move |app| router_with(app, exe.clone(), None, ours()))
+        Fx::with_router(move |app| {
+            crate::serve::router_with_child_env(app, exe.clone(), None, ours(), env)
+        })
     }
 
     /// A fixture whose store embeds through a local Ollama. Nothing is contacted: the
@@ -1541,6 +1558,19 @@ async fn a_request_under_another_name_is_refused_on_every_route() {
 
 /// The binary this test run built, found the way the desktop launcher's tests find it:
 /// `target/<profile>/deps/<test binary>` sits two levels under `target/<profile>`.
+/// The environment of a child that is the operator at a terminal: no agent marker, and the
+/// walk up the process tree switched off (debug builds only), because the test process may
+/// itself run under an agent.
+fn operator_env() -> Vec<(String, Option<String>)> {
+    vec![
+        ("CLAUDECODE".into(), None),
+        ("CLAUDE_CODE_SESSION_ID".into(), None),
+        ("CYBERBRAIN_AGENT".into(), None),
+        (crate::lineage::TEST_SWITCH.into(), Some("1".into())),
+        ("CYBERBRAIN_NO_DAEMON".into(), Some("1".into())),
+    ]
+}
+
 fn cli_binary() -> PathBuf {
     let mut dir = std::env::current_exe().expect("test binary path");
     dir.pop();
@@ -2085,6 +2115,23 @@ async fn a_served_store_does_not_write_rings_zero_and_one_through_the_command_li
         )
         .await;
     assert_eq!(v["exit_code"], 0, "{v:#}");
+}
+
+/// The same line from a child that is an agent: refused by the ring owner rule, whatever the
+/// served store allows. The pair of tests is what tells the two refusals apart.
+#[tokio::test]
+async fn an_agents_command_line_does_not_write_ring_zero_either() {
+    let fx = Fx::with_cli_as_agent();
+    let (_, v) = fx
+        .call(
+            Method::POST,
+            "/api/v1/command",
+            Some(json!({ "line": "write --ring 0 --kind decision --name r0-agent --body 'x'" })),
+        )
+        .await;
+    assert_ne!(v["exit_code"], 0, "{v:#}");
+    assert!(v["stderr"].as_str().unwrap().contains("agent:"), "{v:#}");
+    assert!(!fx.store.join("notes/r0/r0-agent.md").exists());
 }
 
 /// C5, 2026-10-03: the review screen's routes. An agent's untrusted write waits; the list

@@ -16,10 +16,12 @@ const BIN = resolve(import.meta.dirname, "../../target/debug/cyberbrain");
  * The seeding CLI and the server are the operator at a terminal. Run from inside an agent
  * harness they would otherwise be an agent (`cli_actor` in main.rs) and meet the ring-owner
  * check on a ring 0 seed; and a resident daemon has no place in a throwaway store. The same
- * as the Rust CLI tests' harness.
+ * as the Rust CLI tests' harness. `CYBERBRAIN_TEST_IGNORE_LINEAGE` stops the debug binary
+ * from finding the agent further up the process tree (`lineage.rs`); a release build
+ * ignores it.
  */
 const ENV = (() => {
-  const e = { ...process.env, CYBERBRAIN_NO_DAEMON: "1" };
+  const e = { ...process.env, CYBERBRAIN_NO_DAEMON: "1", CYBERBRAIN_TEST_IGNORE_LINEAGE: "1" };
   delete e.CLAUDECODE;
   delete e.CYBERBRAIN_AGENT;
   return e;
