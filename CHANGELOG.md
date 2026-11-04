@@ -12,28 +12,59 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-11-04
+
+A security release. Upgrade every installation that runs `cyberbrain serve`, which includes
+every desktop installation.
+
 ### Security
 
-- **`serve`'s command line keeps the store's refusal of rings 0 and 1.** A served store does
-  not write or erase rings 0 and 1 unless started with `--allow-resident-writes`, because any
-  program on the machine reaches it without credentials. `POST /api/v1/command` hands the
-  typed line to a fresh process, and that process was the operator with nothing refused:
-  `write --ring 0`, `forget` of a ring 0 note and `review --accept` of a ring 0 proposal went
-  through the window after all. The process now inherits the refusal and answers without the
-  daemon.
+- **`serve` no longer writes or erases rings 0 and 1 through its command line.** A served
+  store refuses resident writes over HTTP unless started with `--allow-resident-writes`,
+  because any program on the machine reaches it without credentials. `POST /api/v1/command`
+  handed the typed line to a fresh process, and that process was the operator with nothing
+  refused: any local program, an agent's `curl` included, could run `write --ring 0`,
+  `forget` of a ring 0 note or `review --accept` of a ring 0 proposal, recorded as the
+  operator. A ring 0 note written that way counted as attested and was injected into every
+  later session and subagent. The desktop app always starts `serve` and was affected. The
+  process now inherits the refusal and answers without the daemon. Found in the audit of
+  2026-11-04.
+- **An agent further up the process tree is an agent** (Linux). The CLI and the daemon told an
+  agent by the marker in its own environment, which an agent controls: `env -i bash -c
+  'cyber''brain …'`, `X=cyberbrain; env -i $X …`, `cyber\brain` and a Python
+  `os.environ.pop` passed the pre-tool-use text guard and wrote ring 0 as the operator. Both
+  now also walk up `/proc`: an ancestor whose start-time environment carries the marker, or
+  Claude Code itself, makes the process an agent. About 30 to 65 µs per CLI command; the
+  hooks do not run it and no context grows. Not covered, and documented: a process that left
+  the tree (`setsid -f`, a double fork, `systemd-run`, cron) and work handed to something the
+  operator already runs outside the session. macOS and Windows keep the old rule. Debug
+  builds skip the walk when `CYBERBRAIN_TEST_IGNORE_LINEAGE` is set, for the test harnesses;
+  release builds ignore it.
+
+### Added
+
+- **`[governance] tools`** chooses which tool calls go to AgentGuard: exact names, or a prefix
+  with `*` (`mcp__*`, `mcp__github__*`, `WebSearch`). The default is the six tools as before,
+  so nothing changes unless a store names more. `cyberbrain install` widens the pre-tool-use
+  matcher from the list, and session start reports the hook entry as out of step until it
+  has. An entry that is not a tool name is refused when the configuration loads.
+- **`doctor` names notes dated in the future** (`updated` or `created` more than five minutes
+  ahead of this clock). They rank as newer than they are, and nothing else said so.
 
 ### Fixed
 
 - **A handoff dated in the future no longer passes for the newest, or for fresh.** A note whose
-  `updated` lay ahead of the clock (a hand edit, a machine whose clock runs ahead) stayed the
-  handoff shown at session start until that date came round, labelled "0 min ago". A
-  correctly dated handoff now comes first, and one alone says its date is wrong. Five minutes
-  of clock difference are tolerated.
+  `updated` lay ahead of the clock stayed the handoff shown at session start until that date
+  came round, labelled "0 min ago". A correctly dated handoff now comes first, and one alone
+  says its date is wrong.
 
 ### Changed
 
 - Bundled SQLite 3.53.2 → 3.54.1 (rusqlite 0.41), and the semver-compatible dependency
   updates of 2026-11-04.
+- The command-line children of `serve` in the test suite are the operator or an agent on
+  purpose. Run from inside Claude Code, an inherited `CLAUDECODE` had made the test for the
+  first security fix above pass on the broken code.
 
 ## [0.9.0] — 2026-11-01
 
@@ -2183,7 +2214,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.5...v0.9.0
 [0.8.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.4...v0.8.5
 [0.8.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.8.3...v0.8.4
