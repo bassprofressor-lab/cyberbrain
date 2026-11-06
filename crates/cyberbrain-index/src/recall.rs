@@ -61,6 +61,54 @@ impl Default for RecallOptions {
     }
 }
 
+/// What a note is, as far as deciding who may see it goes. Handed to [`Visibility`].
+#[derive(Debug, Clone, Copy)]
+pub struct NoteFacts<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub ring: Ring,
+    pub bereich: Option<&'a str>,
+    pub tags: &'a [String],
+}
+
+/// Who may see which note, decided per note **before** anything is ranked.
+///
+/// A note the reader may not see contributes nothing to a recall: no hit, no rank it would
+/// have taken from a visible block, no place in a duplicate group, no count in a coverage
+/// caveat, no name as a successor or a newer link. Filtering after the top `k` instead
+/// would let hidden blocks push visible ones out of the candidates and come back as an
+/// empty answer that says, by being empty, that something is there.
+///
+/// One thing it cannot remove: BM25 weighs a term by how many blocks in the whole index
+/// contain it. Hidden blocks therefore still shift lexical scores, and for a query of
+/// several terms possibly the order among visible blocks, by corpus statistics only. Where
+/// that matters, the separation has to be a separate store.
+///
+/// The free build admits everything ([`Everyone`]); a build with access rules supplies its
+/// own and calls [`Index::recall_visible`].
+pub trait Visibility: Send + Sync {
+    fn admits(&self, note: &NoteFacts<'_>) -> bool;
+
+    /// True when [`admits`](Self::admits) is true for every note. Recall then skips the
+    /// filter and its cost entirely, which is what keeps the free build's recall unchanged.
+    fn admits_everything(&self) -> bool {
+        false
+    }
+}
+
+/// Every note is visible. The default for [`Index::recall`].
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Everyone;
+
+impl Visibility for Everyone {
+    fn admits(&self, _: &NoteFacts<'_>) -> bool {
+        true
+    }
+    fn admits_everything(&self) -> bool {
+        true
+    }
+}
+
 /// `AND n.bereich = ?` for a bereich filter, `AND n.bereich IN (…)` for a client's scope,
 /// numbered after the arguments already bound. An empty scope admits nothing.
 fn bereich_clause(
@@ -135,7 +183,27 @@ impl Index {
         embedder: Option<&dyn Embedder>,
         opts: &RecallOptions,
     ) -> Result<RecallResult> {
+        self.recall_visible(query, embedder, opts, &Everyone)
+    }
+
+    /// [`recall`](Self::recall) for a reader who may see only what `visibility` admits.
+    /// See [`Visibility`] for what is and is not hidden.
+    pub fn recall_visible(
+        &self,
+        query: &str,
+        embedder: Option<&dyn Embedder>,
+        opts: &RecallOptions,
+        visibility: &dyn Visibility,
+    ) -> Result<RecallResult> {
         let mut caveats: Vec<String> = Vec::new();
+
+        // 00. Visibility, resolved once to the citations and note names it admits. `None`
+        // when everything is visible, so the free build does no work here at all.
+        let seen: Option<Seen> = if visibility.admits_everything() {
+            None
+        } else {
+            Some(self.resolve_visibility(visibility)?)
+        };
 
         // 0. The bereich filter, resolved once to the citations it admits. The lexical half
         // filters in SQL; the semantic half has no SQL to join, so it tests membership here.
@@ -171,6 +239,11 @@ impl Index {
                 }
                 Some(set)
             };
+        let allowed: Option<std::collections::HashSet<String>> = match (allowed, &seen) {
+            (a, None) => a,
+            (None, Some(v)) => Some(v.citations.clone()),
+            (Some(a), Some(v)) => Some(a.intersection(&v.citations).cloned().collect()),
+        };
 
         // 1. Lexical.
         let lexical: Vec<String> = match fts_query(query) {
@@ -185,6 +258,7 @@ impl Index {
                 opts.ring,
                 opts.bereich.as_deref(),
                 opts.scope.as_deref(),
+                seen.as_ref().map(|v| &v.citations),
             )?,
         };
 
@@ -201,7 +275,10 @@ impl Index {
                 e,
                 opts.k_sem,
                 opts.ring,
-                allowed.as_ref(),
+                Within {
+                    allowed: allowed.as_ref(),
+                    visible: seen.as_ref().map(|v| &v.citations),
+                },
                 opts.min_cosine,
             ) {
                 Ok((hits, coverage)) => {
@@ -241,7 +318,7 @@ impl Index {
         // A client with a scope learns that a hit is replaced, not the name of a successor
         // outside its bereiche: the rule `newer_links` follows below. The hit is demoted
         // all the same, and the caveats say why without naming anything.
-        let visible_names: Option<std::collections::HashSet<String>> = match &opts.scope {
+        let scope_names: Option<std::collections::HashSet<String>> = match &opts.scope {
             None => None,
             Some(sc) => {
                 let mut sql = String::from("SELECT n.name FROM notes n WHERE 1=1");
@@ -258,6 +335,11 @@ impl Index {
                 }
                 Some(set)
             }
+        };
+        let visible_names: Option<std::collections::HashSet<String>> = match (scope_names, &seen) {
+            (n, None) => n,
+            (None, Some(v)) => Some(v.names.clone()),
+            (Some(n), Some(v)) => Some(n.intersection(&v.names).cloned().collect()),
         };
         let mut successor_hidden = 0usize;
         let mut outdated: HashMap<String, Outdated> = HashMap::new();
@@ -303,10 +385,17 @@ impl Index {
             .collect();
         ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         if successor_hidden > 0 {
-            caveats.push(format!(
-                "{successor_hidden} candidate(s) demoted as replaced by a note outside this \
-                 client's bereiche, which is not named"
-            ));
+            caveats.push(if seen.is_some() {
+                format!(
+                    "{successor_hidden} candidate(s) demoted as replaced by a note this reader \
+                     may not see, which is not named"
+                )
+            } else {
+                format!(
+                    "{successor_hidden} candidate(s) demoted as replaced by a note outside this \
+                     client's bereiche, which is not named"
+                )
+            });
         }
 
         // 5. Materialise every candidate: collapsing duplicates needs the text of each, and
@@ -319,7 +408,7 @@ impl Index {
         // where it used to be. A candidate the filter now rejects is left out quietly.
         let filtered = opts.bereich.is_some() || opts.scope.is_some();
         let mut sql = String::from(
-            "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags, b.locator FROM blocks b \
+            "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags, b.locator, n.bereich FROM blocks b \
              JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
         );
         let mut filter_args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(String::new())];
@@ -344,9 +433,10 @@ impl Index {
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
                     r.get::<_, Option<String>>(6)?,
+                    r.get::<_, Option<String>>(7)?,
                 ))
             });
-            let (id, name, ring, text, updated, tags, locator) = match row {
+            let (id, name, ring, text, updated, tags, locator, bereich) = match row {
                 Ok(row) => row,
                 Err(rusqlite::Error::QueryReturnedNoRows) if filtered => continue,
                 Err(e) => {
@@ -356,6 +446,19 @@ impl Index {
                 }
             };
             let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+            // Visibility is asked again for the same reason as the bereich: the note may
+            // have changed since it was resolved at the start.
+            if seen.is_some()
+                && !visibility.admits(&NoteFacts {
+                    id: &id,
+                    name: &name,
+                    ring: Ring::try_from(ring as u8)?,
+                    bereich: bereich.as_deref(),
+                    tags: &tags,
+                })
+            {
+                continue;
+            }
             cands.push(Candidate {
                 key: dedup_key(&text),
                 hit: Hit {
@@ -396,6 +499,10 @@ impl Index {
         if opts.scope.is_none() {
             for h in &mut hits {
                 h.newer_links = self.newer_links_to(h)?;
+                // Nor the names of linking notes this reader may not see.
+                if let Some(v) = &seen {
+                    h.newer_links.retain(|l| v.names.contains(&l.name));
+                }
             }
         }
         if resident_left_out > 0 {
@@ -410,6 +517,59 @@ impl Index {
             conflicts: Vec::new(),
             caveats,
         })
+    }
+
+    /// The citations and note names `visibility` admits, asking it once per note.
+    fn resolve_visibility(&self, visibility: &dyn Visibility) -> Result<Seen> {
+        let mut admitted_ids = std::collections::HashSet::new();
+        let mut names = std::collections::HashSet::new();
+        {
+            let mut stmt = self
+                .conn
+                .prepare_cached("SELECT id, name, ring, bereich, tags FROM notes")
+                .ix()?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, i64>(2)?,
+                        r.get::<_, Option<String>>(3)?,
+                        r.get::<_, String>(4)?,
+                    ))
+                })
+                .ix()?;
+            for row in rows {
+                let (id, name, ring, bereich, tags) = row.ix()?;
+                let tags: Vec<String> = serde_json::from_str(&tags).unwrap_or_default();
+                let facts = NoteFacts {
+                    id: &id,
+                    name: &name,
+                    ring: Ring::try_from(ring as u8)?,
+                    bereich: bereich.as_deref(),
+                    tags: &tags,
+                };
+                if visibility.admits(&facts) {
+                    names.insert(name);
+                    admitted_ids.insert(id);
+                }
+            }
+        }
+        let mut citations = std::collections::HashSet::new();
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT citation, note_id FROM blocks")
+            .ix()?;
+        let rows = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            .ix()?;
+        for row in rows {
+            let (cit, note_id) = row.ix()?;
+            if admitted_ids.contains(&note_id) {
+                citations.insert(cit);
+            }
+        }
+        Ok(Seen { citations, names })
     }
 
     /// Notes updated after `hit`'s that link to its note, newest first, at most three.
@@ -551,6 +711,7 @@ impl Index {
         ring: Option<Ring>,
         bereich: Option<&str>,
         scope: Option<&[String]>,
+        visible: Option<&std::collections::HashSet<String>>,
     ) -> Result<Vec<String>> {
         if k == 0 {
             return Ok(Vec::new());
@@ -580,16 +741,29 @@ impl Index {
             args.push(Box::new(r.as_u8() as i64));
         }
         bereich_clause(&mut sql, &mut args, bereich, scope);
-        sql.push_str(" ORDER BY rank, f.citation LIMIT ?");
-        sql.push_str(&(args.len() + 1).to_string());
-        args.push(Box::new(k as i64));
+        sql.push_str(" ORDER BY rank, f.citation");
+        // Visibility is a Rust predicate, not SQL, so with one the LIMIT moves out of the
+        // query: the first `k` *visible* matches are taken, never the first `k` matches
+        // filtered afterwards (see `Visibility`).
+        if visible.is_none() {
+            sql.push_str(" LIMIT ?");
+            sql.push_str(&(args.len() + 1).to_string());
+            args.push(Box::new(k as i64));
+        }
         let mut stmt = self.conn.prepare_cached(&sql).ix()?;
         let params: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
         let rows = stmt
             .query_map(params.as_slice(), |r| r.get::<_, String>(0))
             .ix()?;
         for r in rows {
-            out.push(r.ix()?);
+            let cit = r.ix()?;
+            if visible.is_some_and(|v| !v.contains(&cit)) {
+                continue;
+            }
+            out.push(cit);
+            if out.len() == k {
+                break;
+            }
         }
         Ok(out)
     }
@@ -602,9 +776,10 @@ impl Index {
         embedder: &dyn Embedder,
         k: usize,
         ring: Option<Ring>,
-        allowed: Option<&std::collections::HashSet<String>>,
+        within: Within<'_>,
         min_cosine: f32,
     ) -> std::result::Result<(Vec<String>, Option<String>), SemanticSkipped> {
+        let Within { allowed, visible } = within;
         let fatal = |e: Error| SemanticSkipped(format!("semantic search failed: {e}"));
         if let Err(e) = self.check_embedder(embedder) {
             return Err(SemanticSkipped(format!("semantic search disabled: {e}")));
@@ -627,14 +802,24 @@ impl Index {
         }
         let cache = cache.as_ref().expect("just loaded");
 
-        let block_count: i64 = self
-            .conn
-            .query_row("SELECT count(*) FROM blocks", [], |r| r.get(0))
-            .map_err(|e| SemanticSkipped(format!("semantic search failed: {e}")))?;
-        let coverage = if cache.len() < block_count as usize {
+        // Counted over what this reader may see: the size of the whole index is itself
+        // something a hidden note contributes to.
+        let (covered, block_count) = match visible {
+            None => {
+                let n: i64 = self
+                    .conn
+                    .query_row("SELECT count(*) FROM blocks", [], |r| r.get(0))
+                    .map_err(|e| SemanticSkipped(format!("semantic search failed: {e}")))?;
+                (cache.len(), n as usize)
+            }
+            Some(v) => (
+                cache.citations.iter().filter(|c| v.contains(*c)).count(),
+                v.len(),
+            ),
+        };
+        let coverage = if covered < block_count {
             Some(format!(
-                "semantic search covered {} of {block_count} blocks; the rest have no vector",
-                cache.len()
+                "semantic search covered {covered} of {block_count} blocks; the rest have no vector"
             ))
         } else {
             None
@@ -787,6 +972,20 @@ fn collapse_duplicates(cands: Vec<Candidate>) -> Vec<Hit> {
             Some(h)
         })
         .collect()
+}
+
+/// The citations the semantic half may return (`allowed`: bereich and visibility together)
+/// and those its coverage is counted over (`visible`: visibility alone).
+#[derive(Clone, Copy)]
+struct Within<'a> {
+    allowed: Option<&'a std::collections::HashSet<String>>,
+    visible: Option<&'a std::collections::HashSet<String>>,
+}
+
+/// What a [`Visibility`] admits, resolved once per recall.
+struct Seen {
+    citations: std::collections::HashSet<String>,
+    names: std::collections::HashSet<String>,
 }
 
 /// Why the semantic half did not run. Always becomes a caveat, never an error.

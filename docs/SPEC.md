@@ -362,6 +362,16 @@ tool whose best mode is opt-in will be used in its worst mode.
    any of these reasons is scored ×0.5 once, however many apply, and is never hidden. Notes
    are not filtered by when they were written: a September note may say what held in August.
 
+**Visibility.** A build with access rules recalls through `Index::recall_visible` and a
+`Visibility` that admits or refuses each note. It is resolved before step 1: a refused note
+yields no candidate in either half, takes no rank, joins no duplicate group, is not counted
+in a coverage caveat and is not named as a successor or a newer link. The lexical half takes
+the first `k_lex` *admitted* matches, not the first `k_lex` matches filtered afterwards. What
+it cannot remove is BM25's corpus statistics: refused blocks still count towards a term's
+document frequency, so they can shift lexical scores and, for a query of several terms, the
+order among admitted blocks. Separation that must hold against that is a separate store.
+`recall` is `recall_visible` with a visibility that admits everything and skips the filter.
+
 **Vector search is a linear SIMD scan.** At the expected corpus size (tens of thousands of
 blocks, a few tens of MB of f32) a flat scan is single-digit milliseconds and cannot go stale.
 An ANN index (`hnsw_rs`) is introduced only when a real corpus exceeds ~500k blocks, and then

@@ -28,6 +28,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   is the product because the file stays authoritative: a rebuilt index finds the same blocks
   and locators. `MarkdownSource` is the reference implementation; the `import` command is
   unchanged. A document that cannot be read is a new user error, code `document`, exit 1.
+- **`Index::recall_visible`, for builds where not everyone may see every note.** A
+  `Visibility` decides per note, before anything is ranked: a refused note yields no hit,
+  takes no rank, joins no duplicate group, does not count in the coverage caveat and is not
+  named as a successor or a newer link. BM25 corpus statistics are the one thing it cannot
+  remove (SPEC §7). `recall` itself is unchanged and skips the filter.
 
 ## [0.9.1] — 2026-11-04
 

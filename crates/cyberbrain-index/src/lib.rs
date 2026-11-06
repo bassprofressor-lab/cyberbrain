@@ -37,7 +37,9 @@ pub use index::{
     EmbeddingProfile, Erased, Erasure, Index, IndexStats, Link, NoteRecord, NoteStamp,
     ProfileChange, Scrubbed, SharedBlocks, UpsertOutcome, WalCheckpoint, content_hash,
 };
-pub use recall::{DEDUP_MIN_CHARS, RRF_K, RecallOptions, dedup_key};
+pub use recall::{
+    DEDUP_MIN_CHARS, Everyone, NoteFacts, RRF_K, RecallOptions, Visibility, dedup_key,
+};
 pub use schema::SCHEMA_VERSION;
 
 /// Maps a `rusqlite` failure onto the tree-wide error type. `rusqlite::Error` is foreign to

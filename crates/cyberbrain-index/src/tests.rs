@@ -326,6 +326,203 @@ fn a_locator_travels_from_the_body_to_the_hit() {
     assert!(!json.contains("locator"), "absent, not null: {json}");
 }
 
+// ----- visibility ---------------------------------------------------------------------------
+
+/// Hides every note whose name starts with `geheim`.
+struct NoSecrets;
+impl crate::Visibility for NoSecrets {
+    fn admits(&self, n: &crate::NoteFacts<'_>) -> bool {
+        !n.name.starts_with("geheim")
+    }
+}
+
+/// Visible notes of equal length that say the query word three, two and one times, and
+/// hidden notes that say it more often, so that they would rank first if they took part.
+/// One hidden note links to a visible one and is newer, so it would show as a newer link.
+fn visibility_corpus() -> Vec<Note> {
+    let mut later = note(
+        "geheim-verweis",
+        Ring::Knowledge,
+        "kosten kosten kosten kosten siehe akte",
+        &["akte-drei"],
+    );
+    later.front.updated = "2026-10-01T00:00:00Z".parse().unwrap();
+    vec![
+        note(
+            "akte-drei",
+            Ring::Knowledge,
+            "kosten kosten kosten miete",
+            &[],
+        ),
+        note(
+            "akte-zwei",
+            Ring::Knowledge,
+            "kosten kosten miete miete",
+            &[],
+        ),
+        note(
+            "akte-eins",
+            Ring::Knowledge,
+            "kosten miete miete miete",
+            &[],
+        ),
+        note(
+            "geheim-eins",
+            Ring::Knowledge,
+            "kosten kosten kosten kosten",
+            &[],
+        ),
+        note(
+            "geheim-zwei",
+            Ring::Knowledge,
+            "kosten kosten kosten kosten kosten",
+            &[],
+        ),
+        later,
+    ]
+}
+
+fn index_of(e: &HashEmbedder, notes: &[Note]) -> Index {
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(e)).unwrap();
+    for n in notes {
+        put(&mut ix, e, n);
+    }
+    ix
+}
+
+/// The recall a reader gets through a filter is the recall of a store in which the hidden
+/// notes do not exist: same hits, same order, same count, same caveats, no hidden name.
+/// k is small on purpose: filtering after the top k would leave the visible notes out.
+#[test]
+fn a_hidden_note_leaves_no_trace_in_recall() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let all = visibility_corpus();
+    let visible: Vec<Note> = all
+        .iter()
+        .filter(|n| !n.front.name.starts_with("geheim"))
+        .cloned()
+        .collect();
+    let full = index_of(&e, &all);
+    let without = index_of(&e, &visible);
+    let opts = RecallOptions {
+        n: 3,
+        k_lex: 3,
+        k_sem: 3,
+        ..RecallOptions::default()
+    };
+    for (q, emb) in [
+        ("kosten", Some(&e as &dyn Embedder)),
+        ("kosten", None),
+        ("kosten miete", Some(&e as &dyn Embedder)),
+    ] {
+        let got = full.recall_visible(q, emb, &opts, &NoSecrets).unwrap();
+        let want = without.recall(q, emb, &opts).unwrap();
+        let show = |r: &cyberbrain_core::RecallResult| -> Vec<(String, String, Vec<String>)> {
+            r.hits
+                .iter()
+                .map(|h| {
+                    (
+                        h.citation.clone(),
+                        h.note_name.clone(),
+                        h.newer_links.iter().map(|l| l.name.clone()).collect(),
+                    )
+                })
+                .collect()
+        };
+        assert_eq!(show(&got), show(&want), "query {q:?}");
+        assert_eq!(got.hits.len(), 3, "query {q:?}: all three visible notes");
+        for (g, w) in got.hits.iter().zip(&want.hits) {
+            assert!(
+                (g.score - w.score).abs() < 1e-6,
+                "query {q:?}: {g:?} vs {w:?}"
+            );
+        }
+        assert_eq!(got.caveats, want.caveats, "query {q:?}");
+        let json = serde_json::to_string(&got).unwrap();
+        assert!(!json.contains("geheim"), "query {q:?}: {json}");
+    }
+    // The single-term query has one BM25 weight for every block, so even the lexical order
+    // is the one of the smaller store; and the filter is what made the difference.
+    let unfiltered = full.recall("kosten", None, &opts).unwrap();
+    assert!(
+        unfiltered
+            .hits
+            .iter()
+            .any(|h| h.note_name.starts_with("geheim")),
+        "the fixture must put hidden notes into the top k: {:?}",
+        unfiltered.hits
+    );
+}
+
+/// Without a filter nothing changes: `recall` and `recall_visible` with [`crate::Everyone`]
+/// are the same function.
+#[test]
+fn everyone_is_the_old_recall() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let ix = index_of(&e, &visibility_corpus());
+    let a = ix
+        .recall("kosten", Some(&e), &RecallOptions::default())
+        .unwrap();
+    let b = ix
+        .recall_visible(
+            "kosten",
+            Some(&e),
+            &RecallOptions::default(),
+            &crate::Everyone,
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_string(&a).unwrap(),
+        serde_json::to_string(&b).unwrap()
+    );
+}
+
+/// A visible note replaced by a hidden one is demoted, but the successor is not named.
+#[test]
+fn a_hidden_successor_is_not_named() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut old = note("akte-alt", Ring::Knowledge, "kosten miete", &[]);
+    old.front.superseded_by = Some("geheim-neu".into());
+    let new = note("geheim-neu", Ring::Knowledge, "kosten miete neu", &[]);
+    let ix = index_of(&e, &[old, new]);
+    let r = ix
+        .recall_visible("kosten", Some(&e), &RecallOptions::default(), &NoSecrets)
+        .unwrap();
+    assert_eq!(r.hits.len(), 1);
+    assert!(r.hits[0].superseded_by.is_none(), "{:?}", r.hits[0]);
+    assert!(
+        r.caveats.iter().any(|c| c.contains("may not see")),
+        "{:?}",
+        r.caveats
+    );
+    assert!(!serde_json::to_string(&r).unwrap().contains("geheim"));
+}
+
+/// A coverage caveat counts only the blocks the reader may see.
+#[test]
+fn coverage_counts_only_visible_blocks() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    put(
+        &mut ix,
+        &e,
+        &note("akte-eins", Ring::Knowledge, "kosten miete", &[]),
+    );
+    // A hidden note without vectors.
+    let n = note("geheim-ohne", Ring::Knowledge, "kosten", &[]);
+    ix.upsert_note(&n, &blocks_of(&n), None).unwrap();
+    let r = ix
+        .recall_visible("kosten", Some(&e), &RecallOptions::default(), &NoSecrets)
+        .unwrap();
+    assert!(
+        !r.caveats.iter().any(|c| c.contains("covered")),
+        "{:?}",
+        r.caveats
+    );
+}
+
 /// The bounds are compared with the moment asked about, at the index level: expired and
 /// not-yet-valid notes are demoted by the same factor as a replaced one, once.
 #[test]
