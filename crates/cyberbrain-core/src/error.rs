@@ -79,6 +79,12 @@ pub enum Error {
 
     #[error("{0}")]
     Config(String),
+
+    /// A document handed to a `source::DocumentSource` could not be read: not a kind the
+    /// source reads, not valid in its format, a locator that cannot be written. The
+    /// document is the user's input, so this is a user error.
+    #[error("document {name}: {reason}")]
+    Document { name: String, reason: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -108,6 +114,7 @@ impl Error {
             Error::Llm(_) => "llm",
             Error::PolicyRefusal { .. } => "policy-refusal",
             Error::Config(_) => "config",
+            Error::Document { .. } => "document",
         }
     }
 
@@ -120,7 +127,8 @@ impl Error {
             | Error::BadRing(_)
             | Error::RingCapExceeded { .. }
             | Error::Frontmatter { .. }
-            | Error::Config(_) => 1,
+            | Error::Config(_)
+            | Error::Document { .. } => 1,
             _ => 2,
         }
     }

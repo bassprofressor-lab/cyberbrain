@@ -820,6 +820,10 @@ async fn error_bodies_carry_the_cli_exit_code() {
         Error::Config("x".into()),
         Error::BadRing(9),
         Error::BadCitation("x".into()),
+        Error::Document {
+            name: "x".into(),
+            reason: "y".into(),
+        },
     ] {
         let want = e.exit_code();
         assert_eq!(ApiError::from(e).exit_code, want);

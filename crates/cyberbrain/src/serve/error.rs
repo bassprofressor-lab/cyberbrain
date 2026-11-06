@@ -104,6 +104,7 @@ pub fn variant_name(e: &Error) -> &'static str {
         Error::Llm(_) => "llm",
         Error::PolicyRefusal { .. } => "policy-refusal",
         Error::Config(_) => "config",
+        Error::Document { .. } => "document",
     }
 }
 

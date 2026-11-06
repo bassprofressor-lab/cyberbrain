@@ -22,6 +22,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   when there is none. A body without such a line splits exactly as it did. The index moves to
   schema v6 on open, without a rescan; going back to an older build means deleting
   `cyberbrain.db` and scanning again, as with v5.
+- **`DocumentSource`, for builds that read documents other than notes.** A source turns one
+  document into the Markdown body of a note, with a locator line before each part whose
+  place is known, plus the blake3 hash of the original (`cyberbrain_core::source`). The body
+  is the product because the file stays authoritative: a rebuilt index finds the same blocks
+  and locators. `MarkdownSource` is the reference implementation; the `import` command is
+  unchanged. A document that cannot be read is a new user error, code `document`, exit 1.
 
 ## [0.9.1] — 2026-11-04
 

@@ -12,6 +12,7 @@ pub mod links;
 pub mod path;
 pub mod path_serde;
 pub mod provenance;
+pub mod source;
 pub mod store;
 pub mod types;
 pub mod waivers;
@@ -21,6 +22,7 @@ pub use config::{Config, PolicyProfile, TranscriptionConfig};
 pub use error::{Error, Result};
 pub use frontmatter::validate_name;
 pub use path::{Slash, slash};
+pub use source::{Document, DocumentSource, Extracted, MarkdownSource};
 pub use store::{Change, Fingerprint, Store};
 pub use types::{
     Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit,
