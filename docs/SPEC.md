@@ -125,6 +125,13 @@ A citation is `r{ring}-{first 12 hex of blake3(note_id || block_index || block_t
 e.g. `r2-a91f2c33e1bd`. It is stable across reindexing as long as the block text is
 unchanged, and it resolves via `cyberbrain recall --id`.
 
+A line of exactly the form `<!-- cyberbrain:locator VALUE -->` (up to three spaces of
+indentation, outside a code fence) is a **locator line**: it ends the block before it as a
+heading does, gives `VALUE` (a page, a paragraph number) to every block after it until the
+next locator line, and is not part of any block's text. The citation and the lexical index
+therefore see exactly what they would without it. It lives in the body, not in the index,
+because the file is authoritative (§3.1). A body without one splits as it always did.
+
 48 bits, not 40. At 100k blocks the birthday collision probability drops from about 5e-3 to
 2e-5 — the difference between a thing that happens to somebody and one that does not. A
 collision is caught loudly as a uniqueness violation at index time rather than producing
@@ -208,7 +215,8 @@ Tables (indicative, implementer may refine):
   stamp are computed by **one function in `cyberbrain-core`**, called by both the scanner and
   the index. Two implementations of the same hash silently drift apart and the incremental
   compare then reports changes that are not there, or worse, misses ones that are.
-- `blocks(citation, note_id, idx, text, token_count)`
+- `blocks(citation, note_id, idx, text, token_count, locator)` — `locator` (schema v6) is
+  NULL for a block with no locator line before it (§3.3)
 - `blocks_fts` — FTS5 virtual table over `blocks.text`
 - `vectors(citation, dim, data BLOB)` — f32 little-endian
 - `links(from_note, to_name, resolved_note_id NULLABLE)`

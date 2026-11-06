@@ -192,6 +192,9 @@ fn enum_parse<T: serde::de::DeserializeOwned>(what: &str, s: &str) -> Result<T> 
         .map_err(|e| Error::Index(format!("stored {what} {s:?} is not valid: {e}")))
 }
 
+/// A `blocks` row as read: citation, note id, index, text, token count, locator.
+type RawBlock = (String, String, i64, String, i64, Option<String>);
+
 fn parse_id(s: &str) -> Result<NoteId> {
     NoteId::from_string(s).map_err(|e| Error::Index(format!("stored note id {s:?}: {e}")))
 }
@@ -552,8 +555,8 @@ impl Index {
         {
             let mut ins_block = tx
                 .prepare_cached(
-                    "INSERT INTO blocks (citation, note_id, idx, text, token_count)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    "INSERT INTO blocks (citation, note_id, idx, text, token_count, locator)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 )
                 .ix()?;
             let mut ins_fts = tx
@@ -572,7 +575,8 @@ impl Index {
                         id_s,
                         b.idx as i64,
                         b.text,
-                        b.token_count as i64
+                        b.token_count as i64,
+                        b.locator
                     ])
                     .map_err(|e| {
                         Error::Index(format!("storing block {cit} of note {id_s}: {e}"))
@@ -982,7 +986,7 @@ impl Index {
         let mut stmt = self
             .conn
             .prepare_cached(
-                "SELECT citation, note_id, idx, text, token_count FROM blocks \
+                "SELECT citation, note_id, idx, text, token_count, locator FROM blocks \
                  WHERE note_id = ?1 ORDER BY idx",
             )
             .ix()?;
@@ -992,21 +996,25 @@ impl Index {
         rows.map(|r| Self::block_from_raw(r.ix()?)).collect()
     }
 
-    fn row_to_block_raw(
-        r: &rusqlite::Row<'_>,
-    ) -> rusqlite::Result<(String, String, i64, String, i64)> {
-        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+    fn row_to_block_raw(r: &rusqlite::Row<'_>) -> rusqlite::Result<RawBlock> {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+        ))
     }
 
-    fn block_from_raw(
-        (cit, note_id, idx, text, tokens): (String, String, i64, String, i64),
-    ) -> Result<Block> {
+    fn block_from_raw((cit, note_id, idx, text, tokens, locator): RawBlock) -> Result<Block> {
         Ok(Block {
             citation: cit.parse()?,
             note_id: parse_id(&note_id)?,
             idx: idx as u32,
             text,
             token_count: tokens as u32,
+            locator,
         })
     }
 
@@ -1015,7 +1023,8 @@ impl Index {
         let raw = self
             .conn
             .query_row(
-                "SELECT citation, note_id, idx, text, token_count FROM blocks WHERE citation = ?1",
+                "SELECT citation, note_id, idx, text, token_count, locator FROM blocks \
+                 WHERE citation = ?1",
                 [citation.to_string()],
                 Self::row_to_block_raw,
             )

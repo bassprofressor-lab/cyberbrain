@@ -569,6 +569,7 @@ mod tests {
             untrusted: None,
             score: 1.0,
             text: text.into(),
+            locator: None,
         }
     }
 

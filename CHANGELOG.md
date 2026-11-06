@@ -12,6 +12,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **A block can say where it sits in an original document.** A line of exactly the form
+  `<!-- cyberbrain:locator S. 12 -->` in a note body ends the block before it and gives
+  `S. 12` to every block after it, until the next such line. The line is not part of any
+  block's text, so citations and lexical search are as before. `recall` shows it as
+  `[at S. 12]`, `recall --id` as `at S. 12`, and the JSON of a hit carries `locator`, absent
+  when there is none. A body without such a line splits exactly as it did. The index moves to
+  schema v6 on open, without a rescan; going back to an older build means deleting
+  `cyberbrain.db` and scanning again, as with v5.
+
 ## [0.9.1] — 2026-11-04
 
 A security release. Upgrade every installation that runs `cyberbrain serve`, which includes

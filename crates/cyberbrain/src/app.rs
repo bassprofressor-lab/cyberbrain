@@ -277,6 +277,9 @@ pub struct BlockView {
     pub idx: u32,
     pub text: String,
     pub token_count: u32,
+    /// Where the block sits in an original document; absent when its note says nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2408,6 +2411,7 @@ impl App {
                 idx: block.idx,
                 text: block.text,
                 token_count: block.token_count,
+                locator: block.locator,
             },
             note,
         })

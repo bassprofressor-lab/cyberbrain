@@ -147,6 +147,9 @@ pub struct Hit {
     pub untrusted: Option<String>,
     pub score: f32,
     pub text: String,
+    /// Where the block sits in an original document; absent when its note says nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locator: Option<String>,
     pub block_idx: u32,
     pub sources: Vec<&'static str>,
 }

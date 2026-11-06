@@ -95,6 +95,7 @@ pub async fn recall(
                 untrusted: h.untrusted,
                 score: h.score,
                 text: h.text,
+                locator: h.locator,
                 block_idx,
                 sources: if mode == "lexical" {
                     vec!["lexical"]

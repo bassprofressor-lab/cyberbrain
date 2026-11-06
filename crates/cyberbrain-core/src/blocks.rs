@@ -22,6 +22,15 @@
 //!
 //! The split is a pure function of the body text: same input, same blocks, same
 //! citations. That is what keeps citations stable across reindexing.
+//!
+//! **Locators.** A line of exactly the form `<!-- cyberbrain:locator VALUE -->` (see
+//! [`locator_marker`]) says where the text after it sits in an original document: a page,
+//! a paragraph number. It ends the block before it like a heading does, gives `VALUE` to
+//! every block after it until the next such line, and is not part of any block's text, so
+//! it changes neither what a citation hashes nor what lexical search sees. A body without
+//! such a line splits exactly as it always did, and its blocks carry no locator. The marker
+//! lives in the body because the file is authoritative (SPEC §3.1): an index rebuilt from
+//! the files alone must find the locators again.
 
 use crate::citation::Citation;
 use crate::types::{Block, Note};
@@ -53,15 +62,49 @@ pub fn approx_tokens(text: &str) -> u32 {
     tokens + run.div_ceil(4)
 }
 
+/// What opens a locator line. See the module docs and [`locator_marker`].
+pub const LOCATOR_OPEN: &str = "<!-- cyberbrain:locator ";
+/// What closes a locator line.
+pub const LOCATOR_CLOSE: &str = " -->";
+
+/// The line that sets `locator` for the blocks after it, or `None` when the value cannot be
+/// carried by one: empty after trimming, holding a line break, or holding `-->`.
+pub fn locator_marker(locator: &str) -> Option<String> {
+    let v = locator.trim();
+    if v.is_empty() || v.contains(['\n', '\r']) || v.contains("-->") {
+        return None;
+    }
+    Some(format!("{LOCATOR_OPEN}{v}{LOCATOR_CLOSE}"))
+}
+
+/// The value of a locator line, if `line` (without its line ending) is one. Up to three
+/// spaces of indentation are allowed, as for a heading; anything else on the line makes it
+/// ordinary text.
+pub fn parse_locator(line: &str) -> Option<&str> {
+    let (indent, rest) = strip_indent(line.trim_end_matches(['\r', '\n']));
+    if indent > 3 {
+        return None;
+    }
+    let v = rest
+        .trim_end()
+        .strip_prefix(LOCATOR_OPEN)?
+        .strip_suffix(LOCATOR_CLOSE)?
+        .trim();
+    (!v.is_empty() && !v.contains("-->")).then_some(v)
+}
+
 /// One block of text, before it is given a citation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TextBlock {
-    /// Verbatim span of the body, trailing whitespace removed.
+    /// Verbatim span of the body, trailing whitespace removed. Locator lines are left out.
     pub text: String,
     /// 1-based line in the body where the block starts.
     pub line: u32,
     /// [`approx_tokens`] of `text`. An approximation, not the embedder's count.
     pub approx_tokens: u32,
+    /// Where in an original document the block sits, from the last locator line before
+    /// it. `None` for a body that has none.
+    pub locator: Option<String>,
 }
 
 /// Why a block was allowed to exceed the limit.
@@ -116,6 +159,7 @@ pub fn blocks_of(note: &Note, limit: u32) -> (Vec<Block>, Vec<Oversized>) {
                 idx,
                 text: b.text,
                 token_count: b.approx_tokens,
+                locator: b.locator,
             }
         })
         .collect();
@@ -194,6 +238,8 @@ enum Kind {
     Heading,
     Para,
     Fence,
+    /// A locator line: no text of its own, ends the block before it.
+    Locator,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -250,6 +296,18 @@ fn segment(body: &str) -> Vec<Seg> {
                 segs.push(seg(body, Kind::Para, p, start));
             }
             segs.push(seg(body, Kind::Heading, start, end));
+            continue;
+        }
+        if parse_locator(stripped).is_some() {
+            if let Some(p) = para.take() {
+                segs.push(seg(body, Kind::Para, p, start));
+            }
+            segs.push(Seg {
+                kind: Kind::Locator,
+                start,
+                end,
+                tokens: 0,
+            });
             continue;
         }
         if para.is_none() {
@@ -353,6 +411,9 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
         cur: Vec<Seg>,
         cur_tokens: u32,
         out: Split,
+        locator: Option<String>,
+        /// Locator lines inside the span of `cur`, as byte ranges of the body.
+        markers: Vec<(usize, usize)>,
     }
     impl Packer<'_> {
         fn has_content(&self) -> bool {
@@ -368,10 +429,32 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
             };
             let last = self.cur.last().unwrap();
             let raw = &self.body[first.start..last.end];
+            // A locator line between a heading and its text sits inside the span. It is
+            // not text, so it is cut out here, by position: the same characters inside a
+            // code fence are text and stay. A body without one takes the first branch.
+            let kept: String;
+            let raw = if self.markers.is_empty() {
+                raw
+            } else {
+                let mut out = String::with_capacity(raw.len());
+                let mut at = first.start;
+                for &(ms, me) in &self.markers {
+                    // Only a marker inside this span: headings flushed alone end before it.
+                    if ms < first.start || me > last.end {
+                        continue;
+                    }
+                    out.push_str(&self.body[at..ms]);
+                    at = me;
+                }
+                out.push_str(&self.body[at..last.end]);
+                kept = out;
+                kept.as_str()
+            };
             let text = raw.trim_start_matches(['\r', '\n']).trim_end();
             if text.is_empty() {
                 self.cur.clear();
                 self.cur_tokens = 0;
+                self.markers.clear();
                 return;
             }
             let approx = approx_tokens(text);
@@ -395,9 +478,11 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
                 text: text.to_string(),
                 line,
                 approx_tokens: approx,
+                locator: self.locator.clone(),
             });
             self.cur.clear();
             self.cur_tokens = 0;
+            self.markers.clear();
         }
     }
 
@@ -407,10 +492,22 @@ fn pack(body: &str, segs: &[Seg], limit: u32) -> Split {
         cur: Vec::new(),
         cur_tokens: 0,
         out: Split::default(),
+        locator: None,
+        markers: Vec::new(),
     };
 
     for &s in segs {
         match s.kind {
+            Kind::Locator => {
+                // Headings alone wait for their text and take the new locator with it.
+                if p.has_content() {
+                    p.flush();
+                }
+                if !p.cur.is_empty() {
+                    p.markers.push((s.start, s.end));
+                }
+                p.locator = parse_locator(&body[s.start..s.end]).map(str::to_string);
+            }
             Kind::Heading => {
                 if p.has_content() {
                     p.flush();
@@ -470,6 +567,102 @@ mod tests {
 
     fn texts(s: &Split) -> Vec<&str> {
         s.blocks.iter().map(|b| b.text.as_str()).collect()
+    }
+
+    fn texts_and_locators(body: &str) -> Vec<(String, Option<String>)> {
+        split(body, MAX_BLOCK_TOKENS)
+            .blocks
+            .into_iter()
+            .map(|b| (b.text, b.locator))
+            .collect()
+    }
+
+    #[test]
+    fn locator_marker_round_trips_and_refuses_what_it_cannot_carry() {
+        let m = locator_marker("  S. 12  ").unwrap();
+        assert_eq!(m, "<!-- cyberbrain:locator S. 12 -->");
+        assert_eq!(parse_locator(&m), Some("S. 12"));
+        assert_eq!(parse_locator(&format!("   {m}\r\n")), Some("S. 12"));
+        assert_eq!(
+            parse_locator(&format!("    {m}")),
+            None,
+            "four spaces is code"
+        );
+        assert_eq!(parse_locator(&format!("{m} trailing")), None);
+        assert_eq!(parse_locator("<!-- cyberbrain:locator  -->"), None);
+        assert_eq!(locator_marker(""), None);
+        assert_eq!(locator_marker("a\nb"), None);
+        assert_eq!(locator_marker("a --> b"), None);
+    }
+
+    #[test]
+    fn a_body_without_locator_lines_has_no_locators() {
+        let body = "# A\n\none\n\n<!-- an ordinary comment -->\n\n# B\n\ntwo\n";
+        assert!(texts_and_locators(body).iter().all(|(_, l)| l.is_none()));
+    }
+
+    #[test]
+    fn locator_lines_end_blocks_carry_forward_and_are_not_text() {
+        let body = "<!-- cyberbrain:locator S. 1 -->\nFirst page, first para.\n\nFirst page, second.\n\n\
+                    <!-- cyberbrain:locator S. 2 -->\nSecond page.\n";
+        assert_eq!(
+            texts_and_locators(body),
+            vec![
+                (
+                    "First page, first para.\n\nFirst page, second.".to_string(),
+                    Some("S. 1".to_string())
+                ),
+                ("Second page.".to_string(), Some("S. 2".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_locator_line_mid_paragraph_ends_the_paragraph() {
+        let body = "line one\n<!-- cyberbrain:locator S. 7 -->\nline two\n";
+        assert_eq!(
+            texts_and_locators(body),
+            vec![
+                ("line one".to_string(), None),
+                ("line two".to_string(), Some("S. 7".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_locator_line_after_a_heading_is_cut_out_and_the_heading_stays() {
+        let body = "Before.\n\n# Section\n<!-- cyberbrain:locator S. 3 -->\nText.\n";
+        assert_eq!(
+            texts_and_locators(body),
+            vec![
+                ("Before.".to_string(), None),
+                ("# Section\nText.".to_string(), Some("S. 3".to_string())),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_locator_line_inside_a_code_fence_is_text() {
+        let body = "```\n<!-- cyberbrain:locator S. 9 -->\n```\n";
+        assert_eq!(
+            texts_and_locators(body),
+            vec![(
+                "```\n<!-- cyberbrain:locator S. 9 -->\n```".to_string(),
+                None
+            )]
+        );
+    }
+
+    #[test]
+    fn a_locator_line_does_not_change_the_text_a_citation_hashes() {
+        let plain = split("Same text.\n", MAX_BLOCK_TOKENS).blocks;
+        let marked = split(
+            "<!-- cyberbrain:locator S. 4 -->\nSame text.\n",
+            MAX_BLOCK_TOKENS,
+        )
+        .blocks;
+        assert_eq!(plain[0].text, marked[0].text);
+        assert_eq!(plain[0].approx_tokens, marked[0].approx_tokens);
     }
 
     #[test]

@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 5;
+pub const SCHEMA_VERSION: u32 = 6;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -129,6 +129,14 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE notes ADD COLUMN valid_from TEXT;
     ALTER TABLE notes ADD COLUMN invalid_at TEXT;
+    "#,
+    // v6: where a block sits in an original document (a page, a paragraph), from a
+    // locator line in the note body. NULL is "none", which is the truth for every block of
+    // a body without such a line, and no body had one before the line existed, so no
+    // rescan is needed. As with v5, a build that knows only v5 refuses the index
+    // afterwards; the way back is to delete cyberbrain.db and `scan --full` with it.
+    r#"
+    ALTER TABLE blocks ADD COLUMN locator TEXT;
     "#,
 ];
 

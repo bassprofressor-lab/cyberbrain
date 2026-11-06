@@ -244,6 +244,9 @@ pub struct Block {
     pub idx: u32,
     pub text: String,
     pub token_count: u32,
+    /// Where the block sits in an original document (a page, a paragraph), from a locator
+    /// line in the note body (`blocks::locator_marker`). `None` for ordinary notes.
+    pub locator: Option<String>,
 }
 
 /// One result from `recall`. Always carries its citation: an answer without one is a bug.
@@ -282,6 +285,10 @@ pub struct Hit {
     pub untrusted: Option<String>,
     pub score: f32,
     pub text: String,
+    /// Where the block sits in an original document, when its note says so (see
+    /// [`Block::locator`]). Absent from the serialised hit when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub locator: Option<String>,
 }
 
 /// A later note that links to a hit. See [`Hit::newer_links`].

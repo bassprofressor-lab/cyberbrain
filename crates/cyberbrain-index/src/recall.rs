@@ -319,7 +319,7 @@ impl Index {
         // where it used to be. A candidate the filter now rejects is left out quietly.
         let filtered = opts.bereich.is_some() || opts.scope.is_some();
         let mut sql = String::from(
-            "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags FROM blocks b \
+            "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags, b.locator FROM blocks b \
              JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
         );
         let mut filter_args: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(String::new())];
@@ -343,9 +343,10 @@ impl Index {
                     r.get::<_, String>(3)?,
                     r.get::<_, String>(4)?,
                     r.get::<_, String>(5)?,
+                    r.get::<_, Option<String>>(6)?,
                 ))
             });
-            let (id, name, ring, text, updated, tags) = match row {
+            let (id, name, ring, text, updated, tags, locator) = match row {
                 Ok(row) => row,
                 Err(rusqlite::Error::QueryReturnedNoRows) if filtered => continue,
                 Err(e) => {
@@ -371,6 +372,7 @@ impl Index {
                     note_name: name,
                     score,
                     text,
+                    locator,
                 },
                 updated: updated.parse().ok(),
             });

@@ -113,6 +113,7 @@ fn blocks_of(n: &Note) -> Vec<Block> {
             idx: i as u32,
             text: p.to_string(),
             token_count: p.split_whitespace().count() as u32,
+            locator: None,
         })
         .collect()
 }
@@ -227,12 +228,13 @@ fn a_v4_index_migrates_and_its_notes_hold() {
             .execute_batch(
                 "ALTER TABLE notes DROP COLUMN valid_from;
                  ALTER TABLE notes DROP COLUMN invalid_at;
+                 ALTER TABLE blocks DROP COLUMN locator;
                  UPDATE meta SET value = '4' WHERE key = 'schema_version';",
             )
             .unwrap();
     }
     let ix = Index::open(&path).unwrap();
-    assert_eq!(ix.schema_version().unwrap(), 5);
+    assert_eq!(ix.schema_version().unwrap(), crate::SCHEMA_VERSION);
     assert_eq!(ix.stats().unwrap().notes, 4, "nothing was dropped");
     let r = ix
         .recall("bind mount inode", Some(&e), &RecallOptions::default())
@@ -243,6 +245,85 @@ fn a_v4_index_migrates_and_its_notes_hold() {
     }
     let rec = ix.note(&id_for("pg18-moves-pgdata")).unwrap().unwrap();
     assert!(rec.front.valid_from.is_none() && rec.front.invalid_at.is_none());
+}
+
+/// An index written by a v5 build (no `blocks.locator`) is brought to the current version on
+/// open, in place; every block in it reads back without a locator, which is the truth for
+/// every body written before locator lines existed.
+#[test]
+fn a_v5_index_migrates_and_its_blocks_carry_no_locator() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cyberbrain.db");
+    {
+        let mut ix = Index::open(&path).unwrap();
+        ix.set_embedding_profile(&profile_of(&e)).unwrap();
+        for n in corpus() {
+            put(&mut ix, &e, &n);
+        }
+        ix.conn
+            .execute_batch(
+                "ALTER TABLE blocks DROP COLUMN locator;
+                 UPDATE meta SET value = '5' WHERE key = 'schema_version';",
+            )
+            .unwrap();
+    }
+    let ix = Index::open(&path).unwrap();
+    assert_eq!(ix.schema_version().unwrap(), 6);
+    assert_eq!(ix.stats().unwrap().notes, 4, "nothing was dropped");
+    let r = ix
+        .recall("bind mount inode", Some(&e), &RecallOptions::default())
+        .unwrap();
+    assert_eq!(r.hits[0].note_name, "docker-bind-mount-inode-drift");
+    assert!(r.hits.iter().all(|h| h.locator.is_none()));
+    let blocks = ix.blocks_of(&id_for("pg18-moves-pgdata")).unwrap();
+    assert!(!blocks.is_empty() && blocks.iter().all(|b| b.locator.is_none()));
+}
+
+/// A locator line in the body reaches the index, a recall hit and `resolve`, and survives a
+/// rebuild because it lives in the file, not only in the cache.
+#[test]
+fn a_locator_travels_from_the_body_to_the_hit() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let n = note(
+        "urteil-mietminderung",
+        Ring::Knowledge,
+        "<!-- cyberbrain:locator S. 4 -->\nDie Mietminderung wegen Baulaerm ist begruendet.\n\n\
+         <!-- cyberbrain:locator S. 5 -->\nDie Kosten traegt die Beklagte.\n",
+        &[],
+    );
+    put(
+        &mut ix,
+        &e,
+        &note(
+            "plain",
+            Ring::Knowledge,
+            "A bind mount follows the inode.",
+            &[],
+        ),
+    );
+    let (blocks, _) =
+        cyberbrain_core::blocks::blocks_of(&n, cyberbrain_core::blocks::MAX_BLOCK_TOKENS);
+    let vecs = embed_blocks(&e, &blocks);
+    ix.upsert_note(&n, &blocks, Some(&vecs)).unwrap();
+    let r = ix
+        .recall("Kosten Beklagte", Some(&e), &RecallOptions::default())
+        .unwrap();
+    assert_eq!(r.hits[0].locator.as_deref(), Some("S. 5"));
+    assert!(!r.hits[0].text.contains("cyberbrain:locator"));
+    let (b, _) = ix.resolve(&blocks[0].citation).unwrap().unwrap();
+    assert_eq!(b.locator.as_deref(), Some("S. 4"));
+    let json = serde_json::to_string(&r.hits[0]).unwrap();
+    assert!(json.contains("\"locator\":\"S. 5\""), "{json}");
+    let plain = ix
+        .recall("bind mount", Some(&e), &RecallOptions::default())
+        .unwrap();
+    assert_eq!(plain.hits[0].note_name, "plain");
+    assert!(plain.hits[0].locator.is_none());
+    let json = serde_json::to_string(&plain.hits[0]).unwrap();
+    assert!(!json.contains("locator"), "absent, not null: {json}");
 }
 
 /// The bounds are compared with the moment asked about, at the index level: expired and
