@@ -4436,6 +4436,18 @@ impl App {
     // ----- status ------------------------------------------------------------------------
 
     pub async fn status(&self) -> Result<StatusReport> {
+        // Every count below spans the whole store: notes, blocks, vectors, audit rows. For a
+        // client limited to bereiche that is the size of what it may not see (2026-11-07).
+        if self.client_scope().is_some() {
+            return Err(Error::PolicyRefusal {
+                profile: "clients".to_string(),
+                reason: format!(
+                    "{} is limited to bereiche in [clients.bereiche]; status counts the whole \
+                     store and is not shown to it",
+                    self.actor
+                ),
+            });
+        }
         let listing = self.store.list()?;
         let mut per_ring = [0usize; 5];
         for e in &listing.entries {

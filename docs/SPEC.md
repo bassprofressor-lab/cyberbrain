@@ -921,7 +921,8 @@ Such a client recalls only notes in those bereiche (in the same SQL as the `bere
 so a small bereich is not crowded out; a note without a bereich is outside every limit), gets
 "not in the index" for a citation outside them — whether a note exists elsewhere is what it
 may not learn — and recall leaves out the "newer notes link here" names, which would. It
-cannot search the code index, which has no bereich. It writes and proposes only into its
+cannot search the code index, which has no bereich, and gets no `status`, whose counts of
+notes, blocks and audit rows span the whole store (2026-11-07). It writes and proposes only into its
 bereiche and never over a note outside them; with one bereich listed an unset one is filled
 in, with several it names one. Unlisted clients, and the operator, are unlimited. This is
 what lets an agent whose model runs elsewhere read the store at all: without it, `recall`

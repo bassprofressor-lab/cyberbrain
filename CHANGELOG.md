@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- **A client limited by `[clients.bereiche]` no longer gets `status`.** Its counts of notes,
+  blocks, vectors and audit rows span the whole store, so over MCP they told a limited client
+  how much lay outside its bereiche. It is refused like `find` (exit 3, a policy refusal);
+  unlisted clients and the operator see it as before. Found by a leak check over `mcp --http`
+  that the check first ran without the limit, where it reported 45 findings.
+
 ## [0.10.0] — 2026-11-07
 
 Documents. A PDF, with or without a text layer, becomes a note whose every page carries its

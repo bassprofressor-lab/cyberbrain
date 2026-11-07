@@ -4672,6 +4672,13 @@ fn a_client_limited_to_bereiche_sees_and_writes_only_inside_them() {
     let out = as_agent("seo", &["find", "main"]);
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
 
+    // 2026-11-07: status counts notes, blocks and audit rows of the whole store, so for a
+    // limited client it says how much lies outside its bereiche. Refused like `find`.
+    let out = as_agent("seo", &["--json", "status"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(!text(&out).contains("finanzen"), "{}", text(&out));
+    assert!(as_agent("other", &["status"]).status.success());
+
     let out = as_agent(
         "seo",
         &[
