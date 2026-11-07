@@ -16,7 +16,8 @@
 ; it instead, and this comment used to say the feature did not exist at all — which it did,
 ; forty lines further down.
 ;
-; Build:  makensis /DVERSION=0.1.0 /DSOURCE=<dir with the exes> cyberbrain.nsi
+; Build:  makensis /INPUTCHARSET UTF8 /DVERSION=0.1.0 /DSOURCE=<dir with the exes> cyberbrain.nsi
+;         (UTF-8 without a BOM: without /INPUTCHARSET, makensis on Windows reads it as ANSI)
 ;         add /DWEBVIEW2LOADER=<path to WebView2Loader.dll> for a GNU-toolchain build
 
 Unicode true

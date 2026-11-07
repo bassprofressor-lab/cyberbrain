@@ -12,6 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Fixed
+
+- **The Windows installer shows German umlauts again.** Its script is UTF-8 without a byte order
+  mark, and makensis on Windows reads such a file in the ANSI code page, so "Verknüpfung" read
+  "VerknÃ¼pfung" in every German text of the installer. The release build now passes
+  `-INPUTCHARSET UTF8`.
+
 ## [0.10.1] — 2026-11-07
 
 ### Added

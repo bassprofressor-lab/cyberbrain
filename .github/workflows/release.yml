@@ -113,7 +113,10 @@ jobs:
           cp LICENSE.md "$staging/LICENSE.txt"
           cd packaging/windows
           # Four numbers for the version resource, so a pre-release suffix cannot break it.
-          makensis "-DVERSION=$version" "-DVIVERSION=${version%%-*}" "-DSOURCE=$staging" cyberbrain.nsi
+          # -INPUTCHARSET UTF8: the script is UTF-8 without a BOM, and makensis on Windows reads
+          # such a file in the ANSI code page, so every ä, ö, ü in the German texts came out as
+          # Ã¤, Ã¶, Ã¼ (reported for 0.10.1; reproduced with -INPUTCHARSET CP1252).
+          makensis -INPUTCHARSET UTF8 "-DVERSION=$version" "-DVIVERSION=${version%%-*}" "-DSOURCE=$staging" cyberbrain.nsi
           mv "cyberbrain-setup-$version.exe" "$GITHUB_WORKSPACE/"
           echo "INSTALLER=cyberbrain-setup-$version.exe" >> "$GITHUB_ENV"
 
