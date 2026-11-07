@@ -21,6 +21,7 @@ cyberbrain-index  = { path = "crates/cyberbrain-index",  version = "0.9.1" }
 cyberbrain-policy = { path = "crates/cyberbrain-policy", version = "0.9.1" }
 cyberbrain-llm    = { path = "crates/cyberbrain-llm",    version = "0.9.1" }
 cyberbrain-code   = { path = "crates/cyberbrain-code",   version = "0.9.1" }
+cyberbrain-documents = { path = "crates/cyberbrain-documents", version = "0.9.1" }
 
 [profile.release]
 opt-level = 3

@@ -1,0 +1,28 @@
+[package]
+name = "cyberbrain-documents"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "PDF and scanned documents into Cyberbrain notes, page by page with locators, for Cyberbrain"
+
+[dependencies]
+cyberbrain-core.workspace = true
+# PDFium (the PDF engine of Chrome; BSD-3/Apache-2.0) is loaded at run time from a library file
+# next to the store's models, so the build needs no PDF toolchain and every platform reads PDFs
+# the same way. `thread_safe` serialises PDFium calls, which the library itself requires.
+pdfium-render = { version = "0.9.5", features = ["thread_safe", "image_025"] }
+# PP-OCRv6 through ONNX Runtime (Apache-2.0 / MIT). Chosen over Tesseract after measuring on
+# 200 scanned pages: 0.18 % character errors against 0.98 %, every section sign kept, 2.5 times
+# faster, and no GPL/AGPL tool to install next to it on Windows or macOS.
+# Without its default `download-binaries`: that downloads ONNX Runtime while building, over
+# native-tls/OpenSSL, which SPEC §15 bans (no C toolchain, no OpenSSL). ONNX Runtime is loaded at
+# run time instead, from a library file next to the models, the same way as PDFium.
+oar-ocr = { version = "0.10.2", default-features = false, features = ["simd"] }
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std", "load-dynamic"] }
+image = "0.25"
+serde = { version = "1.0.229", features = ["derive"] }
+
+[dev-dependencies]

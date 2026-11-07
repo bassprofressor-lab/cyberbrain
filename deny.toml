@@ -17,6 +17,17 @@ allow = [
   "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.9
+# Two crates of the `documents` feature, each allowed by name rather than by adding their licence
+# to the list above, so a third crate under either licence still has to be looked at. Both
+# licences are permissive and OSI-approved.
+# - clipper2-rust (BSL-1.0, Boost): polygon clipping in oar-ocr's text detection.
+# - libfuzzer-sys ((MIT OR Apache-2.0) AND NCSA): pulled in through rav1e, the AVIF encoder that
+#   imageproc enables in `image`; nothing here encodes AVIF, but features only add up, so it
+#   cannot be switched off from this side.
+exceptions = [
+  { crate = "clipper2-rust", allow = ["BSL-1.0"] },
+  { crate = "libfuzzer-sys", allow = ["NCSA"] },
+]
 
 [bans]
 multiple-versions = "warn"
@@ -32,6 +43,17 @@ ignore = [
   # in the shipped binary. Listed individually with the reason rather than switching the
   # unmaintained check off, so the next unmaintained crate still stops the build.
   { id = "RUSTSEC-2024-0436", reason = "build-time proc-macro via tokenizers; nothing of it ships" },
+  # The `documents` feature only. oar-ocr pins zip 8.x; the fixes are in zip 9. All four concern
+  # extracting an archive to disk (`ZipArchive::extract`, `ZipStreamReader::extract`): oar-ocr
+  # opens a zip read-only, in its Indra OCR path, which Cyberbrain never builds, and never calls
+  # extract. Remove these four as soon as oar-ocr allows zip >= 9.
+  { id = "RUSTSEC-2026-0367", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
+  { id = "RUSTSEC-2026-0368", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
+  { id = "RUSTSEC-2026-0369", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
+  { id = "RUSTSEC-2026-0429", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
+  # ttf-parser is unmaintained; it comes with imageproc's text drawing, which oar-ocr links and
+  # Cyberbrain never calls (it reads fonts, it does not draw text). No safe upgrade exists.
+  { id = "RUSTSEC-2026-0192", reason = "font parsing for imageproc text drawing, unused (documents feature)" },
 ]
 
 [sources]
