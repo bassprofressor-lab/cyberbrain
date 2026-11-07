@@ -35,6 +35,10 @@ ed25519-dalek = "3.0.0"
 # dependency used through somebody else's re-export is one nobody can find later.
 getrandom = "0.4.3"
 cyberbrain-code.workspace = true
+# Reading PDFs and scans (`cyberbrain documents`). Off by default: it brings ONNX Runtime bindings
+# and PDFium bindings, both loaded at run time, and a larger dependency tree that a
+# `cargo install` for agents' memory alone should not pay for. Release builds turn it on.
+cyberbrain-documents = { workspace = true, optional = true }
 cyberbrain-core.workspace = true
 cyberbrain-embed.workspace = true
 cyberbrain-index.workspace = true
@@ -113,6 +117,7 @@ libc = "0.2.189"
 # `serve` answers the API while saying the page was not built in.
 default = ["ui"]
 ui = ["dep:rust-embed", "dep:mime_guess"]
+documents = ["dep:cyberbrain-documents"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

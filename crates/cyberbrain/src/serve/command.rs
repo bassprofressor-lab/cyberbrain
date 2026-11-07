@@ -280,6 +280,17 @@ fn refuse(command: &Command) -> Option<&'static str> {
              this store may send notes; that is done at a terminal, not from a page without \
              authentication.",
         ),
+        // Listing is this store's own business. Adding reads files wherever it is pointed, and
+        // this surface has no authentication: the same reason as `transcribe` below.
+        #[cfg(feature = "documents")]
+        Command::Documents {
+            command: crate::cli::DocumentsCommand::List { .. },
+        } => None,
+        #[cfg(feature = "documents")]
+        Command::Documents { .. } => Some(
+            "`documents add` reads files wherever it is pointed, and this surface has no \
+             authentication. Add documents at a prompt.",
+        ),
         Command::Transcribe { .. } => Some(
             "`transcribe` reads a file wherever it is pointed, and this surface has no \
              authentication. Use the microphone button to dictate, or transcribe at a prompt.",

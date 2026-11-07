@@ -12,6 +12,8 @@ mod audit_bridge;
 mod canary;
 mod cli;
 mod daemon;
+#[cfg(feature = "documents")]
+mod documents;
 mod expiry;
 mod hook;
 mod hostload;
@@ -1052,6 +1054,12 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             // 3 only PII holds remain. The ledger failing is an internal error on purpose:
             // it means the importer cannot account for the corpus it just read.
             return Ok(import::exit_code(&r));
+        }
+        #[cfg(feature = "documents")]
+        Command::Documents { command } => {
+            let (r, code) = documents::run(&app, command)?;
+            out.emit(&r, documents::render)?;
+            return Ok(code);
         }
         Command::Manifest { path } => {
             let dir = path.unwrap_or_else(|| app.config().model_dir());

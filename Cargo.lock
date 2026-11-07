@@ -854,6 +854,7 @@ dependencies = [
  "clap",
  "cyberbrain-code",
  "cyberbrain-core",
+ "cyberbrain-documents",
  "cyberbrain-embed",
  "cyberbrain-index",
  "cyberbrain-llm",

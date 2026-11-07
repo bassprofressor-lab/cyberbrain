@@ -354,6 +354,15 @@ pub enum Command {
         dry_run: bool,
     },
 
+    /// Bring PDFs and scanned documents into the store: one note per document, every page under
+    /// its own locator (`p. 3`), so a citation says which page to open. Pages without a text
+    /// layer are recognised (OCR) when the models are installed. Remove one with `forget`.
+    #[cfg(feature = "documents")]
+    Documents {
+        #[command(subcommand)]
+        command: DocumentsCommand,
+    },
+
     /// Serve the web UI and the HTTP API on loopback (SPEC §8.1, §13).
     Serve {
         #[arg(long, default_value_t = 7777)]
@@ -481,6 +490,36 @@ pub enum Command {
         /// somebody signed.
         #[arg(long, value_name = "FINGERPRINT")]
         expect_key: Option<String>,
+    },
+}
+
+#[cfg(feature = "documents")]
+#[derive(Debug, Subcommand)]
+pub enum DocumentsCommand {
+    /// Add PDFs, or every PDF under a folder. An unchanged file is skipped, a changed one
+    /// replaces its note; a note of the same name from elsewhere is never overwritten.
+    Add {
+        /// PDF files or folders.
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        /// The department, team or matter the documents belong to (the note's `bereich`).
+        /// Recall can be limited to it with `--bereich`, the same flag as there.
+        #[arg(long = "bereich", value_name = "BEREICH")]
+        area: Option<String>,
+        /// Documents read at the same time. Each recognition pipeline holds its models in
+        /// memory (about 0.7 GB), so on a laptop this is also the memory limit.
+        #[arg(long)]
+        threads: Option<usize>,
+        /// Accept every PII finding in bulk, as `import --accept-pii`.
+        #[arg(long)]
+        accept_pii: bool,
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// The documents in this store: note name, pages, source file and area.
+    List {
+        #[arg(long = "bereich", value_name = "BEREICH")]
+        area: Option<String>,
     },
 }
 
