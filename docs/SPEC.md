@@ -924,7 +924,12 @@ may not learn — and recall leaves out the "newer notes link here" names, which
 cannot search the code index, which has no bereich, and gets no `status`, whose counts of
 notes, blocks and audit rows span the whole store (2026-11-07). It writes and proposes only into its
 bereiche and never over a note outside them; with one bereich listed an unset one is filled
-in, with several it names one. Unlisted clients, and the operator, are unlimited. This is
+in, with several it names one. Unlisted clients, and the operator, are unlimited, unless
+`[clients] unlisted = "nothing"` (2026-11-07): then an agent (`agent:*`) not listed is limited to no
+bereich at all and sees and writes nothing. That is for a store several people reach over
+`mcp --http`, one token each, where a token created and never listed would otherwise open the whole
+store. The operator, the CLI's own actors, hooks and an unnamed stdio MCP client are not agents and
+stay as they are; starting one of those already needs a shell on this machine. This is
 what lets an agent whose model runs elsewhere read the store at all: without it, `recall`
 hands it everything.
 

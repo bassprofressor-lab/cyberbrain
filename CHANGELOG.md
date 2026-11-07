@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **`[clients] unlisted = "nothing"`.** An agent that `[clients.bereiche]` does not list then sees
+  and writes nothing, instead of everything. Meant for a store several people reach over
+  `mcp --http`, one token each: a token created and never listed opens nothing. The default stays
+  `"unlimited"`, so existing stores behave as before; the operator is never limited. A store that
+  sets the key cannot be opened by 0.10.0 or older, which refuse unknown keys.
+
 ### Fixed
 
 - **A client limited by `[clients.bereiche]` no longer gets `status`.** Its counts of notes,

@@ -2754,15 +2754,17 @@ impl App {
     /// that carries personal data or a secret is refused outright rather than held (until
     /// 2026-09-29 tags skipped the scan entirely: an e-mail address or an IBAN in `--tag`
     /// was written with `pii: none`). The body is where such a thing can be held or redacted.
-    /// The bereiche this actor is limited to by `[clients.bereiche]`, if any.
+    /// The bereiche this actor is limited to by `[clients.bereiche]`, if any. With
+    /// `unlisted = "nothing"` an agent not listed there is limited to none.
     fn client_scope(&self) -> Option<Vec<String>> {
         let me = self.actor.to_string();
-        self.config()
-            .clients
-            .bereiche
-            .iter()
-            .find(|(c, _)| c.trim() == me)
-            .map(|(_, b)| b.clone())
+        let clients = &self.config().clients;
+        if let Some((_, b)) = clients.bereiche.iter().find(|(c, _)| c.trim() == me) {
+            return Some(b.clone());
+        }
+        (clients.unlisted == cyberbrain_core::config::Unlisted::Nothing
+            && matches!(self.actor, Actor::Agent(_)))
+        .then(Vec::new)
     }
 
     /// A limited client writes only into its bereiche, and only over notes already in them.

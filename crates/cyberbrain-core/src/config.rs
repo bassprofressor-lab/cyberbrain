@@ -83,16 +83,34 @@ pub struct Config {
 /// bereiche it is limited to. Such a client recalls only notes in them (a note without a
 /// bereich is outside every limit), cannot expand a citation outside them, cannot search the
 /// code index, and writes only into them: with one bereich listed an unset one is filled in,
-/// with several it must name one. A client not listed is unlimited, as before.
+/// with several it must name one. A client not listed is unlimited, as before, unless
+/// `unlisted = "nothing"` (2026-11-07): then an agent not listed sees and writes nothing. That
+/// is for a store several people reach over `mcp --http`, where a token created and forgotten
+/// here would otherwise open the whole store. The operator is not an agent and stays unlimited.
 ///
 /// ```toml
+/// [clients]
+/// unlisted = "nothing"
+///
 /// [clients.bereiche]
 /// "agent:mcp:seo" = ["seo"]
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ClientsConfig {
+    pub unlisted: Unlisted,
     pub bereiche: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+/// What an agent not named in `[clients.bereiche]` may see.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Unlisted {
+    /// Everything, as before 2026-11-07.
+    #[default]
+    Unlimited,
+    /// Nothing: an empty list of bereiche.
+    Nothing,
 }
 
 /// Clients whose writes are content from outside, whatever they say (C4, 2026-10-03).

@@ -4723,6 +4723,95 @@ fn a_client_limited_to_bereiche_sees_and_writes_only_inside_them() {
     assert!(!f.contains("overwritten"), "{f}");
 }
 
+/// 2026-11-07: with `[clients] unlisted = "nothing"` an agent that is not listed sees and
+/// writes nothing, so a token created and forgotten in `[clients.bereiche]` opens nothing. The
+/// operator stays unlimited, a listed agent keeps its bereiche, and without the switch an
+/// unlisted agent is unlimited as before (the test above).
+#[test]
+fn unlisted_nothing_closes_the_store_to_agents_nobody_listed() {
+    let cb = Cb::new();
+    for (name, bereich) in [("seo-note", Some("seo")), ("plain-note", None)] {
+        let body = format!("marker-unlisted {name}");
+        let mut args = vec![
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            name,
+            "--body",
+            &body,
+        ];
+        if let Some(b) = bereich {
+            args.extend(["--bereich", b]);
+        }
+        let out = cb.run(&args);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let path = cb.store.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&path).unwrap();
+    toml.push_str(
+        "\n[clients]\nunlisted = \"nothing\"\n\n[clients.bereiche]\n\"agent:seo\" = [\"seo\"]\n",
+    );
+    std::fs::write(&path, toml).unwrap();
+    let as_agent = |name: &str, args: &[&str]| {
+        Cb::bin()
+            .env("CYBERBRAIN_AGENT", name)
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let names = |out: &std::process::Output| -> Vec<String> {
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+        let mut n: Vec<String> = v["hits"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|h| h["note_name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        n.sort();
+        n
+    };
+    assert!(
+        names(&as_agent(
+            "forgotten",
+            &["--json", "recall", "marker-unlisted"]
+        ))
+        .is_empty(),
+        "an unlisted agent sees nothing"
+    );
+    assert_eq!(
+        names(&as_agent("seo", &["--json", "recall", "marker-unlisted"])),
+        vec!["seo-note".to_string()]
+    );
+    let all = cb.ok(&["recall", "marker-unlisted"]);
+    assert_eq!(
+        all["hits"].as_array().unwrap().len(),
+        2,
+        "the operator is not an agent: {all}"
+    );
+    let cit = all["hits"][0]["citation"].as_str().unwrap().to_string();
+    assert!(
+        !as_agent("forgotten", &["recall", "--id", &cit])
+            .status
+            .success()
+    );
+    assert_eq!(as_agent("forgotten", &["status"]).status.code(), Some(3));
+    let out = as_agent(
+        "forgotten",
+        &[
+            "write", "--ring", "2", "--kind", "lesson", "--name", "anything", "--body", "x",
+        ],
+    );
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(!cb.store.join("notes/r2/anything.md").exists());
+}
+
 /// Canaries end to end at the command line: planted, listed without their value, handed to
 /// AgentGuard with it, refused in a tool call, and taken away again.
 #[test]
