@@ -12,8 +12,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-11-07
+
+Documents. A PDF, with or without a text layer, becomes a note whose every page carries its
+place, so a recall hit says which page to open. Reading PDFs is a build feature: release
+binaries have it, `cargo install cyberbrain` does not unless asked (`--features documents`).
+
 ### Added
 
+- **`cyberbrain documents add|list` (feature `documents`).** One note per PDF, every page under
+  a locator (`p. 3`); pages that are only an image are recognised with PP-OCRv6 when its files
+  are installed. PDFium, ONNX Runtime and the models are read from the store's `models/` folder
+  and loaded at run time: nothing is downloaded, the build needs no OpenSSL and no PDF toolchain,
+  and Windows, macOS and Linux read a PDF the same way. Every note goes through the ordinary
+  write path, PII hold and audit row included; only a person may accept a PII finding. An
+  unchanged file is skipped by the hash of its bytes, a changed one replaces its note, and a
+  note of the same name from elsewhere is never overwritten. The served page lists documents
+  but refuses to add them. What goes where, what was measured and the limits:
+  [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md).
+- **`cyberbrain-documents`**, the crate behind it, usable on its own as a `DocumentSource`.
+  Measured on 1,400 decisions of the German federal courts and 200 simulated scans before
+  choosing it over Tesseract: 0.18 % character errors against 0.98 %, every section sign kept
+  (Tesseract's German model has none and read all 798 as dollar signs), 2.3 pages/s against 0.9.
 - **A block can say where it sits in an original document.** A line of exactly the form
   `<!-- cyberbrain:locator S. 12 -->` in a note body ends the block before it and gives
   `S. 12` to every block after it, until the next such line. The line is not part of any

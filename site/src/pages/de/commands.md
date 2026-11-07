@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/Doc.astro
 title: "Befehle"
-description: "Alle Befehle und Optionen von cyberbrain 0.9.1: init, write, recall, find, propose, review, forget, scan, status, doctor, trust, install, serve, mcp, hook, policy, canary, hub und weitere."
+description: "Alle Befehle und Optionen von cyberbrain 0.10.0: init, write, recall, find, propose, review, forget, scan, status, doctor, trust, install, serve, mcp, hook, policy, canary, hub und weitere."
 lang: de
 slug: "commands/"
 ---
@@ -111,6 +111,23 @@ Holt einen vorhandenen Baum von Markdown-Notizen in den Store, gesteuert über e
 | `--plan <PLAN>` | die Zuordnungsdatei: was übernommen, was übersprungen, wie geteilt, welcher Ring |
 | `--accept-pii` | alle PII-Funde auf einmal annehmen |
 | `--dry-run` | |
+
+### documents
+
+Nur in den Release-Programmen oder mit `cargo install cyberbrain --features documents`. Holt PDFs und Scans herein: eine Notiz je Dokument in Ring 4, jede Seite unter einer Ortsangabe (`p. 3`), sodass ein Treffer die Seite nennt. Seiten, die nur ein Bild sind, werden erkannt, wenn die OCR-Dateien in `models/` liegen. Was wohin gehört: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
+
+```text
+cyberbrain documents add <PFAD>... [--bereich <B>] [--threads <N>] [--accept-pii] [--dry-run]
+cyberbrain documents list [--bereich <B>]
+```
+
+| Option | |
+|---|---|
+| `--bereich <B>` | Abteilung, Team oder Mandat; recall lässt sich mit derselben Option darauf beschränken |
+| `--threads <N>` | gleichzeitig gelesene Dokumente; jede OCR-Pipeline belegt etwa 0,7 GB |
+| `--accept-pii` | alle PII-Funde auf einmal annehmen; einem Agenten verweigert |
+
+Eine unveränderte Datei wird übersprungen, eine geänderte ersetzt ihre Notiz. Entfernen mit `forget`.
 
 ### transcribe
 

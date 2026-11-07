@@ -405,7 +405,7 @@ the network.
 
 ## Status
 
-**v0.9.1, and young.** 1,130 tests, 18 browser tests, seven crates on crates.io plus the
+**v0.10.0, and young.** 1,153 tests, 18 browser tests, eight crates on crates.io plus the
 Windows launcher, clippy and rustfmt clean. Binaries for Linux, Windows and macOS (Apple
 silicon) on the release page, and an installer beside them. It has been run against one
 operator's real corpus, 1,086 notes across five projects, and not much else. Expect rough
@@ -425,7 +425,7 @@ Cyberbrain is an original work. It shares no source code with any other memory t
 history documents it decision by decision.
 
 <details>
-<summary>The seven crates</summary>
+<summary>The eight crates</summary>
 
 <br>
 
@@ -438,6 +438,7 @@ history documents it decision by decision.
 | [`cyberbrain-code`](https://crates.io/crates/cyberbrain-code) | the code index behind `cyberbrain find` |
 | [`cyberbrain-llm`](https://crates.io/crates/cyberbrain-llm) | the optional OpenAI-compatible client |
 | [`cyberbrain-policy`](https://crates.io/crates/cyberbrain-policy) | egress register, audit chain, PII gate, profiles, obligations |
+| [`cyberbrain-documents`](https://crates.io/crates/cyberbrain-documents) | PDFs and scans into notes with page locators (PDFium, PP-OCRv6); the `documents` feature, [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) |
 
 </details>
 

@@ -111,6 +111,23 @@ Bring an existing tree of Markdown notes into the store, driven by a TOML mappin
 | `--accept-pii` | accept every PII finding in bulk |
 | `--dry-run` | |
 
+### documents
+
+Release binaries only, or `cargo install cyberbrain --features documents`. Bring PDFs and scans in: one note per document in ring 4, every page under a locator (`p. 3`), so a recall hit names the page. Pages that are only an image are recognised when the OCR files are in `models/`. What goes where: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
+
+```text
+cyberbrain documents add <PATH>... [--bereich <B>] [--threads <N>] [--accept-pii] [--dry-run]
+cyberbrain documents list [--bereich <B>]
+```
+
+| Option | |
+|---|---|
+| `--bereich <B>` | the department, team or matter; recall can be limited to it with the same flag |
+| `--threads <N>` | documents read at once; each OCR pipeline holds about 0.7 GB |
+| `--accept-pii` | accept every PII finding in bulk; refused to an agent |
+
+An unchanged file is skipped, a changed one replaces its note. Remove a document with `forget`.
+
 ### transcribe
 
 ```text

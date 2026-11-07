@@ -59,7 +59,7 @@ jobs:
         working-directory: ui
 
       - name: build the binary
-        run: cargo build --release -p cyberbrain
+        run: cargo build --release -p cyberbrain --features documents
 
       # The tag says what it is; the binary has to agree. A release built from the wrong
       # commit is the kind of thing nobody notices until someone reports a fixed bug.

@@ -45,14 +45,19 @@ for Linux and Windows, checks the binary's own version against the tag, runs it 
 machine that has never seen a store, and attaches the files plus `SHA256SUMS` to a **draft**
 release. The notes are written by a person; the workflow only fills the assets.
 
-Then publish the seven crates in dependency order, each waiting for the index to catch up:
+Then publish the eight crates in dependency order, each waiting for the index to catch up:
 
 ```
 cyberbrain-core
 cyberbrain-index      cyberbrain-embed      cyberbrain-code      cyberbrain-llm
-cyberbrain-policy
+cyberbrain-policy      cyberbrain-documents
 cyberbrain
 ```
+
+The release binaries are built with `--features documents` (reading PDFs); the crate's default
+stays without it, so `cargo install cyberbrain` does not pull ONNX Runtime and PDFium bindings.
+The run-time libraries and models are never shipped in a crate or a binary: see
+[`DOCUMENTS.md`](DOCUMENTS.md).
 
 `crates/cyberbrain/ui-dist` is a build artefact: it is gitignored, listed in `include`, and
 should be deleted again after publishing so a stale page cannot be embedded by accident.
