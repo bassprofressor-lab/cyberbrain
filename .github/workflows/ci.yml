@@ -406,4 +406,7 @@ jobs:
       # `--nocapture` because a green tick hides how close it was. The budget test may
       # measure a series up to three times, and one that quietly needs all three on every
       # run is a slow drift nobody would see without the numbers in the log.
-      - run: cargo test --workspace --release --no-default-features -- --ignored --nocapture
+      # cyberbrain-documents is left out: its ignored tests read real PDFs with PDFium and the
+      # OCR models, which are run-time files no runner has (docs/DOCUMENTS.md); they run where
+      # those files are, and say so when they are missing instead of passing.
+      - run: cargo test --workspace --release --no-default-features --exclude cyberbrain-documents -- --ignored --nocapture
