@@ -53,7 +53,8 @@ def canonical(detail):
 
 def admits(selection, row):
     """The selection rules of the writer: an action selects itself and its `action.*`
-    family, a subject matches exactly, `contains` is a case-insensitive substring."""
+    family, a subject and an actor match exactly, `contains` is a case-insensitive substring,
+    a bereich must be one the row names."""
     a = selection.get("action")
     if a is not None and not (row["action"] == a or row["action"].startswith(a + ".")):
         return False
@@ -66,7 +67,38 @@ def admits(selection, row):
         hay = f"{row['actor']} {row['action']} {row['subject']} {detail}".lower()
         if c.lower() not in hay:
             return False
+    who = selection.get("actor")
+    if who is not None and row["actor"] != who:
+        return False
+    b = selection.get("bereich")
+    if b is not None and b not in row_bereiche(row):
+        return False
     return True
+
+
+def row_bereiche(row):
+    """The bereiche a row names: what a search returned or asked for, what a change to
+    `[clients]` added, removed or left in place (`row_bereiche` in the writer)."""
+    d = row.get("detail") or {}
+    out = set()
+
+    def strings(v):
+        if isinstance(v, list):
+            out.update(x for x in v if isinstance(x, str))
+
+    strings(d.get("bereiche"))
+    for key in ("added", "removed"):
+        if isinstance(d.get(key), dict):
+            for v in d[key].values():
+                strings(v)
+    after = d.get("after")
+    if isinstance(after, dict) and isinstance(after.get("bereiche"), dict):
+        for v in after["bereiche"].values():
+            strings(v)
+    for key in ("requested_bereich", "bereich"):
+        if isinstance(d.get(key), str):
+            out.add(d[key])
+    return out
 
 
 def row_hash_v2(row, prev):

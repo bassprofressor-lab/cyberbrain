@@ -12,6 +12,31 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **Searches by a limited client are in the audit log.** Every `recall` and `recall_id` of a
+  client that `[clients]` limits to bereiche leaves a `search.access` row, chained like every other
+  and signed where the store has an audit key: who, which tool,
+  the bereich it asked for, the bereiche of what it got and how many hits. The query is not in
+  the row, only a keyed hash that says which searches were the same; the key stays on the
+  machine. `[audit] searches = "limited" | "all" | "off"` decides whose searches are recorded;
+  the default `"limited"` records nothing in a store that limits nobody, so a single user's hooks
+  do not fill the log. A search whose row cannot be written fails.
+- **Changes to who may see what are in the audit log.** Every process compares `[clients]` with
+  the state the log last recorded when it opens the store and writes the difference as a
+  `clients.changed` row (bereiche added and removed per client, clients added and removed,
+  `unlisted`), so a hand edit of `cyberbrain.toml` is recorded too. The first state is the
+  baseline. The row is written as `system:config-file`; a tool that changed the file can say so
+  in `CYBERBRAIN_CONFIG_CHANGED_BY`, recorded as a claim.
+- **`policy audit --actor` and `--bereich`** select rows by actor and by the bereiche a row names,
+  in the listing and in an export; `scripts/verify-audit-export.py` knows both selections.
+
+### Changed
+
+- **A limited client gets no `policy audit`, audit export or subject access report.** The log
+  names other clients, their bereiche and their searches. Refused like `status` (exit 3).
+- A store that sets `[audit]` cannot be opened by 0.10.1 or older, which refuse unknown keys.
+
 ### Fixed
 
 - **The Windows installer shows German umlauts again.** Its script is UTF-8 without a byte order

@@ -1081,6 +1081,9 @@ pub struct App {
     /// Set by `serve` unless started with `--allow-resident-writes`. See
     /// [`App::refuse_resident_writes`].
     resident_writes_refused: std::sync::atomic::AtomicBool,
+    /// The key the query hash in `search.access` rows is made with, read or made on the first
+    /// recorded search (see `access_log`).
+    search_key: OnceLock<Option<[u8; 32]>>,
 }
 
 /// The loaded model is not freed, it is left to the operating system.
@@ -1234,7 +1237,11 @@ impl App {
             identity: OnceLock::new(),
             llm: Mutex::new(None),
             resident_writes_refused: std::sync::atomic::AtomicBool::new(false),
+            search_key: OnceLock::new(),
         };
+        // Who may see which bereich is a file anybody with access edits by hand; a change is
+        // recorded here, at the first process that loads it (SPEC §12.6.3).
+        app.record_clients_change()?;
         // A process started by `serve` for its command line inherits the served store's
         // refusal (`serve::command`). Only ever narrows: whoever sets it refuses themselves.
         if std::env::var_os(REFUSE_RESIDENT_ENV).is_some_and(|v| !v.is_empty()) {
@@ -2034,6 +2041,17 @@ impl App {
             };
             ix.recall(query, embedder, &opts)?
         };
+        // Recorded before anything is handed back, and the search fails if it cannot be.
+        if self.searches_recorded() {
+            let bereiche = self.hit_bereiche(&result.hits)?;
+            self.record_search(
+                "recall",
+                query,
+                req.bereich.as_deref(),
+                &bereiche,
+                result.hits.len(),
+            )?;
+        }
         if let EmbedderState::Absent { reason } = embedder_state {
             result
                 .caveats
@@ -2385,7 +2403,29 @@ impl App {
     /// `recall --id`: a citation back to its block and the whole note it came from.
     pub fn recall_id(&self, citation: &str) -> Result<Expanded> {
         let cit: Citation = citation.parse()?;
-        let (block, rec) = lock_index(&self.index)?.resolve(&cit)?.ok_or_else(|| {
+        let out = self.expand_citation(&cit);
+        // Recorded either way. Outside the limit the row reads like a citation that does not
+        // exist, as the answer does: no bereich, no hit.
+        if self.searches_recorded() {
+            let (bereiche, hits) = match &out {
+                Ok(e) => (
+                    e.note
+                        .front
+                        .bereich
+                        .iter()
+                        .map(|b| (b.clone(), 1))
+                        .collect(),
+                    1,
+                ),
+                Err(_) => (BTreeMap::new(), 0),
+            };
+            self.record_search("recall_id", &cit.to_string(), None, &bereiche, hits)?;
+        }
+        out
+    }
+
+    fn expand_citation(&self, cit: &Citation) -> Result<Expanded> {
+        let (block, rec) = lock_index(&self.index)?.resolve(cit)?.ok_or_else(|| {
             Error::NoSuchNote(format!(
                 "citation {cit} (not in the index; run `cyberbrain scan` if the note exists)"
             ))
@@ -5343,6 +5383,7 @@ impl App {
     /// [`export_audit_bundle`](Self::export_audit_bundle), signed with the store's key when
     /// `signed` (F2).
     pub fn export_audit_bundle_with(&self, filter: &AuditFilter, signed: bool) -> Result<String> {
+        self.refuse_limited_audit_reader("an audit export")?;
         let tool = concat!("cyberbrain ", env!("CARGO_PKG_VERSION"));
         self.policy.export_audit_bundle_with(filter, tool, signed)
     }
@@ -5480,6 +5521,7 @@ impl App {
         verify: bool,
         format: ExportFormat,
     ) -> Result<AuditView> {
+        self.refuse_limited_audit_reader("policy audit")?;
         let checked = verify.then(|| self.verify_audit_chain().map_err(|e| e.to_string()));
         let verified = checked
             .as_ref()
@@ -5527,6 +5569,7 @@ impl App {
     }
 
     pub fn policy_subject(&self, identifier: &str) -> Result<SubjectAccessReport> {
+        self.refuse_limited_audit_reader("a subject access report")?;
         let source = IndexSubjectSource { index: &self.index };
         self.policy.subject_access(&source, identifier)
     }
@@ -5817,6 +5860,7 @@ fn normalise_link_target(name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+mod access_log;
 mod embed_bench;
 pub use embed_bench::EmbedBenchReport;
 

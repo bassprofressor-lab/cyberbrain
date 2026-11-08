@@ -3090,6 +3090,8 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             limit,
             action,
             subject,
+            actor,
+            bereich,
             verify,
             since,
             until,
@@ -3107,6 +3109,8 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             let filter = AuditFilter {
                 action,
                 subject,
+                actor,
+                bereich,
                 since: stamp(since, "since")?,
                 until: stamp(until, "until")?,
                 // An export answers "what happened in this period", and a limit silently

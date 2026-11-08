@@ -226,15 +226,21 @@ impl AuditSink for StoreAuditSink {
             action: None,
             subject: filter.subject.clone(),
             contains: filter.contains.clone(),
-            limit: if filter.since.is_some() || filter.action.is_some() {
-                None
-            } else {
-                filter.limit
-            },
+            limit: None,
+        };
+        // Actor and bereich are matched here too: the bereiche sit inside `detail`, and the
+        // store has no actor filter. Every condition matched here means the limit can only be
+        // applied here, after them.
+        let narrowed = filter.since.is_some()
+            || filter.action.is_some()
+            || filter.actor.is_some()
+            || filter.bereich.is_some();
+        let store_filter = cyberbrain_index::AuditFilter {
+            limit: if narrowed { None } else { filter.limit },
+            ..store_filter
         };
         let rows = self.lock()?.read(&store_filter)?;
         let mut out = Vec::with_capacity(rows.len());
-        let narrowed = filter.since.is_some() || filter.action.is_some();
         for r in rows {
             let e = to_event(r)?;
             if let Some(since) = filter.since
@@ -245,6 +251,9 @@ impl AuditSink for StoreAuditSink {
             if let Some(action) = &filter.action
                 && !(e.action == *action || e.action.starts_with(&format!("{action}.")))
             {
+                continue;
+            }
+            if !filter.matches_actor_and_bereich(&e) {
                 continue;
             }
             out.push(e);
