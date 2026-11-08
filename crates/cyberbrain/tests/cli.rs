@@ -5134,3 +5134,456 @@ fn doctor_names_a_note_dated_in_the_future() {
         "{d}"
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// Who searched which bereich, and who changed who may see what (2026-11-08).
+
+/// The rows of one action, oldest first, as `policy audit` renders them. `search.access`
+/// rows are in the search log.
+fn rows_of(cb: &Cb, action: &str) -> Vec<Value> {
+    let rows = if action == "search.access" {
+        let v = cb.ok(&["policy", "audit", "--searches", "--limit", "100000"]);
+        serde_json::from_str(v["rendered"].as_str().unwrap()).unwrap()
+    } else {
+        cb.audit_rows()
+    };
+    rows.into_iter().filter(|r| r["action"] == action).collect()
+}
+
+fn append_toml(cb: &Cb, extra: &str) {
+    let path = cb.store.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&path).unwrap();
+    toml.push_str(extra);
+    std::fs::write(&path, toml).unwrap();
+}
+
+/// A client limited by `[clients.bereiche]` leaves a signed row for every search and every
+/// expanded citation: who, which tool, the bereich it asked for, the bereiche of what it got
+/// and how much. The query itself is not in the log, neither in the row nor anywhere in
+/// `audit.db`; a keyed hash says which searches were the same. Unlimited agents, the operator
+/// and hooks leave nothing under the default `searches = "limited"`, so a store with nobody
+/// limited logs no searches at all. The limited client cannot read the log.
+#[test]
+fn searches_by_a_limited_client_are_audited_without_the_query_text() {
+    let cb = Cb::new();
+    assert!(cb.run(&["policy", "audit-key", "--init"]).status.success());
+    for (name, bereich) in [
+        ("seo-note", Some("seo")),
+        ("seo-note-zwei", Some("seo")),
+        ("finance-note", Some("finanzen")),
+        ("plain-note", None),
+    ] {
+        let body = format!("marker-protokoll Zeppelinwerft {name}");
+        let mut args = vec![
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            name,
+            "--body",
+            &body,
+        ];
+        if let Some(b) = bereich {
+            args.extend(["--bereich", b]);
+        }
+        let out = cb.run(&args);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let hits = cb.ok(&["recall", "marker-protokoll", "-n", "10"]);
+    let cit_of = |name: &str| -> String {
+        hits["hits"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|h| h["note_name"] == name)
+            .unwrap()["citation"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (seo_cit, fin_cit) = (cit_of("seo-note"), cit_of("finance-note"));
+    append_toml(&cb, "\n[clients.bereiche]\n\"agent:seo\" = [\"seo\"]\n");
+    let as_agent = |name: &str, args: &[&str]| {
+        Cb::bin()
+            .env("CYBERBRAIN_AGENT", name)
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let ok = |out: std::process::Output| assert!(out.status.success(), "{}", text(&out));
+    ok(as_agent(
+        "seo",
+        &["recall", "marker-protokoll Zeppelinwerft"],
+    ));
+    ok(as_agent(
+        "seo",
+        &["recall", "marker-protokoll Zeppelinwerft"],
+    ));
+    ok(as_agent(
+        "seo",
+        &["recall", "marker-protokoll", "--bereich", "finanzen"],
+    ));
+    assert!(
+        !as_agent("seo", &["recall", "--id", &fin_cit])
+            .status
+            .success()
+    );
+    ok(as_agent("seo", &["recall", "--id", &seo_cit]));
+    // Not limited: nothing under the default.
+    ok(as_agent("other", &["recall", "marker-protokoll"]));
+    ok(cb.run(&["recall", "marker-protokoll"]));
+
+    let rows = rows_of(&cb, "search.access");
+    assert_eq!(
+        rows.len(),
+        5,
+        "one row per access by the limited client: {rows:#?}"
+    );
+    for r in &rows {
+        assert_eq!(r["actor"], "agent:seo", "{r}");
+    }
+    let d = |i: usize| &rows[i]["detail"];
+    assert_eq!(d(0)["tool"], "recall");
+    assert_eq!(d(0)["bereiche"], serde_json::json!(["seo"]), "{}", d(0));
+    assert_eq!(d(0)["hits"], 2, "{}", d(0));
+    assert_eq!(d(0)["limited"], true);
+    assert!(d(0).get("requested_bereich").is_none_or(Value::is_null));
+    let hash = d(0)["query_hash"]
+        .as_str()
+        .expect("a keyed hash of the query");
+    assert_eq!(d(1)["query_hash"], hash, "the same search hashes alike");
+    assert_ne!(d(2)["query_hash"], hash, "another search does not");
+    assert_eq!(d(2)["requested_bereich"], "finanzen");
+    assert_eq!(d(2)["hits"], 0);
+    assert_eq!(d(2)["bereiche"], serde_json::json!([]));
+    // A citation outside the limit reads like one that does not exist, here as well.
+    assert_eq!(d(3)["tool"], "recall_id");
+    assert_eq!(d(3)["hits"], 0);
+    assert_eq!(d(3)["bereiche"], serde_json::json!([]));
+    assert_eq!(d(4)["tool"], "recall_id");
+    assert_eq!(d(4)["bereiche"], serde_json::json!(["seo"]));
+    assert_eq!(d(4)["hits"], 1);
+
+    // The query is nowhere in the record, not even in a column the export leaves out.
+    for file in ["audit.db", "search-audit.db"] {
+        let raw = std::fs::read(cb.store.join(file)).unwrap();
+        let raw = String::from_utf8_lossy(&raw);
+        for secret in ["Zeppelinwerft", "marker-protokoll", &fin_cit, &seo_cit] {
+            assert!(!raw.contains(secret), "{secret} is in {file}");
+        }
+    }
+    // And the searches are not in the main log at all: they have their own, with a retention.
+    assert!(
+        cb.audit_rows()
+            .iter()
+            .all(|r| r["action"] != "search.access"),
+        "search rows belong in the search log"
+    );
+
+    // Signed and chained like every other row.
+    let out = cb.run(&["policy", "audit", "--verify", "--limit", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert!(
+        rows.iter()
+            .all(|r| r["detail"]["_chain"]["sig"].is_string()),
+        "{rows:#?}"
+    );
+
+    // Read back by actor and by bereich.
+    let by = |args: &[&str]| -> Vec<Value> {
+        let mut full = vec!["policy", "audit", "--limit", "1000"];
+        full.extend_from_slice(args);
+        let v = cb.ok(&full);
+        serde_json::from_str(v["rendered"].as_str().unwrap()).unwrap()
+    };
+    assert_eq!(by(&["--searches", "--actor", "agent:seo"]).len(), 5);
+    assert_eq!(by(&["--searches", "--actor", "agent:other"]).len(), 0);
+    assert_eq!(
+        by(&["--action", "search.access", "--bereich", "seo"]).len(),
+        3,
+        "two searches and one citation delivered from seo"
+    );
+    assert_eq!(
+        by(&["--action", "search.access", "--bereich", "finanzen"]).len(),
+        1,
+        "the one search that asked for finanzen"
+    );
+
+    // An export narrowed the same way checks here and in the independent checker.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("seo.jsonl");
+    let out = cb.run(&[
+        "policy",
+        "audit",
+        "--searches",
+        "--actor",
+        "agent:seo",
+        "--bereich",
+        "seo",
+        "--export",
+        file.to_str().unwrap(),
+        "--signed",
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+    let check = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
+    assert!(check.status.success(), "{}", text(&check));
+    assert_eq!(
+        std::fs::read_to_string(&file).unwrap().lines().count(),
+        3 + 2,
+        "header, three rows, footer"
+    );
+    if python_with("blake3") {
+        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../scripts/verify-audit-export.py");
+        let py = Command::new("python3")
+            .arg(&script)
+            .arg(&file)
+            .output()
+            .unwrap();
+        assert!(py.status.success(), "python disagrees: {}", text(&py));
+    } else {
+        eprintln!("SKIPPED the python half: no python3 with blake3 here");
+    }
+
+    // The limited client gets no look at the log.
+    for args in [vec!["policy", "audit"], vec!["policy", "audit", "--verify"]] {
+        let out = as_agent("seo", &args);
+        assert_eq!(out.status.code(), Some(3), "{args:?}: {}", text(&out));
+    }
+
+    // `all` records everybody; `off` nobody.
+    append_toml(&cb, "\n[audit]\nsearches = \"all\"\n");
+    ok(cb.run(&["recall", "marker-protokoll"]));
+    let rows = rows_of(&cb, "search.access");
+    assert_eq!(rows.len(), 6);
+    assert_eq!(rows[5]["actor"], "operator");
+    assert_eq!(rows[5]["detail"]["limited"], false);
+    let path = cb.store.join("cyberbrain.toml");
+    let toml = std::fs::read_to_string(&path)
+        .unwrap()
+        .replace("searches = \"all\"", "searches = \"off\"");
+    std::fs::write(&path, toml).unwrap();
+    ok(as_agent("seo", &["recall", "marker-protokoll"]));
+    assert_eq!(rows_of(&cb, "search.access").len(), 6);
+}
+
+/// Who may see which bereich is `[clients]` in cyberbrain.toml, and whoever can edit that file
+/// changes it without a command. So the change is found where it takes effect: every start
+/// compares the section with the last state the log recorded and writes the difference. The
+/// first state is written as the baseline; a store that never limited anybody writes nothing.
+#[test]
+fn a_hand_edit_to_clients_bereiche_is_recorded_at_the_next_start() {
+    let cb = Cb::new();
+    let path = cb.store.join("cyberbrain.toml");
+    let base = std::fs::read_to_string(&path).unwrap();
+    let set = |section: &str| std::fs::write(&path, format!("{base}\n{section}")).unwrap();
+    cb.ok(&["status"]);
+    assert!(
+        rows_of(&cb, "clients.changed").is_empty(),
+        "nothing limited, nothing to record"
+    );
+
+    set("[clients.bereiche]\n\"agent:mcp:anna\" = [\"akte-a\"]\n");
+    cb.ok(&["status"]);
+    cb.ok(&["status"]);
+    let rows = rows_of(&cb, "clients.changed");
+    assert_eq!(rows.len(), 1, "the baseline, once: {rows:#?}");
+    assert_eq!(rows[0]["actor"], "system:config-file");
+    assert_eq!(rows[0]["detail"]["baseline"], true);
+    assert_eq!(
+        rows[0]["detail"]["after"]["bereiche"]["agent:mcp:anna"],
+        serde_json::json!(["akte-a"])
+    );
+
+    set("[clients]\nunlisted = \"nothing\"\n\n[clients.bereiche]\n\
+         \"agent:mcp:anna\" = [\"akte-a\", \"akte-b\"]\n\"agent:mcp:bernd\" = [\"akte-b\"]\n");
+    let out = Cb::bin()
+        .env("CYBERBRAIN_CONFIG_CHANGED_BY", "kanzlei-admin")
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["--json", "status"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    let rows = rows_of(&cb, "clients.changed");
+    assert_eq!(rows.len(), 2, "{rows:#?}");
+    let d = &rows[1]["detail"];
+    assert_eq!(d["baseline"], false, "{d}");
+    assert_eq!(
+        d["added"]["agent:mcp:anna"],
+        serde_json::json!(["akte-b"]),
+        "{d}"
+    );
+    assert_eq!(
+        d["added"]["agent:mcp:bernd"],
+        serde_json::json!(["akte-b"]),
+        "{d}"
+    );
+    assert_eq!(
+        d["clients_added"],
+        serde_json::json!(["agent:mcp:bernd"]),
+        "{d}"
+    );
+    assert_eq!(d["unlisted"]["before"], "unlimited", "{d}");
+    assert_eq!(d["unlisted"]["after"], "nothing", "{d}");
+    assert_eq!(d["claimed_by"], "kanzlei-admin", "{d}");
+
+    // Taking a bereich away and a client off the list.
+    set(
+        "[clients]\nunlisted = \"nothing\"\n\n[clients.bereiche]\n\"agent:mcp:anna\" = [\"akte-a\"]\n",
+    );
+    cb.ok(&["status"]);
+    let rows = rows_of(&cb, "clients.changed");
+    assert_eq!(rows.len(), 3, "{rows:#?}");
+    let d = &rows[2]["detail"];
+    assert_eq!(
+        d["removed"]["agent:mcp:anna"],
+        serde_json::json!(["akte-b"]),
+        "{d}"
+    );
+    assert_eq!(
+        d["removed"]["agent:mcp:bernd"],
+        serde_json::json!(["akte-b"]),
+        "{d}"
+    );
+    assert_eq!(
+        d["clients_removed"],
+        serde_json::json!(["agent:mcp:bernd"]),
+        "{d}"
+    );
+    assert!(d.get("claimed_by").is_none_or(Value::is_null), "{d}");
+
+    let out = cb.run(&["policy", "audit", "--verify", "--limit", "1"]);
+    assert!(out.status.success(), "{}", text(&out));
+}
+
+/// Search rows have their own log and a retention (`[audit] search_retention_days`). Past it
+/// they are deleted when the store is next opened, and a signed `search.log.pruned` row in the
+/// main log says what went: period, count, the last hash, which the rest of the search log
+/// then chains to. Both logs verify after every deletion. Rows deleted without such a report
+/// are a break.
+#[test]
+fn search_rows_past_their_retention_go_with_a_report_and_both_chains_verify() {
+    let cb = Cb::new();
+    assert!(cb.run(&["policy", "audit-key", "--init"]).status.success());
+    let out = cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "seo-note",
+        "--body",
+        "marker-frist eins",
+        "--bereich",
+        "seo",
+    ]);
+    assert!(out.status.success(), "{}", text(&out));
+    let path = cb.store.join("cyberbrain.toml");
+    let base = std::fs::read_to_string(&path).unwrap();
+    let set_days = |days: u32| {
+        std::fs::write(
+            &path,
+            format!(
+                "{base}\n[audit]\nsearch_retention_days = {days}\n\n\
+                 [clients.bereiche]\n\"agent:seo\" = [\"seo\"]\n"
+            ),
+        )
+        .unwrap()
+    };
+    set_days(1);
+    let at = |offset_hours: i64, args: &[&str]| {
+        let now = jiff::Timestamp::now()
+            .checked_add(jiff::SignedDuration::from_hours(offset_hours))
+            .unwrap();
+        Cb::bin()
+            .env("CYBERBRAIN_TEST_NOW", now.to_string())
+            .arg("--store")
+            .arg(&cb.store)
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let search = || {
+        let out = Cb::bin()
+            .env("CYBERBRAIN_AGENT", "seo")
+            .arg("--store")
+            .arg(&cb.store)
+            .args(["recall", "marker-frist"])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out));
+    };
+    let verify = || {
+        let out = cb.run(&["policy", "audit", "--verify", "--limit", "1"]);
+        (out.status.code(), text(&out))
+    };
+    search();
+    search();
+    let before = rows_of(&cb, "search.access");
+    assert_eq!(before.len(), 2);
+    let last_hash = before[1]["detail"]["_chain"]["hash"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // Inside the period: nothing goes.
+    assert!(at(12, &["status"]).status.success());
+    assert_eq!(rows_of(&cb, "search.access").len(), 2);
+    assert!(rows_of(&cb, "search.log.pruned").is_empty());
+
+    // Past it: both rows go, the report stays.
+    assert!(at(48, &["status"]).status.success());
+    assert!(rows_of(&cb, "search.access").is_empty());
+    let reports = rows_of(&cb, "search.log.pruned");
+    assert_eq!(reports.len(), 1, "{reports:#?}");
+    let d = &reports[0]["detail"];
+    assert_eq!(d["rows"], 2, "{d}");
+    assert_eq!(d["last_hash"], last_hash.as_str(), "{d}");
+    assert_eq!(d["previous_anchor"], "genesis", "{d}");
+    assert!(d["digest"].is_string() && d["from"].is_string() && d["until"].is_string());
+    assert_eq!(reports[0]["actor"], "retention");
+    assert!(reports[0]["detail"]["_chain"]["sig"].is_string(), "signed");
+    let (code, said) = verify();
+    assert_eq!(code, Some(0), "{said}");
+    assert!(said.contains("search log chain verified"), "{said}");
+
+    // The next row chains to the pruned section, not to a new beginning.
+    search();
+    let after = rows_of(&cb, "search.access");
+    assert_eq!(after.len(), 1);
+    assert_eq!(after[0]["detail"]["_chain"]["prev"], last_hash.as_str());
+    let (code, said) = verify();
+    assert_eq!(code, Some(0), "{said}");
+
+    // Retention 0: everything goes at the next open, and the reports chain on.
+    set_days(0);
+    assert!(at(0, &["status"]).status.success());
+    assert!(rows_of(&cb, "search.access").is_empty());
+    let reports = rows_of(&cb, "search.log.pruned");
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[1]["detail"]["previous_anchor"], last_hash.as_str());
+    let (code, said) = verify();
+    assert_eq!(code, Some(0), "{said}");
+
+    // Counter-check: rows deleted without a report break the search log.
+    set_days(365);
+    search();
+    search();
+    {
+        let db = rusqlite::Connection::open(cb.store.join("search-audit.db")).unwrap();
+        db.execute_batch(
+            "DROP TRIGGER audit_no_delete;
+             DELETE FROM audit WHERE seq = (SELECT min(seq) FROM audit);",
+        )
+        .unwrap();
+    }
+    let (code, said) = verify();
+    assert_eq!(code, Some(1), "{said}");
+    assert!(said.contains("without a report"), "{said}");
+}

@@ -109,6 +109,15 @@ pub enum AuditAction {
     SubjectAccess,
     RetentionExpired,
     AuditExport,
+    /// A search or an expanded citation, with the bereiche of what it returned and never the
+    /// query in clear (SPEC §12.6.3). Which searches are recorded is `[audit] searches`.
+    SearchAccess,
+    /// `[clients]` differs from the state the log last recorded: who may see which bereich
+    /// changed. Found when a process loads the configuration, so a hand edit is caught too.
+    ClientsChanged,
+    /// Rows past `[audit] search_retention_days` were deleted from the search log. Written to
+    /// the main log, before the deletion, with what went and the hash the rest now chains to.
+    SearchLogPruned,
 }
 
 impl AuditAction {
@@ -132,6 +141,9 @@ impl AuditAction {
             AuditAction::SubjectAccess => "subject.access",
             AuditAction::RetentionExpired => "retention.expired",
             AuditAction::AuditExport => "audit.export",
+            AuditAction::SearchAccess => "search.access",
+            AuditAction::ClientsChanged => "clients.changed",
+            AuditAction::SearchLogPruned => "search.log.pruned",
         }
     }
 }
@@ -254,11 +266,67 @@ pub struct AuditFilter {
     /// Case-insensitive substring over actor, action, subject and detail. What
     /// `policy subject <identifier>` uses (SPEC §12.3).
     pub contains: Option<String>,
+    /// Exact match on `actor`, as the log writes it: `agent:mcp:anna`, `operator`.
+    pub actor: Option<String>,
+    /// Rows that name this bereich: the bereiche a search returned or asked for, the
+    /// bereiche a change to `[clients]` added or removed. See [`row_bereiche`].
+    pub bereich: Option<String>,
     pub limit: Option<usize>,
 }
 
+/// The bereiche a row names, for `--bereich`: what a search returned (`bereiche`) and asked
+/// for (`requested_bereich`), a single `bereich`, and what a change to `[clients]` added,
+/// removed or left in place for anyone (`added`, `removed`, `after.bereiche`).
+pub fn row_bereiche(e: &AuditEvent) -> std::collections::BTreeSet<String> {
+    let mut out = std::collections::BTreeSet::new();
+    let d = &e.detail;
+    let mut strings = |v: Option<&Value>| {
+        if let Some(Value::Array(a)) = v {
+            out.extend(a.iter().filter_map(Value::as_str).map(str::to_owned));
+        }
+    };
+    strings(d.get("bereiche"));
+    for key in ["added", "removed"] {
+        if let Some(Value::Object(m)) = d.get(key) {
+            for v in m.values() {
+                strings(Some(v));
+            }
+        }
+    }
+    if let Some(Value::Object(m)) = d.get("after").and_then(|a| a.get("bereiche")) {
+        for v in m.values() {
+            strings(Some(v));
+        }
+    }
+    for key in ["requested_bereich", "bereich"] {
+        if let Some(b) = d.get(key).and_then(Value::as_str) {
+            out.insert(b.to_owned());
+        }
+    }
+    out
+}
+
 impl AuditFilter {
+    /// Whether the actor and bereich conditions hold. Separate because the store's reader
+    /// cannot ask SQL for either and applies them after reading.
+    pub fn matches_actor_and_bereich(&self, e: &AuditEvent) -> bool {
+        if let Some(a) = &self.actor
+            && e.actor != *a
+        {
+            return false;
+        }
+        if let Some(b) = &self.bereich
+            && !row_bereiche(e).contains(b)
+        {
+            return false;
+        }
+        true
+    }
+
     pub fn matches(&self, e: &AuditEvent) -> bool {
+        if !self.matches_actor_and_bereich(e) {
+            return false;
+        }
         if let Some(s) = self.since
             && e.ts < s
         {
@@ -713,6 +781,12 @@ pub mod bundle {
         pub subject: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub contains: Option<String>,
+        /// Exact actor (2026-11-08).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub actor: Option<String>,
+        /// A bereich the row names (2026-11-08), by [`super::row_bereiche`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub bereich: Option<String>,
     }
 
     impl Selection {
@@ -722,6 +796,8 @@ pub mod bundle {
                 action: filter.action.clone(),
                 subject: filter.subject.clone(),
                 contains: filter.contains.clone(),
+                actor: filter.actor.clone(),
+                bereich: filter.bereich.clone(),
             };
             (s != Selection::default()).then_some(s)
         }
@@ -745,6 +821,16 @@ pub mod bundle {
                 if !hay.contains(&c.to_lowercase()) {
                     return false;
                 }
+            }
+            if let Some(a) = &self.actor
+                && e.actor != *a
+            {
+                return false;
+            }
+            if let Some(b) = &self.bereich
+                && !super::row_bereiche(e).contains(b)
+            {
+                return false;
             }
             true
         }

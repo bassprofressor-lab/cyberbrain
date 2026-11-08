@@ -150,6 +150,117 @@ impl AuditStore {
         self.path.as_deref()
     }
 
+    /// Open or create a record whose oldest rows may be deleted after a retention period:
+    /// the search log (SPEC §12.6.3), and nothing else. Marked as such in `meta`, and
+    /// [`prune_through`](Self::prune_through) refuses any store without the mark, so the
+    /// main `audit.db` cannot be pruned by calling the wrong function on it.
+    pub fn open_prunable(path: &Path) -> Result<Self> {
+        let s = Self::open(path)?;
+        s.conn
+            .execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('prunable', '1')",
+                [],
+            )
+            .ix()?;
+        Ok(s)
+    }
+
+    /// An in-memory prunable record, for tests.
+    pub fn open_prunable_in_memory() -> Result<Self> {
+        let s = Self::open_in_memory()?;
+        s.conn
+            .execute(
+                "INSERT OR IGNORE INTO meta (key, value) VALUES ('prunable', '1')",
+                [],
+            )
+            .ix()?;
+        Ok(s)
+    }
+
+    fn meta(&self, key: &str) -> Result<Option<String>> {
+        self.conn
+            .query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0))
+            .optional()
+            .ix()
+    }
+
+    /// The chain hash the first remaining row points back at, once older rows were pruned;
+    /// `None` while the record still starts at the genesis marker.
+    pub fn anchor(&self) -> Result<Option<String>> {
+        self.meta("anchor")
+    }
+
+    /// The oldest row, if any.
+    pub fn first(&self) -> Result<Option<AuditEntry>> {
+        self.conn
+            .query_row(
+                &format!("SELECT {COLUMNS} FROM audit ORDER BY seq LIMIT 1"),
+                [],
+                row_to_entry,
+            )
+            .optional()
+            .ix()
+    }
+
+    /// Delete every row up to and including the last one stamped before `cutoff` (same
+    /// format as the column), always a prefix of the log. `report` sees the rows about to go
+    /// while the write lock is held, records them elsewhere and returns the chain hash of the
+    /// last of them, which becomes the new [`anchor`](Self::anchor). If `report` fails, nothing
+    /// is deleted. Returns how many rows went.
+    ///
+    /// Refused on a store not opened with [`open_prunable`](Self::open_prunable).
+    pub fn prune_through(
+        &mut self,
+        cutoff: &str,
+        report: impl FnOnce(&[AuditEntry]) -> Result<String>,
+    ) -> Result<usize> {
+        if self.meta("prunable")?.as_deref() != Some("1") {
+            return Err(Error::Index(
+                "audit: this record is append-only; only the search log may be pruned".into(),
+            ));
+        }
+        let tx = self
+            .conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(|e| Error::Index(format!("audit: could not take the write lock: {e}")))?;
+        let last_seq: Option<i64> = tx
+            .query_row("SELECT max(seq) FROM audit WHERE ts < ?1", [cutoff], |r| {
+                r.get(0)
+            })
+            .ix()?;
+        let Some(last_seq) = last_seq else {
+            return Ok(0);
+        };
+        let gone: Vec<AuditEntry> = {
+            let mut stmt = tx
+                .prepare(&format!(
+                    "SELECT {COLUMNS} FROM audit WHERE seq <= ?1 ORDER BY seq"
+                ))
+                .ix()?;
+            let rows = stmt.query_map([last_seq], row_to_entry).ix()?;
+            rows.collect::<rusqlite::Result<_>>().ix()?
+        };
+        let anchor = report(&gone)?;
+        // The trigger guards against an edit; this is the one deletion the search log
+        // allows, done inside the same transaction so nothing else can slip through.
+        tx.execute_batch("DROP TRIGGER audit_no_delete;").ix()?;
+        tx.execute("DELETE FROM audit WHERE seq <= ?1", [last_seq])
+            .ix()?;
+        tx.execute_batch(
+            "CREATE TRIGGER audit_no_delete BEFORE DELETE ON audit
+                BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END;",
+        )
+        .ix()?;
+        tx.execute(
+            "INSERT INTO meta (key, value) VALUES ('anchor', ?1)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [&anchor],
+        )
+        .ix()?;
+        tx.commit().ix()?;
+        Ok(gone.len())
+    }
+
     /// How long an append waits for another writer before failing with an error.
     /// Default five seconds.
     pub fn set_busy_timeout(&self, timeout: Duration) -> Result<()> {
@@ -362,5 +473,60 @@ fn current_version(conn: &Connection) -> Result<u32> {
         Some(s) => s
             .parse()
             .map_err(|_| Error::Index(format!("audit meta.schema_version is not a number: {s:?}"))),
+    }
+}
+
+#[cfg(test)]
+mod prune_tests {
+    use super::*;
+
+    fn row(ts: &str) -> NewAuditEntry {
+        NewAuditEntry {
+            ts: Some(ts.into()),
+            actor: "agent:x".into(),
+            action: "search.access".into(),
+            subject: None,
+            detail: Some("{}".into()),
+        }
+    }
+
+    /// The main log is append-only for ever; only a record opened as prunable gives rows up.
+    #[test]
+    fn only_a_prunable_record_gives_up_rows_and_only_a_prefix() {
+        let mut main = AuditStore::open_in_memory().unwrap();
+        main.append(&row("2026-01-01T00:00:00.000Z")).unwrap();
+        assert!(
+            main.prune_through("2027-01-01T00:00:00.000Z", |_| Ok("h".into()))
+                .is_err()
+        );
+        assert_eq!(main.count().unwrap(), 1);
+
+        let mut s = AuditStore::open_prunable_in_memory().unwrap();
+        for ts in [
+            "2026-01-01T00:00:00.000Z",
+            "2026-02-01T00:00:00.000Z",
+            "2026-03-01T00:00:00.000Z",
+        ] {
+            s.append(&row(ts)).unwrap();
+        }
+        // A failing report deletes nothing.
+        assert!(
+            s.prune_through("2026-02-15T00:00:00.000Z", |_| Err(Error::Index(
+                "no".into()
+            )))
+            .is_err()
+        );
+        assert_eq!(s.count().unwrap(), 3);
+        let n = s
+            .prune_through("2026-02-15T00:00:00.000Z", |rows| {
+                assert_eq!(rows.len(), 2);
+                Ok("anchor-hash".into())
+            })
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(s.count().unwrap(), 1);
+        assert_eq!(s.anchor().unwrap().as_deref(), Some("anchor-hash"));
+        // The trigger is back: an ordinary delete is still refused.
+        assert!(s.conn.execute("DELETE FROM audit", []).is_err());
     }
 }

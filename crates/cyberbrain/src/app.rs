@@ -677,6 +677,9 @@ pub struct AuditView {
     /// key, and by which key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<cyberbrain_policy::ChainReport>,
+    /// With `--verify`: the search log's chain (SPEC §12.6.3), when the store has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub searches_verified: Option<std::result::Result<usize, String>>,
     pub rendered: String,
 }
 
@@ -1081,6 +1084,11 @@ pub struct App {
     /// Set by `serve` unless started with `--allow-resident-writes`. See
     /// [`App::refuse_resident_writes`].
     resident_writes_refused: std::sync::atomic::AtomicBool,
+    /// The key the query hash in `search.access` rows is made with, read or made on the first
+    /// recorded search (see `access_log`).
+    search_key: OnceLock<Option<[u8; 32]>>,
+    /// `search-audit.db`, opened on first need (see `access_log`).
+    search_log: OnceLock<access_log::SearchLog>,
 }
 
 /// The loaded model is not freed, it is left to the operating system.
@@ -1234,7 +1242,14 @@ impl App {
             identity: OnceLock::new(),
             llm: Mutex::new(None),
             resident_writes_refused: std::sync::atomic::AtomicBool::new(false),
+            search_key: OnceLock::new(),
+            search_log: OnceLock::new(),
         };
+        // Who may see which bereich is a file anybody with access edits by hand; a change is
+        // recorded here, at the first process that loads it (SPEC §12.6.3).
+        app.record_clients_change()?;
+        // And search rows past their retention go, with a report in the main log.
+        app.prune_search_log()?;
         // A process started by `serve` for its command line inherits the served store's
         // refusal (`serve::command`). Only ever narrows: whoever sets it refuses themselves.
         if std::env::var_os(REFUSE_RESIDENT_ENV).is_some_and(|v| !v.is_empty()) {
@@ -2034,6 +2049,17 @@ impl App {
             };
             ix.recall(query, embedder, &opts)?
         };
+        // Recorded before anything is handed back, and the search fails if it cannot be.
+        if self.searches_recorded() {
+            let bereiche = self.hit_bereiche(&result.hits)?;
+            self.record_search(
+                "recall",
+                query,
+                req.bereich.as_deref(),
+                &bereiche,
+                result.hits.len(),
+            )?;
+        }
         if let EmbedderState::Absent { reason } = embedder_state {
             result
                 .caveats
@@ -2385,7 +2411,29 @@ impl App {
     /// `recall --id`: a citation back to its block and the whole note it came from.
     pub fn recall_id(&self, citation: &str) -> Result<Expanded> {
         let cit: Citation = citation.parse()?;
-        let (block, rec) = lock_index(&self.index)?.resolve(&cit)?.ok_or_else(|| {
+        let out = self.expand_citation(&cit);
+        // Recorded either way. Outside the limit the row reads like a citation that does not
+        // exist, as the answer does: no bereich, no hit.
+        if self.searches_recorded() {
+            let (bereiche, hits) = match &out {
+                Ok(e) => (
+                    e.note
+                        .front
+                        .bereich
+                        .iter()
+                        .map(|b| (b.clone(), 1))
+                        .collect(),
+                    1,
+                ),
+                Err(_) => (BTreeMap::new(), 0),
+            };
+            self.record_search("recall_id", &cit.to_string(), None, &bereiche, hits)?;
+        }
+        out
+    }
+
+    fn expand_citation(&self, cit: &Citation) -> Result<Expanded> {
+        let (block, rec) = lock_index(&self.index)?.resolve(cit)?.ok_or_else(|| {
             Error::NoSuchNote(format!(
                 "citation {cit} (not in the index; run `cyberbrain scan` if the note exists)"
             ))
@@ -5343,6 +5391,7 @@ impl App {
     /// [`export_audit_bundle`](Self::export_audit_bundle), signed with the store's key when
     /// `signed` (F2).
     pub fn export_audit_bundle_with(&self, filter: &AuditFilter, signed: bool) -> Result<String> {
+        self.refuse_limited_audit_reader("an audit export")?;
         let tool = concat!("cyberbrain ", env!("CARGO_PKG_VERSION"));
         self.policy.export_audit_bundle_with(filter, tool, signed)
     }
@@ -5354,6 +5403,28 @@ impl App {
     /// break, not a curiosity.
     pub fn verify_audit_chain(&self) -> Result<cyberbrain_policy::ChainReport> {
         let report = self.policy.verify_audit_report()?;
+        self.check_row_keys(&report)?;
+        // The loop in `check_row_keys` only judges keys that signed something. With every signature
+        // stripped and the format-1 hashes recomputed — no key needed for that — there is
+        // nothing left for it to judge, and the chain read as intact (C1, 2026-10-31). A store
+        // with a key has signed rows from the one that recorded the key onwards, so none at all
+        // is not a store that never signed.
+        if let Some(key) = self.policy.audit().key()
+            && report.signed == 0
+        {
+            let fp = key.fingerprint();
+            return Err(Error::Index(format!(
+                "this store has a signing key ({fp}) at {AUDIT_KEY_FILE}, but no row is signed: \
+                 the signatures were removed and the chain rewritten, or the key file was put \
+                 here after the log was written. Compare with an earlier export \
+                 (`verify-export --expect-key`)"
+            )));
+        }
+        Ok(report)
+    }
+
+    /// Every key that signed a row in `report` must be this store's own.
+    pub(crate) fn check_row_keys(&self, report: &cyberbrain_policy::ChainReport) -> Result<()> {
         let own = self.policy.audit().key().map(|k| k.public_hex());
         for (k, fp) in report.keys.iter().zip(report.fingerprints()) {
             match &own {
@@ -5374,23 +5445,7 @@ impl App {
                 }
             }
         }
-        // The loop above only judges keys that signed something. With every signature
-        // stripped and the format-1 hashes recomputed — no key needed for that — there is
-        // nothing left for it to judge, and the chain read as intact (C1, 2026-10-31). A store
-        // with a key has signed rows from the one that recorded the key onwards, so none at all
-        // is not a store that never signed.
-        if let Some(key) = self.policy.audit().key()
-            && report.signed == 0
-        {
-            let fp = key.fingerprint();
-            return Err(Error::Index(format!(
-                "this store has a signing key ({fp}) at {AUDIT_KEY_FILE}, but no row is signed: \
-                 the signatures were removed and the chain rewritten, or the key file was put \
-                 here after the log was written. Compare with an earlier export \
-                 (`verify-export --expect-key`)"
-            )));
-        }
-        Ok(report)
+        Ok(())
     }
 
     /// Whether a signature asked for now would have no key to be made with.
@@ -5480,6 +5535,7 @@ impl App {
         verify: bool,
         format: ExportFormat,
     ) -> Result<AuditView> {
+        self.refuse_limited_audit_reader("policy audit")?;
         let checked = verify.then(|| self.verify_audit_chain().map_err(|e| e.to_string()));
         let verified = checked
             .as_ref()
@@ -5522,11 +5578,17 @@ impl App {
             rows,
             verified,
             chain,
+            searches_verified: if verify {
+                self.verify_search_log().map(|r| r.map(|c| c.rows))
+            } else {
+                None
+            },
             rendered,
         })
     }
 
     pub fn policy_subject(&self, identifier: &str) -> Result<SubjectAccessReport> {
+        self.refuse_limited_audit_reader("a subject access report")?;
         let source = IndexSubjectSource { index: &self.index };
         self.policy.subject_access(&source, identifier)
     }
@@ -5817,6 +5879,7 @@ fn normalise_link_target(name: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
+mod access_log;
 mod embed_bench;
 pub use embed_bench::EmbedBenchReport;
 

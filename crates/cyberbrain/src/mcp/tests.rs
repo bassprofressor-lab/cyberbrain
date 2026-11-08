@@ -1430,3 +1430,79 @@ fn no_tool_schema_uses_a_list_as_type() {
     }
     walk(&crate::mcp::tools::list_value(), "tools");
 }
+
+/// 2026-11-08 over MCP: a client limited to bereiche leaves a `search.access` row for its
+/// search, as `agent:mcp:<name>`, with the bereiche it got and without the query; no tool
+/// hands the log to it, and `status` (which counts audit rows) stays refused.
+#[tokio::test]
+async fn a_limited_mcp_client_leaves_a_search_row_and_cannot_read_the_log() {
+    let (_d, root) = temp_store();
+    let operator = App::open(Some(&root), Actor::Operator).unwrap();
+    for (name, bereich) in [("in-a", "akte-a"), ("in-b", "akte-b")] {
+        operator
+            .write(crate::app::WriteRequest {
+                ring: cyberbrain_core::Ring::Knowledge,
+                kind: cyberbrain_core::NoteKind::Knowledge,
+                name: name.into(),
+                body: format!("Mietminderung Zeppelinwerft {name}"),
+                tags: Vec::new(),
+                bereich: Some(Some(bereich.into())),
+                retention: None,
+                force: false,
+                choice: None,
+                expected_updated: None,
+                supersedes: None,
+                valid_from: None,
+                invalid_at: None,
+                arriving: None,
+                dry_run: false,
+            })
+            .unwrap();
+    }
+    let cfg = root.join("cyberbrain.toml");
+    let mut toml = std::fs::read_to_string(&cfg).unwrap();
+    toml.push_str("\n[clients.bereiche]\n\"agent:mcp:anna\" = [\"akte-a\"]\n");
+    std::fs::write(&cfg, toml).unwrap();
+    let app = Arc::new(App::open(Some(&root), Actor::Agent("mcp:anna".into())).unwrap());
+    session(app, |mut c| async move {
+        c.init().await;
+        let tools = c.request("tools/list", json!({})).await;
+        let names: Vec<&str> = tools["result"]["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|t| t["name"].as_str())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n.contains("audit")),
+            "no tool reads the log: {names:?}"
+        );
+        let r = c
+            .call("recall", json!({ "query": "Mietminderung Zeppelinwerft" }))
+            .await;
+        assert_ne!(r["isError"], true, "{r}");
+        let r = c.call("status", json!({})).await;
+        assert_eq!(r["isError"], true, "{r}");
+        c
+    })
+    .await;
+    let operator = App::open(Some(&root), Actor::Operator).unwrap();
+    let view = operator
+        .policy_search_audit(
+            &cyberbrain_policy::AuditFilter::default(),
+            true,
+            cyberbrain_policy::ExportFormat::Json,
+        )
+        .unwrap();
+    assert!(matches!(view.verified, Some(Ok(1))), "{:?}", view.verified);
+    let rows: Vec<Value> = serde_json::from_str(&view.rendered).unwrap();
+    assert_eq!(rows.len(), 1, "{rows:#?}");
+    assert_eq!(rows[0]["actor"], "agent:mcp:anna");
+    assert_eq!(rows[0]["detail"]["bereiche"], json!(["akte-a"]));
+    assert_eq!(rows[0]["detail"]["hits"], 1);
+    let text = rows[0]["detail"].to_string();
+    assert!(
+        !text.contains("Mietminderung") && !text.contains("Zeppelinwerft"),
+        "{text}"
+    );
+}

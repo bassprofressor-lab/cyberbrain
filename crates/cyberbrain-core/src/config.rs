@@ -66,6 +66,7 @@ pub struct Config {
     pub governance: GovernanceConfig,
     pub provenance: ProvenanceConfig,
     pub clients: ClientsConfig,
+    pub audit: AuditConfig,
     /// Keys this store's file sets to `true` that its user did not grant in the waivers file,
     /// and which [`Config::load`] therefore switched off (0.8.2, see [`crate::waivers`]). Not
     /// a key in the file: a store cannot declare its own waivers granted.
@@ -111,6 +112,70 @@ pub enum Unlisted {
     Unlimited,
     /// Nothing: an empty list of bereiche.
     Nothing,
+}
+
+/// What the audit log records beyond writes, erasures and egress (2026-11-08).
+///
+/// `searches` decides which searches leave a row (`search.access`): who searched, with which
+/// tool, the bereich asked for, the bereiche of what came back and how many hits. Never the
+/// query in clear: a keyed hash says which searches were the same (SPEC §12.6.3). The rows
+/// go to a log of their own, `search-audit.db`, kept for `search_retention_days`.
+///
+/// ```toml
+/// [audit]
+/// searches = "limited"         # "all" | "off"
+/// search_retention_days = 365   # then deleted, with a report in the main log
+/// ```
+///
+/// Not written into a fresh store's file, so a store without the section stays readable by
+/// older binaries.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AuditConfig {
+    pub searches: SearchAudit,
+    /// Days a `search.access` row is kept in the search log before it is deleted; a signed
+    /// report of each deletion stays in the main log for good. 0 deletes at the next open.
+    pub search_retention_days: u32,
+}
+
+/// A year: long enough to answer "who looked at this file" for the period a firm is usually
+/// asked about, short enough not to become a standing record of everybody's working day.
+pub const DEFAULT_SEARCH_RETENTION_DAYS: u32 = 365;
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            searches: SearchAudit::default(),
+            search_retention_days: DEFAULT_SEARCH_RETENTION_DAYS,
+        }
+    }
+}
+
+/// Which searches the audit log records.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchAudit {
+    /// Those of clients `[clients]` limits to bereiche, and nobody else's. The default: a
+    /// store that limits nobody records no searches, so the hooks of a single user do not
+    /// put a row into the log for every prompt; a store that does limit somebody is one
+    /// several people share, and there a limit nobody can account for afterwards is half a
+    /// limit.
+    #[default]
+    Limited,
+    /// Every search, the operator's and the hooks' as well.
+    All,
+    /// None.
+    Off,
+}
+
+impl SearchAudit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SearchAudit::Limited => "limited",
+            SearchAudit::All => "all",
+            SearchAudit::Off => "off",
+        }
+    }
 }
 
 /// Clients whose writes are content from outside, whatever they say (C4, 2026-10-03).
@@ -469,6 +534,7 @@ impl Default for Config {
             governance: GovernanceConfig::default(),
             provenance: ProvenanceConfig::default(),
             clients: ClientsConfig::default(),
+            audit: AuditConfig::default(),
             waivers_ignored: Vec::new(),
             waivers_problem: None,
         }

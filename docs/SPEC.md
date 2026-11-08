@@ -931,7 +931,9 @@ bereich at all and sees and writes nothing. That is for a store several people r
 store. The operator, the CLI's own actors, hooks and an unnamed stdio MCP client are not agents and
 stay as they are; starting one of those already needs a shell on this machine. This is
 what lets an agent whose model runs elsewhere read the store at all: without it, `recall`
-hands it everything.
+hands it everything. Such a client's searches are recorded (§12.6.3), and it gets neither
+`policy audit`, an audit export nor a subject access report: the log names the other clients
+and their bereiche.
 
 #### 9.2.1 MCP over HTTP
 
@@ -1205,6 +1207,76 @@ fingerprint they were given (`verify-export --expect-key`). The first signed row
 There is no key by default, and without one nothing changes. Once a store signs, every binary
 that writes or verifies its log — and a hub it delivers to — has to know format 2; an older one
 reports the signed rows as edited.
+
+#### 12.6.3 Searches and who may see what (2026-11-08)
+
+A limit (§9.2.0) says what a client may see; a store several people share also has to say
+afterwards what each of them did see. Two rows do that, both chained and signed (with the
+store's audit key) like every other.
+
+**`search.access`**, for every `recall` and `recall_id` of the clients `[audit] searches` names,
+written to a log of its own, `search-audit.db` beside `audit.db`:
+
+```toml
+[audit]
+searches = "limited"          # the default; "all" | "off"
+search_retention_days = 365   # the default; 0 deletes at the next open
+```
+
+`limited` records the clients `[clients]` limits to bereiche (an unlisted agent under
+`unlisted = "nothing"` included) and nobody else. That is the default because it changes
+nothing for a store that limits nobody — a single user's hooks do not put a row into the log
+for every prompt — while a store that does limit somebody is shared, and there a limit nobody
+can account for afterwards is half a limit. `all` records everybody, the operator and the hooks
+too; `off` nobody.
+
+The row names the actor, the tool (`subject` `search:recall` or `search:recall_id`), the bereich
+asked for (`requested_bereich`, the client's own input), the bereiche of what was returned
+(`bereiche`, with counts in `per_bereich`), the number of hits, and whether the actor was
+limited. A citation outside the limit is recorded as it is answered, like one that does not
+exist: no bereich, no hit. The row is written before anything is handed back, and a search
+whose row cannot be written fails.
+
+**The query is not in the row.** A firm's search for a client is that client's name; a log
+meant to show *that* somebody looked must not become a second copy of *what* they looked for
+(data minimisation, Art. 5(1)(c) GDPR). The row carries `query_hash` instead: the first 16 hex
+digits of keyed blake3 over the query, lower-cased with its spacing collapsed, under a store key
+(`keys/search.key`, owner-only, made on the first recorded search). Equal searches hash alike,
+so repeated probing shows; nobody without the key — the recipient of an export, a hub,
+AgentGuard — can test a guess. The operator holds the key and can, and can also read every
+note, which is why that is no loss. A citation is hashed the same way.
+
+**Retention.** Search rows record people at work, so unlike the rest of the record they do not
+stay for ever. At every open of a store that has a search log, rows stamped before now minus
+`search_retention_days` are deleted — always a prefix, in one transaction, the only deletion any
+audit file allows (the file is marked prunable; `audit.db` is not and refuses). Before the
+deletion, under the search log's write lock, a `search.log.pruned` row is written to the **main**
+log as `retention`: the period (`from`, `until`), `rows`, `previous_anchor`, `first_hash`,
+`last_hash`, a `digest` (blake3 over the chain hashes of every deleted row, one per line), the
+retention and the cutoff. `last_hash` becomes the search log's anchor: the first remaining row
+points back at it, and a row written into an emptied log does too. Verification (`policy audit
+--verify` checks both logs) accepts a search log that starts at the genesis marker or at the
+`last_hash` of a report, and requires the newest report to be the start or still inside the log;
+rows deleted without a report are a break. The report stays in the main log for good, as do
+`clients.changed` rows.
+
+**`clients.changed`**, whenever `[clients]` differs from the state the log last recorded. The
+file is edited by hand or by a tool, and neither goes through a command here, so every process
+compares at open: the section in a canonical form (client names trimmed, bereiche sorted and
+without repeats, `unlisted`) against `after` of the last such row. The first state is written
+with `baseline: true`; a store that never limited anybody writes nothing. The row is written as
+`system:config-file`, because the process that notices did not make the change, and carries
+`before`, `after`, `added` and `removed` per client, `clients_added`, `clients_removed`,
+`unlisted` when it changed, `detected_by` (the actor of the process that noticed), and
+`claimed_by` when `CYBERBRAIN_CONFIG_CHANGED_BY` was set — a claim, named as one. Two processes
+opening at the same instant after an edit can both write the row; the second repeats the first.
+A change takes effect, and is recorded, when a process loads the file: `mcp --http` holds one
+configuration per client from its first request, so it is restarted after a change.
+
+`policy audit --searches` reads the search log (implied by `--action search.access`), with the
+same listing, `--verify` and `--export` as the main log. `--actor <actor> --bereich <bereich>`
+select rows in either (a bereich matches the bereiche a row returned, asked for, granted or
+withdrew), and an export carries both in its selection.
 
 #### 12.6.2 Decoys
 

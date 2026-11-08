@@ -540,6 +540,17 @@ pub enum PolicyCommand {
         action: Option<String>,
         #[arg(long)]
         subject: Option<String>,
+        /// Only rows by this actor, exactly as the log writes it: `agent:mcp:anna`, `operator`.
+        #[arg(long)]
+        actor: Option<String>,
+        /// Only rows that name this bereich: searches that returned or asked for it, changes
+        /// to `[clients]` that granted or withdrew it.
+        #[arg(long)]
+        bereich: Option<String>,
+        /// Read the search log (`search-audit.db`, `search.access` rows) instead of the main
+        /// log. Implied by `--action search.access`.
+        #[arg(long)]
+        searches: bool,
         /// Verify the hash chain and name the first altered row.
         #[arg(long)]
         verify: bool,
