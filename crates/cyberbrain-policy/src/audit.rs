@@ -115,6 +115,9 @@ pub enum AuditAction {
     /// `[clients]` differs from the state the log last recorded: who may see which bereich
     /// changed. Found when a process loads the configuration, so a hand edit is caught too.
     ClientsChanged,
+    /// Rows past `[audit] search_retention_days` were deleted from the search log. Written to
+    /// the main log, before the deletion, with what went and the hash the rest now chains to.
+    SearchLogPruned,
 }
 
 impl AuditAction {
@@ -140,6 +143,7 @@ impl AuditAction {
             AuditAction::AuditExport => "audit.export",
             AuditAction::SearchAccess => "search.access",
             AuditAction::ClientsChanged => "clients.changed",
+            AuditAction::SearchLogPruned => "search.log.pruned",
         }
     }
 }

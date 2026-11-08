@@ -1487,19 +1487,20 @@ async fn a_limited_mcp_client_leaves_a_search_row_and_cannot_read_the_log() {
     })
     .await;
     let operator = App::open(Some(&root), Actor::Operator).unwrap();
-    let rows = operator
-        .policy()
-        .audit()
-        .read(&cyberbrain_policy::AuditFilter {
-            action: Some("search.access".into()),
-            ..Default::default()
-        })
+    let view = operator
+        .policy_search_audit(
+            &cyberbrain_policy::AuditFilter::default(),
+            true,
+            cyberbrain_policy::ExportFormat::Json,
+        )
         .unwrap();
+    assert!(matches!(view.verified, Some(Ok(1))), "{:?}", view.verified);
+    let rows: Vec<Value> = serde_json::from_str(&view.rendered).unwrap();
     assert_eq!(rows.len(), 1, "{rows:#?}");
-    assert_eq!(rows[0].actor, "agent:mcp:anna");
-    assert_eq!(rows[0].detail["bereiche"], json!(["akte-a"]));
-    assert_eq!(rows[0].detail["hits"], 1);
-    let text = rows[0].detail.to_string();
+    assert_eq!(rows[0]["actor"], "agent:mcp:anna");
+    assert_eq!(rows[0]["detail"]["bereiche"], json!(["akte-a"]));
+    assert_eq!(rows[0]["detail"]["hits"], 1);
+    let text = rows[0]["detail"].to_string();
     assert!(
         !text.contains("Mietminderung") && !text.contains("Zeppelinwerft"),
         "{text}"

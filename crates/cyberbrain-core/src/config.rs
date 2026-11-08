@@ -118,19 +118,37 @@ pub enum Unlisted {
 ///
 /// `searches` decides which searches leave a row (`search.access`): who searched, with which
 /// tool, the bereich asked for, the bereiche of what came back and how many hits. Never the
-/// query in clear: a keyed hash says which searches were the same (SPEC §12.6.3).
+/// query in clear: a keyed hash says which searches were the same (SPEC §12.6.3). The rows
+/// go to a log of their own, `search-audit.db`, kept for `search_retention_days`.
 ///
 /// ```toml
 /// [audit]
-/// searches = "limited"   # "all" | "off"
+/// searches = "limited"         # "all" | "off"
+/// search_retention_days = 365   # then deleted, with a report in the main log
 /// ```
 ///
 /// Not written into a fresh store's file, so a store without the section stays readable by
 /// older binaries.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct AuditConfig {
     pub searches: SearchAudit,
+    /// Days a `search.access` row is kept in the search log before it is deleted; a signed
+    /// report of each deletion stays in the main log for good. 0 deletes at the next open.
+    pub search_retention_days: u32,
+}
+
+/// A year: long enough to answer "who looked at this file" for the period a firm is usually
+/// asked about, short enough not to become a standing record of everybody's working day.
+pub const DEFAULT_SEARCH_RETENTION_DAYS: u32 = 365;
+
+impl Default for AuditConfig {
+    fn default() -> Self {
+        Self {
+            searches: SearchAudit::default(),
+            search_retention_days: DEFAULT_SEARCH_RETENTION_DAYS,
+        }
+    }
 }
 
 /// Which searches the audit log records.

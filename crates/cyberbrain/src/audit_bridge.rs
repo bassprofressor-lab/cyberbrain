@@ -84,13 +84,61 @@ pub fn create_audit_key(root: &std::path::Path) -> Result<cyberbrain_policy::Aud
 
 pub struct StoreAuditSink {
     store: Mutex<AuditStore>,
+    /// The search log (SPEC §12.6.3): its oldest rows are pruned, so an empty log does not
+    /// start at the genesis marker but at the anchor the last pruning left behind.
+    prunable: bool,
 }
+
+/// The search log beside `audit.db`: `search.access` rows only, chained and signed like the
+/// main log, and pruned after `[audit] search_retention_days`.
+pub const SEARCH_LOG_FILE: &str = "search-audit.db";
 
 impl StoreAuditSink {
     pub fn new(store: AuditStore) -> Self {
         Self {
             store: Mutex::new(store),
+            prunable: false,
         }
+    }
+
+    /// The search log, which may be pruned (see [`AuditStore::open_prunable`]).
+    pub fn search_log(store: AuditStore) -> Self {
+        Self {
+            store: Mutex::new(store),
+            prunable: true,
+        }
+    }
+
+    /// Where the chain starts: the genesis marker, or the anchor a pruning left.
+    pub fn head_when_empty(&self) -> Result<String> {
+        if !self.prunable {
+            return Ok(GENESIS.to_string());
+        }
+        Ok(self
+            .lock()?
+            .anchor()?
+            .unwrap_or_else(|| GENESIS.to_string()))
+    }
+
+    /// The anchor recorded in the store itself, if a pruning left one.
+    pub fn anchor(&self) -> Result<Option<String>> {
+        self.lock()?.anchor()
+    }
+
+    /// See [`AuditStore::prune_through`]. `report` gets the rows as events.
+    pub fn prune_through(
+        &self,
+        cutoff: jiff::Timestamp,
+        report: impl FnOnce(&[AuditEvent]) -> Result<String>,
+    ) -> Result<usize> {
+        self.lock()?.prune_through(&format_ts(cutoff), |rows| {
+            let events = rows
+                .iter()
+                .cloned()
+                .map(to_event)
+                .collect::<Result<Vec<_>>>()?;
+            report(&events)
+        })
     }
 
     pub fn count(&self) -> Result<usize> {
@@ -184,6 +232,7 @@ impl AuditSink for StoreAuditSink {
         let detail = serde_json::to_string(&event.detail)
             .map_err(|e| Error::Index(format!("audit detail does not serialise: {e}")))?;
         let expected_prev = event.chain_prev().map(str::to_owned);
+        let empty_head = self.head_when_empty()?;
         let row = NewAuditEntry {
             // One clock, and it is the writer's. Letting the store stamp its own would
             // give the event two timestamps: the one the caller is handed back and the
@@ -199,7 +248,7 @@ impl AuditSink for StoreAuditSink {
             if let Some(expected) = &expected_prev {
                 let actual = last
                     .and_then(stored_chain_hash)
-                    .unwrap_or_else(|| GENESIS.to_string());
+                    .unwrap_or_else(|| empty_head.clone());
                 if *expected != actual {
                     // Typed, because the caller retries on this and only this. The row is
                     // rebuilt against the head that is actually there and offered again.
@@ -265,7 +314,20 @@ impl AuditSink for StoreAuditSink {
     }
 
     fn last(&self) -> Result<Option<AuditEvent>> {
-        self.lock()?.last()?.map(to_event).transpose()
+        let last = self.lock()?.last()?;
+        match last {
+            Some(e) => to_event(e).map(Some),
+            // An emptied search log: hand the writer a head that carries the anchor, so the
+            // next row points back at the pruned section instead of starting a new chain.
+            None if self.prunable => Ok(self.anchor()?.map(|a| AuditEvent {
+                ts: jiff::Timestamp::UNIX_EPOCH,
+                actor: String::new(),
+                action: "search.log.anchor".into(),
+                subject: String::new(),
+                detail: serde_json::json!({ "_chain": { "hash": a } }),
+            })),
+            None => Ok(None),
+        }
     }
 }
 

@@ -3092,6 +3092,7 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             subject,
             actor,
             bereich,
+            searches,
             verify,
             since,
             until,
@@ -3123,8 +3124,15 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                 },
                 ..Default::default()
             };
+            // `search.access` rows live in the search log (SPEC §12.6.3); asking for them by
+            // name reads it, rather than answering from a log that never holds them.
+            let searches = searches || filter.action.as_deref() == Some("search.access");
             if let Some(path) = export {
-                let text = app.export_audit_bundle_with(&filter, signed)?;
+                let text = if searches {
+                    app.export_search_bundle(&filter, signed)?
+                } else {
+                    app.export_audit_bundle_with(&filter, signed)?
+                };
                 std::fs::write(&path, &text).map_err(|e| Error::Io {
                     path: path.clone(),
                     source: e,
@@ -3157,7 +3165,11 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
             } else {
                 cyberbrain_policy::ExportFormat::Text
             };
-            let r = app.policy_audit(&filter, verify, format)?;
+            let r = if searches {
+                app.policy_search_audit(&filter, verify, format)?
+            } else {
+                app.policy_audit(&filter, verify, format)?
+            };
             let code = audit_exit_code(&r);
             out.emit(&r, |v| {
                 let mut s = String::new();
@@ -3168,6 +3180,13 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
                     });
                     if let Some(c) = &v.chain {
                         s.push_str(&render::signing_line(c));
+                    }
+                    match &v.searches_verified {
+                        Some(Ok(n)) => {
+                            s.push_str(&format!("search log chain verified over {n} rows\n"))
+                        }
+                        Some(Err(e)) => s.push_str(&format!("SEARCH LOG BROKEN: {e}\n")),
+                        None => {}
                     }
                 }
                 s.push_str(&format!(
@@ -3242,8 +3261,8 @@ fn run_policy(app: &App, command: PolicyCommand, out: Out) -> Result<i32> {
 /// leaves. Reporting commands (`doctor`, plain `audit`) keep exiting 0; findings there are
 /// advisory, a broken hash chain is not.
 fn audit_exit_code(view: &AuditView) -> i32 {
-    match &view.verified {
-        Some(Err(_)) => 1,
+    match (&view.verified, &view.searches_verified) {
+        (Some(Err(_)), _) | (_, Some(Err(_))) => 1,
         // Not asked to verify, or verified and intact.
         _ => 0,
     }
@@ -3291,6 +3310,7 @@ mod tests {
             rows: 3,
             verified,
             chain: None,
+            searches_verified: None,
             rendered: String::new(),
         }
     }
@@ -3308,5 +3328,15 @@ mod tests {
     fn an_intact_chain_and_an_unverified_listing_both_exit_zero() {
         assert_eq!(audit_exit_code(&view(Some(Ok(3)))), 0);
         assert_eq!(audit_exit_code(&view(None)), 0);
+    }
+
+    /// A broken search log fails `--verify` as a broken main log does (SPEC §12.6.3).
+    #[test]
+    fn a_broken_search_log_exits_non_zero() {
+        let mut v = view(Some(Ok(3)));
+        v.searches_verified = Some(Err("rows were deleted without a report".into()));
+        assert_eq!(audit_exit_code(&v), 1);
+        v.searches_verified = Some(Ok(2));
+        assert_eq!(audit_exit_code(&v), 0);
     }
 }

@@ -677,6 +677,9 @@ pub struct AuditView {
     /// key, and by which key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chain: Option<cyberbrain_policy::ChainReport>,
+    /// With `--verify`: the search log's chain (SPEC §12.6.3), when the store has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub searches_verified: Option<std::result::Result<usize, String>>,
     pub rendered: String,
 }
 
@@ -1084,6 +1087,8 @@ pub struct App {
     /// The key the query hash in `search.access` rows is made with, read or made on the first
     /// recorded search (see `access_log`).
     search_key: OnceLock<Option<[u8; 32]>>,
+    /// `search-audit.db`, opened on first need (see `access_log`).
+    search_log: OnceLock<access_log::SearchLog>,
 }
 
 /// The loaded model is not freed, it is left to the operating system.
@@ -1238,10 +1243,13 @@ impl App {
             llm: Mutex::new(None),
             resident_writes_refused: std::sync::atomic::AtomicBool::new(false),
             search_key: OnceLock::new(),
+            search_log: OnceLock::new(),
         };
         // Who may see which bereich is a file anybody with access edits by hand; a change is
         // recorded here, at the first process that loads it (SPEC §12.6.3).
         app.record_clients_change()?;
+        // And search rows past their retention go, with a report in the main log.
+        app.prune_search_log()?;
         // A process started by `serve` for its command line inherits the served store's
         // refusal (`serve::command`). Only ever narrows: whoever sets it refuses themselves.
         if std::env::var_os(REFUSE_RESIDENT_ENV).is_some_and(|v| !v.is_empty()) {
@@ -5395,6 +5403,28 @@ impl App {
     /// break, not a curiosity.
     pub fn verify_audit_chain(&self) -> Result<cyberbrain_policy::ChainReport> {
         let report = self.policy.verify_audit_report()?;
+        self.check_row_keys(&report)?;
+        // The loop in `check_row_keys` only judges keys that signed something. With every signature
+        // stripped and the format-1 hashes recomputed — no key needed for that — there is
+        // nothing left for it to judge, and the chain read as intact (C1, 2026-10-31). A store
+        // with a key has signed rows from the one that recorded the key onwards, so none at all
+        // is not a store that never signed.
+        if let Some(key) = self.policy.audit().key()
+            && report.signed == 0
+        {
+            let fp = key.fingerprint();
+            return Err(Error::Index(format!(
+                "this store has a signing key ({fp}) at {AUDIT_KEY_FILE}, but no row is signed: \
+                 the signatures were removed and the chain rewritten, or the key file was put \
+                 here after the log was written. Compare with an earlier export \
+                 (`verify-export --expect-key`)"
+            )));
+        }
+        Ok(report)
+    }
+
+    /// Every key that signed a row in `report` must be this store's own.
+    pub(crate) fn check_row_keys(&self, report: &cyberbrain_policy::ChainReport) -> Result<()> {
         let own = self.policy.audit().key().map(|k| k.public_hex());
         for (k, fp) in report.keys.iter().zip(report.fingerprints()) {
             match &own {
@@ -5415,23 +5445,7 @@ impl App {
                 }
             }
         }
-        // The loop above only judges keys that signed something. With every signature
-        // stripped and the format-1 hashes recomputed — no key needed for that — there is
-        // nothing left for it to judge, and the chain read as intact (C1, 2026-10-31). A store
-        // with a key has signed rows from the one that recorded the key onwards, so none at all
-        // is not a store that never signed.
-        if let Some(key) = self.policy.audit().key()
-            && report.signed == 0
-        {
-            let fp = key.fingerprint();
-            return Err(Error::Index(format!(
-                "this store has a signing key ({fp}) at {AUDIT_KEY_FILE}, but no row is signed: \
-                 the signatures were removed and the chain rewritten, or the key file was put \
-                 here after the log was written. Compare with an earlier export \
-                 (`verify-export --expect-key`)"
-            )));
-        }
-        Ok(report)
+        Ok(())
     }
 
     /// Whether a signature asked for now would have no key to be made with.
@@ -5564,6 +5578,11 @@ impl App {
             rows,
             verified,
             chain,
+            searches_verified: if verify {
+                self.verify_search_log().map(|r| r.map(|c| c.rows))
+            } else {
+                None
+            },
             rendered,
         })
     }

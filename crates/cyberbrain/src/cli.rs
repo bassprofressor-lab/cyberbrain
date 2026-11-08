@@ -547,6 +547,10 @@ pub enum PolicyCommand {
         /// to `[clients]` that granted or withdrew it.
         #[arg(long)]
         bereich: Option<String>,
+        /// Read the search log (`search-audit.db`, `search.access` rows) instead of the main
+        /// log. Implied by `--action search.access`.
+        #[arg(long)]
+        searches: bool,
         /// Verify the hash chain and name the first altered row.
         #[arg(long)]
         verify: bool,

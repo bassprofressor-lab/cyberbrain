@@ -1,22 +1,48 @@
 //! Who searched which bereich, and who changed who may see what (SPEC §12.6.3, 2026-11-08).
 //!
-//! Two rows, both through the one audit writer, so they are chained and signed like the rest:
+//! Two rows, chained and signed like the rest of the record:
 //!
 //! - `search.access` for a search or an expanded citation, by the clients `[audit] searches`
 //!   names. It carries the bereiche of what was returned and never the query: a firm's search
 //!   for a client's name is that name, and a log meant to show *that* somebody looked must not
 //!   become a second copy of *what* they looked for. A keyed hash still says which searches
-//!   were the same.
+//!   were the same. They go to `search-audit.db`, which unlike `audit.db` gives up rows after
+//!   `[audit] search_retention_days`, each time with a report in the main log.
 //! - `clients.changed` when `[clients]` differs from the last state the log recorded. The file
 //!   is edited by `cb-rechte` or by hand, and neither goes through a command here, so the
 //!   change is found where it takes effect: when a process loads the configuration.
 
-use super::{App, lock_index};
+use super::{App, AuditView, lock_index};
+use crate::audit_bridge::{SEARCH_LOG_FILE, StoreAuditSink, load_audit_key};
 use cyberbrain_core::config::SearchAudit;
 use cyberbrain_core::{Error, Result};
-use cyberbrain_policy::{Actor, AuditAction};
+use cyberbrain_index::AuditStore;
+use cyberbrain_policy::audit::GENESIS;
+use cyberbrain_policy::{
+    Actor, AuditAction, AuditEvent, AuditFilter, AuditLog, ChainReport, ExportFormat,
+};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+/// The search log as the app holds it: the writer, and the sink for reading and pruning.
+pub(super) type SearchLog = (AuditLog, Arc<StoreAuditSink>);
+
+/// Read in debug builds only: the moment the retention cutoff is measured from, so a test can
+/// move a day ahead without waiting one. A release binary always uses the clock.
+const TEST_NOW_ENV: &str = "CYBERBRAIN_TEST_NOW";
+
+fn retention_now() -> jiff::Timestamp {
+    #[cfg(debug_assertions)]
+    if let Some(t) = std::env::var(TEST_NOW_ENV)
+        .ok()
+        .and_then(|v| v.parse::<jiff::Timestamp>().ok())
+    {
+        return t;
+    }
+    let _ = TEST_NOW_ENV;
+    jiff::Timestamp::now()
+}
 
 /// The key the query hash is made with, relative to the store root. Beside the audit key,
 /// under the same `.gitignore`, readable by the owner only.
@@ -72,7 +98,7 @@ impl App {
         if let Some(b) = requested_bereich {
             detail["requested_bereich"] = json!(b);
         }
-        self.policy.audit().record(
+        self.search_log()?.0.record(
             &self.actor,
             AuditAction::SearchAccess,
             format!("search:{tool}"),
@@ -203,6 +229,208 @@ impl App {
             detail,
         )?;
         Ok(())
+    }
+
+    /// The search log, opened (and made, on the first recorded search) beside `audit.db`.
+    /// Signed with the store's audit key like the main log.
+    pub(super) fn search_log(&self) -> Result<&SearchLog> {
+        if let Some(l) = self.search_log.get() {
+            return Ok(l);
+        }
+        let sink = Arc::new(StoreAuditSink::search_log(AuditStore::open_prunable(
+            &self.root.join(SEARCH_LOG_FILE),
+        )?));
+        let log = AuditLog::new(sink.clone()).with_key(load_audit_key(&self.root)?);
+        let _ = self.search_log.set((log, sink));
+        Ok(self.search_log.get().expect("set just now"))
+    }
+
+    /// The search log if it exists; `None` in a store that never recorded a search, so that
+    /// reading or pruning does not create the file.
+    fn existing_search_log(&self) -> Result<Option<&SearchLog>> {
+        if self.search_log.get().is_none() && !self.root.join(SEARCH_LOG_FILE).exists() {
+            return Ok(None);
+        }
+        self.search_log().map(Some)
+    }
+
+    /// Delete search rows older than `[audit] search_retention_days` (SPEC §12.6.3). Runs at
+    /// every open of a store that has a search log: one indexed read when nothing is due.
+    ///
+    /// Before anything is deleted, a `search.log.pruned` row goes into the main log, under the
+    /// search log's write lock: the period, the count, the first and last chain hash and a
+    /// digest of every hash that went. The last hash becomes the anchor the remaining rows
+    /// chain to, so the search log still verifies, and a deletion without that row does not.
+    pub(super) fn prune_search_log(&self) -> Result<usize> {
+        let Some((_, sink)) = self.existing_search_log()? else {
+            return Ok(0);
+        };
+        let days = self.config.audit.search_retention_days;
+        let now = retention_now();
+        let cutoff = now
+            .checked_sub(jiff::SignedDuration::from_hours(24 * i64::from(days)))
+            .unwrap_or(jiff::Timestamp::UNIX_EPOCH);
+        sink.prune_through(cutoff, |rows| {
+            let (Some(first), Some(last)) = (rows.first(), rows.last()) else {
+                return Err(Error::Index("nothing to prune".into()));
+            };
+            let unchained = || Error::Index("search log row without a chain hash".into());
+            let last_hash = last.chain_hash().ok_or_else(unchained)?.to_string();
+            let mut digest = blake3::Hasher::new();
+            for r in rows {
+                digest.update(r.chain_hash().ok_or_else(unchained)?.as_bytes());
+                digest.update(b"\n");
+            }
+            self.policy.audit().record(
+                &Actor::Retention,
+                AuditAction::SearchLogPruned,
+                "search-log",
+                json!({
+                    "log": SEARCH_LOG_FILE,
+                    "rows": rows.len(),
+                    "from": first.ts.to_string(),
+                    "until": last.ts.to_string(),
+                    "previous_anchor": first.chain_prev(),
+                    "first_hash": first.chain_hash(),
+                    "last_hash": last_hash,
+                    "digest": digest.finalize().to_hex().to_string(),
+                    "retention_days": days,
+                    "cutoff": cutoff.to_string(),
+                }),
+            )?;
+            Ok(last_hash)
+        })
+    }
+
+    /// Check the search log: its chain from where it starts, and that it starts where it may.
+    ///
+    /// It may start at the genesis marker, or at the `last_hash` of a `search.log.pruned`
+    /// row in the main log. Anything else is rows deleted without a report. The newest report
+    /// must also be accounted for: either the log starts at it, or the rows it names are still
+    /// there (the deletion after the report did not happen). `None` without a search log.
+    pub fn verify_search_log(&self) -> Option<std::result::Result<ChainReport, String>> {
+        let check = || -> Result<Option<ChainReport>> {
+            let Some((_, sink)) = self.existing_search_log()? else {
+                return Ok(None);
+            };
+            let rows = cyberbrain_policy::AuditSink::read(sink.as_ref(), &AuditFilter::default())?;
+            let reports = self
+                .audit_sink
+                .read_exact_action(AuditAction::SearchLogPruned.as_str())?;
+            let reported: Vec<String> = reports
+                .iter()
+                .filter_map(|r| r.detail.get("last_hash")?.as_str().map(str::to_owned))
+                .collect();
+            let start = match rows.first() {
+                Some(r) => r.chain_prev().unwrap_or(GENESIS).to_string(),
+                None => sink.anchor()?.unwrap_or_else(|| GENESIS.to_string()),
+            };
+            if start != GENESIS && !reported.contains(&start) {
+                return Err(Error::Index(format!(
+                    concat!(
+                        "the search log starts at {}, which no search.log.pruned row in the ",
+                        "audit log names: rows were deleted without a report"
+                    ),
+                    &start[..start.len().min(12)]
+                )));
+            }
+            if let Some(newest) = reported.last()
+                && *newest != start
+                && !rows.iter().any(|r| r.chain_hash() == Some(newest.as_str()))
+            {
+                return Err(Error::Index(format!(
+                    concat!(
+                        "the newest search.log.pruned row names {}, which the search log ",
+                        "neither starts at nor contains"
+                    ),
+                    &newest[..newest.len().min(12)]
+                )));
+            }
+            let report = cyberbrain_policy::verify_chain_report(&start, &rows)?;
+            self.check_row_keys(&report)?;
+            Ok(Some(report))
+        };
+        match check() {
+            Ok(Some(r)) => Some(Ok(r)),
+            Ok(None) => None,
+            Err(e) => Some(Err(e.to_string())),
+        }
+    }
+
+    /// `policy audit --searches`: the search log, as `policy audit` shows the main one. The
+    /// reading is recorded in the main log, which is where the operator's actions belong.
+    pub fn policy_search_audit(
+        &self,
+        filter: &AuditFilter,
+        verify: bool,
+        format: ExportFormat,
+    ) -> Result<AuditView> {
+        self.refuse_limited_audit_reader("policy audit")?;
+        let checked = verify.then(|| self.verify_search_log());
+        let rows = match self.existing_search_log()? {
+            Some((_, sink)) => cyberbrain_policy::AuditSink::read(sink.as_ref(), filter)?,
+            None => Vec::new(),
+        };
+        let rendered = cyberbrain_policy::audit::render(&rows, format);
+        self.policy.audit().record(
+            &self.actor,
+            AuditAction::AuditExport,
+            "audit",
+            json!({ "rows": rows.len(), "format": format.as_str(), "log": SEARCH_LOG_FILE }),
+        )?;
+        let (verified, chain) = match checked.flatten() {
+            None if verify => (Some(Ok(0)), None),
+            None => (None, None),
+            Some(Ok(r)) => (Some(Ok(r.rows)), Some(r)),
+            Some(Err(e)) => (Some(Err(e)), None),
+        };
+        Ok(AuditView {
+            rows: rows.len(),
+            verified,
+            chain,
+            searches_verified: None,
+            rendered,
+        })
+    }
+
+    /// `policy audit --searches --export`: a bundle of the search log, checkable like one of
+    /// the main log. Its anchor is where the selected rows chain from.
+    pub fn export_search_bundle(&self, filter: &AuditFilter, signed: bool) -> Result<String> {
+        self.refuse_limited_audit_reader("an audit export")?;
+        let key = match (signed, self.policy.audit().key()) {
+            (false, _) => None,
+            (true, Some(k)) => Some(k),
+            (true, None) => {
+                return Err(Error::Config(
+                    "this store has no audit key to sign with; create one with \
+                     `cyberbrain policy audit-key --init`"
+                        .into(),
+                ));
+            }
+        };
+        let rows: Vec<AuditEvent> = match self.existing_search_log()? {
+            Some((_, sink)) => cyberbrain_policy::AuditSink::read(sink.as_ref(), filter)?,
+            None => Vec::new(),
+        };
+        let out = cyberbrain_policy::audit::bundle::render_with(
+            &rows,
+            &cyberbrain_policy::audit::bundle::Spec {
+                from: filter.since.map(|t| t.to_string()),
+                to: filter.until.map(|t| t.to_string()),
+                tool: concat!("cyberbrain ", env!("CARGO_PKG_VERSION")).to_string(),
+                exported_at: jiff::Timestamp::now().to_string(),
+                selection: cyberbrain_policy::audit::bundle::Selection::of(filter),
+                key,
+            },
+        );
+        self.policy.audit().record(
+            &self.actor,
+            AuditAction::AuditExport,
+            "audit",
+            json!({ "rows": rows.len(), "format": "bundle", "signed": key.is_some(),
+                    "log": SEARCH_LOG_FILE }),
+        )?;
+        Ok(out)
     }
 
     /// The audit log is the operator's. A limited client is refused it like `status`: it

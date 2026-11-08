@@ -22,6 +22,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   machine. `[audit] searches = "limited" | "all" | "off"` decides whose searches are recorded;
   the default `"limited"` records nothing in a store that limits nobody, so a single user's hooks
   do not fill the log. A search whose row cannot be written fails.
+- **Search rows have their own log and a retention.** They go to `search-audit.db`, chained and
+  signed like the main log, and are deleted after `[audit] search_retention_days` (default 365) at
+  the next open of the store. Each deletion leaves a `search.log.pruned` row in the main log with
+  the period, the count, the last chain hash and a digest of what went; the rest of the search log
+  chains to that hash, so it still verifies, and rows deleted without such a report do not.
+  `policy audit --searches` reads it; `--verify` checks both logs.
 - **Changes to who may see what are in the audit log.** Every process compares `[clients]` with
   the state the log last recorded when it opens the store and writes the difference as a
   `clients.changed` row (bereiche added and removed per client, clients added and removed,
@@ -36,6 +42,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 - **A limited client gets no `policy audit`, audit export or subject access report.** The log
   names other clients, their bereiche and their searches. Refused like `status` (exit 3).
 - A store that sets `[audit]` cannot be opened by 0.10.1 or older, which refuse unknown keys.
+- **Upgrading a store that limits agents** (`[clients.bereiche]`, such as n8n agents over
+  `mcp --http`): their searches are recorded from now on, and the first start writes the current
+  `[clients]` as a baseline. Set `[audit] searches = "off"` before the upgrade if that is not
+  wanted.
 
 ### Fixed
 
