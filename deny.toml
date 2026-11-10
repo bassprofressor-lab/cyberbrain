@@ -43,10 +43,12 @@ ignore = [
   # in the shipped binary. Listed individually with the reason rather than switching the
   # unmaintained check off, so the next unmaintained crate still stops the build.
   { id = "RUSTSEC-2024-0436", reason = "build-time proc-macro via tokenizers; nothing of it ships" },
-  # The `documents` feature only. oar-ocr pins zip 8.x; the fixes are in zip 9. All four concern
-  # extracting an archive to disk (`ZipArchive::extract`, `ZipStreamReader::extract`): oar-ocr
-  # opens a zip read-only, in its Indra OCR path, which Cyberbrain never builds, and never calls
-  # extract. Remove these four as soon as oar-ocr allows zip >= 9.
+  # The `documents` feature only (release binaries are built with it). oar-ocr pins zip 8.x; the
+  # fixes are in zip 9 (9.0.5 for the parser differential GHSA-m665-v7pm-7grj). oar-ocr uses zip in
+  # exactly one place, `indra/lm.rs` `NgramLm::load`, which opens a local `.npz` model file
+  # read-only and never extracts; Cyberbrain never calls the Indra path, so neither the extract
+  # issues listed here nor the read-path ones (GHSA-m665, GHSA-9hj8, GHSA-8hxf; not yet in RustSec,
+  # dismissed on GitHub as not used) are reachable. Remove these as soon as oar-ocr allows zip >= 9.0.5.
   { id = "RUSTSEC-2026-0367", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
   { id = "RUSTSEC-2026-0368", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
   { id = "RUSTSEC-2026-0369", reason = "zip extract only; oar-ocr reads, never extracts (documents feature)" },
