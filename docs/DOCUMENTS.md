@@ -13,17 +13,61 @@ cargo install cyberbrain --features documents
 
 ## What it needs, and where it goes
 
-Nothing is downloaded at run time. The files go into the store's `models/` folder, next to the
-embedding model, so an office without internet installs them by copying a folder.
+Nothing is downloaded at run time; an office without internet installs everything by copying
+files. There are two kinds, and they go to two places.
+
+**The two native libraries go into a folder of your own, never into the store.** Loading a
+library runs its code. A store travels with its repository, so a library inside it may have come
+with a clone; until 2026-11-10 `documents add` loaded it from there, and it no longer does.
+
+| Platform | Library folder (`<lib>`) |
+|---|---|
+| Linux | `$XDG_DATA_HOME/cyberbrain/lib`, by default `~/.local/share/cyberbrain/lib` |
+| macOS | `~/Library/Application Support/cyberbrain/lib` |
+| Windows | `%LOCALAPPDATA%\cyberbrain\lib` |
+
+`CYBERBRAIN_DOCUMENTS_LIB=/some/absolute/folder` names another one, for example a folder the
+administrator installs for every user. It is read from the environment of whoever runs the
+command, never from `cyberbrain.toml`, which also travels with the repository.
 
 | Folder | File | From |
 |---|---|---|
-| `models/pdfium/` | `pdfium.dll` / `libpdfium.dylib` / `libpdfium.so` | [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) (PDFium: BSD-3/Apache-2.0; build: MIT) |
-| `models/onnxruntime/` | `onnxruntime.dll` / `libonnxruntime.dylib` / `libonnxruntime.so` | [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) (MIT); tested with 1.31.1 |
+| `<lib>/pdfium/` | `pdfium.dll` / `libpdfium.dylib` / `libpdfium.so` | [bblanchon/pdfium-binaries](https://github.com/bblanchon/pdfium-binaries/releases) (PDFium: BSD-3/Apache-2.0; build: MIT) |
+| `<lib>/onnxruntime/` | `onnxruntime.dll` / `libonnxruntime.dylib` / `libonnxruntime.so` | [microsoft/onnxruntime releases](https://github.com/microsoft/onnxruntime/releases) (MIT); tested with 1.31.1 |
+
+Before a library is loaded it is resolved through links and refused when it lies inside the
+store. On Linux and macOS it is also refused when the file or any folder above it belongs to
+someone other than you or root, or can be written by others (a world-writable folder with the
+sticky bit, such as `/tmp`, passes): whoever else can write there could replace it. An archive
+unpacked as root keeps the owner recorded in it, so unpack with `tar --no-same-owner` or `chown`
+the files. On Windows the folder under `%LOCALAPPDATA%` is the user's own; no owner check is made.
+
+**The OCR models go into the store**, next to the embedding model:
+
+| Folder | File | From |
+|---|---|---|
 | `models/ppocrv6/` | `pp-ocrv6_small_det.onnx`, `pp-ocrv6_small_rec.onnx`, `ppocrv6_dict.txt` | PaddlePaddle on Hugging Face, `PP-OCRv6_small_det_onnx` and `PP-OCRv6_small_rec_onnx` (Apache-2.0); the dictionary is the `character_dict` of the recognition model's `inference.yml`, one entry per line |
+
+They are data, not code: ONNX Runtime reads a model as a graph of its own built-in operators, and
+code from outside (custom operators) only comes in when the program registers a library, which
+cyberbrain does not. A model from a clone is parsed the way a PDF from a clone is: by a parser
+that has to cope with hostile input either way. The hooks refuse an agent's writes to `models/`.
 
 PDFium is required. Without ONNX Runtime or the PP-OCRv6 files, text layers are still read and
 pages that are only an image are reported as empty — never silently as an empty document.
+
+### Upgrading from a store with libraries in `models/`
+
+`documents add` stops and says where the library was found and where it goes; nothing is read
+until it is moved. On Linux, from the project folder:
+
+```sh
+mkdir -p ~/.local/share/cyberbrain/lib
+mv .cyberbrain/models/pdfium .cyberbrain/models/onnxruntime ~/.local/share/cyberbrain/lib/
+```
+
+Only move libraries you put there yourself. One that came with a repository you cloned: delete
+it. A copy left in the store next to one in the library folder is ignored and named in the report.
 
 ## Use
 
@@ -34,14 +78,22 @@ cyberbrain recall "Wiedereinsetzung Frist" --bereich matter-2026-0142
 cyberbrain forget doc-schriftsatz-mueller      # removal, with the Art. 17 report
 ```
 
+- A document is known by where its file lies: its path relative to the project the store belongs
+  to, or its absolute path when it lies outside. `akte-1/urteil.pdf` and `akte-2/urteil.pdf` are
+  two documents. The note is `doc-<file name>`, or `doc-<file name>-<six characters>` when that
+  name is taken; the place itself is kept only as a hash (tag `doc-id:`), so folder names never
+  end up in a tag. A moved or renamed file is a new document; `forget` the old note.
 - A file that has not changed since the last run is skipped (`unchanged`); one that has changed
-  replaces its note. A note of the same name that did not come from that file is never
-  overwritten.
+  replaces its note. A note that did not come from that file is never overwritten.
+- Notes added before 2026-11-10 are known by name and file name only. Each is taken over by a
+  file of that name, the one whose bytes it holds if there is one: left as it is while that file
+  is unchanged, given the `doc-id:` tag when it changes, never doubled. Another file of the same
+  name gets a note of its own.
 - Every note goes through the normal write path: the PII gate, the audit row, the index. A
   document with personal data is held like any other note; only a person can mark a finding as
   reviewed (`--accept-pii` is refused to an agent).
 - Notes land in ring 4 (imported material) as kind `reference`, tagged with the source file
-  and the hash of the original bytes.
+  name, the hash of the original bytes and the hash of its place.
 - `--threads` sets how many documents are read at once. Each recognition pipeline holds its
   models in memory, about 0.7 GB with the small models; on a laptop this is the memory limit.
 - The web UI lists documents but does not add them: adding reads files wherever it is pointed,

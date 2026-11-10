@@ -47,8 +47,45 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   `[clients]` as a baseline. Set `[audit] searches = "off"` before the upgrade if that is not
   wanted.
 
+### Security
+
+- **`documents add` no longer loads native code from the store.** It took PDFium and ONNX
+  Runtime from `<store>/models/pdfium` and `<store>/models/onnxruntime`. A store travels with its
+  repository, so a cloned repository could bring a library there, and the first `documents add`
+  loaded it: its code ran as whoever ran the command (review 2026-11-10, H1). The libraries now
+  come from the user's own data folder (`~/.local/share/cyberbrain/lib` or `$XDG_DATA_HOME`,
+  `~/Library/Application Support/cyberbrain/lib`, `%LOCALAPPDATA%\cyberbrain\lib`) or from a
+  folder named in `CYBERBRAIN_DOCUMENTS_LIB`, never from the store or its configuration. Before
+  loading, the file is resolved through links and refused when it lies in the store; on Unix also
+  when it or a folder above it belongs to someone other than the user or root, or can be written
+  by others. The OCR models stay in `models/ppocrv6`: they are data, read the way a PDF is read.
+- **The hooks guard the store's `models/` folder.** `Write`/`Edit` there was "inside the store but
+  not a file the hooks guard", and `cp evil.so .cyberbrain/models/pdfium/libpdfium.so` went
+  through the shell guard. Both are refused now and the refusal is recorded, as for the audit log.
+
+**Upgrading with `documents`:** move the two libraries out of the store, for example on Linux
+`mkdir -p ~/.local/share/cyberbrain/lib && mv .cyberbrain/models/pdfium
+.cyberbrain/models/onnxruntime ~/.local/share/cyberbrain/lib/`. Until then `documents add` stops
+with that instruction instead of reading anything; nothing changes silently. A copy left in the
+store next to a proper one is ignored and named in the report. An archive unpacked as root keeps
+its owner (the PDFium build's files belong to uid 1001): `chown` them or unpack with
+`--no-same-owner`, or the check refuses them.
+
 ### Fixed
 
+- **Two PDFs of the same name in different folders are two documents.** The note was named
+  `doc-<file stem>` and recognised by that name and the bare file name, so `akte-1/urteil.pdf` and
+  `akte-2/urteil.pdf` were one note: the second replaced the first, exit 0, and the next run
+  swapped them back (with `--bereich` the note moved between bereiche). A document is now
+  recognised by where its file lies, the path relative to the project the store belongs to, or
+  the absolute path for a file outside it, carried as a hash in a new `doc-id:` tag. The note name
+  stays `doc-<stem>` when it is free and gets six characters of that hash otherwise
+  (`doc-urteil-773c69`). Folder names never reach a tag, so client names in folders are not
+  indexed unredacted. A changed file still replaces its note. Notes written before keep their
+  names and are taken over by a file of that name, the one whose bytes they hold if there is one:
+  left as they are while that file is unchanged, given the `doc-id:` tag when it changes, never
+  doubled. A file that is moved or renamed is a new document; `cyberbrain forget` removes the old
+  note.
 - **The Windows installer shows German umlauts again.** Its script is UTF-8 without a byte order
   mark, and makensis on Windows reads such a file in the ANSI code page, so "Verknüpfung" read
   "VerknÃ¼pfung" in every German text of the installer. The release build now passes

@@ -5,8 +5,11 @@
 //! Everything runs in this process on Windows, macOS and Linux alike: PDFium reads the text
 //! layer and renders a page image, PP-OCRv6 through ONNX Runtime reads pages that are only an
 //! image. Nothing is downloaded at run time; the PDFium library and the model files are looked
-//! up in folders the caller names (the CLI uses the store's `models/` folder), which keeps the
-//! "no network in the core" rule and lets an air-gapped office install them by copying files.
+//! up in folders the caller names, which keeps the "no network in the core" rule and lets an
+//! air-gapped office install them by copying files. Loading the libraries runs their code: the
+//! CLI takes them from a folder of the user's own and the models, which are data, from the
+//! store's `models/` folder. A caller must never take a library from a place that arrives with
+//! data, such as a store in a cloned repository.
 //!
 //! Measured on 1,400 federal court decisions (10,171 pages) and 200 simulated scans, 07.11.2026:
 //! see `docs/` in the private evaluation repository for the full table. The numbers that shaped
@@ -88,6 +91,12 @@ pub fn onnx_runtime_file(dir: &Path) -> PathBuf {
     } else {
         "libonnxruntime.so"
     })
+}
+
+/// The PDFium library in `dir` under the platform's name (`libpdfium.so`, `libpdfium.dylib`,
+/// `pdfium.dll`).
+pub fn pdfium_library_file(dir: &Path) -> PathBuf {
+    Pdfium::pdfium_platform_library_name_at_path(dir)
 }
 
 /// Loads ONNX Runtime from a library file, once per process, before the first pipeline is
@@ -178,15 +187,22 @@ impl PdfSource {
     /// `library_dir`: folder holding `pdfium.dll`, `libpdfium.dylib` or `libpdfium.so`.
     /// `ocr`: pipelines from [`ocr_pipeline`], one per thread that will call [`Self::read`];
     /// empty turns recognition off (pages without a text layer then come back empty).
+    ///
+    /// Loading a library runs its code. Name a folder only the user (or the administrator)
+    /// can write to, never one that arrives with data such as a cloned repository.
     pub fn new(library_dir: &Path, ocr: Vec<OAROCR>) -> Result<Self> {
-        let bindings =
-            Pdfium::bind_to_library(Pdfium::pdfium_platform_library_name_at_path(library_dir))
-                .map_err(|e| {
-                    failure(format!(
-                        "PDFium not found in {}: {e}",
-                        library_dir.display()
-                    ))
-                })?;
+        Self::with_library(&pdfium_library_file(library_dir), ocr)
+    }
+
+    /// As [`Self::new`], with the library file itself: the caller has checked this very file
+    /// and wants nothing else loaded in its place.
+    pub fn with_library(library: &Path, ocr: Vec<OAROCR>) -> Result<Self> {
+        let bindings = Pdfium::bind_to_library(library).map_err(|e| {
+            failure(format!(
+                "PDFium did not load from {}: {e}",
+                library.display()
+            ))
+        })?;
         Ok(Self {
             pdfium: Pdfium::new(bindings),
             ocr: ocr.into_iter().map(Mutex::new).collect(),
