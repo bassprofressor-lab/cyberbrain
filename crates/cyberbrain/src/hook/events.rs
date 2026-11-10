@@ -846,6 +846,19 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
             ),
         });
     }
+    if fold_dots(&hit.replace('\\', "/").to_lowercase()).contains(".cyberbrain/models") {
+        return Some(BashVerdict {
+            decision,
+            reason: format!(
+                "this command writes to `{hit}`, the store's models folder. The index and \
+                 `cyberbrain documents` read what lies there, and an older cyberbrain loaded \
+                 native libraries from it, which runs their code as the operator; the file tools \
+                 are refused the same write. The operator puts model files there. The PDFium and \
+                 ONNX Runtime libraries belong in the library folder named in docs/DOCUMENTS.md, \
+                 outside the store."
+            ),
+        });
+    }
     Some(BashVerdict {
         decision,
         reason: format!(
@@ -859,7 +872,7 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
 }
 
 /// Whether one word of a command names a guarded store path: `deny` for rings 0/1, the
-/// audit log, proposals, the signing key or a directory holding them, `ask` for the
+/// audit log, proposals, the signing key, the models folder or a directory holding them, `ask` for the
 /// configuration. Spelled-around forms count too: `.`/`..`/`//` are folded the way the file
 /// system reads them, and a glob counts when what comes before its first wildcard could
 /// still lead to a guarded path (`.cyberbrain/n*/r0`, `.c*`) (C7, 2026-10-31).
@@ -869,15 +882,17 @@ fn guard_of(platform: paths::Platform, word: &str) -> Option<&'static str> {
         t = t.to_lowercase();
     }
     let t = fold_dots(&t);
-    // `.cyberbrain/proposals` and `.cyberbrain/keys` only under the default store name: a
-    // bare `proposals/` or `keys/` is too common a directory to refuse writes to. The
+    // `.cyberbrain/proposals`, `.cyberbrain/keys` and `.cyberbrain/models` only under the
+    // default store name: a bare `proposals/`, `keys/` or `models/` is too common a directory
+    // to refuse writes to. The
     // digest check in `review` is what holds wherever the store lives.
-    const DENY: [&str; 5] = [
+    const DENY: [&str; 6] = [
         "notes/r0",
         "notes/r1",
         "audit.db",
         ".cyberbrain/proposals",
         ".cyberbrain/keys",
+        ".cyberbrain/models",
     ];
     if DENY.iter().any(|g| t.contains(g))
         || t.ends_with(".cyberbrain")
@@ -890,7 +905,8 @@ fn guard_of(platform: paths::Platform, word: &str) -> Option<&'static str> {
     }
     let wild = t.find(['*', '?', '[', '{'])?;
     let head = &t[..wild];
-    const LEADS: [(&str, &str); 8] = [
+    const LEADS: [(&str, &str); 9] = [
+        (".cyberbrain/models", "deny"),
         (".cyberbrain/notes/r0", "deny"),
         (".cyberbrain/notes/r1", "deny"),
         (".cyberbrain/audit.db", "deny"),
@@ -1481,6 +1497,16 @@ fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
                  manages it with `cyberbrain policy audit-key`."
             ),
         ),
+        StoreTarget::Models => (
+            "deny",
+            format!(
+                "`{rel}` is in the store's models folder. The index and `cyberbrain documents` \
+                 read what lies there, and an older cyberbrain loaded native libraries from \
+                 it, which runs their code as the operator. The operator puts model files \
+                 there; the PDFium and ONNX Runtime libraries belong in the library folder \
+                 named in docs/DOCUMENTS.md, outside the store."
+            ),
+        ),
         StoreTarget::Other => {
             out.note(format!(
                 "pre-tool-use: {rel} is inside the store but not a file the hooks guard; allowing"
@@ -1544,6 +1570,10 @@ fn post_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
         StoreTarget::Proposal => format!(
             "cyberbrain: `{rel}` is a waiting proposal and was changed directly. `review \
              --accept` will refuse it now; reject it and propose again."
+        ),
+        StoreTarget::Models => format!(
+            "cyberbrain: `{rel}` in the store's models folder was written to by a tool. What \
+             lies there is read by the index and by `cyberbrain documents`; tell the operator."
         ),
         StoreTarget::SigningKey => format!(
             "cyberbrain: `{rel}`, the audit log's signing key, was written to by a tool. Rows \
@@ -1650,6 +1680,33 @@ mod bash_tests {
             "dd if=/dev/zero of=.cyberbrain/audit.db bs=1 count=1",
         ] {
             assert!(bash_verdict(cmd).is_some(), "{cmd}");
+        }
+    }
+
+    /// H1 (review 2026-11-10): `cp evil.so .cyberbrain/models/pdfium/libpdfium.so` went
+    /// through. Writes into the store's `models/` folder are refused; reading stays free.
+    #[test]
+    fn shell_writes_into_the_models_folder_are_refused() {
+        for cmd in [
+            "cp /tmp/x.so .cyberbrain/models/pdfium/libpdfium.so",
+            "echo x > .cyberbrain/models/onnxruntime/libonnxruntime.so",
+            "mv evil.so /root/p/.cyberbrain/models/pdfium/libpdfium.so",
+            "install -m 755 x.so .cyberbrain/models/pdfium/libpdfium.so",
+            "rm -rf .cyberbrain/models",
+            "cd .cyberbrain && cp /tmp/x models/pdfium/libpdfium.so",
+            "cp /tmp/x .cyberbrain/mo*/pdfium/",
+            r"cp x.dll C:\p\.cyberbrain\models\pdfium\pdfium.dll",
+        ] {
+            let v = bash_verdict(cmd);
+            assert_eq!(v.as_ref().map(|v| v.decision), Some("deny"), "{cmd}");
+        }
+        for cmd in [
+            "ls -la .cyberbrain/models",
+            "sha256sum .cyberbrain/models/pdfium/libpdfium.so",
+            "cp .cyberbrain/models/ppocrv6/ppocrv6_dict.txt /tmp/",
+            "cp x.so ~/.local/share/cyberbrain/lib/pdfium/libpdfium.so",
+        ] {
+            assert!(bash_verdict(cmd).is_none(), "{cmd}");
         }
     }
 

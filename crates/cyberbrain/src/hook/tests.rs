@@ -682,6 +682,31 @@ fn pre_tool_use_refuses_the_signing_key() {
     }
 }
 
+/// H1 (review 2026-11-10): `models/` was "inside the store but not a file the hooks guard",
+/// so an agent could `Write` a library there that `documents add` used to load, or swap a
+/// model the index reads. Refused like the audit log, with a refusal row.
+#[test]
+fn pre_tool_use_refuses_the_models_folder() {
+    let f = fixture();
+    let app = f.open();
+    for (tool, rel) in [
+        ("Write", "models/pdfium/libpdfium.so"),
+        ("Edit", "models/onnxruntime/libonnxruntime.so"),
+        ("Write", "models/ppocrv6/pp-ocrv6_small_det.onnx"),
+        ("Write", "models/model2vec/model.safetensors"),
+    ] {
+        let out = run(
+            Some(&app),
+            HookEvent::PreToolUse,
+            &tool_payload(&f, tool, &f.store.join(rel)),
+        );
+        assert!(!out.stdout.is_empty(), "{tool} {rel}: {}", out.stderr);
+        let (d, why) = decision(&out);
+        assert_eq!(d, "deny", "{tool} {rel}: {why}");
+        assert!(why.contains("models"), "{why}");
+    }
+}
+
 /// C6 (review 2026-10-31): a link to the store made elsewhere (`ln -s .cyberbrain /tmp/cb`)
 /// was "outside the store" to the lexical check, so `Write /tmp/cb/audit.db` went through.
 /// The file tools now look through links before they decide a path is not ours.
@@ -952,7 +977,7 @@ fn path_classification_holds_on_both_platforms() {
     );
     assert_eq!(
         classify(u, "/p/.cyberbrain", "/p", "/p/.cyberbrain/models/x"),
-        Some(StoreTarget::Other)
+        Some(StoreTarget::Models)
     );
     assert_eq!(
         classify(u, "/p/.cyberbrain", "/p", "/p/.cyberbrain/proposals/x.md"),

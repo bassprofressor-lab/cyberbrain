@@ -61,7 +61,10 @@ pub enum StoreTarget {
     Proposal,
     /// `keys/*`: the audit log's signing key.
     SigningKey,
-    /// Inside the store, none of the above (`models/`, a stray file).
+    /// `models/*`: model files the index and `documents add` read. Native libraries were
+    /// loaded from here until 2026-11-10 (H1), and an old binary still would.
+    Models,
+    /// Inside the store, none of the above (a stray file).
     Other,
 }
 
@@ -260,6 +263,9 @@ pub fn classify(
     }
     if inside.len() >= 2 && inside[0] == "keys" {
         return Some(StoreTarget::SigningKey);
+    }
+    if inside[0] == "models" {
+        return Some(StoreTarget::Models);
     }
     if inside.len() >= 3 && inside[0] == "notes" {
         let ring = Ring::ALL.iter().copied().find(|r| r.dir() == inside[1]);
