@@ -955,6 +955,16 @@ this machine — n8n in a container is the case it was built for (2026-10-03).
 - **No browsers.** A request carrying `Origin` is refused, which also closes DNS rebinding.
 - **Stateless.** No session id and no event stream; `GET` and `DELETE` answer 405. A
   notification is answered 202 with no body.
+- **The configuration follows the file** (2026-11-10). Before each request the server hashes
+  `cyberbrain.toml`, the user's waivers and the model manifest (a few KiB, read every time) and
+  compares them with what its open stores were opened from. On a difference it drops them all,
+  and each client's next request opens the store afresh, with a `clients.changed` row if
+  `[clients]` changed: a bereich taken away, one granted and `unlisted` take effect from that
+  request on, without a restart. A request is served by one state of the file, never a mix; one
+  already running finishes on the state it started with. A file that does not load serves nothing
+  to any client until it is fixed (the request gets 500, the reason goes to stderr): the old state
+  is not kept, since the edit that broke the file may be the one that took a bereich away. After
+  a change each client loads the embedding model again on its first semantic search.
 
 ## 10. Code index
 
@@ -1270,8 +1280,10 @@ with `baseline: true`; a store that never limited anybody writes nothing. The ro
 `unlisted` when it changed, `detected_by` (the actor of the process that noticed), and
 `claimed_by` when `CYBERBRAIN_CONFIG_CHANGED_BY` was set — a claim, named as one. Two processes
 opening at the same instant after an edit can both write the row; the second repeats the first.
-A change takes effect, and is recorded, when a process loads the file: `mcp --http` holds one
-configuration per client from its first request, so it is restarted after a change.
+A change takes effect, and is recorded, when a process loads the file. `mcp --http` checks the
+file before every request and opens afresh when it changed (§9.2.1), so there the row and the
+effect come with the same request. A process that holds one store open for its whole life does
+not: a stdio MCP session and `serve` keep the configuration they started with until they end.
 
 `policy audit --searches` reads the search log (implied by `--action search.access`), with the
 same listing, `--verify` and `--export` as the main log. `--actor <actor> --bereich <bereich>`

@@ -144,3 +144,5 @@ $ cyberbrain mcp --http 172.17.0.1:7790
 `mcp-client add` prints the token once and keeps only its hash, in your configuration directory, never in the store. Each request needs `Authorization: Bearer <token>` and runs as `agent:mcp:<name>`. The address must be loopback or private, `0.0.0.0` is refused, there is no TLS, and a request carrying an `Origin` header is refused, so browsers cannot reach it. An expired token is refused with a 401 naming the client, and the refusal is an audit row.
 
 When several people reach one store this way, each with their own token, set `unlisted = "nothing"` under `[clients]`. An agent that is not listed in `[clients.bereiche]` then sees and writes nothing, so a token created and never listed opens nothing. Without it, an unlisted client sees everything. The operator at the command line is not an agent and stays unlimited.
+
+The running server reads `cyberbrain.toml` again when it changes: an edit of `[clients]` takes effect from the next request, with no restart. A file that does not load serves nothing until it is fixed. A stdio session (`cyberbrain mcp` without `--http`) keeps the configuration it started with until it ends.

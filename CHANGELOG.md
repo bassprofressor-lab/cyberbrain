@@ -86,6 +86,13 @@ its owner (the PDFium build's files belong to uid 1001): `chown` them or unpack 
   left as they are while that file is unchanged, given the `doc-id:` tag when it changes, never
   doubled. A file that is moved or renamed is a new document; `cyberbrain forget` removes the old
   note.
+- **A running `mcp --http` follows edits of `[clients]`.** It kept the configuration each client
+  first got until it was restarted, so a bereich taken from a client, or `unlisted = "nothing"`
+  set later, did not reach it, while the audit log already recorded the change. It now checks the
+  configuration before every request and opens the store afresh when it changed; the
+  `clients.changed` row is written by that open. A configuration that does not load serves
+  nothing until it is fixed, rather than the state from before the edit. Found in the review of
+  2026-11-10 (H2).
 - **The Windows installer shows German umlauts again.** Its script is UTF-8 without a byte order
   mark, and makensis on Windows reads such a file in the ANSI code page, so "Verknüpfung" read
   "VerknÃ¼pfung" in every German text of the installer. The release build now passes

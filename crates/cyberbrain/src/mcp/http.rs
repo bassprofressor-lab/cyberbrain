@@ -15,6 +15,10 @@
 //!   a page, and refusing it closes DNS rebinding as `serve` does with its host guard.
 //! - **Stateless.** Every POST is answered on its own, as the transport allows: no session id,
 //!   no server-sent events. The stdio session holds nothing a request needs from the one before.
+//! - **The configuration is read again when it changes** (H2, 2026-11-10). A stdio server is one
+//!   client's session and ends with it; this one runs for months. Every request checks
+//!   `cyberbrain.toml`, the user's waivers and the model manifest, and an edit takes effect from
+//!   the next request on, `[clients]` included: a bereich taken away is no longer served.
 
 use super::{Session, jsonrpc};
 use crate::app::App;
@@ -34,26 +38,101 @@ use std::sync::{Arc, Mutex};
 
 struct HttpState {
     store: Option<PathBuf>,
-    /// One `App` per client, opened on its first request: the actor is fixed per `App`.
-    apps: Mutex<HashMap<String, Arc<App>>>,
+    /// The `App`s opened for the clients, and the configuration they were opened from.
+    apps: Mutex<Generation>,
     /// Where the client list is read from; `None` reads the user's file on every request, so
     /// `mcp-client add/remove` take effect without a restart.
     clients: Option<Vec<super::clients::Client>>,
 }
 
+/// One `App` per client, all opened from the same state of the files that shape it.
+///
+/// H2 (review 2026-11-10): the `App`s used to be kept for the life of the process, and an
+/// `App`'s configuration is fixed at open. A bereich taken from a client in `[clients]` stayed
+/// readable to it until the server was restarted, as did an `unlisted = "nothing"` set later,
+/// while the first other process to open the store wrote `clients.changed … removed` into the
+/// audit log. Now every request first compares the files against the state the `App`s were
+/// opened from, and a difference drops them all: the next `App` is opened from the file as it
+/// is, and its open writes the `clients.changed` row, so the row and the effect coincide.
+#[derive(Default)]
+struct Generation {
+    /// [`App::watched_files`] of the last `App` opened: the configuration, the user's waivers
+    /// and the model manifest. Only known once a store is open (the model's place is in its
+    /// configuration), so empty before the first.
+    watched: Vec<PathBuf>,
+    /// The contents of `watched`, read *before* the `App`s below were opened. `None` when
+    /// nothing vouches for them, which makes the next request open afresh.
+    stamp: Option<blake3::Hash>,
+    apps: HashMap<String, Arc<App>>,
+}
+
+/// One hash over the contents of the watched files, a missing or unreadable one included as
+/// such. The contents, not size and mtime: `["a", "b"]` edited to `["a", "c"]` within one tick
+/// of a coarse clock keeps both. The files are a few KiB together; reading them is what every
+/// request pays for this (H2).
+fn stamp(files: &[PathBuf]) -> blake3::Hash {
+    let mut h = blake3::Hasher::new();
+    for f in files {
+        h.update(f.as_os_str().as_encoded_bytes());
+        h.update(&[0]);
+        match std::fs::read(f) {
+            Ok(bytes) => {
+                h.update(&[1]);
+                h.update(&(bytes.len() as u64).to_le_bytes());
+                h.update(&bytes);
+            }
+            Err(e) => {
+                h.update(&[2]);
+                h.update(format!("{:?}", e.kind()).as_bytes());
+            }
+        }
+    }
+    h.finalize()
+}
+
 impl HttpState {
+    /// The `App` for this client, opened from the configuration as it is now.
+    ///
+    /// The lock is held across the check and the open, so a request is served entirely by an
+    /// `App` from one state of the files: one already running keeps the `App` it has (an
+    /// `App` never changes), and the next one gets an `App` opened after the change. The open
+    /// happens once per client and change; every other request reads the files and hashes.
+    ///
+    /// A configuration that does not load opens nothing, for any client, until it is fixed:
+    /// the `App`s from before are dropped, not kept, because the change that broke the file
+    /// may be the one that took a bereich away, and serving the old state would go on handing
+    /// that bereich out. The request is refused and the reason goes to stderr.
     fn app_for(&self, client: &str) -> Result<Arc<App>> {
-        if let Some(a) = self.apps.lock().expect("apps lock").get(client) {
+        // A panic inside `App::open` leaves the state consistent (the old `App`s are already
+        // gone), so a poisoned lock is taken as it is rather than failing every later request.
+        let mut g = self.apps.lock().unwrap_or_else(|p| p.into_inner());
+        let now = stamp(&g.watched);
+        if g.stamp != Some(now) {
+            if !g.apps.is_empty() {
+                diag!(
+                    "the configuration changed; {} client(s) are served from the new one \
+                     from their next request",
+                    g.apps.len()
+                );
+            }
+            g.apps.clear();
+            g.stamp = Some(now);
+        }
+        if let Some(a) = g.apps.get(client) {
             return Ok(a.clone());
         }
         let app = Arc::new(App::open(
             self.store.as_deref(),
             Actor::Agent(format!("mcp:{client}")),
         )?);
-        self.apps
-            .lock()
-            .expect("apps lock")
-            .insert(client.to_string(), app.clone());
+        let watched = app.watched_files();
+        if watched != g.watched {
+            // The stamp above was taken over other files (none, before the first open), so it
+            // cannot tell whether these changed since: the next request opens afresh.
+            g.watched = watched;
+            g.stamp = None;
+        }
+        g.apps.insert(client.to_string(), app.clone());
         Ok(app)
     }
 }
@@ -74,7 +153,7 @@ pub fn check_bind(addr: &SocketAddr) -> Result<()> {
 pub fn router(store: Option<PathBuf>, clients: Option<Vec<super::clients::Client>>) -> Router {
     let st = Arc::new(HttpState {
         store,
-        apps: Mutex::new(HashMap::new()),
+        apps: Mutex::new(Generation::default()),
         clients,
     });
     Router::new()

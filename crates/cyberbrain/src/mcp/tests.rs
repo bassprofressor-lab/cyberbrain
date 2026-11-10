@@ -1506,3 +1506,196 @@ async fn a_limited_mcp_client_leaves_a_search_row_and_cannot_read_the_log() {
         "{text}"
     );
 }
+
+/// H2 (review 2026-11-10): a running `mcp --http` follows edits of `[clients]` from the next
+/// request on, over a real socket. Before, it kept the `App` (and so the configuration) each
+/// client first got until it was restarted: a bereich taken away stayed readable, while the
+/// audit log already said it was removed.
+mod http_reload {
+    use super::*;
+    use crate::mcp::{clients, http};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    struct Server {
+        addr: std::net::SocketAddr,
+        id: u64,
+    }
+
+    impl Server {
+        async fn start(root: &std::path::Path) -> Server {
+            let r = http::router(
+                Some(root.to_path_buf()),
+                Some(vec![clients::Client::new(
+                    "anna",
+                    clients::digest("cbm_anna"),
+                    None,
+                )]),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tokio::spawn(async move { axum::serve(listener, r).await.unwrap() });
+            Server { addr, id: 0 }
+        }
+
+        /// One POST over its own connection; the status and the JSON body.
+        async fn post(&mut self, body: Value) -> (u16, Value) {
+            self.id += 1;
+            let body = body.to_string();
+            let mut s = tokio::net::TcpStream::connect(self.addr).await.unwrap();
+            let req = format!(
+                "POST /mcp HTTP/1.1\r\nhost: {}\r\nauthorization: Bearer cbm_anna\r\n\
+                 content-type: application/json\r\ncontent-length: {}\r\n\
+                 connection: close\r\n\r\n{body}",
+                self.addr,
+                body.len()
+            );
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut raw = Vec::new();
+            s.read_to_end(&mut raw).await.unwrap();
+            let text = String::from_utf8_lossy(&raw);
+            let status: u16 = text
+                .split_whitespace()
+                .nth(1)
+                .and_then(|c| c.parse().ok())
+                .unwrap_or(0);
+            let json = text
+                .split_once("\r\n\r\n")
+                .and_then(|(_, b)| serde_json::from_str(b).ok())
+                .unwrap_or(Value::Null);
+            (status, json)
+        }
+
+        /// The note names a recall returns, or `None` when the request was not served.
+        async fn recall(&mut self) -> Option<Vec<String>> {
+            let id = self.id + 1;
+            let (status, v) = self
+                .post(
+                    json!({"jsonrpc": "2.0", "id": id, "method": "tools/call", "params": {
+                    "name": "recall", "arguments": {"query": "Zeppelinwerft"}}}),
+                )
+                .await;
+            if status != 200 || v["result"]["isError"] == true {
+                return None;
+            }
+            let text = v["result"]["content"][0]["text"].as_str().unwrap_or("");
+            let mut names: Vec<String> = ["in-a", "in-b", "in-none"]
+                .iter()
+                .filter(|n| text.contains(&format!("Zeppelinwerft {n}")))
+                .map(|n| n.to_string())
+                .collect();
+            names.sort();
+            Some(names)
+        }
+    }
+
+    fn set_clients(root: &std::path::Path, base: &str, clients: &str) {
+        std::fs::write(root.join("cyberbrain.toml"), format!("{base}{clients}")).unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn clients_edits_take_effect_on_the_next_request() {
+        let (_d, root) = temp_store();
+        let operator = App::open(Some(&root), Actor::Operator).unwrap();
+        for (name, bereich) in [
+            ("in-a", Some("akte-a")),
+            ("in-b", Some("akte-b")),
+            ("in-none", None),
+        ] {
+            operator
+                .write(crate::app::WriteRequest {
+                    ring: cyberbrain_core::Ring::Knowledge,
+                    kind: cyberbrain_core::NoteKind::Knowledge,
+                    name: name.into(),
+                    body: format!("Mietminderung Zeppelinwerft {name}"),
+                    tags: Vec::new(),
+                    bereich: Some(bereich.map(str::to_string)),
+                    retention: None,
+                    force: false,
+                    choice: None,
+                    expected_updated: None,
+                    supersedes: None,
+                    valid_from: None,
+                    invalid_at: None,
+                    arriving: None,
+                    dry_run: false,
+                })
+                .unwrap();
+        }
+        drop(operator);
+        let base = std::fs::read_to_string(root.join("cyberbrain.toml")).unwrap();
+        let both = "\n[clients.bereiche]\n\"agent:mcp:anna\" = [\"akte-a\", \"akte-b\"]\n";
+        let only_a = "\n[clients.bereiche]\n\"agent:mcp:anna\" = [\"akte-a\"]\n";
+        set_clients(&root, &base, both);
+
+        let mut srv = Server::start(&root).await;
+        let (status, v) = srv
+            .post(json!({"jsonrpc": "2.0", "id": 1, "method": "ping"}))
+            .await;
+        assert_eq!(status, 200, "{v}");
+        let ab = Some(vec!["in-a".to_string(), "in-b".to_string()]);
+        assert_eq!(srv.recall().await, ab, "both bereiche to start with");
+        // A second request on the same state: served from the cached `App`.
+        assert_eq!(srv.recall().await, ab);
+
+        // Taken away: the very next request no longer sees akte-b.
+        set_clients(&root, &base, only_a);
+        assert_eq!(
+            srv.recall().await,
+            Some(vec!["in-a".to_string()]),
+            "a bereich taken away is not served by the running server"
+        );
+        // The audit row for it is there, written by the open that made it take effect.
+        let check = App::open(Some(&root), Actor::Operator).unwrap();
+        let rows = check
+            .policy()
+            .audit()
+            .read(&cyberbrain_policy::AuditFilter::default())
+            .unwrap();
+        let removed = rows
+            .iter()
+            .filter(|r| r.action == "clients.changed")
+            .find(|r| r.detail["removed"]["agent:mcp:anna"] == json!(["akte-b"]))
+            .expect("clients.changed with akte-b removed");
+        assert_eq!(
+            removed.detail["detected_by"], "agent:mcp:anna",
+            "{removed:?}"
+        );
+        drop(check);
+
+        // Granted again: the next request sees it.
+        set_clients(&root, &base, both);
+        assert_eq!(srv.recall().await, ab, "a bereich granted is served");
+
+        // anna unlisted, store open to unlisted agents: everything.
+        set_clients(&root, &base, "");
+        let all = Some(vec![
+            "in-a".to_string(),
+            "in-b".to_string(),
+            "in-none".to_string(),
+        ]);
+        assert_eq!(srv.recall().await, all, "unlisted and unlimited");
+        // unlisted = "nothing": the same client, the next request, nothing.
+        set_clients(&root, &base, "\n[clients]\nunlisted = \"nothing\"\n");
+        assert_eq!(
+            srv.recall().await,
+            Some(Vec::new()),
+            "unlisted = \"nothing\" holds for the running server"
+        );
+
+        // A broken file is not more open than the state before it: nothing is served.
+        set_clients(
+            &root,
+            &base,
+            "\n[clients]\nunlisted = \"nothing\"\n[clients.bereiche\n",
+        );
+        assert_eq!(
+            srv.recall().await,
+            None,
+            "a broken configuration serves nothing"
+        );
+        assert_eq!(srv.recall().await, None, "and keeps serving nothing");
+        // Fixed: served again, from the fixed file.
+        set_clients(&root, &base, only_a);
+        assert_eq!(srv.recall().await, Some(vec!["in-a".to_string()]));
+    }
+}
