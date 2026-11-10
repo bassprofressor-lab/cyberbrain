@@ -449,6 +449,10 @@ SPEC §0 binds contributors, and a contribution that breaks it breaks the proven
 above retroactively. Vulnerabilities go through [`SECURITY.md`](SECURITY.md), not a public
 issue.
 
+Questions, ideas and setups you want to show go to
+[Discussions](https://github.com/bassprofressor-lab/cyberbrain/discussions) (Q&A for questions);
+a bug you can reproduce goes to an issue.
+
 ## Licence
 
 [FSL-1.1-ALv2](LICENSE.md). Use it for anything except building a competing product, and
