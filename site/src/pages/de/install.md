@@ -15,7 +15,7 @@ Paket und Programm heißen beide `cyberbrain`.
 ```console
 $ cargo install cyberbrain
 $ cyberbrain --version
-cyberbrain 0.10.1
+cyberbrain 0.10.2
 ```
 
 Dafür braucht es Rust 1.98 oder neuer. Die Weboberfläche ist ins Programm kompiliert und liegt im Paket, ein node wird also nicht gebraucht. 0.8.3 wurde auf crates.io ohne die Oberfläche veröffentlicht und ließ sich nicht installieren; jede Version ab 0.8.4 enthält sie.
@@ -35,7 +35,7 @@ Jedes [Release auf GitHub](https://github.com/bassprofressor-lab/cyberbrain/rele
 | `cyberbrain-linux-x86_64` | Linux, x86_64 |
 | `cyberbrain-windows-x86_64.exe` | Windows, x86_64, nur das Programm |
 | `cyberbrain-macos-aarch64` | macOS mit Apple-Chip |
-| `cyberbrain-setup-0.10.1.exe` | das Windows-Installationsprogramm, siehe unten |
+| `cyberbrain-setup-0.10.2.exe` | das Windows-Installationsprogramm, siehe unten |
 
 Vor dem Start prüfen:
 
@@ -43,11 +43,11 @@ Vor dem Start prüfen:
 $ sha256sum -c SHA256SUMS
 cyberbrain-linux-x86_64: OK
 cyberbrain-macos-aarch64: OK
-cyberbrain-setup-0.10.1.exe: OK
+cyberbrain-setup-0.10.2.exe: OK
 cyberbrain-windows-x86_64.exe: OK
 $ chmod +x cyberbrain-linux-x86_64
 $ ./cyberbrain-linux-x86_64 --version
-cyberbrain 0.10.1
+cyberbrain 0.10.2
 ```
 
 Zur Laufzeit braucht das Programm nichts: kein SQLite aus dem System, kein OpenSSL, keinen Modellserver, kein node.
