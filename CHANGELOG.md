@@ -12,6 +12,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.3] — 2026-11-11
+
+### Fixed
+
+- **A copied store no longer touches the original.** The index kept the absolute path of every
+  note as it was when the note was indexed. In a copy of a store (a backup restored next to the
+  original, `cp -r`, a second checkout) `forget <id>` deleted the note file in the **original**
+  and reported the copy's note as gone, and `export <id>` and `recall --id` read the original's
+  text. Indexed notes are now found by ring and name in the store that is open, and removing a
+  note file outside the store's root is refused. A moved store answers `recall --id` again
+  without `scan --full`.
+- **The hub shows a credential to the session that created it, and only to it.** A message the
+  administrator page shows once, such as a new person's or device's credential, sat in one slot
+  for the whole hub; the next page anybody signed in rendered showed it. It is now kept per
+  session.
+
 ## [0.10.2] — 2026-11-10
 
 ### Added
@@ -2362,7 +2378,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.2...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...HEAD
+[0.10.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.0...v0.10.1
 [0.10.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.9.1...v0.10.0

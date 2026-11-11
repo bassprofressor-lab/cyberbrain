@@ -100,7 +100,10 @@ impl HubState {
 
     /// Taken, not read: a message about what just happened should not survive a refresh.
     pub fn take_flash(&self, headers: &HeaderMap) -> Option<Result<String, String>> {
-        self.flash.lock().ok().and_then(|mut f| f.remove(&Self::flash_key(headers)))
+        self.flash
+            .lock()
+            .ok()
+            .and_then(|mut f| f.remove(&Self::flash_key(headers)))
     }
 
     /// The record, whatever an earlier request did to the lock.
@@ -980,7 +983,11 @@ pub struct PrincipalForm {
 
 /// Answer a form on the administrator's page: back to the page with what happened, or a 400
 /// with why not, as the grant form does.
-fn page_outcome(state: &HubState, headers: &HeaderMap, outcome: Result<String, String>) -> Response {
+fn page_outcome(
+    state: &HubState,
+    headers: &HeaderMap,
+    outcome: Result<String, String>,
+) -> Response {
     match outcome {
         Ok(text) => {
             state.set_flash(headers, Ok(text));

@@ -597,8 +597,14 @@ fn a_copied_store_never_touches_the_original() {
 
     let f = kopie.ok(&["forget", &id]);
     assert_eq!(f["file_removed"], true);
-    assert!(!kopie.note_path("2", "geteilt").exists(), "the copy's file goes");
-    assert!(cb.note_path("2", "geteilt").exists(), "the original's file stays");
+    assert!(
+        !kopie.note_path("2", "geteilt").exists(),
+        "the copy's file goes"
+    );
+    assert!(
+        cb.note_path("2", "geteilt").exists(),
+        "the original's file stays"
+    );
 }
 
 /// Regression, SPEC §12.2: erasure removes the vector and the FTS row, not just the file

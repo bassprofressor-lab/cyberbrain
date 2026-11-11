@@ -4838,8 +4838,13 @@ async fn page_as(state: &Arc<super::api::HubState>, cookie: &str) -> String {
             .parse::<std::net::SocketAddr>()
             .unwrap(),
     ));
-    let r = super::api::router(state.clone()).oneshot(req).await.unwrap();
-    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+    let r = super::api::router(state.clone())
+        .oneshot(req)
+        .await
+        .unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX)
+        .await
+        .unwrap();
     String::from_utf8_lossy(&bytes).into_owned()
 }
 
@@ -4861,7 +4866,10 @@ async fn a_credential_shown_once_is_shown_to_its_own_session_only() {
         page_as(&state, &cookie).await.contains("cbp_"),
         "the session that created it sees it once"
     );
-    assert!(!page_as(&state, &cookie).await.contains("cbp_"), "and only once");
+    assert!(
+        !page_as(&state, &cookie).await.contains("cbp_"),
+        "and only once"
+    );
 }
 
 #[tokio::test]

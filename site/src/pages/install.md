@@ -14,7 +14,7 @@ The package and the program are both called `cyberbrain`.
 ```console
 $ cargo install cyberbrain
 $ cyberbrain --version
-cyberbrain 0.10.2
+cyberbrain 0.10.3
 ```
 
 This needs Rust 1.98 or newer. The web page is compiled into the binary and ships inside the crate, so no node toolchain is needed. 0.8.3 on crates.io was published without the page and did not install; every version from 0.8.4 on carries it.
@@ -34,7 +34,7 @@ Every [release on GitHub](https://github.com/bassprofressor-lab/cyberbrain/relea
 | `cyberbrain-linux-x86_64` | Linux, x86_64 |
 | `cyberbrain-windows-x86_64.exe` | Windows, x86_64, the bare program |
 | `cyberbrain-macos-aarch64` | macOS on Apple silicon |
-| `cyberbrain-setup-0.10.2.exe` | the Windows installer, see below |
+| `cyberbrain-setup-0.10.3.exe` | the Windows installer, see below |
 
 Check before you run anything:
 
@@ -42,11 +42,11 @@ Check before you run anything:
 $ sha256sum -c SHA256SUMS
 cyberbrain-linux-x86_64: OK
 cyberbrain-macos-aarch64: OK
-cyberbrain-setup-0.10.2.exe: OK
+cyberbrain-setup-0.10.3.exe: OK
 cyberbrain-windows-x86_64.exe: OK
 $ chmod +x cyberbrain-linux-x86_64
 $ ./cyberbrain-linux-x86_64 --version
-cyberbrain 0.10.2
+cyberbrain 0.10.3
 ```
 
 The binary needs nothing at runtime: no system SQLite, no OpenSSL, no model server, no node.
