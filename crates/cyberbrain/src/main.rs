@@ -1810,7 +1810,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                             record: path.clone(),
                             port: bound.port(),
                             sessions: Default::default(),
-                            flash: std::sync::Mutex::new(None),
+                            flash: std::sync::Mutex::new(std::collections::HashMap::new()),
                             encrypted: tls.is_some(),
                             enrol_attempts: Default::default(),
                             sign_in_refusals: Default::default(),

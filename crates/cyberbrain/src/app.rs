@@ -1936,7 +1936,7 @@ impl App {
             }
             // Looked at again before the row goes: the listing is from the start of the scan,
             // and a file that exists now is not "missing at scan" whatever the listing says.
-            if self.root.join(&rec.path).is_file() || rec.path.is_file() {
+            if self.indexed_path(&rec).is_ok_and(|p| p.is_file()) {
                 continue;
             }
             let erased = w.index.delete_note(&rec.front.id)?;
@@ -2438,7 +2438,7 @@ impl App {
                 "citation {cit} (not in the index; run `cyberbrain scan` if the note exists)"
             ))
         })?;
-        let note = self.note_view_at(&rec.path)?;
+        let note = self.note_view_at(&self.indexed_path(&rec)?)?;
         // A limited client gets the same answer for a note outside its bereiche as for one
         // that does not exist: which notes exist elsewhere is itself what it may not see.
         if let Some(scope) = self.client_scope()
@@ -2465,6 +2465,14 @@ impl App {
         })
     }
 
+    /// Where an indexed note lives in *this* store: built from ring and name, never taken from
+    /// the path the index stored. The index stores the path it saw at upsert time, absolute;
+    /// in a copied or moved store that path points at the original, and `forget <id>` deleted
+    /// the original's file while `recall --id` read the original's text (K1, audit 2026-11-10).
+    fn indexed_path(&self, rec: &cyberbrain_index::NoteRecord) -> Result<PathBuf> {
+        self.store.note_path(rec.front.ring, &rec.front.name)
+    }
+
     fn note_view_at(&self, path: &Path) -> Result<NoteView> {
         let n = self.store.read_path(path)?;
         let blocks = lock_index(&self.index)?
@@ -2489,7 +2497,7 @@ impl App {
         }
         if let Ok(id) = NoteId::from_string(target) {
             if let Some(rec) = lock_index(&self.index)?.note(&id)? {
-                return self.store.read_path(&rec.path);
+                return self.store.read_path(&self.indexed_path(&rec)?);
             }
             return self.store.read_by_id(id);
         }
@@ -4013,7 +4021,8 @@ impl App {
                     },
                 };
                 let rec = rec.ok_or_else(|| Error::NoSuchNote(target.to_string()))?;
-                (rec.front.id, rec.front.name, rec.front.ring, rec.path)
+                let path = self.indexed_path(&rec)?;
+                (rec.front.id, rec.front.name, rec.front.ring, path)
             }
             Err(e) => return Err(e),
         };

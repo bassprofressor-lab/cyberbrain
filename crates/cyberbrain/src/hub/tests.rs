@@ -2007,7 +2007,7 @@ fn state_for(hub: HubStore, encrypted: bool) -> Arc<super::api::HubState> {
         record: std::path::PathBuf::from("hub.db"),
         port: 7788,
         sessions: Default::default(),
-        flash: std::sync::Mutex::new(None),
+        flash: std::sync::Mutex::new(std::collections::HashMap::new()),
         encrypted,
         enrol_attempts: Default::default(),
         sign_in_refusals: Default::default(),
@@ -4787,7 +4787,7 @@ async fn admin_on_page() -> (Arc<super::api::HubState>, String, tempfile::TempDi
         record: dir.path().join("hub.db"),
         port: 7788,
         sessions: Default::default(),
-        flash: std::sync::Mutex::new(None),
+        flash: std::sync::Mutex::new(std::collections::HashMap::new()),
         encrypted: true,
         enrol_attempts: Default::default(),
         sign_in_refusals: Default::default(),
@@ -4822,7 +4822,46 @@ async fn form_post(
 }
 
 fn flash_of(state: &Arc<super::api::HubState>) -> Option<std::result::Result<String, String>> {
-    state.flash.lock().unwrap().take()
+    let mut f = state.flash.lock().unwrap();
+    let key = f.keys().next().cloned()?;
+    f.remove(&key)
+}
+
+async fn page_as(state: &Arc<super::api::HubState>, cookie: &str) -> String {
+    let mut req = Request::builder()
+        .uri("/")
+        .header("cookie", cookie)
+        .body(Body::empty())
+        .unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    let r = super::api::router(state.clone()).oneshot(req).await.unwrap();
+    let bytes = axum::body::to_bytes(r.into_body(), usize::MAX).await.unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// Finding 4 of the audit 2026-11-10: the "shown once" credential sat in one flash slot for
+/// the whole hub, so the next page anybody rendered showed it. Now it is the session's own.
+/// Shown to fail with the single slot (the second administrator's page carried `cbp_`).
+#[tokio::test]
+async fn a_credential_shown_once_is_shown_to_its_own_session_only() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    let r = sign_in_from(state.clone(), "192.168.1.21:51000", "correct horse battery").await;
+    let other = cookie_of(&r).split(';').next().unwrap().to_string();
+    let r = form_post(&state, &cookie, "/principals", "name=E.+Kraus&role=editor").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert!(
+        !page_as(&state, &other).await.contains("cbp_"),
+        "another administrator's page must not show the credential"
+    );
+    assert!(
+        page_as(&state, &cookie).await.contains("cbp_"),
+        "the session that created it sees it once"
+    );
+    assert!(!page_as(&state, &cookie).await.contains("cbp_"), "and only once");
 }
 
 #[tokio::test]

@@ -554,6 +554,53 @@ impl Cb {
     }
 }
 
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let e = e.unwrap();
+        let ziel = to.join(e.file_name());
+        if e.file_type().unwrap().is_dir() {
+            copy_dir(&e.path(), &ziel);
+        } else {
+            std::fs::copy(e.path(), &ziel).unwrap();
+        }
+    }
+}
+
+/// Regression K1 (audit 2026-11-10): the index stored absolute note paths and trusted them.
+/// In a copied store (backup, `cp -r`, second checkout) `forget <id>` deleted the file in the
+/// original and `export <id>` read the original. Shown to fail with the stored path in use.
+#[test]
+fn a_copied_store_never_touches_the_original() {
+    let cb = Cb::new();
+    cb.write("2", "geteilt", "original marker text");
+    cb.ok(&["scan"]);
+    let id = cb.ok(&["export", "geteilt"])["front"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let dir = tempfile::tempdir().unwrap();
+    let kopie = Cb {
+        store: dir.path().join("store"),
+        _dir: dir,
+    };
+    copy_dir(&cb.store, &kopie.store);
+
+    let gesehen = kopie.ok(&["export", &id]);
+    let pfad = PathBuf::from(gesehen["path"].as_str().unwrap());
+    assert!(
+        pfad.starts_with(&kopie.store),
+        "export by id must read the copy, read {}",
+        pfad.display()
+    );
+
+    let f = kopie.ok(&["forget", &id]);
+    assert_eq!(f["file_removed"], true);
+    assert!(!kopie.note_path("2", "geteilt").exists(), "the copy's file goes");
+    assert!(cb.note_path("2", "geteilt").exists(), "the original's file stays");
+}
+
 /// Regression, SPEC §12.2: erasure removes the vector and the FTS row, not just the file
 /// and the notes row, and the erasure is recorded with what went. Shown to fail against an
 /// eraser that removed the file and skipped `delete_note` (vector and FTS row survived),

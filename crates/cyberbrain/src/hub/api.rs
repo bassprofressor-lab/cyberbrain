@@ -32,8 +32,10 @@ pub struct HubState {
     /// be typed into it from anywhere but the machine itself, and whether the session
     /// cookie is marked `Secure`.
     pub encrypted: bool,
-    /// The last thing the page did, shown once on the next render.
-    pub flash: Mutex<Option<Result<String, String>>>,
+    /// The last thing the page did, shown once on the next render **of the same session**.
+    /// Keyed by the session cookie: one slot for the whole hub showed a device token "shown
+    /// once" to whoever rendered a page next (audit 2026-11-10, finding 4).
+    pub flash: Mutex<std::collections::HashMap<String, Result<String, String>>>,
     /// Enrolment codes tried per address, so guessing is slowed, locked and on record.
     pub enrol_attempts: Arc<super::attempts::EnrolAttempts>,
     /// Refused sign-ins per address, so they are on record without filling it.
@@ -80,6 +82,27 @@ pub fn router(state: Arc<HubState>) -> Router {
 }
 
 impl HubState {
+    fn flash_key(headers: &HeaderMap) -> String {
+        super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()))
+            .unwrap_or_default()
+    }
+
+    /// Leave a message for the next page this session renders, and only this session.
+    pub fn set_flash(&self, headers: &HeaderMap, outcome: Result<String, String>) {
+        if let Ok(mut f) = self.flash.lock() {
+            // Messages nobody came back for do not pile up.
+            if f.len() >= 64 {
+                f.clear();
+            }
+            f.insert(Self::flash_key(headers), outcome);
+        }
+    }
+
+    /// Taken, not read: a message about what just happened should not survive a refresh.
+    pub fn take_flash(&self, headers: &HeaderMap) -> Option<Result<String, String>> {
+        self.flash.lock().ok().and_then(|mut f| f.remove(&Self::flash_key(headers)))
+    }
+
     /// The record, whatever an earlier request did to the lock.
     ///
     /// A panic while the mutex was held used to poison it, and from then on every page and
@@ -379,7 +402,7 @@ async fn page(
         }
     };
     // Taken, not read: a message about what just happened should not survive a refresh.
-    let flash = state.flash.lock().ok().and_then(|mut f| f.take());
+    let flash = state.take_flash(&headers);
     let view = super::page::View::gather(
         &hub,
         &state.record,
@@ -644,9 +667,7 @@ async fn change_password(
     if outcome.is_err() {
         stumble().await;
     }
-    if let Ok(mut f) = state.flash.lock() {
-        *f = Some(outcome);
-    }
+    state.set_flash(&headers, outcome);
     Redirect::to("/").into_response()
 }
 
@@ -691,9 +712,7 @@ async fn install_licence(
             }
         }
     };
-    if let Ok(mut f) = state.flash.lock() {
-        *f = Some(outcome);
-    }
+    state.set_flash(&headers, outcome);
     // Redirect rather than render, so a refresh does not install anything a second time.
     Redirect::to("/").into_response()
 }
@@ -735,9 +754,7 @@ async fn add_device(
             form.expires.trim(),
         )
     };
-    if let Ok(mut f) = state.flash.lock() {
-        *f = Some(outcome);
-    }
+    state.set_flash(&headers, outcome);
     Redirect::to("/").into_response()
 }
 
@@ -963,12 +980,10 @@ pub struct PrincipalForm {
 
 /// Answer a form on the administrator's page: back to the page with what happened, or a 400
 /// with why not, as the grant form does.
-fn page_outcome(state: &HubState, outcome: Result<String, String>) -> Response {
+fn page_outcome(state: &HubState, headers: &HeaderMap, outcome: Result<String, String>) -> Response {
     match outcome {
         Ok(text) => {
-            if let Ok(mut f) = state.flash.lock() {
-                *f = Some(Ok(text));
-            }
+            state.set_flash(headers, Ok(text));
             Redirect::to("/").into_response()
         }
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -1018,7 +1033,7 @@ async fn add_principal(
             p.id
         ))
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 async fn revoke_principal(
@@ -1041,7 +1056,7 @@ async fn revoke_principal(
             Err(format!("{id} is unknown or was already withdrawn."))
         }
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 #[derive(serde::Deserialize)]
@@ -1095,7 +1110,7 @@ async fn assign_bereich(
         .map_err(|e| e.to_string())?;
         Ok(format!("{id} now sees conflicts in {bereich}."))
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 async fn unassign_bereich(
@@ -1125,7 +1140,7 @@ async fn unassign_bereich(
         .map_err(|e| e.to_string())?;
         Ok(format!("{id} no longer sees conflicts in {bereich}."))
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 #[derive(serde::Deserialize)]
@@ -1184,7 +1199,7 @@ async fn add_enrolment_code(
             row.expires_at
         ))
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 async fn revoke_enrolment_code(
@@ -1211,7 +1226,7 @@ async fn revoke_enrolment_code(
             ))
         }
     })();
-    page_outcome(&state, outcome)
+    page_outcome(&state, &headers, outcome)
 }
 
 async fn revoke_grant(
@@ -1617,7 +1632,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
         .filter(|d| d.is_active())
         .map(|d| (d.id, d.name))
         .collect();
-    let flash = state.flash.lock().ok().and_then(|mut f| f.take());
+    let flash = state.take_flash(&headers);
     let view = super::page::SigningView {
         name: &name,
         id: &id,
@@ -1671,9 +1686,7 @@ async fn countersign_purge(
             )),
             Err(e) => Err(e.to_string()),
         };
-        if let Ok(mut f) = state.flash.lock() {
-            *f = Some(message);
-        }
+        state.set_flash(&headers, message);
     }
     Redirect::to("/requests").into_response()
 }
@@ -1876,9 +1889,7 @@ async fn post_request(
                 })
                 .map_err(|e| e.to_string())
         };
-        if let Ok(mut f) = state.flash.lock() {
-            *f = Some(outcome);
-        }
+        state.set_flash(&headers, outcome);
     }
     Redirect::to("/requests").into_response()
 }
@@ -1929,9 +1940,7 @@ async fn approve(
             )),
             Err(d) => Err(d.to_string()),
         };
-        if let Ok(mut f) = state.flash.lock() {
-            *f = Some(message);
-        }
+        state.set_flash(&headers, message);
     }
     Redirect::to("/requests").into_response()
 }
@@ -1974,9 +1983,7 @@ async fn countersign(
             )),
             Err(e) => Err(e.to_string()),
         };
-        if let Ok(mut f) = state.flash.lock() {
-            *f = Some(message);
-        }
+        state.set_flash(&headers, message);
     }
     Redirect::to("/requests").into_response()
 }

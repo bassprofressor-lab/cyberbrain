@@ -29,6 +29,14 @@ impl NoteWriter for FsNoteWriter {
     }
 
     fn remove(&self, path: &Path) -> Result<bool> {
+        // Only ever a file of this store: a path from elsewhere (an index copied along with the
+        // store, K1 2026-11-10) must not delete another store's note.
+        if !inside_root(self.store.root(), path) {
+            return Err(Error::Io {
+                path: path.to_path_buf(),
+                source: std::io::Error::other("refusing to remove a file outside this store"),
+            });
+        }
         match std::fs::remove_file(path) {
             Ok(()) => Ok(true),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -250,4 +258,17 @@ impl Eraser for StoreEraser<'_> {
         }
         Ok(report)
     }
+}
+
+/// Whether `path` lies inside `root`, judged on the real directories (symlinked roots,
+/// `./` prefixes). A file that does not exist yet is judged by its parent directory.
+pub(crate) fn inside_root(root: &Path, path: &Path) -> bool {
+    let Ok(root) = std::fs::canonicalize(root) else {
+        return false;
+    };
+    let dir = match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => return false,
+    };
+    std::fs::canonicalize(dir).is_ok_and(|d| d.starts_with(&root))
 }
