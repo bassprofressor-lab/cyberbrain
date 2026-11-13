@@ -747,6 +747,7 @@ mod tests {
                 valid_from: None,
                 invalid_at: None,
                 pii: PiiState::None,
+                anchors: Vec::new(),
             },
             body: body.into(),
             path: PathBuf::new(),

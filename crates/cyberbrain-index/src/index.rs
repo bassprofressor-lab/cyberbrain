@@ -627,6 +627,7 @@ impl Index {
                 links += 1;
             }
         }
+        Self::insert_anchors(&tx, &id_s, &note.front.anchors)?;
         // Anyone who linked to this name now resolves to this note.
         tx.execute(
             "UPDATE links SET resolved_note_id = ?1 WHERE to_name = ?2",
@@ -683,6 +684,8 @@ impl Index {
             .ix()?;
         let links_out = tx
             .execute("DELETE FROM links WHERE from_note = ?1", [id_s])
+            .ix()?;
+        tx.execute("DELETE FROM anchors WHERE note_id = ?1", [id_s])
             .ix()?;
         Ok(Erased {
             vectors,
@@ -778,6 +781,7 @@ impl Index {
             .ix()? as usize;
         tx.execute("DELETE FROM blocks_fts", []).ix()?;
         let links_out = tx.execute("DELETE FROM links", []).ix()?;
+        tx.execute("DELETE FROM anchors", []).ix()?;
         let blocks = tx.execute("DELETE FROM blocks", []).ix()?;
         let notes = tx.execute("DELETE FROM notes", []).ix()?;
         let e = Erased {
@@ -892,6 +896,7 @@ impl Index {
                         .map(|s| ts("invalid_at", s))
                         .transpose()?,
                     pii: enum_parse::<PiiState>("pii", &pii)?,
+                    anchors: Vec::new(),
                 },
                 path: PathBuf::from(path),
                 hash,

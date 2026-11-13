@@ -92,6 +92,34 @@ export interface Frontmatter {
   /** RFC 3339. From when the note no longer holds; absent means it still does. */
   invalid_at?: string;
   pii: PiiState;
+  /** Files the note makes claims about, each hashed when anchored. Absent when none. */
+  anchors?: Anchor[];
+}
+
+/** `cyberbrain_core::Anchor`: a project-relative file and its SHA-256 when anchored. */
+export interface Anchor {
+  path: string;
+  /** `N` or `N-M`; informational, the hash is over the whole file. */
+  lines?: string;
+  sha256: string;
+  /** RFC 3339: when it was anchored. */
+  at: string;
+}
+
+/** `cyberbrain_core::AnchorDrift`: an anchored file that changed or went missing since. */
+export interface AnchorDrift {
+  path: string;
+  lines?: string;
+  /** RFC 3339: when the note was anchored to it. */
+  since: string;
+  state: "changed" | "missing";
+}
+
+/** `cyberbrain_core::SignOff`: a person confirmed the note's text (`cyberbrain signoff`). */
+export interface SignOff {
+  by: string;
+  /** RFC 3339. */
+  at: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────────── /status
@@ -239,6 +267,10 @@ export interface Hit {
    * "not reported", never "came from nowhere". `"semantic"` is never sent today.
    */
   sources: Array<"lexical" | "semantic">;
+  /** Anchored files that changed since the note was written against them. Absent when none. */
+  code_changed?: AnchorDrift[];
+  /** Present while a person's sign-off covers the note's current text. */
+  signed_off?: SignOff;
 }
 
 /** `cyberbrain_core::Conflict`. */
@@ -358,6 +390,10 @@ export interface NoteDetail {
   blocks: BlockRef[];
   /** Present (and `true`) only when this describes what a `?dry_run=true` write would have written; the disk is unchanged. */
   dry_run?: true;
+  /** Anchors in `front.anchors` whose file changed or went missing since. Absent when none. */
+  code_changed?: AnchorDrift[];
+  /** Present while a person's sign-off covers the note's current text. */
+  signed_off?: SignOff;
 }
 
 /** UI-owned request shape; parsed by hand in `serve::notes::parse_write`. */

@@ -152,6 +152,12 @@ pub struct Hit {
     pub locator: Option<String>,
     pub block_idx: u32,
     pub sources: Vec<&'static str>,
+    /// Anchored files that changed or went missing since the note was written against them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub code_changed: Vec<cyberbrain_core::AnchorDrift>,
+    /// A person's sign-off, while the note's text is still the one signed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_off: Option<cyberbrain_core::SignOff>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -263,6 +269,12 @@ pub struct NoteDetail {
     /// the file on disk is unchanged.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub dry_run: bool,
+    /// Additive: anchors in `front.anchors` whose file changed or went missing since.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub code_changed: Vec<cyberbrain_core::AnchorDrift>,
+    /// Additive: a person's sign-off, while the text is still the one signed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signed_off: Option<cyberbrain_core::SignOff>,
 }
 
 #[derive(Debug, Clone, Serialize)]

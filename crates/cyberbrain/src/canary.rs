@@ -363,6 +363,7 @@ pub fn plant(app: &App, kind: Kind, label: Option<&str>, ring: Ring) -> Result<P
         expected_updated: None,
         arriving: None,
         dry_run: false,
+        anchors: crate::app::Anchoring::default(),
     })?;
     match outcome {
         WriteOutcome::Written(_) => {}

@@ -94,6 +94,7 @@ fn note(name: &str, ring: Ring, body: &str, links: &[&str]) -> Note {
             valid_from: None,
             invalid_at: None,
             pii: PiiState::None,
+            anchors: Vec::new(),
         },
         body: body.into(),
         path: PathBuf::from(format!("/nonexistent/{}/{name}.md", ring.dir())),
@@ -229,6 +230,8 @@ fn a_v4_index_migrates_and_its_notes_hold() {
                 "ALTER TABLE notes DROP COLUMN valid_from;
                  ALTER TABLE notes DROP COLUMN invalid_at;
                  ALTER TABLE blocks DROP COLUMN locator;
+                 DROP TABLE anchors;
+                 DROP TABLE anchor_files;
                  UPDATE meta SET value = '4' WHERE key = 'schema_version';",
             )
             .unwrap();
@@ -264,12 +267,14 @@ fn a_v5_index_migrates_and_its_blocks_carry_no_locator() {
         ix.conn
             .execute_batch(
                 "ALTER TABLE blocks DROP COLUMN locator;
+                 DROP TABLE anchors;
+                 DROP TABLE anchor_files;
                  UPDATE meta SET value = '5' WHERE key = 'schema_version';",
             )
             .unwrap();
     }
     let ix = Index::open(&path).unwrap();
-    assert_eq!(ix.schema_version().unwrap(), 6);
+    assert_eq!(ix.schema_version().unwrap(), crate::SCHEMA_VERSION);
     assert_eq!(ix.stats().unwrap().notes, 4, "nothing was dropped");
     let r = ix
         .recall("bind mount inode", Some(&e), &RecallOptions::default())
@@ -2243,4 +2248,98 @@ fn superseded_by_does_not_name_a_note_outside_the_scope() {
     let r = ix.recall("Tourenplanung", Some(&e), &scoped).unwrap();
     let h = r.hits.iter().find(|h| h.note_name == "alte-regel").unwrap();
     assert_eq!(h.superseded_by.as_deref(), Some("geheime-regel"));
+}
+
+// ----- anchors (schema v7) -----------------------------------------------------------------
+
+fn anchor(path: &str, lines: Option<&str>, fill: char) -> cyberbrain_core::Anchor {
+    cyberbrain_core::Anchor {
+        path: path.into(),
+        lines: lines.map(str::to_string),
+        sha256: fill.to_string().repeat(64),
+        at: "2026-11-13T10:00:00Z".parse().unwrap(),
+    }
+}
+
+/// An index of v6 (no anchor tables) comes up as v7 with both tables empty, which is the
+/// truth for every note written before anchors existed.
+#[test]
+fn a_v6_index_migrates_and_has_no_anchors() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("cyberbrain.db");
+    {
+        let mut ix = Index::open(&path).unwrap();
+        ix.set_embedding_profile(&profile_of(&e)).unwrap();
+        for n in corpus() {
+            put(&mut ix, &e, &n);
+        }
+        ix.conn
+            .execute_batch(
+                "DROP TABLE anchors; DROP TABLE anchor_files;
+                 UPDATE meta SET value = '6' WHERE key = 'schema_version';",
+            )
+            .unwrap();
+    }
+    let ix = Index::open(&path).unwrap();
+    assert_eq!(ix.schema_version().unwrap(), 7);
+    assert_eq!(ix.stats().unwrap().notes, 4);
+    assert_eq!(count(&ix, "SELECT count(*) FROM anchors"), 0);
+    assert!(
+        ix.anchors_of(&id_for("pg18-moves-pgdata"))
+            .unwrap()
+            .is_empty()
+    );
+}
+
+/// Anchors follow the head: stored on upsert, replaced on the next, gone with the note.
+#[test]
+fn anchors_follow_the_note_through_upsert_and_erasure() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let mut n = note(
+        "carry-guard",
+        Ring::Knowledge,
+        "The guard refuses carry.",
+        &[],
+    );
+    n.front.anchors = vec![
+        anchor("backend/routes/exchange.py", Some("120"), 'a'),
+        anchor("backend/config.py", None, 'b'),
+    ];
+    put(&mut ix, &e, &n);
+    let rows = ix.anchors_of(&n.front.id).unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].anchor, n.front.anchors[0]);
+    assert_eq!(rows[0].note_name, "carry-guard");
+    let by_file = ix.anchored_to("backend/config.py").unwrap();
+    assert_eq!(by_file.len(), 1);
+    assert_eq!(by_file[0].note_id, n.front.id);
+
+    n.front.anchors.truncate(1);
+    put(&mut ix, &e, &n);
+    assert_eq!(ix.anchors_of(&n.front.id).unwrap().len(), 1);
+    assert!(ix.anchored_to("backend/config.py").unwrap().is_empty());
+
+    ix.delete_note(&n.front.id).unwrap();
+    assert_eq!(count(&ix, "SELECT count(*) FROM anchors"), 0);
+}
+
+/// The cache answers only for the exact mtime and size it was filled at.
+#[test]
+fn the_file_hash_cache_is_keyed_by_mtime_and_size() {
+    let ix = Index::open_in_memory().unwrap();
+    let p = std::path::Path::new("/project/a.rs");
+    let at = crate::FileHash {
+        mtime_ns: 10,
+        size: 3,
+    };
+    assert_eq!(ix.cached_file_hash(p, at).unwrap(), None);
+    ix.remember_file_hash(p, at, "abc").unwrap();
+    assert_eq!(ix.cached_file_hash(p, at).unwrap().as_deref(), Some("abc"));
+    let touched = crate::FileHash { mtime_ns: 11, ..at };
+    assert_eq!(ix.cached_file_hash(p, touched).unwrap(), None);
+    ix.remember_file_hash(p, touched, "def").unwrap();
+    assert_eq!(ix.cached_file_hash(p, at).unwrap(), None);
 }

@@ -250,6 +250,8 @@ fn refuse(command: &Command) -> Option<&'static str> {
         | Command::Find { .. }
         | Command::Write { .. }
         | Command::Invalidate { .. }
+        // A head-only write like `invalidate`, under the same ring owner's rule.
+        | Command::Anchor { .. }
         | Command::Forget { .. }
         | Command::Doctor
         | Command::Status
@@ -290,6 +292,12 @@ fn refuse(command: &Command) -> Option<&'static str> {
         Command::Documents { .. } => Some(
             "`documents add` reads files wherever it is pointed, and this surface has no \
              authentication. Add documents at a prompt.",
+        ),
+        // A sign-off says a person checked the content, and this surface cannot tell who is
+        // asking. The command would refuse anyway (no terminal); said here so the page says why.
+        Command::Signoff { .. } => Some(
+            "`signoff` records that a person checked a note, and this surface has no \
+             authentication. Sign off in your own terminal.",
         ),
         Command::Transcribe { .. } => Some(
             "`transcribe` reads a file wherever it is pointed, and this surface has no \

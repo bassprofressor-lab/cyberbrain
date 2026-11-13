@@ -19,7 +19,7 @@ use std::path::Path;
 const FENCE: &str = "---";
 
 /// Keys the head may contain. Anything else is a typo or a field from another tool.
-const KNOWN_KEYS: [&str; 15] = [
+const KNOWN_KEYS: [&str; 16] = [
     "id",
     "name",
     "ring",
@@ -35,6 +35,7 @@ const KNOWN_KEYS: [&str; 15] = [
     "valid_from",
     "invalid_at",
     "pii",
+    "anchors",
 ];
 
 /// A note file split into its two halves. `body` borrows from the input and starts after
@@ -115,6 +116,9 @@ fn validate_head(front: &Frontmatter) -> std::result::Result<(), String> {
     }
     for n in front.supersedes.iter().chain(&front.superseded_by) {
         validate_name(n).map_err(|r| format!("supersession names `{n}`, which {r}"))?;
+    }
+    for a in &front.anchors {
+        crate::anchor::validate(a).map_err(|why| format!("anchor {why}"))?;
     }
     validate_validity(front.valid_from, front.invalid_at)
 }
@@ -350,6 +354,7 @@ fn check_field(key: &str, value: &serde_norway::Value) -> std::result::Result<()
         "bereich" => as_::<Option<String>>(value),
         "retention" => as_::<Option<String>>(value),
         "pii" => as_::<PiiState>(value),
+        "anchors" => as_::<Vec<crate::anchor::Anchor>>(value),
         _ => Ok(()),
     }
 }

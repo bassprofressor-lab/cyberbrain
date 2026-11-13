@@ -252,6 +252,32 @@ base_url = "http://127.0.0.1:8178"
 Kein C++ in diesem Build: das Modell läuft in einem eigenen Prozess, so wie die Einbettungen
 in Ollama.
 
+### Stimmt das noch? Anker und Prüfvermerk
+
+Eine Notiz über Code stimmt für eine Fassung dieses Codes. Verankert man sie, sagt recall,
+wenn sich der Code bewegt hat:
+
+```console
+$ cyberbrain write --ring 2 --kind bug --name carry-guard --anchor backend/routes/exchange.py:120 \
+    --body 'exchange.py lehnt `carry` ab, solange es nicht in ENGINES_WAEHLBAR steht'
+$ cyberbrain recall carry
+1. r2-…  ring 2  carry-guard  2026-11-13  (100% of top)
+     ↳ code changed since 2026-11-13: backend/routes/exchange.py:120; re-verify before relying on this
+$ cyberbrain anchor carry-guard          # neu geprüft: Hash erneuern
+```
+
+Der Kopf der Notiz hält Pfad und SHA-256 der Datei. Verweise `pfad:zeile` im Text, der an der
+Kommandozeile, über MCP oder auf der Seite geschrieben wird, werden ohne `--anchor` verankert,
+wenn die Datei im Projekt liegt; `find` nennt die Notizen, die an den gefundenen Dateien hängen.
+Dafür wird nichts durchsucht: verglichen werden nur die Anker der Treffer, und eine Datei wird
+erst neu gehasht, wenn sich Änderungszeit oder Größe bewegt haben.
+
+Die meisten Notizen schreibt ein Agent. Mit `cyberbrain signoff <notiz>` bestätigt ein Mensch,
+dass er den Inhalt geprüft hat: die Notiz wird gezeigt, ihr Name muss eingetippt werden, und
+Identität und Hash des Texts landen in der Audit-Kette. recall und die Seite zeigen dann
+`[checked by … on …]`, bis sich der Text ändert. Nur am Terminal und nur als Betreiber: Agent,
+MCP, Hook und Seite werden abgewiesen.
+
 ## Im Team: die Zentraleinheit
 
 Die Zentraleinheit (Hub) ist der eine Rechner im Team, der die Nachweise der übrigen

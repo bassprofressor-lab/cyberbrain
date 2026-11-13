@@ -237,6 +237,32 @@ language = "en"
 
 No C++ in this build: the model runs in its own process, as embeddings run in Ollama.
 
+### Is it still true? Anchors and sign-off
+
+A note about code is true of one version of that code. Anchor it, and recall says when the
+code moved:
+
+```console
+$ cyberbrain write --ring 2 --kind bug --name carry-guard --anchor backend/routes/exchange.py:120 \
+    --body 'exchange.py refuses `carry` unless it is in ENGINES_WAEHLBAR'
+$ cyberbrain recall carry
+1. r2-…  ring 2  carry-guard  2026-11-13  (100% of top)
+     ↳ code changed since 2026-11-13: backend/routes/exchange.py:120; re-verify before relying on this
+$ cyberbrain anchor carry-guard          # checked it again: renew the hash
+```
+
+The head keeps the path and the SHA-256 of the file. `path:line` references in a body written
+at the CLI, over MCP or in the page are anchored without `--anchor` when the file exists in the
+project; `find` names the notes anchored to the files it found. Nothing is scanned for this:
+only the anchors of the hits are compared, and a file is hashed again only when its mtime or
+size moved.
+
+An agent writes most notes. `cyberbrain signoff <note>` is how a person says they checked one:
+it shows the note, asks you to type its name, and records your identity and the hash of the
+text in the audit chain. Recall and the page then show `[checked by you on …]` until the text
+changes. Only at a terminal, and only as the operator: an agent, MCP, a hook or the page are
+refused.
+
 ## Team: the hub
 
 A hub is the one machine in a team that collects the others' audit trail. On Windows the

@@ -112,6 +112,11 @@ struct WriteArgs {
         deserialize_with = "present"
     )]
     invalid_at: Option<Option<jiff::Timestamp>>,
+    /// Anchor `path:line` references in the body. Absent is off, which is what every client
+    /// before anchors meant; a daemon before anchors ignores the key and anchors nothing,
+    /// which costs a mark, never a wrong one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    detect_anchors: bool,
 }
 
 /// A key that is there, even as `null`, is `Some`: `null` is "remove it", which is not the
@@ -270,10 +275,14 @@ pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Resu
     // `supersedes` and the validity bounds travel since protocol 4. What the CLI never
     // sets (an operator's choice, an expected timestamp, a note arriving from a hub) is not
     // part of the protocol, so such a write stays local rather than arriving without it.
+    // Named anchors do not travel: a write that names files stays here, where the paths
+    // were resolved. Detection does (`detect_anchors`), and the daemon detects against the
+    // same project this process would.
     if req.body.len() > MAX_REQUEST / 2
         || req.choice.is_some()
         || req.expected_updated.is_some()
         || req.arriving.is_some()
+        || !req.anchors.explicit.is_empty()
     {
         return Ok(Answer::Local);
     }
@@ -290,6 +299,7 @@ pub fn write(root: &Path, actor: &Actor, req: &WriteRequest, json: bool) -> Resu
         supersedes: req.supersedes.clone(),
         valid_from: req.valid_from,
         invalid_at: req.invalid_at,
+        detect_anchors: req.anchors.detect,
     });
     once(
         send(root, actor, op, json),
@@ -819,6 +829,10 @@ mod server {
                     invalid_at: w.invalid_at,
                     arriving: None,
                     dry_run: w.dry_run,
+                    anchors: crate::app::Anchoring {
+                        explicit: Vec::new(),
+                        detect: w.detect_anchors,
+                    },
                 };
                 let outcome = app.write(wr)?;
                 let stdout = rendered(&outcome, req.json, crate::render_write)?;
@@ -920,6 +934,7 @@ mod tests {
                 supersedes: Some(vec!["alt".into()]),
                 valid_from: from,
                 invalid_at: to,
+                detect_anchors: false,
             };
             let line = serde_json::to_string(&Op::Write(args)).unwrap();
             let Op::Write(back) = serde_json::from_str(&line).unwrap() else {
@@ -927,7 +942,27 @@ mod tests {
             };
             assert_eq!((back.valid_from, back.invalid_at), (from, to), "{line}");
             assert_eq!(back.supersedes, Some(vec!["alt".to_string()]));
+            assert!(!line.contains("detect_anchors"), "off is left out: {line}");
         }
+    }
+
+    /// Detection survives the socket, and a request from a client before anchors (no key)
+    /// means off.
+    #[test]
+    fn anchor_detection_travels_and_its_absence_is_off() {
+        let line = r#"{"op":"write","ring":2,"kind":"knowledge","name":"x","body":"y","tags":[],"bereich":null,"retention":null,"force":false,"dry_run":false}"#;
+        let Op::Write(old) = serde_json::from_str(line).unwrap() else {
+            panic!("a write")
+        };
+        assert!(!old.detect_anchors);
+        let with = line.replace(
+            "\"dry_run\":false",
+            "\"dry_run\":false,\"detect_anchors\":true",
+        );
+        let Op::Write(new) = serde_json::from_str(&with).unwrap() else {
+            panic!("a write")
+        };
+        assert!(new.detect_anchors);
     }
 
     /// A deep store used to get no daemon at all. Its socket now lives in a directory of this

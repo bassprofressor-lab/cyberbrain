@@ -476,6 +476,8 @@ impl Index {
                     score,
                     text,
                     locator,
+                    code_changed: Vec::new(),
+                    signed_off: None,
                 },
                 updated: updated.parse().ok(),
             });

@@ -736,6 +736,7 @@ fn write_document(
         choice: accept_pii.then_some(OperatorChoice::MarkReviewed),
         expected_updated: None,
         arriving: None,
+        anchors: crate::app::Anchoring::default(),
         dry_run,
     };
     let outcome = match app.write(req)? {
@@ -1068,6 +1069,7 @@ mod tests {
                 choice: None,
                 expected_updated: None,
                 arriving: None,
+                anchors: crate::app::Anchoring::default(),
                 dry_run: false,
             })
             .unwrap();

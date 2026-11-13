@@ -31,6 +31,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   holds up a compaction: the mod always continues it, without the extra instructions. Opt-in,
   because function hooks are early access; the shell `PreCompact` hook stays and keeps
   counting. `--undo` takes the mod's files back out and leaves anything else in the folder.
+- **Anchors: a note says when the code it describes changed.** A note can be anchored to
+  files of its project (`write --anchor path[:lines]`, repeatable; `cyberbrain anchor <note>
+  [path…] [--remove path]`). The head keeps the project-relative path, the lines and the
+  SHA-256 of the whole file under `anchors:`. Recall (CLI, MCP, the page) marks a hit whose
+  anchored file changed or is gone: "code changed since 2026-11-13: path:120; re-verify";
+  `find` names the notes anchored to the files it found; the note view says the same.
+  `cyberbrain anchor <note>` without files renews every anchor after checking. Where somebody
+  writes about code they just read (CLI `write`, MCP `write`, the page), `path:line`
+  references in the body are anchored too when the file exists inside the project and
+  outside the store; `--no-detect-anchors` turns that off. A path without a line, an import,
+  a document, a transcript or a note from a hub anchors nothing on its own. An edit keeps the
+  old hash; only naming the file again renews it. Cost: nothing is scanned per recall; the
+  anchors of the hits are read from the index and a file is hashed again only when its mtime
+  or size moved (cached in the index).
+- **`cyberbrain signoff <note>`: a person confirms a note's content.** It shows the note, asks
+  for its name to be typed, and records a `note.signoff` row in the audit chain with the
+  machine's identity (as for `review`), the time and the blake3 of the body. Recall and the
+  page show "checked by X on …" while the body is unchanged, and nothing after it changed.
+  `--withdraw` takes it back. Only the operator at a terminal: an agent at the CLI, MCP, a
+  hook, a served store and the page's command line are refused, the same boundary that keeps
+  rings 0 and 1 the operator's. Agents read the mark in recall.
+
+### Changed
+
+- **Index schema v7** (`anchors`, `anchor_files`). Opened by an older build the index is
+  refused; the way back is to delete `cyberbrain.db` and `scan --full` with that build.
+- **A note with `anchors:` in its head cannot be read by 0.10.4 or older**, which refuse
+  unknown head fields. Notes without anchors are written byte for byte as before.
 
 ## [0.10.4] — 2026-11-13
 

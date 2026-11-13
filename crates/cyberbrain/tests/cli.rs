@@ -5640,3 +5640,122 @@ fn search_rows_past_their_retention_go_with_a_report_and_both_chains_verify() {
     assert_eq!(code, Some(1), "{said}");
     assert!(said.contains("without a report"), "{said}");
 }
+
+/// A project with its store at `<project>/.cyberbrain`, the layout anchors need.
+fn project_store() -> (tempfile::TempDir, PathBuf, PathBuf) {
+    let dir = tempfile::tempdir().unwrap();
+    let project = dir.path().join("proj");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("src/lib.rs"),
+        "pub fn guard() -> bool {\n    true\n}\n",
+    )
+    .unwrap();
+    let store = project.join(".cyberbrain");
+    let out = Cb::bin()
+        .args(["init", "--path"])
+        .arg(&store)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    (dir, project, store)
+}
+
+fn in_project(project: &Path, args: &[&str]) -> Output {
+    Cb::bin()
+        .current_dir(project)
+        .arg("--store")
+        .arg(project.join(".cyberbrain"))
+        .args(args)
+        .output()
+        .unwrap()
+}
+
+/// `write --anchor`, a change to the file, recall saying so, `anchor` renewing it, and
+/// `find` naming the note — all through the binary.
+#[test]
+fn an_anchored_note_says_when_its_code_changed() {
+    let (_dir, project, _store) = project_store();
+    let out = in_project(
+        &project,
+        &[
+            "write",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "guard-note",
+            "--body",
+            "The guard returns true, unique-marker-anchor.",
+            "--anchor",
+            "src/lib.rs:1-3",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let note = std::fs::read_to_string(project.join(".cyberbrain/notes/r2/guard-note.md")).unwrap();
+    assert!(
+        note.contains("anchors:") && note.contains("path: src/lib.rs"),
+        "{note}"
+    );
+
+    let out = in_project(&project, &["recall", "unique-marker-anchor"]);
+    assert!(!text(&out).contains("code changed"), "{}", text(&out));
+
+    std::fs::write(
+        project.join("src/lib.rs"),
+        "pub fn guard() -> bool {\n    false\n}\n",
+    )
+    .unwrap();
+    let out = in_project(&project, &["recall", "unique-marker-anchor"]);
+    assert!(text(&out).contains("code changed since"), "{}", text(&out));
+    assert!(text(&out).contains("src/lib.rs:1-3"), "{}", text(&out));
+    let out = in_project(&project, &["--json", "recall", "unique-marker-anchor"]);
+    let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(v["hits"][0]["code_changed"][0]["state"], "changed", "{v:#}");
+
+    let out = in_project(&project, &["find", "guard"]);
+    assert!(text(&out).contains("note guard-note"), "{}", text(&out));
+    assert!(text(&out).contains("CODE CHANGED"), "{}", text(&out));
+
+    let out = in_project(&project, &["anchor", "guard-note"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let out = in_project(&project, &["recall", "unique-marker-anchor"]);
+    assert!(!text(&out).contains("code changed"), "{}", text(&out));
+}
+
+/// A sign-off needs the operator at a terminal: an agent is refused before anything is
+/// shown, and the operator without a terminal (stdin not a tty) is refused too. Neither
+/// leaves a row.
+#[test]
+fn a_signoff_is_refused_to_an_agent_and_without_a_terminal() {
+    let cb = Cb::new();
+    cb.write(
+        "2",
+        "fact",
+        "A fact a person checked, unique-marker-signoff.",
+    );
+
+    let out = cb.as_agent_of("anna", "sess1234", &["signoff", "fact"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("is not one"), "{}", text(&out));
+    assert!(
+        !text(&out).contains("A fact a person"),
+        "nothing shown to an agent: {}",
+        text(&out)
+    );
+
+    let out = cb.as_person("anna", &["signoff", "fact"]);
+    assert!(!out.status.success());
+    assert!(text(&out).contains("terminal"), "{}", text(&out));
+
+    // The log refuses a filter for an action it never recorded: no row was written.
+    let (_, code, err) = cb.json(&["policy", "audit", "--action", "note.signoff"]);
+    assert_ne!(code, 0, "{err}");
+    assert!(
+        err.contains("no audit action named"),
+        "no sign-off row: {err}"
+    );
+    let hits = cb.ok(&["recall", "unique-marker-signoff"]);
+    assert!(hits["hits"][0].get("signed_off").is_none(), "{hits:#}");
+}

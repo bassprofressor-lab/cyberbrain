@@ -83,6 +83,11 @@ superseded_by: pg19-note  # the note replacing this one; optional, set by hand
 valid_from: 2026-07-01T00:00:00Z  # from when it holds; optional, absent means unbounded
 invalid_at: 2026-09-10T00:00:00Z  # from when it no longer holds; optional (`invalidate`)
 pii: none | reviewed | flagged
+anchors:                 # files the note makes claims about; optional (§3.5)
+- path: backend/routes/exchange.py   # relative to the project, `/`, never `..`
+  lines: 120-140         # optional, informational
+  sha256: 3f7a…          # of the whole file when anchored
+  at: 2026-11-13T10:00:00Z
 ---
 
 Body in Markdown. Links to other notes are written [[like-this]].
@@ -104,6 +109,33 @@ Rules:
   every note written before the fields existed says.
 - The file on disk is authoritative. The index is a cache and must be rebuildable from
   the files alone, with no information loss.
+
+### 3.5 Anchors and sign-off
+
+**Anchors** tie a note to the bytes of the code it describes. Each records a project-relative
+path, optionally lines, the SHA-256 of the whole file and when it was taken. The project is
+the directory the store sits in (`<project>/.cyberbrain`); a store placed elsewhere has none
+and anchors nothing. They come from `write --anchor path[:lines]`, from `cyberbrain anchor`,
+and, where somebody writes about code they just read (CLI `write`, MCP `write`, the page),
+from `path:line` references in the body whose file exists inside the project and outside the
+store. A path named without a line is not anchored by detection: it is context, not a claim.
+An import, a document, a transcript or a note arriving from a hub anchors nothing on its own,
+because nobody can say which version of the code it was written against.
+
+An edit keeps the hash an anchor has; naming the file again (`--anchor`, `anchor`) renews it.
+Recall, `recall` over MCP, `find` and the page compare the anchors of what they return with
+the files now and mark the ones that changed or are gone ("code changed since …"), never
+demote: the code moved, so what the note says is due a check. A file is hashed again only when
+its mtime or size moved since the last hash (`anchor_files`, §5).
+
+A **sign-off** is a person saying they checked a note's content (`cyberbrain signoff`). It is
+not in the note: it is a `note.signoff` row in the audit chain with who (this machine's
+identity, as for `review`), when, and the blake3 of the body as signed. Recall and the page
+show "checked by X on …" while the body still hashes to that and nothing once it changed. Only
+the operator at a terminal signs: an agent (`cli_actor`), MCP, a hook or a served store are
+refused, and the CLI asks for the note's name to be typed, with stdin and stderr a terminal.
+Rows by any other actor are not read as sign-offs. A process of the same user that writes the
+audit database itself is not stopped, as for ring 0 (§3.2).
 
 ### 3.2 Ring semantics
 
@@ -220,6 +252,9 @@ Tables (indicative, implementer may refine):
 - `blocks_fts` — FTS5 virtual table over `blocks.text`
 - `vectors(citation, dim, data BLOB)` — f32 little-endian
 - `links(from_note, to_name, resolved_note_id NULLABLE)`
+- `anchors(note_id, path, lines, sha256, at)` (schema v7) — derived from the head like
+  `links`; `anchor_files(path, mtime_ns, size, sha256)` caches the hash an anchored file has
+  now, so a recall reads a file only when its mtime or size moved
 - `audit(ts, actor, action, subject, detail)` — append-only, see §12
 - `meta(key, value)` — schema version, embedding profile id, model hash
 
@@ -395,6 +430,9 @@ cyberbrain find <symbol>              exact line ranges from the code index
 cyberbrain write --ring R --kind K --name N [--stdin] [--valid-from D] [--invalid-at D]
 cyberbrain invalidate <name> [--at D] [--by NAME] [--clear] [--dry-run]
                                       declare a note no longer holding; one audit row
+cyberbrain anchor <name> [PATH[:LINES]…] [--remove PATH] [--dry-run]
+                                      anchor a note to code, or renew its anchors (§3.5)
+cyberbrain signoff <name> [--withdraw]   a person confirms the content; terminal only (§3.5)
 cyberbrain propose --ring R --kind K --name N        offer a note for somebody to accept (§8.0.3)
 cyberbrain review [<name> --accept|--reject --reason] what is waiting, and deciding it
 cyberbrain forget <name|id> [--dry-run] [--report FILE [--sign]]
