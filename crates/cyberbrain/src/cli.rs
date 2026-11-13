@@ -758,8 +758,9 @@ mod tests {
 
     #[test]
     fn all_hook_events_exist() {
-        // Seven harness events; session start comes whole or in two halves.
-        assert_eq!(HookEvent::value_variants().len(), 9);
+        // Seven harness events; session start comes whole or in two halves; and the
+        // snapshot the compaction mod calls, which no settings hook does.
+        assert_eq!(HookEvent::value_variants().len(), 10);
     }
 }
 
