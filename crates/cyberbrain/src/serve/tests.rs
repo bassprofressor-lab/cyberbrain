@@ -2162,6 +2162,7 @@ async fn the_review_routes_list_decide_and_record_a_quarantined_proposal() {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
     assert!(matches!(w, crate::app::WriteOutcome::Quarantined(_)));

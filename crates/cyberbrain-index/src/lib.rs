@@ -19,6 +19,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod anchors;
 pub mod audit;
 pub mod index;
 pub mod recall;
@@ -32,6 +33,7 @@ pub const PROVENANCE: &str = "cbk-ae5bdfe657bba11e";
 #[cfg(test)]
 mod tests;
 
+pub use anchors::{AnchorRow, FileHash};
 pub use audit::{AUDIT_SCHEMA_VERSION, AuditEntry, AuditFilter, AuditStore, NewAuditEntry};
 pub use index::{
     EmbeddingProfile, Erased, Erasure, Index, IndexStats, Link, NoteRecord, NoteStamp,

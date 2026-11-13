@@ -216,6 +216,98 @@ fn write_note(app: &App, out: Out, req: WriteRequest) -> Result<i32> {
     }
 }
 
+/// A `write --anchor` or `anchor` path as typed: relative to where the command runs, when
+/// that names a file, so `cd src && cyberbrain anchor n lib.rs` means the file beside you.
+/// Otherwise left as given, relative to the project. Made absolute here because a write may
+/// be carried out by the daemon, whose working directory is not this one.
+fn anchor_from_cwd(spec: &str) -> String {
+    let (path, lines) = cyberbrain_core::anchor::split_spec(spec);
+    let p = std::path::Path::new(path);
+    if p.is_absolute() {
+        return spec.to_string();
+    }
+    match std::env::current_dir().map(|d| d.join(p)) {
+        Ok(abs) if abs.exists() => match lines {
+            Some(l) => format!("{}:{l}", abs.display()),
+            None => abs.display().to_string(),
+        },
+        _ => spec.to_string(),
+    }
+}
+
+/// The person at the terminal reads what they sign and types its name.
+///
+/// A sign-off says a person checked the content, so it needs a person: stdin and stderr must
+/// be a terminal, which an agent's shell is not, and the name has to be typed, not passed.
+/// `--yes` does not exist on purpose. The actor check (`App::may_sign_off`) ran before this.
+fn confirm_signoff(app: &App, name: &str, by: &str, withdraw: bool) -> Result<()> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() || !std::io::stderr().is_terminal() {
+        return Err(Error::PolicyRefusal {
+            profile: "signoff".into(),
+            reason: concat!(
+                "a sign-off is typed by a person at a terminal; this command has no ",
+                "terminal (stdin or stderr is redirected). Run it in your own shell"
+            )
+            .into(),
+        });
+    }
+    let note = app.store().read(name)?;
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(
+        err,
+        "{} {} (ring {}, updated {})\n",
+        if withdraw {
+            "Withdraw your sign-off on"
+        } else {
+            "Sign off"
+        },
+        note.front.name,
+        note.front.ring.as_u8(),
+        &note.front.updated.to_string()[..10]
+    );
+    if !withdraw {
+        const SHOWN: usize = 40;
+        let lines: Vec<&str> = note.body.lines().collect();
+        for l in lines.iter().take(SHOWN) {
+            let _ = writeln!(err, "  | {l}");
+        }
+        if lines.len() > SHOWN {
+            let _ = writeln!(
+                err,
+                "  | … {} more lines; read the whole note before signing: {}",
+                lines.len() - SHOWN,
+                cyberbrain_core::Slash(&note.path)
+            );
+        }
+        for d in app.note_drift(&note) {
+            let _ = writeln!(
+                err,
+                "\n  note: {} changed since {}; check it against the code as it is now",
+                d.path,
+                &d.since.to_string()[..10]
+            );
+        }
+    }
+    let _ = write!(
+        err,
+        "\nSigned as {by}. Type the note's name to confirm, anything else to stop: "
+    );
+    let _ = err.flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .lock()
+        .read_line(&mut line)
+        .map_err(|e| Error::Io {
+            path: "stdin".into(),
+            source: e,
+        })?;
+    if line.trim() != note.front.name {
+        return Err(Error::Config("not confirmed; nothing recorded".into()));
+    }
+    Ok(())
+}
+
 /// The label for the multipart part. whisper-server decodes by content, so a wrong guess
 /// costs nothing; it only keeps the server's log readable.
 fn audio_mime(path: &std::path::Path) -> &'static str {
@@ -668,11 +760,17 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             valid_from,
             invalid_at,
             force,
+            anchors,
+            no_detect_anchors,
             dry_run,
         } => {
             let body = match body {
                 Some(b) => b,
                 None => read_stdin()?,
+            };
+            let anchors = crate::app::Anchoring {
+                explicit: anchors.iter().map(|a| anchor_from_cwd(a)).collect(),
+                detect: !no_detect_anchors,
             };
             let req = WriteRequest {
                 ring: Ring::try_from(ring)?,
@@ -690,6 +788,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 invalid_at: invalid_at.map(Some),
                 arriving: None,
                 dry_run,
+                anchors,
             };
             let code = write_note(&app, out, req)?;
             if code != 0 {
@@ -760,6 +859,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 invalid_at: None,
                 arriving: None,
                 dry_run,
+                anchors: crate::app::Anchoring::default(),
             };
             let code = write_note(&app, out, req)?;
             if code != 0 {
@@ -798,6 +898,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 invalid_at: None,
                 arriving: None,
                 dry_run,
+                anchors: crate::app::Anchoring::default(),
             };
             let outcome = app.propose(req, &who)?;
             out.emit(&outcome, |o| match o {
@@ -912,6 +1013,32 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 dry_run,
             })?;
             out.emit(&r, render::invalidated)?;
+        }
+        Command::Anchor {
+            name,
+            files,
+            remove,
+            dry_run,
+        } => {
+            let r = app.anchor(crate::app::AnchorRequest {
+                name,
+                specs: files.iter().map(|f| anchor_from_cwd(f)).collect(),
+                remove,
+                dry_run,
+            })?;
+            out.emit(&r, render::anchored)?;
+        }
+        Command::Signoff {
+            name,
+            withdraw,
+            dry_run,
+        } => {
+            // Asked first, so an agent hears no before anything is shown or asked.
+            app.may_sign_off()?;
+            let by = identity::who(app.root())?;
+            confirm_signoff(&app, &name, &by, withdraw)?;
+            let r = app.sign_off(&name, &by, withdraw, dry_run)?;
+            out.emit(&r, render::signed_off)?;
         }
         Command::Canary { command } => {
             use cli::CanaryCommand;

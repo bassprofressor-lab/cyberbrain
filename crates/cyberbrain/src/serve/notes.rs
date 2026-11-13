@@ -134,7 +134,7 @@ pub fn block_refs(blocks: &[Block]) -> Vec<BlockRef> {
 }
 
 /// The detail of a note that lives in the loaded tree.
-pub fn detail_in_tree(tree: &Tree, n: &Loaded, dry_run: bool) -> NoteDetail {
+pub fn detail_in_tree(app: &App, tree: &Tree, n: &Loaded, dry_run: bool) -> NoteDetail {
     let outbound = n
         .targets
         .iter()
@@ -165,6 +165,9 @@ pub fn detail_in_tree(tree: &Tree, n: &Loaded, dry_run: bool) -> NoteDetail {
         inbound,
         blocks: block_refs(&n.blocks),
         dry_run,
+        code_changed: app.note_drift(&n.note),
+        // A dry run describes text that is not on disk; nobody signed that.
+        signed_off: (!dry_run).then(|| app.signoff_of(&n.note)).flatten(),
     }
 }
 
@@ -172,7 +175,7 @@ pub fn detail_in_tree(tree: &Tree, n: &Loaded, dry_run: bool) -> NoteDetail {
 pub fn detail_of(app: &App, note: Note, dry_run: bool) -> ApiResult<NoteDetail> {
     let tree = Tree::load(app)?;
     let loaded = load_one(app.root(), note);
-    Ok(detail_in_tree(&tree, &loaded, dry_run))
+    Ok(detail_in_tree(app, &tree, &loaded, dry_run))
 }
 
 pub fn note_from_view(v: NoteView) -> Note {
@@ -584,6 +587,11 @@ fn run_write(
                             .invalid_at
                             .unwrap_or_else(|| before.as_ref().and_then(|f| f.invalid_at)),
                         pii: w.pii,
+                        // What the note has; a dry run anchors nothing new.
+                        anchors: before
+                            .as_ref()
+                            .map(|f| f.anchors.clone())
+                            .unwrap_or_default(),
                     },
                     body,
                     path: w.path.clone(),
@@ -684,6 +692,12 @@ pub async fn put_note(
             invalid_at: parsed.front.invalid_at,
             arriving: None,
             dry_run: dry.is_on(),
+            // The page is a person editing a note: references to code are anchored as for
+            // `write` at the CLI.
+            anchors: crate::app::Anchoring {
+                explicit: Vec::new(),
+                detect: true,
+            },
         };
         run_write(&st, req, false, Some(cur.created), None)
     })
@@ -729,6 +743,12 @@ pub async fn post_note(
             invalid_at: parsed.front.invalid_at,
             arriving: None,
             dry_run: dry.is_on(),
+            // The page is a person editing a note: references to code are anchored as for
+            // `write` at the CLI.
+            anchors: crate::app::Anchoring {
+                explicit: Vec::new(),
+                detect: true,
+            },
         };
         run_write(&st, req, true, None, None)
     })

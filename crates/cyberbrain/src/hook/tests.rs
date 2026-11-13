@@ -65,6 +65,7 @@ impl Fixture {
                 invalid_at: None,
                 arriving: None,
                 dry_run: false,
+                anchors: crate::app::Anchoring::default(),
             })
             .unwrap();
         assert!(
@@ -1475,6 +1476,7 @@ fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
                 retention: Some("P2Y".into()),
             }),
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
     assert!(matches!(out, crate::app::WriteOutcome::Written(_)));
@@ -1515,6 +1517,7 @@ fn a_note_that_arrives_from_another_machine_keeps_its_identity() {
         invalid_at: None,
         arriving: None,
         dry_run: false,
+        anchors: crate::app::Anchoring::default(),
     })
     .unwrap();
     let note = app.store().read("von-drueben").unwrap();
@@ -1848,6 +1851,7 @@ fn a_canary_copied_into_a_new_note_is_refused() {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap_err()
         .to_string();

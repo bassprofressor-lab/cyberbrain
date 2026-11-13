@@ -570,6 +570,8 @@ mod tests {
             score: 1.0,
             text: text.into(),
             locator: None,
+            code_changed: Vec::new(),
+            signed_off: None,
         }
     }
 

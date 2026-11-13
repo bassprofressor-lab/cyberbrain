@@ -612,6 +612,7 @@ async fn rings_zero_and_one_are_refused_over_mcp() {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
     let rule = root.join("notes/r0/house-rule.md");
@@ -1039,6 +1040,7 @@ fn stdout_carries_protocol_only_over_real_pipes() {
                 invalid_at: None,
                 arriving: None,
                 dry_run: false,
+                anchors: crate::app::Anchoring::default(),
             })
             .unwrap();
         assert!(matches!(w, crate::app::WriteOutcome::Written(_)));
@@ -1456,6 +1458,7 @@ async fn a_limited_mcp_client_leaves_a_search_row_and_cannot_read_the_log() {
                 invalid_at: None,
                 arriving: None,
                 dry_run: false,
+                anchors: crate::app::Anchoring::default(),
             })
             .unwrap();
     }
@@ -1618,6 +1621,7 @@ mod http_reload {
                     invalid_at: None,
                     arriving: None,
                     dry_run: false,
+                    anchors: crate::app::Anchoring::default(),
                 })
                 .unwrap();
         }

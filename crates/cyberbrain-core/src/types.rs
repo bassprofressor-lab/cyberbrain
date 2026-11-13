@@ -193,6 +193,13 @@ pub struct Frontmatter {
     pub invalid_at: Option<jiff::Timestamp>,
     #[serde(default)]
     pub pii: PiiState,
+    /// Files this note makes claims about, each with the hash it had when the note was
+    /// written against it (`write --anchor`, or a `path:line` reference in the body).
+    /// Recall says when one has changed since. Absent on every note written before the
+    /// field existed, which then simply has no anchors. Last, so a head without anchors
+    /// renders byte for byte as before.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchors: Vec<crate::anchor::Anchor>,
 }
 
 /// The moments a note's validity is bounded by (`valid_from`, `invalid_at`, `recall
@@ -289,6 +296,42 @@ pub struct Hit {
     /// [`Block::locator`]). Absent from the serialised hit when there is none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub locator: Option<String>,
+    /// Anchored files that changed or went missing since the note was written against
+    /// them. Not a verdict on the note: the code moved, so what it says is due a check.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub code_changed: Vec<AnchorDrift>,
+    /// A person's sign-off on the note's content, while the content is still what they
+    /// signed (`cyberbrain signoff`). Absent when nobody signed or the note changed since.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signed_off: Option<SignOff>,
+}
+
+/// An anchored file that is no longer what the note was written against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnchorDrift {
+    /// Relative to the project.
+    pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<String>,
+    /// When the note was anchored to the file: "changed since" this.
+    pub since: jiff::Timestamp,
+    pub state: DriftState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DriftState {
+    /// The file is there and its bytes differ.
+    Changed,
+    /// The file is gone, or is no longer a readable file.
+    Missing,
+}
+
+/// Who confirmed a note's content, and when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignOff {
+    pub by: String,
+    pub at: jiff::Timestamp,
 }
 
 /// A later note that links to a hit. See [`Hit::newer_links`].

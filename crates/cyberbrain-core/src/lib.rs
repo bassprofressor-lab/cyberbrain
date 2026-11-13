@@ -3,6 +3,7 @@
 //! Original work, copyright 2026 Krynex Labs, licensed FSL-1.1-ALv2.
 //! See `docs/SPEC.md` §0 for the clean-room boundary this project is built under.
 
+pub mod anchor;
 pub mod blocks;
 pub mod citation;
 pub mod config;
@@ -17,6 +18,7 @@ pub mod store;
 pub mod types;
 pub mod waivers;
 
+pub use anchor::Anchor;
 pub use citation::Citation;
 pub use config::{Config, PolicyProfile, TranscriptionConfig};
 pub use error::{Error, Result};
@@ -25,8 +27,8 @@ pub use path::{Slash, slash};
 pub use source::{Document, DocumentSource, Extracted, MarkdownSource};
 pub use store::{Change, Fingerprint, Store};
 pub use types::{
-    Block, Conflict, DenyAllEgress, EgressGate, EgressPurpose, Embedder, Frontmatter, Hit,
-    NewerLink, Note, NoteId, NoteKind, PiiState, RecallResult, Ring,
+    AnchorDrift, Block, Conflict, DenyAllEgress, DriftState, EgressGate, EgressPurpose, Embedder,
+    Frontmatter, Hit, NewerLink, Note, NoteId, NoteKind, PiiState, RecallResult, Ring, SignOff,
 };
 
 /// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.

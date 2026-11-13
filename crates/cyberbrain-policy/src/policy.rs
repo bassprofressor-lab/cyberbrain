@@ -311,6 +311,7 @@ mod tests {
             valid_from: None,
             invalid_at: None,
             pii: PiiState::Unscanned,
+            anchors: Vec::new(),
         };
         p.record_write(&f, 120).unwrap();
         assert_eq!(sink.rows()[0].detail["scanned"], false);

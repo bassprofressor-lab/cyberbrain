@@ -339,7 +339,25 @@ pub struct WriteRequest {
     /// of "now" that made the next real change from the other machine look older than a
     /// note this machine had never touched.
     pub arriving: Option<Arriving>,
+    /// Which files the note is anchored to (`write --anchor`), and whether `path:line`
+    /// references in the body are anchored too. Existing anchors are kept either way.
+    pub anchors: Anchoring,
     pub dry_run: bool,
+}
+
+/// How a write anchors its note to code. See [`crate::anchoring`].
+#[derive(Debug, Clone, Default)]
+pub struct Anchoring {
+    /// `path` or `path:lines`, absolute or relative to the project. Each is hashed now and
+    /// replaces an anchor of the note on the same path; one that cannot be anchored (missing,
+    /// outside the project, inside the store) refuses the write.
+    pub explicit: Vec<String>,
+    /// Anchor `path:line` references found in the body, when the file exists inside the
+    /// project. Off by default: only the front ends where somebody is writing about code
+    /// they just looked at turn it on (CLI `write`, MCP, the page). An import, a document or
+    /// a note arriving from a hub was written against code nobody can name, and anchoring it
+    /// to today's bytes would claim it matches them.
+    pub detect: bool,
 }
 
 /// The identity a note keeps when it moves between machines.
@@ -825,6 +843,9 @@ pub struct FindReport {
     /// several files, a scope that matched nothing, a truncated list.
     pub caveats: Vec<String>,
     pub elapsed_ms: u128,
+    /// Notes anchored to the files of these hits, and whether each file moved since.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub anchored: Vec<AnchoredFinding>,
 }
 
 impl From<cyberbrain_code::FindResult> for FindReport {
@@ -880,6 +901,7 @@ impl From<cyberbrain_code::FindResult> for FindReport {
             ignore_files: r.ignore_files,
             caveats: r.caveats,
             elapsed_ms: r.elapsed.as_millis(),
+            anchored: Vec::new(),
         }
     }
 }
@@ -2049,6 +2071,9 @@ impl App {
             };
             ix.recall(query, embedder, &opts)?
         };
+        // After the index lock is released: both take it, or the audit log, briefly.
+        self.annotate_code_drift(&mut result.hits);
+        self.annotate_signoffs(&mut result.hits);
         // Recorded before anything is handed back, and the search fails if it cannot be.
         if self.searches_recorded() {
             let bereiche = self.hit_bereiche(&result.hits)?;
@@ -3020,6 +3045,15 @@ impl App {
             }
         }
         let arriving = req.arriving.clone();
+        let anchors = self.anchors_for_write(
+            existing
+                .as_ref()
+                .map(|n| n.front.anchors.as_slice())
+                .unwrap_or_default(),
+            &body,
+            &req.anchors,
+            now,
+        )?;
         // An arriving note keeps what it already is. The local note's id still wins when
         // there is one — two ids for one name is a store that contradicts itself, and the
         // note here was written first as far as this machine can tell.
@@ -3082,6 +3116,7 @@ impl App {
                 Some(v) => v,
             },
             pii,
+            anchors,
         };
         let note = Note {
             front,
@@ -3380,6 +3415,7 @@ impl App {
             invalid_at: None,
             arriving: None,
             dry_run,
+            anchors: crate::app::Anchoring::default(),
         };
         let proposed = self.propose(req, who)?;
         Ok(SessionProposal {
@@ -3508,6 +3544,7 @@ impl App {
                 valid_from: req.valid_from.flatten(),
                 invalid_at: req.invalid_at.flatten(),
                 pii,
+                anchors: Vec::new(),
             },
             body,
             path: PathBuf::new(),
@@ -4627,7 +4664,8 @@ impl App {
             ..cyberbrain_code::FindOptions::default()
         };
         let result = cyberbrain_code::find(&self.code_root(), symbol, limit, &opts)?;
-        let report = FindReport::from(result);
+        let mut report = FindReport::from(result);
+        report.anchored = self.anchored_findings(&report);
         self.record_find_usage(&report);
         Ok(report)
     }
@@ -4935,6 +4973,7 @@ impl App {
                         retention: incoming_retention,
                     }),
                     dry_run: false,
+                    anchors: crate::app::Anchoring::default(),
                 };
                 // `force` is what makes an unattended pull possible at all: a hold waits for
                 // an operator, and there is none at the other end of a timer. What it must
@@ -5889,8 +5928,12 @@ fn normalise_link_target(name: &str) -> String {
 }
 
 mod access_log;
+mod anchoring;
 mod embed_bench;
+mod signoff;
+pub use anchoring::{AnchorRequest, AnchoredFinding, AnchoredNote};
 pub use embed_bench::EmbedBenchReport;
+pub use signoff::SignOffReport;
 
 #[cfg(test)]
 mod contradiction_budget_tests {
@@ -6172,6 +6215,7 @@ mod ring_owner_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         }
     }
 
@@ -6291,6 +6335,7 @@ mod recall_check_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
     }
@@ -6433,6 +6478,7 @@ mod duplicate_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
     }
@@ -6643,6 +6689,7 @@ mod session_start_size_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
         let chars = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
@@ -6720,6 +6767,7 @@ mod session_start_size_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         })
         .unwrap();
         let chars = crate::hook::events::startup_text(&app, crate::hook::events::Part::Whole)
@@ -6826,6 +6874,7 @@ mod index_step_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         }
     }
 
@@ -6941,6 +6990,7 @@ mod review_tests {
             invalid_at: None,
             arriving: None,
             dry_run: false,
+            anchors: crate::app::Anchoring::default(),
         }
     }
 

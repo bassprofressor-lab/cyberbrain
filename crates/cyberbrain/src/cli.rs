@@ -128,7 +128,50 @@ pub enum Command {
         /// Write despite PII findings, recording them as flagged rather than reviewed.
         #[arg(long)]
         force: bool,
+        /// Anchor the note to a file of the project: `path` or `path:120` or `path:120-140`.
+        /// Its SHA-256 is recorded now, and recall says "code changed since …" once the file
+        /// differs. Repeat for several. `path:line` references in the body are anchored
+        /// without it, when the file exists inside the project.
+        #[arg(long = "anchor", alias = "anker", value_name = "PATH[:LINES]")]
+        anchors: Vec<String>,
+        /// Do not anchor `path:line` references found in the body.
+        #[arg(long)]
+        no_detect_anchors: bool,
         /// Run the real path with no-op writers and report what would have happened.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Anchor a note to files, renew its anchors, or drop them, without changing its text.
+    ///
+    /// Without files and without --remove, every anchor the note has is hashed again: say
+    /// so after checking the note against the code as it is now, and recall stops saying
+    /// "code changed". Rings 0 and 1 stay the operator's, as for every write.
+    Anchor {
+        /// Note name.
+        name: String,
+        /// `path`, `path:120` or `path:120-140`, relative to the project or absolute.
+        #[arg(value_name = "PATH[:LINES]")]
+        files: Vec<String>,
+        /// Drop the anchor on this path (`path:lines` for one range only). Repeatable.
+        #[arg(long, value_name = "PATH[:LINES]")]
+        remove: Vec<String>,
+        #[arg(long)]
+        dry_run: bool,
+    },
+
+    /// Confirm, as a person, that you checked a note's content.
+    ///
+    /// Recall and the page then show "checked by <you> on <date>" for as long as the note's
+    /// text stays what you signed. The sign-off goes into the audit chain with your
+    /// identity (as for `review`) and the hash of the text. Only at a terminal, and only as
+    /// the operator: an agent cannot sign, and neither can MCP, a hook or the page.
+    Signoff {
+        /// Note name.
+        name: String,
+        /// Take your sign-off back.
+        #[arg(long)]
+        withdraw: bool,
         #[arg(long)]
         dry_run: bool,
     },

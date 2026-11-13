@@ -293,6 +293,12 @@ export function SearchScreen({ route }: { route: Route }) {
                       {h.superseded_by ? <Pill tone="warn" title={t.search.badge.supersededTitle(h.superseded_by)}>{t.search.badge.superseded}</Pill> : null}
                       {h.invalid_at ? <Pill tone="warn" title={absTime(h.invalid_at)}>{t.search.badge.invalid}</Pill> : null}
                       {h.valid_from ? <Pill title={absTime(h.valid_from)}>{t.search.badge.notYet(shortDate(h.valid_from))}</Pill> : null}
+                      {h.code_changed?.length ? (
+                        <Pill tone="warn" title={t.search.badge.codeChangedTitle(h.code_changed.map((d) => (d.lines ? `${d.path}:${d.lines}` : d.path)).join(", "))}>
+                          {t.search.badge.codeChanged}
+                        </Pill>
+                      ) : null}
+                      {h.signed_off ? <Pill title={absTime(h.signed_off.at)}>{t.search.badge.checked(h.signed_off.by, shortDate(h.signed_off.at))}</Pill> : null}
                       <CitationChip citation={h.citation} ring={h.ring} className="ml-auto" />
                       <ScoreBar score={h.score} top={top} />
                       <span className="hidden md:inline-flex gap-1">

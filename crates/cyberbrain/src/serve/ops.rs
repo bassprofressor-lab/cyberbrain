@@ -102,6 +102,8 @@ pub async fn recall(
                 } else {
                     Vec::new()
                 },
+                code_changed: h.code_changed,
+                signed_off: h.signed_off,
             });
         }
         Ok(out)
@@ -146,7 +148,7 @@ pub async fn expand(
             block_idx: e.block.idx,
             block_text: e.block.text,
             token_count: e.block.token_count,
-            note: detail_in_tree(&tree, &loaded, false),
+            note: detail_in_tree(&st.app, &tree, &loaded, false),
         }))
     })
     .await

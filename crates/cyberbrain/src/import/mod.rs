@@ -631,6 +631,7 @@ fn write_one(
         invalid_at: None,
         arriving: None,
         dry_run,
+        anchors: crate::app::Anchoring::default(),
     };
     Ok(match app.write(req)? {
         WriteOutcome::Written(w) => {

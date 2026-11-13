@@ -933,6 +933,7 @@ mod tests {
                 valid_from: None,
                 invalid_at: None,
                 pii: PiiState::None,
+                anchors: Vec::new(),
             },
             body: "# A\n\none\n\n# B\n\ntwo\n".into(),
             path: PathBuf::from("notes/r3/n.md"),

@@ -194,6 +194,8 @@ pub fn catalogue() -> Vec<Tool> {
                     "valid_from": bound_schema("valid_from"),
                     "invalid_at": bound_schema("invalid_at"),
                     "force": schema_prop("write", "force", json!({ "type": "boolean" })),
+                    "anchors": schema_prop("write", "anchors", json!({ "type": "array", "items": { "type": "string" } })),
+                    "no_detect_anchors": schema_prop("write", "no_detect_anchors", json!({ "type": "boolean" })),
                     "dry_run": schema_prop("write", "dry_run", json!({ "type": "boolean" })),
                     "choice": {
                         "type": "string",
@@ -559,6 +561,8 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
             "valid_from",
             "invalid_at",
             "force",
+            "anchors",
+            "no_detect_anchors",
             "dry_run",
             "choice",
             "expected_updated",
@@ -612,6 +616,12 @@ fn write(app: &App, raw: &Value) -> Result<Value, RpcError> {
         invalid_at: a.bound("invalid_at")?,
         arriving: None,
         dry_run: a.boolean("dry_run")?.unwrap_or(false),
+        // An agent writing over MCP is writing about code it just read: its `path:line`
+        // references are anchored unless it says not to.
+        anchors: crate::app::Anchoring {
+            explicit: a.string_list("anchors")?.unwrap_or_default(),
+            detect: !a.boolean("no_detect_anchors")?.unwrap_or(false),
+        },
     };
     Ok(match app.write(req) {
         Ok(outcome) => {

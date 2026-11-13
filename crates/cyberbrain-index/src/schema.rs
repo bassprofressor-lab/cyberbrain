@@ -9,7 +9,7 @@ use cyberbrain_core::{Error, Result};
 use rusqlite::Connection;
 
 /// Version of the schema this build writes. Bump when appending to [`MIGRATIONS`].
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 /// Migrations, applied in order. Index `i` brings the schema to version `i + 1`.
 /// Never edit a published entry; append a new one.
@@ -137,6 +137,30 @@ const MIGRATIONS: &[&str] = &[
     // afterwards; the way back is to delete cyberbrain.db and `scan --full` with it.
     r#"
     ALTER TABLE blocks ADD COLUMN locator TEXT;
+    "#,
+    // v7: anchors — the files a note makes claims about, with the hash each had when the
+    // note was written against it, and a cache of the hash each anchored file has now,
+    // keyed by its mtime and size so a recall hashes a file only when it changed. No note
+    // had anchors before the field existed, so both tables start empty and no rescan is
+    // needed. As with v5 and v6, a build that knows only v6 refuses the index afterwards;
+    // the way back is to delete cyberbrain.db and `scan --full` with it.
+    r#"
+    CREATE TABLE anchors (
+        note_id TEXT NOT NULL REFERENCES notes(id),
+        path    TEXT NOT NULL,                           -- relative to the project, `/`
+        lines   TEXT,                                    -- `N` or `N-M`, informational
+        sha256  TEXT NOT NULL,                           -- of the file when anchored
+        at      TEXT NOT NULL                            -- RFC 3339 UTC, when anchored
+    );
+    CREATE INDEX anchors_note ON anchors(note_id);
+    CREATE INDEX anchors_path ON anchors(path);
+
+    CREATE TABLE anchor_files (
+        path     TEXT PRIMARY KEY NOT NULL,              -- absolute, as hashed
+        mtime_ns INTEGER NOT NULL,
+        size     INTEGER NOT NULL,
+        sha256   TEXT NOT NULL
+    );
     "#,
 ];
 

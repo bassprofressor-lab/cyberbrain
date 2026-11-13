@@ -197,9 +197,14 @@ pub fn recall(r: &RecallResult) -> String {
             .as_deref()
             .map(|l| format!("  [at {l}]"))
             .unwrap_or_default();
+        let checked = h
+            .signed_off
+            .as_ref()
+            .map(|c| format!("  [checked by {} on {}]", c.by, &c.at.to_string()[..10]))
+            .unwrap_or_default();
         let _ = writeln!(
             s,
-            "{}. {}  {}  {}{place}{date}  ({:.0}% of top){replaced}{expired}{pending}{outside}",
+            "{}. {}  {}  {}{place}{date}  ({:.0}% of top){replaced}{expired}{pending}{outside}{checked}",
             i + 1,
             h.citation,
             h.ring,
@@ -218,6 +223,9 @@ pub fn recall(r: &RecallResult) -> String {
                 names.join(", ")
             );
         }
+        for line in drift_lines(&h.code_changed) {
+            let _ = writeln!(s, "     \u{21b3} {line}");
+        }
         for line in h.text.lines() {
             let _ = writeln!(s, "     {line}");
         }
@@ -231,6 +239,84 @@ pub fn recall(r: &RecallResult) -> String {
     }
     for c in &r.caveats {
         let _ = writeln!(s, "caveat: {c}");
+    }
+    s
+}
+
+/// "code changed since …" for each drifted anchor of a hit or a note.
+pub fn drift_lines(drift: &[cyberbrain_core::AnchorDrift]) -> Vec<String> {
+    drift
+        .iter()
+        .map(|d| {
+            let at = match &d.lines {
+                Some(l) => format!("{}:{l}", d.path),
+                None => d.path.clone(),
+            };
+            let day = &d.since.to_string()[..10];
+            match d.state {
+                cyberbrain_core::DriftState::Changed => {
+                    format!("code changed since {day}: {at}; re-verify before relying on this")
+                }
+                cyberbrain_core::DriftState::Missing => {
+                    format!(
+                        "anchored file gone since {day}: {at}; re-verify before relying on this"
+                    )
+                }
+            }
+        })
+        .collect()
+}
+
+pub fn anchored(r: &crate::app::AnchoredNote) -> String {
+    let mut s = String::new();
+    let dry = if r.dry_run { "[dry run] " } else { "" };
+    for a in &r.anchored {
+        let _ = writeln!(s, "{dry}{}: anchored to {a}", r.name);
+    }
+    for a in &r.removed {
+        let _ = writeln!(s, "{dry}{}: anchor {a} removed", r.name);
+    }
+    if r.anchors.is_empty() {
+        let _ = writeln!(s, "  no anchors left");
+    }
+    for a in &r.anchors {
+        let _ = writeln!(
+            s,
+            "  {}  sha256 {}  since {}",
+            a.label(),
+            &a.sha256[..12],
+            &a.at.to_string()[..10]
+        );
+    }
+    let _ = writeln!(s, "  {}", Slash(&r.path));
+    for line in &r.audit_preview {
+        let _ = writeln!(s, "  audit: {line}");
+    }
+    s
+}
+
+pub fn signed_off(r: &crate::app::SignOffReport) -> String {
+    let mut s = String::new();
+    let dry = if r.dry_run { "[dry run] " } else { "" };
+    if r.withdrawn {
+        let _ = writeln!(s, "{dry}{}: sign-off by {} withdrawn", r.name, r.by);
+    } else {
+        let _ = writeln!(
+            s,
+            "{dry}{} ({}): checked by {} on {}",
+            r.name,
+            r.ring,
+            r.by,
+            &r.at.to_string()[..10]
+        );
+        let _ = writeln!(
+            s,
+            "  holds while the text is unchanged (blake3 {})",
+            r.blake3.as_deref().map(|h| &h[..12]).unwrap_or("")
+        );
+    }
+    for line in &r.audit_preview {
+        let _ = writeln!(s, "  audit: {line}");
     }
     s
 }
@@ -816,6 +902,23 @@ pub fn find(r: &FindReport) -> String {
     }
     for u in &s.unreadable {
         o.push_str(&format!("unreadable: {} ({})\n", Slash(&u.path), u.reason));
+    }
+    for a in &r.anchored {
+        let at = match &a.lines {
+            Some(l) => format!("{}:{l}", a.path),
+            None => a.path.clone(),
+        };
+        let state = match a.drift {
+            None => "unchanged since",
+            Some(cyberbrain_core::DriftState::Changed) => "CODE CHANGED since",
+            Some(cyberbrain_core::DriftState::Missing) => "FILE GONE since",
+        };
+        o.push_str(&format!(
+            "note {} ({}) is anchored to {at}, {state} {}\n",
+            a.note,
+            a.ring,
+            &a.since.to_string()[..10]
+        ));
     }
     for c in &r.caveats {
         o.push_str(&format!("caveat: {c}\n"));
