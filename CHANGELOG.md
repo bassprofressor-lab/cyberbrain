@@ -12,6 +12,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.4] — 2026-11-13
+
+### Security
+
+- **zip 9.5.1 instead of 8.6.0 in builds with the `documents` feature**, which the release
+  binaries use. zip 8.6.0 carries RUSTSEC-2026-0367, -0368, -0369 (critical) and -0429, and the
+  read-path advisory GHSA-m665-v7pm-7grj; all are fixed in 9.0.5. Cyberbrain never reached the
+  affected code (oar-ocr opens one local `.npz` file read-only and never extracts, and only on a
+  path Cyberbrain does not call), so this removes the advisories from the binary rather than a
+  known exploit path. oar-ocr 0.10.2, the newest release, still requires zip 8, so the
+  repository carries that release under `vendor/oar-ocr` with only the zip requirement raised,
+  applied through `[patch.crates-io]`. The patch covers builds from this repository; installing
+  from crates.io still resolves upstream oar-ocr until it moves to zip 9. The four ignores in
+  `deny.toml` are gone.
+
 ## [0.10.3] — 2026-11-11
 
 ### Fixed
@@ -2378,7 +2393,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.4...HEAD
+[0.10.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.1...v0.10.2
 [0.10.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.0...v0.10.1
