@@ -462,6 +462,12 @@ pub enum Command {
         /// Say what would change, and write nothing.
         #[arg(long)]
         dry_run: bool,
+        /// Claude Code: also write the compaction mod into the project's
+        /// `.claude/skills/cyberbrain-compact`. Before a compaction it keeps a snapshot of the
+        /// conversation in ring 3 and tells the summary which citations to keep. Uses Claude
+        /// Code's function hooks (early access); the shell PreCompact hook stays either way.
+        #[arg(long)]
+        compact_mod: bool,
     },
 
     /// Compliance operations (SPEC §12).

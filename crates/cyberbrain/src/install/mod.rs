@@ -18,6 +18,7 @@
 //! three lines to paste. Both appear in the report, so a person learns the client is usable
 //! rather than assuming it is not.
 
+mod compact_mod;
 mod edit;
 mod paths;
 #[cfg(test)]
@@ -70,6 +71,8 @@ pub struct Options {
     pub name: String,
     pub undo: bool,
     pub dry_run: bool,
+    /// Claude Code: also write the compaction mod (`compact_mod`) into the project.
+    pub compact_mod: bool,
     pub env: Env,
 }
 
@@ -195,7 +198,31 @@ pub fn run(opts: &Options) -> Result<Report> {
     let mut clients = Vec::new();
     for client in wanted {
         let report = match client {
-            Client::ClaudeCode => claude_code(opts, &binary)?,
+            Client::ClaudeCode => {
+                let mut r = claude_code(opts, &binary)?;
+                let change = compact_mod::apply(
+                    &opts.project,
+                    &binary,
+                    opts.compact_mod,
+                    opts.undo,
+                    opts.dry_run,
+                )?;
+                if let Some(c) = change {
+                    if matches!(
+                        c.action,
+                        Action::Added | Action::Updated | Action::Unchanged
+                    ) {
+                        let hint = compact_mod::note(&c.path);
+                        r.note = Some(match r.note.take() {
+                            Some(n) => format!("{n} {hint}"),
+                            None => hint,
+                        });
+                    }
+                    r.found = true;
+                    r.changes.push(c);
+                }
+                r
+            }
             Client::ClaudeDesktop => claude_desktop(opts, &binary, &store)?,
             Client::Codex => codex(opts, &binary, &store),
         };

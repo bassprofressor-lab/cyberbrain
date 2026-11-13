@@ -22,6 +22,7 @@ fn opts(tmp: &Path, env: Env) -> Options {
         name: "cyberbrain".to_string(),
         undo: false,
         dry_run: false,
+        compact_mod: false,
         env,
     }
 }
@@ -677,5 +678,125 @@ fn the_pre_tool_matcher_widens_only_for_extra_governed_tools() {
     assert_eq!(
         super::matcher_for("PostToolUse", "Edit|Write", &gov),
         "Edit|Write"
+    );
+}
+
+// -----------------------------------------------------------------------------------
+// The compaction mod (`--compact-mod`)
+
+fn mod_dir(o: &Options) -> PathBuf {
+    o.project
+        .join(".claude")
+        .join("skills")
+        .join("cyberbrain-compact")
+}
+
+#[test]
+fn the_compaction_mod_is_written_only_when_asked_and_comes_back_out() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut o = opts(tmp.path(), bare_env(tmp.path()));
+    o.clients = vec![Client::ClaudeCode];
+
+    run(&o).unwrap();
+    assert!(!mod_dir(&o).exists(), "not without --compact-mod");
+
+    o.compact_mod = true;
+    let r = run(&o).unwrap();
+    let dir = mod_dir(&o);
+    let manifest = read(&dir.join(".claude-plugin").join("plugin.json"));
+    assert_eq!(manifest["name"], "cyberbrain-compact");
+    assert_eq!(
+        read(&dir.join("hooks").join("hooks.json"))["modules"],
+        serde_json::json!(["./register.ts"])
+    );
+    let module = fs::read_to_string(dir.join("hooks").join("register.ts")).unwrap();
+    assert!(module.contains("'session.compact'"), "{module}");
+    assert!(module.contains("pre-compact-snapshot"), "{module}");
+    // The binary that installed it, absolute, as a JavaScript string.
+    let binary = serde_json::to_string(&current_binary().display().to_string()).unwrap();
+    assert!(
+        module.contains(&format!("const BINARY = {binary}")),
+        "{module}"
+    );
+    let cc = only(&r, Client::ClaudeCode);
+    assert!(
+        cc.changes
+            .iter()
+            .any(|c| c.path == dir && c.action == Action::Added),
+        "{:?}",
+        cc.changes
+    );
+    assert!(
+        cc.note.as_deref().unwrap_or("").contains("--plugin-dir"),
+        "{:?}",
+        cc.note
+    );
+
+    // A second run changes nothing.
+    let r = run(&o).unwrap();
+    assert!(
+        only(&r, Client::ClaudeCode)
+            .changes
+            .iter()
+            .any(|c| c.path == dir && c.action == Action::Unchanged)
+    );
+
+    // Something of the user's beside it survives the undo.
+    fs::write(dir.join("NOTES.txt"), "mine").unwrap();
+    o.undo = true;
+    o.compact_mod = false;
+    let r = run(&o).unwrap();
+    assert!(
+        only(&r, Client::ClaudeCode)
+            .changes
+            .iter()
+            .any(|c| c.path == dir && c.action == Action::Removed)
+    );
+    assert!(!dir.join("hooks").join("register.ts").exists());
+    assert!(!dir.join(".claude-plugin").exists());
+    assert_eq!(fs::read_to_string(dir.join("NOTES.txt")).unwrap(), "mine");
+}
+
+#[test]
+fn a_folder_of_that_name_that_is_not_ours_is_left_alone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut o = opts(tmp.path(), bare_env(tmp.path()));
+    o.clients = vec![Client::ClaudeCode];
+    o.compact_mod = true;
+    let dir = mod_dir(&o);
+    fs::create_dir_all(dir.join(".claude-plugin")).unwrap();
+    fs::write(
+        dir.join(".claude-plugin").join("plugin.json"),
+        r#"{"name":"somebody-else"}"#,
+    )
+    .unwrap();
+    let r = run(&o).unwrap();
+    assert!(
+        only(&r, Client::ClaudeCode)
+            .changes
+            .iter()
+            .any(|c| c.path == dir && c.action == Action::NotOurs)
+    );
+    assert!(!dir.join("hooks").exists());
+
+    o.undo = true;
+    run(&o).unwrap();
+    assert!(dir.join(".claude-plugin").join("plugin.json").exists());
+}
+
+#[test]
+fn a_dry_run_writes_no_mod() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut o = opts(tmp.path(), bare_env(tmp.path()));
+    o.clients = vec![Client::ClaudeCode];
+    o.compact_mod = true;
+    o.dry_run = true;
+    let r = run(&o).unwrap();
+    assert!(!mod_dir(&o).exists());
+    assert!(
+        only(&r, Client::ClaudeCode)
+            .changes
+            .iter()
+            .any(|c| c.path == mod_dir(&o) && c.action == Action::Added)
     );
 }

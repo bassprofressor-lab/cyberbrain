@@ -1,0 +1,6 @@
+{
+  "name": "cyberbrain-compact",
+  "version": "0.1.0",
+  "license": "FSL-1.1-ALv2",
+  "description": "Before Claude Code compacts the conversation, cyberbrain keeps a snapshot of it in the local store and tells the summary which citations to keep."
+}

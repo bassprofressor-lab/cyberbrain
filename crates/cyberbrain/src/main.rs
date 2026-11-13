@@ -523,6 +523,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             ref name,
             undo,
             dry_run,
+            compact_mod,
         } => {
             let project = match project {
                 Some(p) => p.clone(),
@@ -542,6 +543,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                 name: name.clone(),
                 undo,
                 dry_run,
+                compact_mod,
                 env: install::Env::current(),
             };
             let r = install::run(&opts)?;

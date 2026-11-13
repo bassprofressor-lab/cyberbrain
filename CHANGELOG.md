@@ -12,6 +12,26 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **A snapshot before each compaction, and a summary that keeps the citations** (Claude Code).
+  The `PreCompact` hook only ever counted: the harness hands it neither the conversation nor a
+  way to the summary. Claude Code's function hooks do both, so `cyberbrain install --client
+  claude-code --compact-mod` now also writes a small mod into the project's
+  `.claude/skills/cyberbrain-compact`. On `session.compact` it hands the conversation to the
+  new `cyberbrain hook pre-compact-snapshot` over stdin (nothing goes over the network), which
+  keeps a snapshot as a ring 3 note (`compact-snapshot-<session>-<n>`, kind `session`,
+  retention `P30D`) through the ordinary write path, so the PII gate and the audit chain apply;
+  a PII hold is redacted. The snapshot holds the first request, the newest messages cut to a
+  few hundred words each, the citations used and the names of the tools called, at most 16 KiB;
+  tool inputs, tool outputs and the reminders the harness puts into prompts are left out. The
+  mod adds to the summarizer's instructions: keep the citations the conversation used (newest
+  first), the open points of ring 1 and the snapshot's own citation. After the compaction the
+  session start names the snapshot with its citation. A failure on cyberbrain's side never
+  holds up a compaction: the mod always continues it, without the extra instructions. Opt-in,
+  because function hooks are early access; the shell `PreCompact` hook stays and keeps
+  counting. `--undo` takes the mod's files back out and leaves anything else in the folder.
+
 ## [0.10.4] — 2026-11-13
 
 ### Security
