@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.5] — 2026-11-13
+
 ### Added
 
 - **A snapshot before each compaction, and a summary that keeps the citations** (Claude Code).
@@ -2441,7 +2443,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.4...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.5...HEAD
+[0.10.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.2...v0.10.3
 [0.10.2]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.1...v0.10.2

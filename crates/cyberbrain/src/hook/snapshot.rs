@@ -184,6 +184,8 @@ fn keep(
         choice: None,
         expected_updated: None,
         arriving: None,
+        // Ein Sitzungs-Snapshot beschreibt keinen Codestand: nichts verankern, nichts erkennen.
+        anchors: crate::app::Anchoring::default(),
         dry_run: false,
     };
     let written = match app.write(req.clone()) {
