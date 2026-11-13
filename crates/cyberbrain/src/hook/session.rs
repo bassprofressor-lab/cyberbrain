@@ -38,6 +38,18 @@ pub struct ResidentMark {
     pub updated: String,
 }
 
+/// Which note holds a session's snapshot from before a compaction, and for which one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SnapshotMark {
+    pub name: String,
+    /// The citation of its first block, for `recall --id`.
+    pub citation: String,
+    /// The compaction it was taken before: `compactions + 1` at the time it was written.
+    pub compaction: u32,
+    pub at: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SessionState {
@@ -57,6 +69,10 @@ pub struct SessionState {
     pub compactions: u32,
     pub last_compaction_at: Option<String>,
     pub last_compaction_trigger: Option<String>,
+    /// The snapshot the compaction mod kept before the last compaction it saw
+    /// (`hook pre-compact-snapshot`). `session-start` on `compact` names it when its
+    /// compaction is the one that just happened.
+    pub last_snapshot: Option<SnapshotMark>,
     /// Keyed `r{ring}/{name}`.
     pub resident: BTreeMap<String, ResidentMark>,
 }

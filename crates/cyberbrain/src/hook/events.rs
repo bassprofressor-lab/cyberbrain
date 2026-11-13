@@ -197,6 +197,9 @@ pub(super) fn dispatch(
         HookEvent::PostToolUse => post_tool_use(&ctx, &mut out)?,
         HookEvent::Stop => stop(&ctx, &mut out)?,
         HookEvent::PreCompact => pre_compact(&ctx, &mut out)?,
+        HookEvent::PreCompactSnapshot => {
+            super::snapshot::run(app, &payload, stdin, &ctx.now, &mut out)?
+        }
     }
     Ok(out)
 }
@@ -434,6 +437,9 @@ fn session_start_text(
                  `cyberbrain write` is gone from your context, and still in the store only if \
                  you wrote it.\n\n"
             ));
+            if let Some(line) = state.and_then(super::snapshot::after_compaction) {
+                text.push_str(&line);
+            }
         }
         "resume" => {
             if let Some(s) = state {

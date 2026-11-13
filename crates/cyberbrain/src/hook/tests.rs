@@ -1999,3 +1999,6 @@ fn session_context_names_hook_entries_an_older_install_left_behind() {
         out.stdout
     );
 }
+
+// The compaction mod's snapshot (hook pre-compact-snapshot), in a file of its own.
+mod snapshot;

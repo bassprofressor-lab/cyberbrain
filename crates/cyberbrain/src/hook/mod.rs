@@ -43,6 +43,7 @@ pub mod paths;
 pub mod payload;
 pub mod resident;
 pub mod session;
+pub mod snapshot;
 #[cfg(test)]
 mod tests;
 
@@ -113,6 +114,7 @@ pub fn event_name(event: HookEvent) -> &'static str {
         HookEvent::PostToolUse => "post-tool-use",
         HookEvent::Stop => "stop",
         HookEvent::PreCompact => "pre-compact",
+        HookEvent::PreCompactSnapshot => "pre-compact-snapshot",
     }
 }
 
@@ -127,7 +129,7 @@ pub fn harness_event_name(event: HookEvent) -> &'static str {
         HookEvent::PreToolUse => "PreToolUse",
         HookEvent::PostToolUse => "PostToolUse",
         HookEvent::Stop => "Stop",
-        HookEvent::PreCompact => "PreCompact",
+        HookEvent::PreCompact | HookEvent::PreCompactSnapshot => "PreCompact",
     }
 }
 
@@ -137,6 +139,7 @@ pub fn budget_ms(event: HookEvent) -> u128 {
         | HookEvent::SessionRings
         | HookEvent::SessionContext
         | HookEvent::SubagentStart => SESSION_START_BUDGET_MS,
+        HookEvent::PreCompactSnapshot => snapshot::BUDGET_MS,
         _ => HOT_PATH_BUDGET_MS,
     }
 }
@@ -244,8 +247,11 @@ pub fn run_with(
         // Plugin hooks and settings.json hooks are merged by the harness: the same event can
         // arrive twice. Only the first run answers (dedupe.rs). Off in this crate's unit tests:
         // they replay event sequences within milliseconds on purpose; dedupe.rs tests itself
-        // and the release binary is checked end to end.
+        // and the release binary is checked end to end. The snapshot has one caller, the
+        // compaction mod, which runs it again on purpose (`precompute`, then the compaction):
+        // a second call answered with nothing would lose the summary its instructions.
         if let (false, None, Some(a)) = (cfg!(test), &stand_down, app)
+            && !matches!(event, HookEvent::PreCompactSnapshot)
             && !dedupe::claim(a.root(), name, stdin, std::time::SystemTime::now())
         {
             let mut out = HookOutput::empty();

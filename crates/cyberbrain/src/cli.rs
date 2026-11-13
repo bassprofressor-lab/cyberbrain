@@ -629,6 +629,10 @@ pub enum HookEvent {
     PostToolUse,
     Stop,
     PreCompact,
+    /// Called by the Claude Code compaction mod (`install --compact-mod`), not by a settings
+    /// hook: the conversation on stdin, a bounded snapshot into ring 3, and instructions for
+    /// the summary on stdout. The shell `pre-compact` hook keeps counting either way.
+    PreCompactSnapshot,
 }
 
 /// The clients `install` knows. Not every one is written to: see `install`'s module
