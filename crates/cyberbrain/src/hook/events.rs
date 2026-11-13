@@ -1650,14 +1650,34 @@ fn pre_compact(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     ));
     // No channel to the model exists here (the harness documents stdout as debug-only for
     // this event); the human gets one line, and session-start(compact) does the rest.
-    out.stdout = json!({
-        "systemMessage": format!(
+    // With the compaction mod in the project (store's project or the session's working
+    // directory) the conversation is kept as a ring 3 snapshot and the citations stay in the
+    // summary, so the old warning would be wrong there (13.11.2026).
+    let mod_installed = [ctx.root().parent().map(Path::to_path_buf), Some(ctx.cwd())]
+        .into_iter()
+        .flatten()
+        .any(|p| {
+            crate::install::compact_mod::folder(&p)
+                .join("hooks")
+                .join("register.ts")
+                .is_file()
+        });
+    let message = if mod_installed {
+        format!(
+            "cyberbrain: compaction #{count} ({trigger}). Rings 0 and 1 are re-injected by the \
+             session-start hook right after it; the compaction mod keeps a snapshot of the \
+             conversation in ring 3 (30 days) and the citations in the summary. What should \
+             outlast the snapshot still belongs in `cyberbrain write`."
+        )
+    } else {
+        format!(
             "cyberbrain: compaction #{count} ({trigger}). Rings 0 and 1 are re-injected by the \
              session-start hook right after it. Anything the agent learned this session and did \
-             not write with `cyberbrain write` does not survive compaction."
+             not write with `cyberbrain write` does not survive compaction; `cyberbrain install \
+             --client claude-code --compact-mod` keeps a snapshot first."
         )
-    })
-    .to_string();
+    };
+    out.stdout = json!({ "systemMessage": message }).to_string();
     Ok(())
 }
 

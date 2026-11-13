@@ -221,3 +221,32 @@ fn a_subagent_transcript_is_not_kept_and_a_bad_payload_answers_nothing() {
     assert_eq!(out.exit_code, 0);
     assert!(out.stdout.is_empty(), "{}", out.stdout);
 }
+
+#[test]
+fn pre_compact_message_names_the_snapshot_only_when_the_mod_is_installed() {
+    // 13.11.2026: the shell PreCompact line still said that nothing unwritten survives a
+    // compaction, also in projects where the compaction mod keeps a snapshot and the citations.
+    let f = fixture();
+    session_start(&f, "startup");
+    let app = f.open();
+    let payload =
+        f.payload(serde_json::json!({"hook_event_name": "PreCompact", "trigger": "manual"}));
+    let without = run(Some(&app), HookEvent::PreCompact, &payload);
+    assert!(
+        without.stdout.contains("does not survive"),
+        "{}",
+        without.stdout
+    );
+    assert!(
+        without.stdout.contains("--compact-mod"),
+        "{}",
+        without.stdout
+    );
+
+    let hooks = crate::install::compact_mod::folder(f.store.parent().unwrap()).join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("register.ts"), "// test\n").unwrap();
+    let with = run(Some(&app), HookEvent::PreCompact, &payload);
+    assert!(with.stdout.contains("snapshot"), "{}", with.stdout);
+    assert!(!with.stdout.contains("does not survive"), "{}", with.stdout);
+}

@@ -12,6 +12,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Changed
+
+- **The PreCompact line no longer says everything is lost when the compaction mod keeps a
+  snapshot.** In a project with `.claude/skills/cyberbrain-compact` the shell hook now says that
+  the conversation is kept in ring 3 for 30 days and the citations stay in the summary;
+  without the mod it keeps the old warning and names `install --compact-mod`.
+
 ## [0.10.5] — 2026-11-13
 
 ### Added

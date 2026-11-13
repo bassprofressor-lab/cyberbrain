@@ -18,7 +18,7 @@
 //! three lines to paste. Both appear in the report, so a person learns the client is usable
 //! rather than assuming it is not.
 
-mod compact_mod;
+pub(crate) mod compact_mod;
 mod edit;
 mod paths;
 #[cfg(test)]
