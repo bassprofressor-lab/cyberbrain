@@ -12,6 +12,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.7] — 2026-11-16
+
+### Fixed
+
+- The Linux binary of 0.10.6 on GitHub would not start on Ubuntu 24.04, Debian 13 or any other
+  system older than glibc 2.43 ("version `GLIBC_2.43' not found"). GitHub had moved
+  `ubuntu-latest` to 26.04 between 0.10.3 and 0.10.6, and the release was built there. The Linux
+  build is now pinned to Ubuntu 24.04, and the release refuses a binary that asks for anything
+  newer than glibc 2.39 (`scripts/glibc-floor.sh`, checked against the 0.10.6 binary: it fails).
+  Nothing else changed; crates.io users who build from source were never affected. If you
+  installed the 0.10.6 Linux binary and it runs, keep it or update, either is fine.
+
 ## [0.10.6] — 2026-11-16
 
 0.10.4 and 0.10.5 were tagged but never published on GitHub or crates.io; 0.10.6 is the first
@@ -2458,7 +2470,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.6...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.7...HEAD
+[0.10.7]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.6...v0.10.7
 [0.10.6]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...v0.10.4

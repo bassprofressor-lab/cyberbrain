@@ -27,7 +27,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # Pinned, not ubuntu-latest: latest moved to 26.04 and the 0.10.6 binary then needed
+          # glibc 2.43, which Ubuntu 24.04 and Debian 13 do not have (2026-11-16).
+          - os: ubuntu-24.04
             name: linux-x86_64
             bin: cyberbrain
           - os: windows-latest
@@ -60,6 +62,11 @@ jobs:
 
       - name: build the binary
         run: cargo build --release -p cyberbrain --features documents
+
+      - name: it runs on glibc 2.39 (Ubuntu 24.04)
+        if: matrix.name == 'linux-x86_64'
+        shell: bash
+        run: scripts/glibc-floor.sh target/release/cyberbrain 2.39
 
       # The tag says what it is; the binary has to agree. A release built from the wrong
       # commit is the kind of thing nobody notices until someone reports a fixed bug.
