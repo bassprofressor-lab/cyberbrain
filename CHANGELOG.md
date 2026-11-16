@@ -12,6 +12,14 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.10.6] — 2026-11-16
+
+0.10.4 and 0.10.5 were tagged but never published on GitHub or crates.io; 0.10.6 is the first
+release that carries them. Read the two sections below together with this one: anchors that
+say when the code a note describes changed, `cyberbrain signoff` for a person's check mark, the
+snapshot before a compaction, index schema v7, and zip 9.5.1. Once this build has opened an
+index, 0.10.3 and older refuse it (see 0.10.5, "Index schema v7").
+
 ### Changed
 
 - **The PreCompact line no longer says everything is lost when the compaction mod keeps a
@@ -2450,7 +2458,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.5...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.6...HEAD
+[0.10.6]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.5...v0.10.6
 [0.10.5]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.4...v0.10.5
 [0.10.4]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.3...v0.10.4
 [0.10.3]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.2...v0.10.3

@@ -5,7 +5,7 @@ members = ["crates/*"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.10.5"
+version = "0.10.6"
 edition = "2024"
 rust-version = "1.98"
 license = "FSL-1.1-ALv2"
@@ -17,13 +17,13 @@ keywords = ["ai-agents", "memory", "retrieval", "mcp", "markdown"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
-cyberbrain-core   = { path = "crates/cyberbrain-core",   version = "0.10.5" }
-cyberbrain-embed  = { path = "crates/cyberbrain-embed",  version = "0.10.5" }
-cyberbrain-index  = { path = "crates/cyberbrain-index",  version = "0.10.5" }
-cyberbrain-policy = { path = "crates/cyberbrain-policy", version = "0.10.5" }
-cyberbrain-llm    = { path = "crates/cyberbrain-llm",    version = "0.10.5" }
-cyberbrain-code   = { path = "crates/cyberbrain-code",   version = "0.10.5" }
-cyberbrain-documents = { path = "crates/cyberbrain-documents", version = "0.10.5" }
+cyberbrain-core   = { path = "crates/cyberbrain-core",   version = "0.10.6" }
+cyberbrain-embed  = { path = "crates/cyberbrain-embed",  version = "0.10.6" }
+cyberbrain-index  = { path = "crates/cyberbrain-index",  version = "0.10.6" }
+cyberbrain-policy = { path = "crates/cyberbrain-policy", version = "0.10.6" }
+cyberbrain-llm    = { path = "crates/cyberbrain-llm",    version = "0.10.6" }
+cyberbrain-code   = { path = "crates/cyberbrain-code",   version = "0.10.6" }
+cyberbrain-documents = { path = "crates/cyberbrain-documents", version = "0.10.6" }
 
 # oar-ocr 0.10.2 (newest on crates.io, needed by the `documents` feature) requires zip 8.x, which
 # carries RUSTSEC-2026-0367/0368/0369/0429. vendor/oar-ocr is that release with zip raised to
