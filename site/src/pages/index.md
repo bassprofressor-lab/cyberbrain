@@ -29,13 +29,13 @@ caveat: contradiction check skipped: fewer than two hits, nothing to compare
 The caveats matter as much as the hit. Cyberbrain says what it did **not** do: here, no model was installed, so the search was lexical, and with one hit there was nothing to compare. An unchecked result never looks like a checked one.
 
 <div class="cards">
-  <div class="card"><div class="k">version</div><div class="v">0.8.4</div><div class="s">released 2026-10-31</div></div>
-  <div class="card"><div class="k">Linux binary</div><div class="v">20 MB</div><div class="s">web page included</div></div>
+  <div class="card"><div class="k">version</div><div class="v">0.10.3</div><div class="s">released 2026-11-11</div></div>
+  <div class="card"><div class="k">Linux binary</div><div class="v">22 MB</div><div class="s">web page included</div></div>
   <div class="card"><div class="k">platforms</div><div class="v">3</div><div class="s">Linux, Windows, macOS (Apple silicon)</div></div>
   <div class="card"><div class="k">telemetry</div><div class="v">none</div><div class="s">there is no code for it</div></div>
 </div>
 
-<sub>Size of the 0.8.4 release file `cyberbrain-linux-x86_64` (20,024,408 bytes).</sub>
+<sub>Size of the 0.10.3 release file `cyberbrain-linux-x86_64` (22,422,816 bytes).</sub>
 
 ## Four ways in
 
@@ -60,6 +60,6 @@ All four are the same binary and work on the same store.
 
 ## Status
 
-0.8.4 is young. The README for this release counts 1,097 tests and 18 browser tests, and says it has been run against one operator's real corpus (1,086 notes across five projects) and not much else. The Windows installer is the newest part. If something misbehaves, an [issue](https://github.com/bassprofressor-lab/cyberbrain/issues) helps.
+0.10.3 is young. The README for this release counts 1,167 tests and 18 browser tests, and says it has been run against one operator's real corpus (1,086 notes across five projects) and not much else. The Windows installer is the newest part. If something misbehaves, an [issue](https://github.com/bassprofressor-lab/cyberbrain/issues) helps.
 
 Licence: [FSL-1.1-ALv2](https://github.com/bassprofressor-lab/cyberbrain/blob/main/LICENSE.md). Use it for anything except building a competing product; each release becomes Apache-2.0 two years after it ships.
