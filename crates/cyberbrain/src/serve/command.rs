@@ -55,8 +55,10 @@ pub struct CommandResult {
 
 pub async fn run(
     State(st): State<Arc<ServeState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<CommandRequest>,
 ) -> ApiResult<Json<CommandResult>> {
+    crate::terminal::decision_guard(&st, &headers)?;
     let argv = tokenise(&req.line)
         .map_err(ApiError::bad_request)?
         .ok_or_else(|| ApiError::bad_request("there is no command in that line"))?;

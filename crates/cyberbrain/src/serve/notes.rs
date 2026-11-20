@@ -822,8 +822,10 @@ pub async fn resolve_hold(
     State(st): State<Arc<ServeState>>,
     ApiPath(id): ApiPath<String>,
     ApiQuery(dry): ApiQuery<DryRun>,
+    headers: axum::http::HeaderMap,
     ApiJson(res): ApiJson<PiiHoldResolution>,
 ) -> ApiResult<Response> {
+    crate::terminal::decision_guard(&st, &headers)?;
     let choice = match res.action.as_str() {
         "redact" => Some(OperatorChoice::Redact),
         "mark-reviewed" => Some(OperatorChoice::MarkReviewed),

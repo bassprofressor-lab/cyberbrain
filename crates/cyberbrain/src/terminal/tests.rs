@@ -202,3 +202,67 @@ async fn a_paste_into_a_program_that_is_not_reading_does_not_block() {
     );
     pty.kill();
 }
+
+// ---------------------------------------------------------------------------------------
+// S5: the operator's decisions over HTTP want the session token when there is one.
+
+async fn post(
+    terminal: Option<TerminalConfig>,
+    uri: &str,
+    body: &str,
+    token: Option<&str>,
+) -> StatusCode {
+    let (_dir, app) = store();
+    let router = router_with(app, PathBuf::new(), terminal, Vec::new());
+    let mut req = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(t) = token {
+        req = req.header("x-cyberbrain-terminal-token", t);
+    }
+    router
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+        .status()
+}
+
+const DECISIONS: [(&str, &str); 3] = [
+    (
+        "/api/v1/proposals/gibt-es-nicht/decision",
+        r#"{"accept":true}"#,
+    ),
+    (
+        "/api/v1/holds/gibt-es-nicht",
+        r#"{"action":"mark-reviewed"}"#,
+    ),
+    ("/api/v1/command", r#"{"line":"review --store x"}"#),
+];
+
+#[tokio::test]
+async fn an_operator_decision_without_the_session_token_is_refused() {
+    for (uri, body) in DECISIONS {
+        assert_eq!(
+            post(Some(cfg()), uri, body, None).await,
+            StatusCode::FORBIDDEN,
+            "{uri}: none"
+        );
+        assert_eq!(
+            post(Some(cfg()), uri, body, Some("falsch")).await,
+            StatusCode::FORBIDDEN,
+            "{uri}: wrong"
+        );
+    }
+}
+
+#[tokio::test]
+async fn with_the_session_token_or_without_a_terminal_the_decision_is_heard() {
+    for (uri, body) in DECISIONS {
+        let with = post(Some(cfg()), uri, body, Some(&"a".repeat(64))).await;
+        assert_ne!(with, StatusCode::FORBIDDEN, "{uri}: with token");
+        // `serve` at a prompt has no token to ask for (open, see the report).
+        let plain = post(None, uri, body, None).await;
+        assert_ne!(plain, StatusCode::FORBIDDEN, "{uri}: no terminal");
+    }
+}

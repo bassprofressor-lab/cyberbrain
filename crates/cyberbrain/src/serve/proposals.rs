@@ -11,6 +11,7 @@ use super::{ServeState, blocking};
 use crate::app::{ProposalDecision, ProposalDetail, ReviewReport, ReviewRequest};
 use axum::Json;
 use axum::extract::State;
+use axum::http::HeaderMap;
 use serde::Deserialize;
 use std::sync::Arc;
 
@@ -41,8 +42,10 @@ pub struct DecisionBody {
 pub async fn decide(
     State(st): State<Arc<ServeState>>,
     ApiPath(name): ApiPath<String>,
+    headers: HeaderMap,
     ApiJson(body): ApiJson<DecisionBody>,
 ) -> ApiResult<Json<ReviewReport>> {
+    crate::terminal::decision_guard(&st, &headers)?;
     blocking(move || {
         let by = crate::identity::who(st.app.root())?;
         let r = st.app.review(ReviewRequest {

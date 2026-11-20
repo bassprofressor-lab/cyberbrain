@@ -187,6 +187,27 @@ fn guard(st: &ServeState, headers: &HeaderMap) -> Result<(), ApiError> {
     }
 }
 
+/// The operator's decisions over HTTP: accepting or rejecting a proposal, resolving a PII
+/// hold (`mark-reviewed` above all) and the command line, which runs `review` and `canary` as
+/// whoever started `serve` (S5, review 2026-11-10/19).
+///
+/// A served store answers every process of this account, and an agent is one of them: with
+/// the operator's `serve` running, `curl -X POST …/proposals/x/decision` was a review by the
+/// operator. When this run has a terminal token (the desktop application always starts one),
+/// these routes want it, as the terminal does. The page has it from the fragment, a process
+/// that only reaches the port does not. Without `--terminal` there is no token to ask for and
+/// nothing changes; `serve` at a prompt keeps answering as before.
+pub(crate) fn decision_guard(st: &ServeState, headers: &HeaderMap) -> Result<(), ApiError> {
+    match st.terminal.as_ref() {
+        None => Ok(()),
+        Some(cfg) if constant_time_eq(cfg.token.as_bytes(), token_of(headers).as_bytes()) => Ok(()),
+        Some(_) => Err(refusal(
+            "this window decides for the operator only with its session token; open it from \
+             the address `serve --terminal` printed, or decide at a terminal (`cyberbrain review`)",
+        )),
+    }
+}
+
 /// A refusal in the shape every other route here uses, so the page has one error body to
 /// understand. `403` is the taxonomy's policy refusal (SPEC §8.1), which is what this is.
 fn refusal(message: &str) -> ApiError {
