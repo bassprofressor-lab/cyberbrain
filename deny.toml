@@ -46,6 +46,14 @@ ignore = [
   # ttf-parser is unmaintained; it comes with imageproc's text drawing, which oar-ocr links and
   # Cyberbrain never calls (it reads fonts, it does not draw text). No safe upgrade exists.
   { id = "RUSTSEC-2026-0192", reason = "font parsing for imageproc text drawing, unused (documents feature)" },
+  # chrono is unmaintained (RUSTSEC-2026-0543, an "unmaintained" notice, no vulnerability). It
+  # arrives only through pdfium-render 0.9.5 (documents feature), which depends on it without a
+  # feature to switch it off and uses it to turn PDF date strings of annotations and form fields
+  # into chrono types. Cyberbrain reads page text and never asks pdfium-render for a date.
+  # 0.9.5 is the newest pdfium-render (checked 2026-11-20); nothing else in the tree needs chrono.
+  # REVIEW BY 2027-02-28: drop this line as soon as pdfium-render releases without chrono, and
+  # if it has not by then, decide again whether to keep the documents feature on pdfium-render.
+  { id = "RUSTSEC-2026-0543", reason = "chrono via pdfium-render (documents feature), no safe upgrade; review by 2027-02-28" },
 ]
 
 [sources]
