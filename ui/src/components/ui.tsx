@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import { ApiError } from "@/api/client";
 import { useT } from "@/lib/i18n";
-import { errorKind } from "@/lib/errors";
+import { errorKind, isNotFound } from "@/lib/errors";
+import { href } from "@/lib/router";
 import { prettyKeys } from "@/lib/keys";
 import { StateMark } from "./design";
 import { Icon, type IconName } from "./icons";
@@ -105,8 +106,10 @@ export function Loading({ label }: { label?: string }) {
  * one click down. The server's wording is English and technical, and it used to be the first
  * thing a colleague read.
  */
-export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
+export function ErrorBanner({ error, onRetry, searchFor }: { error: ApiError; onRetry?: () => void; searchFor?: string }) {
   const t = useT();
+  // Retrying a 404 asks the same question and gets the same answer. Offer a way out instead.
+  const missing = isNotFound(error);
   return (
     <div className="alert alert-danger" role="alert">
       <div className="flex items-start gap-3">
@@ -122,7 +125,18 @@ export function ErrorBanner({ error, onRetry }: { error: ApiError; onRetry?: () 
             <div className="mt-0.5 text-fg break-words">{error.message}</div>
           </details>
         </div>
-        {onRetry ? (
+        {missing ? (
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <a className="btn btn-sm" href={href("notes")}>
+              {t.error.toList}
+            </a>
+            {searchFor ? (
+              <a className="btn btn-sm" href={href("search", null, { q: searchFor })}>
+                {t.error.searchFor}
+              </a>
+            ) : null}
+          </div>
+        ) : onRetry ? (
           <button className="btn btn-sm" onClick={onRetry}>
             {t.common.retry}
           </button>

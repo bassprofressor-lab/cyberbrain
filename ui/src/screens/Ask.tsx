@@ -8,8 +8,10 @@ import { relTime } from "@/lib/format";
 import { useT } from "@/lib/i18n";
 import { useShortcuts } from "@/lib/keys";
 import { setMode } from "@/lib/mode";
-import { href, navigate, type Route } from "@/lib/router";
-import { pickAnswer } from "@/lib/answer";
+import { href, navigate, queryFromRoute, type Route } from "@/lib/router";
+import { answerParts, pickAnswer } from "@/lib/answer";
+import { hasSkippedCheck } from "@/lib/errors";
+import { Markdown } from "@/lib/markdown";
 import { toApiError, useAsync } from "@/lib/useAsync";
 
 /**
@@ -33,6 +35,10 @@ export function AskScreen({ route }: { route: Route }) {
   const [error, setError] = useState<ApiError | null>(null);
   const [loading, setLoading] = useState(false);
   const gen = useRef(0);
+
+  // A new address (Back, Forward, a shared link, the link from the start page) replaces the
+  // question; this component stays mounted across it.
+  useEffect(() => setQ((typed) => queryFromRoute(route, typed)), [route]);
 
   // The address is the state of record here too, so a question can be sent to a colleague.
   useEffect(() => {
@@ -113,7 +119,7 @@ export function AskScreen({ route }: { route: Route }) {
           <>
             <article className="answer" style={{ ["--wash" as string]: `var(--ring-${answer.ring}-bg)` }}>
               <RingChip ring={answer.ring} />
-              <p className="text-xl leading-snug font-medium tracking-tight text-pretty">{answer.text}</p>
+              <AnswerText text={answer.text} />
               <div className="flex items-center gap-3 flex-wrap pt-3 border-t text-2xs text-fg-muted">
                 <span>{t.ask.applies[answer.ring]}</span>
                 <button className="btn btn-sm ml-auto" onClick={() => open(answer.note_name, answer.block_idx)}>
@@ -156,15 +162,10 @@ export function AskScreen({ route }: { route: Route }) {
         {/* Checks that did not run, in the words the server gave. Shown here as in the full
             search: a conflict check that was skipped is the reason "no warning" may mean
             nothing. */}
-        {answer && result?.caveats.length ? (
-          <ul className="space-y-0.5">
-            {result.caveats.map((c, i) => (
-              <li key={i} className={`text-2xs ${/skipped|disabled|not configured/i.test(c) ? "text-warn" : "text-fg-faint"}`}>
-                {c}
-              </li>
-            ))}
-          </ul>
-        ) : null}
+        {/* The server's own lines are English operator text with file paths; they stay in the
+            full view. What the simple view must not lose is that a check did not run, because
+            "no warning" may then mean nothing. */}
+        {answer && hasSkippedCheck(result?.caveats ?? []) ? <p className="text-2xs text-warn">{t.ask.checkSkipped}</p> : null}
 
         {q.trim() && !loading && !error && result && !hits.length ? (
           <Empty title={t.ask.nothing(q.trim())} icon="search">
@@ -174,6 +175,20 @@ export function AskScreen({ route }: { route: Route }) {
 
         <HealthLine />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The answer block: its heading as a title, the rest rendered as markdown instead of shown
+ * as raw characters in one large line.
+ */
+function AnswerText({ text }: { text: string }) {
+  const { title, body } = answerParts(text);
+  return (
+    <div className="answer-text">
+      {title ? <h2 className="text-xl leading-snug font-semibold tracking-tight text-pretty">{title}</h2> : null}
+      {body ? <Markdown source={body} resolves={() => false} className={`prose-note ${title ? "mt-2" : ""}`} /> : null}
     </div>
   );
 }

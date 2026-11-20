@@ -20,3 +20,13 @@ export function errorKind(e: Pick<ApiError, "status" | "body">): ErrorKind {
       return "internal";
   }
 }
+
+/** A note or page that is not there. Trying again cannot change that; going elsewhere can. */
+export function isNotFound(e: Pick<ApiError, "status" | "body">): boolean {
+  return e.status === 404 || e.body.code === "not-found";
+}
+
+/** Whether one of the server's caveats says a check did not run. */
+export function hasSkippedCheck(caveats: string[]): boolean {
+  return caveats.some((c) => /skipped|disabled|not configured/i.test(c));
+}

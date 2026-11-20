@@ -126,6 +126,8 @@ export const de: Dict = {
   error: {
     http: (status: string | number, exit: number) => `http ${status} · exit ${exit}`,
     details: "Technische Details",
+    toList: "Zur Liste",
+    searchFor: "Danach suchen",
     friendly: {
       unreachable: "Die Seite erreicht cyberbrain nicht. Läuft es noch?",
       "bad-request": "Diese Anfrage wurde nicht angenommen.",
@@ -419,6 +421,7 @@ export const de: Dict = {
     kindAria: "Art",
     anyKind: "jede Art",
     listAria: "Notizen",
+    toList: "Alle Notizen",
     noMatch: "keine Notiz passt",
     count: (n: number) => `${n} Notiz${n === 1 ? "" : "en"}`,
     selectTitle: "Notiz auswählen.",
@@ -434,11 +437,11 @@ export const de: Dict = {
     piiNotScannedTitle: "Über diese Notiz lief nie eine Prüfung beim Schreiben. Wer sie durch das Werkzeug schreibt, prüft sie.",
     write: "auf die Platte schreiben",
     writing: "schreibt…",
-    forget: "forget…",
-    forgetTitle: "Führt forget zuerst mit --dry-run aus und zeigt, was wegginge",
+    forget: "Vergessen …",
+    forgetTitle: "Zeigt zuerst im Probelauf, was entfernt würde",
     wrote: (path: string) => `${path} geschrieben`,
     notShared: "nicht geteilt",
-    field: { id: "ID", path: "Pfad", created: "angelegt", updated: "geändert", retention: "Aufbewahrung", bereich: "Bereich", ring: "Ring", tags: "Tags" },
+    field: { id: "Kennung", path: "Datei", created: "angelegt", updated: "geändert", retention: "Aufbewahrung", bereich: "Bereich", ring: "Ring", tags: "Tags" },
     bodyAria: "Text der Notiz",
     bodyNote: "Nur der Text. Die Frontmatter-Felder werden in einer späteren Fassung oberhalb bearbeitet; id, created, updated, links und pii gehören dem Server. Der Schreibvorgang läuft im Profil eu/ch durch die PII-Prüfung und wird in derselben Anfrage neu indiziert.",
     citations: (n: number) => `Zitate · ${n} Blöcke`,
@@ -471,7 +474,7 @@ export const de: Dict = {
     forgetDialog: {
       aria: "Notiz löschen",
       dryRun: "Trockenlauf",
-      title: (note: string) => `forget ${note}`,
+      title: (note: string) => `${note} vergessen`,
       body: "Der echte forget-Pfad lief mit einem Schreiber, der nichts tut. Das hier würde er in einer Transaktion entfernen:",
       file: "Datei",
       blocks: "Blöcke",
@@ -856,6 +859,7 @@ export const de: Dict = {
     trouble: "Etwas braucht Aufmerksamkeit.",
     unknown: "Der Zustand ließ sich nicht prüfen.",
     details: "Technische Details",
+    checkSkipped: "Einzelne Prüfungen liefen nicht, die Antwort ist unter Umständen unvollständig. Einzelheiten stehen in der Experten-Ansicht.",
   },
   simpleNotes: {
     backToQuestion: "Ihre Frage",

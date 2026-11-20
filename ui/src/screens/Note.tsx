@@ -67,7 +67,9 @@ export function NoteScreen({ route }: { route: Route }) {
 
   return (
     <div className="grid h-full grid-cols-1 md:grid-cols-[20rem_minmax(0,1fr)]">
-      <aside className="border-r flex flex-col min-h-0 max-h-[40vh] md:max-h-none">
+      {/* On a narrow screen the list would sit above the note and push it below the fold; while a
+          note (or the new-note form) is open the list is out of the way, one tap back. */}
+      <aside className={`border-r flex-col min-h-0 max-h-[40vh] md:max-h-none md:flex ${selectedName || creating ? "hidden" : "flex"}`}>
         <div className="p-3 border-b space-y-2">
           <div className="flex gap-1.5">
             <input ref={filterRef} className="input w-full min-w-0" placeholder={t.notes.filterPlaceholder} value={filter} onChange={(e) => setFilter(e.target.value)} aria-label={t.notes.filterAria} />
@@ -109,6 +111,13 @@ export function NoteScreen({ route }: { route: Route }) {
         </div>
       </aside>
       <main className="min-h-0 overflow-auto scroll-thin">
+        {selectedName || creating ? (
+          <div className="md:hidden px-3 pt-3">
+            <a className="btn btn-sm" href={href("notes")}>
+              {t.notes.toList}
+            </a>
+          </div>
+        ) : null}
         {creating ? (
           <div className="p-5 max-w-3xl">
             <h1 className="text-2xl font-semibold tracking-tight mb-5">{t.newNote.heading}</h1>
@@ -244,7 +253,7 @@ function NoteDetailView({ nameOrId, resolves, editing, setEditing, block, onChan
     [editing, draft, d, hold, t],
   );
 
-  if (note.error) return <div className="p-4"><ErrorBanner error={note.error} onRetry={note.reload} /></div>;
+  if (note.error) return <div className="p-4"><ErrorBanner error={note.error} onRetry={note.reload} searchFor={nameOrId} /></div>;
   if (!d) return <Loading label={t.note.loading} />;
 
   const f = d.front;

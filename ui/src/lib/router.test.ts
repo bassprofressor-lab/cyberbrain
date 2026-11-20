@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cameFromSearch, filterFromRoute, href, parseRoute } from "./router";
+import { cameFromSearch, filterFromRoute, href, parseRoute, queryFromRoute } from "./router";
 
 describe("parseRoute", () => {
   it("decodes a note name", () => {
@@ -32,5 +32,16 @@ describe("cameFromSearch", () => {
     expect(cameFromSearch("#/search")).toBe(true);
     expect(cameFromSearch("#/notes")).toBe(false);
     expect(cameFromSearch("")).toBe(false);
+  });
+});
+
+describe("queryFromRoute (O2)", () => {
+  it("takes q from a new address while the question page is already open", () => {
+    expect(queryFromRoute(parseRoute("#/search?q=skonto"), "")).toBe("skonto");
+    expect(queryFromRoute(parseRoute("#/search?q=skonto"), "old")).toBe("skonto");
+  });
+  it("leaves what was typed alone when the address has no q or is another screen", () => {
+    expect(queryFromRoute(parseRoute("#/search"), "typed")).toBe("typed");
+    expect(queryFromRoute(parseRoute("#/notes?q=x"), "typed")).toBe("typed");
   });
 });

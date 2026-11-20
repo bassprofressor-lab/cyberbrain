@@ -1274,3 +1274,23 @@
   .prose-note strong { font-weight: 600; }
   .prose-note img { max-width: 100%; }
 }
+
+/* Touch devices: every control a finger has to hit is at least 44 px (WCAG 2.5.5), in both
+   views. Only for a coarse pointer, so the dense layout stays on a desktop with a mouse. */
+@layer components {
+  @media (pointer: coarse) {
+    .btn,
+    .btn-sm,
+    .btn-icon,
+    .nav-item,
+    .chip-quiet,
+    .seg-item,
+    .source-row {
+      min-height: 2.75rem;
+    }
+    .btn-icon,
+    .btn-icon.btn-sm {
+      min-width: 2.75rem;
+    }
+  }
+}

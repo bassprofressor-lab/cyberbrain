@@ -132,6 +132,8 @@ export const en = {
   error: {
     http: (status: string | number, exit: number) => `http ${status} · exit ${exit}`,
     details: "Technical details",
+    toList: "To the list",
+    searchFor: "Search for it",
     friendly: {
       unreachable: "The page cannot reach cyberbrain. Is it still running?",
       "bad-request": "That request was not accepted.",
@@ -425,6 +427,7 @@ export const en = {
     kindAria: "Kind",
     anyKind: "any kind",
     listAria: "Notes",
+    toList: "All notes",
     noMatch: "no notes match",
     count: (n: number) => `${n} note${n === 1 ? "" : "s"}`,
     selectTitle: "Select a note.",
@@ -867,6 +870,7 @@ export const en = {
     trouble: "Something needs attention.",
     unknown: "The state could not be checked.",
     details: "Technical details",
+    checkSkipped: "Some checks did not run, so the answer may be incomplete. Details are in the full view.",
   },
   simpleNotes: {
     backToQuestion: "Your question",

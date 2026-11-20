@@ -137,6 +137,13 @@ export function filterFromRoute(route: Route, typed: string): string {
   return typed;
 }
 
+/** What the question box holds after the address changed: an address with `q` wins (Back,
+ * Forward, a shared link), one without it leaves what the person typed alone. */
+export function queryFromRoute(route: Route, typed: string): string {
+  if (route.screen === "search" && route.query.has("q")) return route.query.get("q") ?? "";
+  return typed;
+}
+
 export function navigate(to: string, replace = false) {
   if (replace) history.replaceState(null, "", to);
   else location.hash = to.startsWith("#") ? to.slice(1) : to;

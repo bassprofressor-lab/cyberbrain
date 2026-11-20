@@ -143,7 +143,7 @@ function SimpleNoteView({ name, block }: { name: string; block: string | null })
         <button className="btn btn-ghost btn-sm self-start -ml-2.5" onClick={() => (fromQuestion ? history.back() : navigate(href("notes")))}>
           <Icon name="chevron" size={16} className="rotate-90" /> {fromQuestion ? t.simpleNotes.backToQuestion : t.simpleNotes.title}
         </button>
-        {note.error ? <ErrorBanner error={note.error} /> : null}
+        {note.error ? <ErrorBanner error={note.error} searchFor={name} /> : null}
         {note.loading && !d ? <Loading /> : null}
         {d ? (
           <>
