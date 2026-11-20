@@ -190,6 +190,28 @@ fn answer_of(v: &Value) -> Answer {
     }
 }
 
+/// The AgentGuard key travels in a header, and over plain http anything on the path reads it
+/// (S10, review 2026-11-10/19: a store's configuration could point the hook at a LAN address
+/// over http and the bearer and `tool_input` went there). Plain http only to this machine.
+fn bearer_may_go_to(endpoint: &str) -> Result<()> {
+    let dest = cyberbrain_policy::egress::Destination::parse(endpoint)?;
+    if dest.scheme == "https" {
+        return Ok(());
+    }
+    let loopback = dest.host == "localhost"
+        || dest
+            .host
+            .parse::<std::net::IpAddr>()
+            .is_ok_and(|ip| ip.is_loopback());
+    if loopback {
+        return Ok(());
+    }
+    Err(Error::Config(format!(
+        "governance: the key is sent over https or to this machine only, not over {} to {}",
+        dest.scheme, dest.host
+    )))
+}
+
 fn ask(
     egress: &Egress,
     cfg: &GovernanceConfig,
@@ -200,6 +222,7 @@ fn ask(
     actor: &Actor,
 ) -> Result<Answer> {
     let endpoint = format!("{}/v1/tool-calls", url.trim_end_matches('/'));
+    bearer_may_go_to(&endpoint)?;
     let ticket = egress.open(actor, EgressPurpose::Governance, &endpoint)?;
     let body = json!({
         "tenant_id": cfg.tenant,
@@ -735,5 +758,25 @@ mod tests {
             shadow_line("Write", &a),
             "governance (shadow): Write would be ask (file_write)"
         );
+    }
+
+    #[test]
+    fn the_key_goes_over_https_or_to_this_machine_only() {
+        for ok in [
+            "https://agentguard.example/v1/tool-calls",
+            "https://10.0.0.5/v1/tool-calls",
+            "http://127.0.0.1:18095/v1/tool-calls",
+            "http://localhost:18095/v1/tool-calls",
+            "http://[::1]:18095/v1/tool-calls",
+        ] {
+            assert!(bearer_may_go_to(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "http://192.168.1.20:18095/v1/tool-calls",
+            "http://169.254.169.254/v1/tool-calls",
+            "http://agentguard.example/v1/tool-calls",
+        ] {
+            assert!(bearer_may_go_to(bad).is_err(), "{bad}");
+        }
     }
 }

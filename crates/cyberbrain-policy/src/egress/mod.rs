@@ -542,12 +542,13 @@ fn describe(purpose: EgressPurpose, cfg: &PolicyConfig) -> EgressEntry {
 }
 
 /// Where an address sits on the network. Matches SPEC §12.1's definition of "private":
-/// loopback, RFC 1918, RFC 4193 unique-local, link-local. `100.64.0.0/10` is its own class.
+/// loopback, RFC 1918, RFC 4193 unique-local. Link-local counts as public since S10
+/// (2026-11-20): it is where cloud metadata answers. `100.64.0.0/10` is its own class.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Locality {
     Loopback,
-    /// RFC 1918, RFC 4193 unique-local, link-local (v4 and v6).
+    /// RFC 1918, RFC 4193 unique-local.
     Private,
     /// RFC 6598 shared address space, `100.64.0.0/10`: carrier-grade NAT, but also what
     /// Tailscale-style overlays hand out. Needs `allow_overlay_network`.
@@ -571,7 +572,12 @@ fn locality_v4(v4: Ipv4Addr) -> Locality {
         Locality::NotUnicast
     } else if v4.is_loopback() {
         Locality::Loopback
-    } else if v4.is_private() || v4.is_link_local() {
+    } else if v4.is_link_local() {
+        // S10: link-local is where a cloud's metadata service answers (169.254.169.254). No
+        // inference server lives there by accident, so it needs the same explicit grant as a
+        // public address instead of passing as "private".
+        Locality::Public
+    } else if v4.is_private() {
         Locality::Private
     } else if a == 100 && (64..=127).contains(&b) {
         Locality::Overlay
@@ -598,7 +604,9 @@ fn locality_v6(v6: Ipv6Addr) -> Locality {
         Locality::NotUnicast
     } else if v6.is_loopback() {
         Locality::Loopback
-    } else if v6.is_unique_local() || v6.is_unicast_link_local() {
+    } else if v6.is_unicast_link_local() {
+        Locality::Public
+    } else if v6.is_unique_local() {
         Locality::Private
     } else {
         Locality::Public
@@ -1801,9 +1809,14 @@ mod tests {
         assert_eq!(l("172.16.0.1"), Locality::Private);
         assert_eq!(l("172.32.0.1"), Locality::Public);
         assert_eq!(l("192.168.0.1"), Locality::Private);
-        assert_eq!(l("169.254.1.1"), Locality::Private);
+        assert_eq!(
+            l("169.254.1.1"),
+            Locality::Public,
+            "link-local needs a grant (S10)"
+        );
+        assert_eq!(l("169.254.169.254"), Locality::Public);
         assert_eq!(l("fd12::1"), Locality::Private);
-        assert_eq!(l("fe80::1"), Locality::Private);
+        assert_eq!(l("fe80::1"), Locality::Public);
         assert_eq!(
             l("100.64.0.1"),
             Locality::Overlay,
