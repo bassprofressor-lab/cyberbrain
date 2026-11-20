@@ -915,6 +915,107 @@ impl From<cyberbrain_code::FindResult> for FindReport {
 // ---------------------------------------------------------------------------------------
 // Lazy pieces
 
+/// The vectors of the last queries, in front of an embedder that answers over the network
+/// (M4, review 2026-11-19: hybrid recall at the production store took 0.1 to 2.4 s, and the
+/// contradiction check once ran out of its budget waiting for Ollama). In the resident daemon
+/// this outlives one call, so a question asked again, by the hook and then by the agent, is
+/// embedded once. Passages are not cached: they are embedded once per change anyway.
+pub(crate) struct QueryCache<E> {
+    inner: E,
+    recent: Mutex<std::collections::VecDeque<(String, Vec<f32>)>>,
+}
+
+/// Queries remembered. A vector of 1024 floats is 4 KiB; this is a quarter of a megabyte.
+const QUERY_CACHE: usize = 64;
+
+impl<E> QueryCache<E> {
+    pub(crate) fn new(inner: E) -> Self {
+        Self {
+            inner,
+            recent: Mutex::new(std::collections::VecDeque::new()),
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &E {
+        &self.inner
+    }
+}
+
+impl<E: cyberbrain_core::Embedder> cyberbrain_core::Embedder for QueryCache<E> {
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+
+    fn profile_id(&self) -> &str {
+        self.inner.profile_id()
+    }
+
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed(texts)
+    }
+
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        if let Ok(recent) = self.recent.lock()
+            && let Some((_, v)) = recent.iter().find(|(q, _)| q == query)
+        {
+            return Ok(v.clone());
+        }
+        // Not under the lock: the call can take seconds, and other queries need not wait.
+        let v = self.inner.embed_query(query)?;
+        if let Ok(mut recent) = self.recent.lock() {
+            recent.retain(|(q, _)| q != query);
+            if recent.len() >= QUERY_CACHE {
+                recent.pop_front();
+            }
+            recent.push_back((query.to_string(), v.clone()));
+        }
+        Ok(v)
+    }
+}
+
+#[cfg(test)]
+mod query_cache_tests {
+    use super::*;
+    use cyberbrain_core::Embedder;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    struct Counting(AtomicUsize);
+
+    impl Embedder for Counting {
+        fn dim(&self) -> usize {
+            2
+        }
+        fn profile_id(&self) -> &str {
+            "counting"
+        }
+        fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(texts.iter().map(|t| vec![t.len() as f32, 1.0]).collect())
+        }
+    }
+
+    #[test]
+    fn a_query_asked_again_is_embedded_once() {
+        let c = QueryCache::new(Counting(AtomicUsize::new(0)));
+        let a = c.embed_query("skonto").unwrap();
+        let b = c.embed_query("skonto").unwrap();
+        assert_eq!(a, b);
+        assert_eq!(c.inner().0.load(Ordering::SeqCst), 1);
+        c.embed_query("frist").unwrap();
+        assert_eq!(c.inner().0.load(Ordering::SeqCst), 2);
+        for i in 0..QUERY_CACHE {
+            c.embed_query(&format!("q{i}")).unwrap();
+        }
+        let before = c.inner().0.load(Ordering::SeqCst);
+        c.embed_query("skonto").unwrap();
+        assert_eq!(
+            c.inner().0.load(Ordering::SeqCst),
+            before + 1,
+            "bounded: the oldest went"
+        );
+    }
+}
+
 #[derive(Clone)]
 enum EmbedderState {
     Loaded {
@@ -925,7 +1026,7 @@ enum EmbedderState {
     /// `backend = "ollama"`: vectors from a local Ollama. Constructed without a request;
     /// reachability and the digest are checked by the first call that embeds.
     Remote {
-        embedder: Arc<OllamaEmbedder>,
+        embedder: Arc<QueryCache<OllamaEmbedder>>,
     },
     Absent {
         reason: String,
@@ -1507,7 +1608,7 @@ impl App {
             let audit: Arc<dyn cyberbrain_llm::AuditSink> = Arc::new(self.policy.audit().clone());
             return match OllamaEmbedder::new(cfg, audit, self.gate.clone()) {
                 Ok(e) => EmbedderState::Remote {
-                    embedder: Arc::new(e),
+                    embedder: Arc::new(QueryCache::new(e)),
                 },
                 Err(e) => EmbedderState::Absent {
                     reason: e.to_string(),
@@ -6177,7 +6278,7 @@ impl ModelInventory for App {
             cards.push(c);
         }
         if let EmbedderState::Remote { embedder } = self.embedder() {
-            let cfg = embedder.config();
+            let cfg = embedder.inner().config();
             let mut c = ModelCard::new(
                 ModelRole::Embedding,
                 cfg.model.clone(),
