@@ -326,6 +326,10 @@ pub enum Command {
         /// Sign that report with the store's audit key (`policy audit-key --init`).
         #[arg(long, requires = "report")]
         sign: bool,
+        /// At a terminal, do not ask to type the name first. Scripts and pipes are never
+        /// asked.
+        #[arg(long)]
+        yes: bool,
     },
 
     /// Write the `manifest.json` that a model artefact needs, from the files themselves.

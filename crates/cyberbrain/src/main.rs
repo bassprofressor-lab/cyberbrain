@@ -132,6 +132,25 @@ fn write_exit(o: &WriteOutcome) -> Result<i32> {
     }
 }
 
+/// Ask for the note's name before an erasure at a terminal (F10). True when it was typed.
+fn confirm_forget(
+    input: &mut dyn std::io::BufRead,
+    out: &mut dyn std::io::Write,
+    shown: &str,
+    name: &str,
+) -> bool {
+    let _ = write!(
+        out,
+        "Forget {shown} for good? This cannot be undone.\nType the name to confirm: "
+    );
+    let _ = out.flush();
+    let mut line = String::new();
+    if input.read_line(&mut line).is_err() {
+        return false;
+    }
+    line.trim() == name
+}
+
 /// The hub credential for `--as` (N10, review 2026-11-19). `--as -` reads it from the first
 /// line of stdin; given literally on the command line it works as before but says that it is
 /// readable in the process list and the shell history. `CYBERBRAIN_HUB_PRINCIPAL_TOKEN` is
@@ -1176,7 +1195,35 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
             dry_run,
             report,
             sign,
+            yes,
         } => {
+            // F10 (review 2026-11-19): at a terminal a typo erased for good. There the name is
+            // typed once more; a script or a pipe is not asked, and `--yes` skips it.
+            if !dry_run && !yes {
+                use std::io::IsTerminal;
+                if std::io::stdin().is_terminal() && std::io::stderr().is_terminal() {
+                    let shown = app
+                        .store()
+                        .read(&target)
+                        .map(|n| format!("{} (ring {})", n.front.name, n.front.ring.as_u8()))
+                        .unwrap_or_else(|_| target.clone());
+                    let expect = app
+                        .store()
+                        .read(&target)
+                        .map(|n| n.front.name)
+                        .unwrap_or_else(|_| target.clone());
+                    if !confirm_forget(
+                        &mut std::io::stdin().lock(),
+                        &mut std::io::stderr().lock(),
+                        &shown,
+                        &expect,
+                    ) {
+                        return Err(Error::Config(
+                            "not forgotten: the name typed was not the note's name".into(),
+                        ));
+                    }
+                }
+            }
             // Before the erasure, so a missing key stops it rather than leaving an erasure
             // without the signed report that was asked for.
             if sign && app.policy_audit_key_missing() {
@@ -3572,5 +3619,37 @@ mod credential_tests {
         let mut empty = std::io::Cursor::new(Vec::new());
         assert!(credential_from(Some("-"), &[], &mut empty).is_err());
         assert_eq!(credential_from(None, &[], &mut empty).unwrap(), None);
+    }
+}
+
+#[cfg(test)]
+mod forget_confirm_tests {
+    use super::confirm_forget;
+
+    #[test]
+    fn forget_at_a_terminal_wants_the_name_typed() {
+        let mut out = Vec::new();
+        let mut yes = std::io::Cursor::new(b"kunde-x\n".to_vec());
+        assert!(confirm_forget(
+            &mut yes,
+            &mut out,
+            "kunde-x (ring 2)",
+            "kunde-x"
+        ));
+        let mut typo = std::io::Cursor::new(b"kunde-y\n".to_vec());
+        assert!(!confirm_forget(
+            &mut typo,
+            &mut out,
+            "kunde-x (ring 2)",
+            "kunde-x"
+        ));
+        let mut nothing = std::io::Cursor::new(Vec::new());
+        assert!(!confirm_forget(
+            &mut nothing,
+            &mut out,
+            "kunde-x (ring 2)",
+            "kunde-x"
+        ));
+        assert!(String::from_utf8_lossy(&out).contains("Type the name"));
     }
 }
