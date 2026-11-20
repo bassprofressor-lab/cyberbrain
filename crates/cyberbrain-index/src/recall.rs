@@ -406,7 +406,6 @@ impl Index {
         // holds the index still between then and now: a note another process moved into a
         // foreign bereich in the meantime would otherwise be handed out on the strength of
         // where it used to be. A candidate the filter now rejects is left out quietly.
-        let filtered = opts.bereich.is_some() || opts.scope.is_some();
         let mut sql = String::from(
             "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags, b.locator, n.bereich FROM blocks b \
              JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
@@ -438,7 +437,11 @@ impl Index {
             });
             let (id, name, ring, text, updated, tags, locator, bereich) = match row {
                 Ok(row) => row,
-                Err(rusqlite::Error::QueryReturnedNoRows) if filtered => continue,
+                // Filtered out, or gone: a writer in another process replaced or erased the
+                // note between the search and this read. Its other version is either found by
+                // the search as well or does not exist; failing the whole recall for it, as
+                // this did ("hit vanished during recall"), answered nothing at all (K12).
+                Err(rusqlite::Error::QueryReturnedNoRows) => continue,
                 Err(e) => {
                     return Err(Error::Index(format!(
                         "hit {cit} vanished during recall: {e}"
