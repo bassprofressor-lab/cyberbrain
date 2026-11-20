@@ -332,12 +332,13 @@ fn terminal_address_dir() -> Result<PathBuf> {
         std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("cyberbrain"))
     } else {
         std::env::var_os("XDG_RUNTIME_DIR")
-            .filter(|d| !d.is_empty())
-            .map(|d| PathBuf::from(d).join("cyberbrain"))
+            .map(PathBuf::from)
+            .filter(|d| d.is_absolute())
+            .map(|d| d.join("cyberbrain"))
             .or_else(|| {
                 std::env::var_os("XDG_STATE_HOME")
-                    .filter(|d| !d.is_empty())
                     .map(PathBuf::from)
+                    .filter(|d| d.is_absolute())
                     .or_else(|| {
                         std::env::var_os("HOME")
                             .map(|h| PathBuf::from(h).join(".local").join("state"))
