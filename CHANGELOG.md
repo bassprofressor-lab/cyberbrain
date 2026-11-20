@@ -22,7 +22,29 @@ Open findings of the review of 2026-11-19 (and 2026-11-10), second round.
 - **With `serve --terminal`** (the desktop application always starts it so) accepting or
   rejecting a proposal, resolving a PII hold and `POST /command` need the session token
   header the page already sends. Scripts calling those routes on a desktop window are
-  refused; `serve` without `--terminal` is unchanged.
+  refused.
+- **`serve` without `--terminal` no longer takes the operator's decisions**: accepting or
+  rejecting a proposal, marking a PII hold as reviewed and `POST /command` answer 403 with a
+  German message naming the way (`serve --terminal`, the desktop launcher, or
+  `cyberbrain review` at a terminal). Redacting, flagging or discarding a hold still works.
+- **The terminal address is no longer printed.** `serve --terminal` writes it to a file only
+  this account can read (`$XDG_RUNTIME_DIR/cyberbrain/serve/`, otherwise
+  `~/.local/state/cyberbrain/serve/`, `%LOCALAPPDATA%\cyberbrain\serve\` on Windows) and
+  prints `cyberbrain serve: terminal address in <path>`. The desktop launcher reads and
+  removes the file and still understands an older `serve`; scripts that took the address
+  from stdout have to read the file.
+- **`audit.db`, `search-audit.db` and `cyberbrain.toml` are 0600.** New stores create them
+  so; an existing store's files are pulled to 0600 the next time it is opened, if they
+  belong to whoever opens it. A store shared between accounts through group permissions
+  loses that for these files.
+- **Hub: an editor's bereich takes a countersignature**, like a grant: the page or
+  `hub principal assign` writes it down, a countersigner signs it on `/requests` or with
+  `hub principal approve --principal … --bereich … --as …`. Assignments from before the
+  upgrade arrive unsigned; the editor sees that bereich again once it is signed.
+- **Hub purges count a row's age from when the hub received it**, not from the device's
+  clock.
+- **Hub erasures stay in their bereich**: the hub refuses one for a name the bereich does not
+  hold, and `hub pull --apply-erasures` removes only a note of the marker's bereich.
 - **Link-local addresses** (169.254.0.0/16, fe80::/10) need the same waiver as a public
   endpoint. The AgentGuard key goes over plain http only to this machine.
 - **`forget` at a terminal** asks for the note's name; `--yes` skips it, scripts and pipes
@@ -45,10 +67,14 @@ Open findings of the review of 2026-11-19 (and 2026-11-10), second round.
 - `hub … --as -` reads the credential from stdin; given on the command line it warns.
 - `serve`: at most four commands at once per window, at most 256 waiting PII holds.
 - CI and release build `--locked`; the hub test licence reaches only the step that uses it;
-  Dependabot also watches cargo and npm.
+  Dependabot also watches cargo and npm. Runner images (`ubuntu-24.04`, `windows-2025`,
+  `macos-26`), `choco install nsis` (3.13.0), the pip packages and the bare Debian image (by
+  digest) are pinned.
 
 ### Fixed
 
+- A hub erasure kept here on purpose (ring 0 or 1, another bereich) no longer holds the pull
+  cursor back, so the same marker is not fetched on every pull.
 - `policy subject` also searches note names and heads (tags, bereich) and waiting
   proposals (`file_hits`).
 - `status` counts the files `scan` skips as unreadable.
