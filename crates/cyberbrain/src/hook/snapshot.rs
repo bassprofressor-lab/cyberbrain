@@ -109,7 +109,10 @@ pub(super) fn run(
         .iter()
         .map(|m| (m.role.clone(), clean(&m.text)))
         .collect();
-    let citations = citations_newest_first(cleaned.iter().map(|(_, t)| t.as_str()));
+    let citations = known_citations(
+        app,
+        citations_newest_first(cleaned.iter().map(|(_, t)| t.as_str())),
+    );
     let open = open_points(app);
 
     let snapshot = keep(app, payload, &messages, &cleaned, &citations, now, out);
@@ -120,6 +123,20 @@ pub(super) fn run(
     })
     .to_string();
     Ok(())
+}
+
+/// Only citations this store resolves (N8, review 2026-11-19): an `r0-aaaaaaaaaaaa` typed
+/// into the conversation was handed to the summariser as "keep exactly as written", and an
+/// invented ring 0 citation survived the compaction looking like a rule.
+fn known_citations(app: &App, found: Vec<String>) -> Vec<String> {
+    found
+        .into_iter()
+        .filter(|c| {
+            c.parse::<cyberbrain_core::Citation>()
+                .ok()
+                .is_some_and(|cit| app.expand_citation(&cit).is_ok())
+        })
+        .collect()
 }
 
 /// The line `session-start` adds after a compaction this mod saw.

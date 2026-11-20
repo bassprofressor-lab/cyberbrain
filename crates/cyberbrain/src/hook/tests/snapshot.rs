@@ -3,8 +3,21 @@
 
 use super::*;
 
-const CITED: &str = "r2-a91f2c33e1bd";
-const CITED_LATER: &str = "r0-0123456789ab";
+/// N8: only citations the store resolves are kept. This one does not exist.
+const INVENTED: &str = "r0-aaaaaaaaaaaa";
+
+/// Two real citations, of a ring 2 and a ring 0 note: `(cited, cited_later)`.
+fn cited(f: &Fixture) -> (String, String) {
+    f.write(
+        Ring::Knowledge,
+        "session-cookie",
+        "The session cookie is the cause.",
+    );
+    f.write(Ring::Invariant, "never-skip-tests", "Never skip the tests.");
+    let app = f.open();
+    let first = |name: &str| app.export(name).unwrap().blocks[0].clone();
+    (first("session-cookie"), first("never-skip-tests"))
+}
 
 fn snapshot_payload(f: &Fixture, messages: serde_json::Value) -> String {
     f.payload(serde_json::json!({
@@ -27,14 +40,15 @@ fn answer(out: &HookOutput) -> serde_json::Value {
     serde_json::from_str(&out.stdout).unwrap_or_else(|e| panic!("{e}: {:?}", out.stdout))
 }
 
-fn conversation() -> serde_json::Value {
+fn conversation(f: &Fixture) -> serde_json::Value {
+    let (cited, cited_later) = cited(f);
     serde_json::json!([
         { "role": "user", "text": "Fix the login bug in auth.rs", "tools": [] },
-        { "role": "assistant", "text": format!("Per [{CITED}] the session cookie is the cause."),
+        { "role": "assistant", "text": format!("Per [{cited}] the session cookie is the cause, not {INVENTED}."),
           "tools": ["Read", "Edit"] },
         { "role": "user", "text": "",
           "toolResults": [{ "tool_use_id": "t1", "text": "SECRET TOOL OUTPUT", "isError": false }] },
-        { "role": "assistant", "text": format!("Done; see {CITED_LATER}."),
+        { "role": "assistant", "text": format!("Done; see {cited_later}."),
           "toolUses": [{ "tool": "Bash", "tool_use_id": "t2", "input": { "command": "cargo test" } }] },
     ])
 }
@@ -49,15 +63,17 @@ fn the_snapshot_lands_in_ring_3_and_its_citations_steer_the_summary() {
     );
     session_start(&f, "startup");
 
-    let out = snapshot(&f, conversation());
+    let out = snapshot(&f, conversation(&f));
     assert_eq!(out.exit_code, 0);
     let v = answer(&out);
     let instructions = v["instructions"].as_str().unwrap();
+    let (cited, cited_later) = cited(&f);
     // Most recently cited first, both kept verbatim.
     let (a, b) = (
-        instructions.find(CITED_LATER).unwrap(),
-        instructions.find(CITED).unwrap(),
+        instructions.find(&cited_later).unwrap(),
+        instructions.find(&cited).unwrap(),
     );
+    assert!(!instructions.contains(INVENTED), "N8: {instructions}");
     assert!(a < b, "{instructions}");
     assert!(
         instructions.contains("migrate the session table"),
@@ -74,7 +90,7 @@ fn the_snapshot_lands_in_ring_3_and_its_citations_steer_the_summary() {
     assert_eq!(note.front.kind, NoteKind::Session);
     assert_eq!(note.front.retention.as_deref(), Some("P30D"));
     assert!(note.body.contains("Fix the login bug"), "{}", note.body);
-    assert!(note.body.contains(CITED), "{}", note.body);
+    assert!(note.body.contains(&cited), "{}", note.body);
     assert!(note.body.contains("Bash"), "{}", note.body);
     // Tool names only: no output, no input.
     assert!(!note.body.contains("SECRET TOOL OUTPUT"), "{}", note.body);
@@ -144,7 +160,7 @@ fn reminders_stay_out_and_the_size_is_bounded() {
 fn session_start_after_the_compaction_points_to_the_snapshot() {
     let f = fixture();
     session_start(&f, "startup");
-    let v = answer(&snapshot(&f, conversation()));
+    let v = answer(&snapshot(&f, conversation(&f)));
     let citation = v["snapshot"]["citation"].as_str().unwrap().to_string();
     let app = f.open();
     run(
@@ -171,8 +187,8 @@ fn a_second_snapshot_for_the_same_compaction_replaces_the_first() {
     // `precompute` runs ahead of the real compaction, which then runs the hook again.
     let f = fixture();
     session_start(&f, "startup");
-    let first = answer(&snapshot(&f, conversation()));
-    let second = answer(&snapshot(&f, conversation()));
+    let first = answer(&snapshot(&f, conversation(&f)));
+    let second = answer(&snapshot(&f, conversation(&f)));
     assert_eq!(first["snapshot"]["name"], second["snapshot"]["name"]);
 }
 
@@ -183,11 +199,11 @@ fn a_store_that_cannot_take_the_note_still_gets_instructions_and_exit_0() {
     let r3 = f.store.join("notes").join("r3");
     let _ = std::fs::remove_dir_all(&r3);
     std::fs::write(&r3, "not a directory").unwrap();
-    let out = snapshot(&f, conversation());
+    let out = snapshot(&f, conversation(&f));
     assert_eq!(out.exit_code, 0);
     let v = answer(&out);
     assert!(v["snapshot"].is_null(), "{v}");
-    assert!(v["instructions"].as_str().unwrap().contains(CITED));
+    assert!(v["instructions"].as_str().unwrap().contains(&cited(&f).0));
     assert!(out.stderr.contains("snapshot"), "{}", out.stderr);
 }
 
@@ -201,12 +217,12 @@ fn a_subagent_transcript_is_not_kept_and_a_bad_payload_answers_nothing() {
         &f.payload(serde_json::json!({
             "hook_event_name": "PreCompact",
             "agent_id": "a1",
-            "messages": conversation(),
+            "messages": conversation(&f),
         })),
     );
     let v = answer(&out);
     assert!(v["snapshot"].is_null(), "{v}");
-    assert!(v["instructions"].as_str().unwrap().contains(CITED));
+    assert!(v["instructions"].as_str().unwrap().contains(&cited(&f).0));
 
     for bad in ["", "not json", "[]", r#"{"messages": 7}"#] {
         let out = run(Some(&app), HookEvent::PreCompactSnapshot, bad);
@@ -216,7 +232,7 @@ fn a_subagent_transcript_is_not_kept_and_a_bad_payload_answers_nothing() {
     let out = run(
         None,
         HookEvent::PreCompactSnapshot,
-        &snapshot_payload(&f, conversation()),
+        &snapshot_payload(&f, conversation(&f)),
     );
     assert_eq!(out.exit_code, 0);
     assert!(out.stdout.is_empty(), "{}", out.stdout);

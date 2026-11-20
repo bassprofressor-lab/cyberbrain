@@ -2575,7 +2575,7 @@ impl App {
         out
     }
 
-    fn expand_citation(&self, cit: &Citation) -> Result<Expanded> {
+    pub(crate) fn expand_citation(&self, cit: &Citation) -> Result<Expanded> {
         let (block, rec) = lock_index(&self.index)?.resolve(cit)?.ok_or_else(|| {
             Error::NoSuchNote(format!(
                 "citation {cit} (not in the index; run `cyberbrain scan` if the note exists)"
