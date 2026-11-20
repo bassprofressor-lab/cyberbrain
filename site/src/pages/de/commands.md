@@ -243,7 +243,7 @@ Von Haus aus Port 7777. Siehe [Weboberfläche und HTTP-API](../serve/).
 
 ### verify-export
 
-`cyberbrain verify-export <PFAD> [--expect-key <FINGERABDRUCK>]` prüft ein Audit-Bündel oder einen Löschbericht. Braucht keinen Store, keine Einstellungen und kein Netz. Endet nicht mit 0, wenn die Kette nicht hält.
+`cyberbrain verify-export <PFAD> [--expect-key <FINGERABDRUCK>]` prüft ein Audit-Bündel oder einen Löschbericht. Braucht keinen Store, keine Einstellungen und kein Netz. Endet nur dann mit `0`, wenn die Datei hält und mit dem Schlüssel signiert ist, den `--expect-key` nennt; mit `4`, wenn sie hält, aber gegen keinen Schlüssel geprüft wurde (in sich stimmig, aber kein Nachweis: wer das Protokoll schreiben kann, kann es umschreiben und neu hashen); mit `1` oder `2`, wenn sie nicht hält.
 
 ### canary
 

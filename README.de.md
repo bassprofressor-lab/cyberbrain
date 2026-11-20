@@ -33,24 +33,12 @@ steht an einer Stelle, die du dir ausdrucken lassen kannst.
 <sub>Die Weboberfläche, die in der Binärdatei steckt. Die Screenshots stammen aus einem
 Demo-Store, die Notizen darin sind erfunden.</sub>
 
-## Neu in 0.8
+## Neu
 
-- **Sprache zu Text, lokal.** `cyberbrain transcribe <datei>` macht aus einer Sprachnotiz
-  oder einer Besprechung eine Notiz, über einen whisper.cpp-Server auf deinem eigenen
-  Rechner, und die Seite bekommt einen Mikrofon-Knopf zum Diktieren.
-  [Mehr dazu unten](#sprache-zu-text).
-- **Ein signiertes Audit-Log.** `policy audit-key --init` gibt einem Store einen
-  Ed25519-Schlüssel; jede neue Zeile wird signiert, und `verify-export` prüft ein
-  exportiertes Bündel gegen den Fingerabdruck, den der Empfänger bekommen hat.
-- **Köder.** `cyberbrain canary plant` legt ein Zugangsdatum, das niemand benutzt, in eine
-  Notiz. Jede Verwendung außerhalb dieser Notiz wird abgewiesen und als `canary.hit`
-  festgehalten.
-- **Tokens mit Ablaufdatum**, für MCP-Clients, Zugänge zur Zentraleinheit und Gerätetokens.
-- **Ein neues Gesicht.** Eine Weboberfläche im Stil von Windows 11, ein Neon-Gehirn als
-  Symbol, und Starter und Installationsprogramm sprechen auf einem deutschen Windows Deutsch.
-- Viele Korrekturen beim Abgleich, im Governance-Notbetrieb, beim Schwärzen von PII und bei
-  Dateirechten: [CHANGELOG](CHANGELOG.md#080--2026-10-27), samt dem, worauf man beim
-  Aktualisieren achten muss.
+Was in welcher Version dazukam, steht im [CHANGELOG](CHANGELOG.md). Die letzten Schritte:
+Anker an Code und ein menschlicher Prüfvermerk für Notizen (0.10.5), ein Snapshot der
+Sitzung vor der Kompaktierung (0.10.5), und mit der nächsten Version ein Audit-Log, das ein
+neuer Store von der ersten Zeile an signiert, samt Kopf-Anker außerhalb des Stores.
 
 ## Auf einen Blick
 
@@ -160,7 +148,7 @@ Vier Wege hinein, alle aus derselben Binärdatei:
 | | |
 |---|---|
 | `cyberbrain <befehl>` | alles ist von der Kommandozeile aus erreichbar, überall mit `--json` |
-| `cyberbrain hook <ereignis>` | sechs Lebenszyklus-Ereignisse des Agenten; an einem Store mit 1.300 Notizen und 105.000 Audit-Zeilen ein p99 von 7 bis 9 ms inklusive Prozessstart, bei einem Budget von 15 ms (`session-start`, der die Ringe 0 und 1 übergibt: 17 ms bei 150 ms) |
+| `cyberbrain hook <ereignis>` | sieben Lebenszyklus-Ereignisse des Agenten; an einem Store mit 1.300 Notizen und 105.000 Audit-Zeilen ein p99 von 7 bis 9 ms inklusive Prozessstart, bei einem Budget von 15 ms (`session-start`, der die Ringe 0 und 1 übergibt: 17 ms bei 150 ms) |
 | `cyberbrain mcp` | Model Context Protocol über stdio, für jeden Client, der es spricht |
 | `cyberbrain serve` | Weboberfläche und HTTP-API, auf Loopback, ohne Anmeldung, weil nichts davon den Rechner verlässt; unter Linux kommt nur das eigene Konto (und root) hinein |
 
@@ -479,7 +467,7 @@ Gedächtnis-Werkzeug; §0 von [`docs/SPEC.md`](docs/SPEC.md) hält die Grenze fe
 gebaut wurde, und die Commit-Historie belegt das Entscheidung für Entscheidung.
 
 <details>
-<summary>Die sieben Pakete</summary>
+<summary>Die acht Pakete</summary>
 
 <br>
 
@@ -492,6 +480,7 @@ gebaut wurde, und die Commit-Historie belegt das Entscheidung für Entscheidung.
 | [`cyberbrain-code`](https://crates.io/crates/cyberbrain-code) | der Code-Index hinter `cyberbrain find` |
 | [`cyberbrain-llm`](https://crates.io/crates/cyberbrain-llm) | der optionale OpenAI-kompatible Client |
 | [`cyberbrain-policy`](https://crates.io/crates/cyberbrain-policy) | Ausgangsregister, Audit-Kette, PII-Gate, Profile, Pflichtenkatalog |
+| [`cyberbrain-documents`](https://crates.io/crates/cyberbrain-documents) | PDFs und Scans als Notizen mit Seitenangabe (PDFium, PP-OCRv6); Feature `documents`, [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) |
 
 </details>
 

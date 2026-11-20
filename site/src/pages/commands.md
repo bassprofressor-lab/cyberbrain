@@ -242,7 +242,7 @@ Default port 7777. See [Web page and HTTP API](../serve/).
 
 ### verify-export
 
-`cyberbrain verify-export <PATH> [--expect-key <FINGERPRINT>]` checks an audit bundle or an erasure report. Needs no store, no configuration and no network. Exits non-zero when the chain does not hold.
+`cyberbrain verify-export <PATH> [--expect-key <FINGERPRINT>]` checks an audit bundle or an erasure report. Needs no store, no configuration and no network. Exits `0` only when the file holds and is signed with the key `--expect-key` names; `4` when it holds but was not checked against a key (consistent, not evidence: whoever can write the log can rewrite and re-hash it); `1` or `2` when it does not hold.
 
 ### canary
 

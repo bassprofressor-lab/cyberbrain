@@ -33,21 +33,12 @@ can print.
 <sub>The web page that ships inside the binary, here in German; it speaks English as well.
 Screenshots are from a demo store, the notes in them are invented.</sub>
 
-## New in 0.8
+## New
 
-- **Speech to text, locally.** `cyberbrain transcribe <file>` turns a voice memo or a meeting
-  into a note through a whisper.cpp server on your own machine, and the page gets a
-  microphone button for dictation. [More below](#speech-to-text).
-- **A signed audit log.** `policy audit-key --init` gives a store an Ed25519 key; every new
-  row is signed, and `verify-export` checks an exported bundle against the fingerprint the
-  recipient was given.
-- **Decoys.** `cyberbrain canary plant` puts a credential nobody uses into a note. Any use of
-  it outside that note is refused and recorded as `canary.hit`.
-- **Tokens that expire**, for MCP clients, hub credentials and device tokens.
-- **A new look.** A Windows 11 style web page, a neon brain as the icon, and a launcher and
-  installer that speak German on a German Windows.
-- Many fixes in sync, the governance fallback, PII redaction and file permissions:
-  [CHANGELOG](CHANGELOG.md#080--2026-10-27), including what to watch for when upgrading.
+What arrived in which version is in the [CHANGELOG](CHANGELOG.md). The latest steps: anchors
+to code and a human sign-off for notes (0.10.5), a snapshot of the session before compaction
+(0.10.5), and with the next version an audit log that a new store signs from its first row,
+with a head anchor kept outside the store.
 
 ## At a glance
 
@@ -153,7 +144,7 @@ Four ways in, all from the same binary:
 | | |
 |---|---|
 | `cyberbrain <command>` | everything is reachable from the command line, `--json` on all of it |
-| `cyberbrain hook <event>` | six agent lifecycle events; on a store of 1,300 notes and 105,000 audit rows a p99 of 7 to 9 ms including process start, against a 15 ms budget (`session-start`, which hands over rings 0 and 1: 17 ms against 150 ms) |
+| `cyberbrain hook <event>` | seven agent lifecycle events; on a store of 1,300 notes and 105,000 audit rows a p99 of 7 to 9 ms including process start, against a 15 ms budget (`session-start`, which hands over rings 0 and 1: 17 ms against 150 ms) |
 | `cyberbrain mcp` | Model Context Protocol over stdio, for any client that speaks it |
 | `cyberbrain serve` | the web page and the HTTP API, on loopback, with no login because it never leaves the machine; on Linux only your own account (and root) can connect |
 

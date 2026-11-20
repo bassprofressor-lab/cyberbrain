@@ -19,8 +19,10 @@ last row: 0238e45f21154cbf53b852ae183efe8c2151f9b3a868571d9a9bb671c7e4eed4
 written:  2026-09-07T14:18:16Z by cyberbrain 0.2.1
 ```
 
-Exit code 0 when the chain holds, non-zero when it does not, and the message says which row
-failed and how.
+Without `--expect-key` that check ends with exit code 4 and a line `NOT EVIDENCE`: the file is
+consistent, but anybody who can write the log could have rewritten its rows and re-hashed them.
+Exit code 0 needs `--expect-key <fingerprint>` against a signed file (see *Signed exports*);
+1 or 2 when the chain does not hold, and the message says which row failed and how.
 
 ## Why a bundle and not just the rows
 
@@ -91,7 +93,8 @@ a reader that only knows version 1 keeps working.
 
 ## Signed exports
 
-With an audit key (`cyberbrain policy audit-key --init`), a bundle can be signed:
+A store made with `cyberbrain init` has an audit key from its first row (since 0.10.8; an older
+store gets one with `cyberbrain policy audit-key --init`), and a bundle can be signed:
 
 ```console
 $ cyberbrain policy audit --since 2026-01-01T00:00:00Z --export q1.jsonl --signed
