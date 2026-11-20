@@ -145,7 +145,9 @@ pub fn save(root: &Path, id: &str, state: &SessionState) -> Result<()> {
     let path = state_path(root, id);
     let text = serde_json::to_string_pretty(state)
         .map_err(|e| Error::Config(format!("session state does not serialise: {e}")))?;
-    std::fs::write(&path, text).map_err(|e| Error::Io { path, source: e })
+    // Atomic (K10, 2026-11-10): a half-written file reads as "no baseline", and the next
+    // session start injects rings 0 and 1 whole again.
+    cyberbrain_core::store::write_atomic(&path, text.as_bytes())
 }
 
 /// Remove state files older than [`STATE_MAX_AGE_DAYS`]. Returns how many were removed;

@@ -2073,3 +2073,29 @@ fn pre_tool_use_refuses_to_read_the_signing_key() {
             .is_empty()
     );
 }
+
+/// K9 (audits 2026-11-10 and 2026-11-19): when the `session.start` row could not be
+/// written, the finished ring 0/1 text was thrown away and the session started without its
+/// invariants. Calibrated against the broken state: stdout was empty.
+#[test]
+fn session_start_shows_the_rules_even_when_the_audit_log_fails() {
+    let f = fixture();
+    f.write(
+        Ring::Invariant,
+        "never-copy-config",
+        "Never copy config.py to S2.",
+    );
+    break_the_audit_log(&f);
+    let out = session_start(&f, "startup");
+    assert_eq!(out.exit_code, 0);
+    assert!(
+        out.stdout.contains("Never copy config.py"),
+        "{}",
+        out.stderr
+    );
+    assert!(
+        out.stdout.contains("could not be recorded"),
+        "{}",
+        out.stdout
+    );
+}

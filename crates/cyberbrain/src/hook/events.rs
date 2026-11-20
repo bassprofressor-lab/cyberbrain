@@ -258,7 +258,10 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput, part: Part) -> Result<()> 
     // The record: which invariants were shown to which session, when (§12.6 is the seam
     // AgentGuard reads). One row per injection, never per turn.
     let subject = format!("session:{}", id.as_deref().unwrap_or("unknown"));
-    ctx.app.policy().audit().record_raw(
+    // K9 (2026-11-10): a failed row or session state used to discard the finished ring 0/1
+    // text, and the session started without its invariants and with one stderr line. The
+    // rules are shown either way; what failed is said in the injected text itself.
+    let recorded = ctx.app.policy().audit().record_raw(
         &ctx.actor().to_string(),
         "session.start",
         subject,
@@ -272,10 +275,22 @@ fn session_start(ctx: &Ctx<'_>, out: &mut HookOutput, part: Part) -> Result<()> 
             "injection": state.as_ref().map(|s| s.injections),
             "handoff": handoff.as_ref().map(|h| format!("{}/{}", h.note.front.ring, h.note.front.name)),
         }),
-    )?;
+    );
+    if let Err(e) = recorded {
+        out.note(format!("session-start: the audit row was not written: {e}"));
+        out.stdout.push_str(&format!(
+            "\n\n(cyberbrain: this injection could not be recorded in the audit log: {e}. \
+             The rules above apply all the same; tell the operator.)\n"
+        ));
+    }
 
-    if let (Some(id), Some(s)) = (&id, &state) {
-        session::save(ctx.root(), id, s)?;
+    if let (Some(id), Some(s)) = (&id, &state)
+        && let Err(e) = session::save(ctx.root(), id, s)
+    {
+        out.note(format!(
+            "session-start: session state not saved ({e}); the next start injects the rings \
+             whole again"
+        ));
     }
     if source == "startup" {
         match session::sweep(ctx.root(), SystemTime::now()) {
