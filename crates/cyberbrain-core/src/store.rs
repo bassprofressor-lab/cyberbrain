@@ -693,6 +693,13 @@ where
 
     let attempt = (|| -> io::Result<()> {
         let mut f = File::create_new(&tmp)?;
+        // The replacement keeps the mode of what it replaces (S20): a configuration made
+        // 0600 came back 0644 from every rewrite. Unix only; elsewhere the mode is a
+        // read-only flag, and copying that would make the rename fail.
+        #[cfg(unix)]
+        if let Ok(m) = fs::metadata(path) {
+            f.set_permissions(m.permissions())?;
+        }
         fill(&mut f)?;
         f.sync_all()?;
         drop(f);
@@ -1204,6 +1211,23 @@ mod tests {
         write_atomic(&target, b"two").unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"two");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+    }
+
+    /// S20: replacing a file keeps its mode. `cyberbrain.toml` is made 0600 and rewritten by
+    /// `policy consent` and `hub enrol`; the replacement used to come out 0644 under the usual
+    /// umask, undoing the tightening at every change.
+    #[cfg(unix)]
+    #[test]
+    fn write_atomic_keeps_the_mode_of_what_it_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("cyberbrain.toml");
+        write_atomic(&target, b"one").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600)).unwrap();
+        write_atomic(&target, b"two").unwrap();
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
+        assert_eq!(fs::read(&target).unwrap(), b"two");
     }
 
     /// Regression: a reader racing a naive truncate-and-write observes empty or partial

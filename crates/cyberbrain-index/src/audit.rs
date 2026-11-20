@@ -124,6 +124,28 @@ impl std::fmt::Debug for AuditStore {
 impl AuditStore {
     /// Open or create the record at `path` and migrate it to the current schema.
     pub fn open(path: &Path) -> Result<Self> {
+        // A new record is this account's alone from its first byte (S20): SQLite creates the
+        // file 0644 under the usual umask, and gives its `-wal` and `-shm` the mode of the
+        // main file, so creating that one 0600 first is enough for all three.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)
+            {
+                Ok(_) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => {
+                    return Err(Error::Io {
+                        path: path.to_path_buf(),
+                        source: e,
+                    });
+                }
+            }
+        }
         let conn = Connection::open(path).map_err(|e| Error::Io {
             path: path.to_path_buf(),
             source: std::io::Error::other(e.to_string()),

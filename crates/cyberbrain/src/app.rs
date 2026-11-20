@@ -118,6 +118,42 @@ fn current_uid() -> Option<u32> {
     None
 }
 
+/// The files of a store that are nobody else's business: the record (who did what to which
+/// note, and the search log beside it, with what was asked) and the configuration. A store
+/// made since S20 (review 2026-11-10/19) creates them 0600; one made before has them 0644,
+/// and this pulls them to 0600 the next time it is opened — only files that belong to whoever
+/// opens it, so root opening somebody's store does not change what that person set, and only
+/// regular files, so a link is not followed somewhere else. Best effort: a file that cannot be
+/// changed stays as it was, and the store opens as before.
+#[cfg(unix)]
+fn tighten_private_files(root: &Path) {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    const PRIVATE_FILES: [&str; 7] = [
+        cyberbrain_core::config::CONFIG_FILE,
+        AUDIT_DB_FILE,
+        "audit.db-wal",
+        "audit.db-shm",
+        crate::audit_bridge::SEARCH_LOG_FILE,
+        "search-audit.db-wal",
+        "search-audit.db-shm",
+    ];
+    let Some(me) = current_uid() else { return };
+    for name in PRIVATE_FILES {
+        let path = root.join(name);
+        let Ok(m) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        let mode = m.permissions().mode();
+        if m.is_file() && m.uid() == me && mode & 0o077 != 0 {
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o700));
+        }
+    }
+}
+
+/// Windows has no mode bits; the store's files carry the ACL of the profile they sit in.
+#[cfg(not(unix))]
+fn tighten_private_files(_root: &Path) {}
+
 /// The walk itself, as the account `me` (`None`: ownership is not checked, as on Windows).
 ///
 /// The first `.cyberbrain` above the working directory wins only if it is this account's:
@@ -1343,6 +1379,8 @@ impl App {
             Some(_) => discover_store(store)?,
             None => discover_store_from(start)?,
         };
+        // 0. A store from before S20 has its record and configuration at 0644.
+        tighten_private_files(&root);
         // 1. Config.
         let config = Config::load(&root)?;
         let store = Store::with_config(&root, &config)?;

@@ -996,7 +996,16 @@ impl Config {
             path: path.clone(),
             source,
         };
-        let mut f = std::fs::File::create_new(&path).map_err(io)?;
+        // 0600 from the start (S20): it names the hub, the device and the inference endpoint,
+        // and there is no reason another account on this machine should read it.
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts.open(&path).map_err(io)?;
         std::io::Write::write_all(&mut f, DEFAULT_TOML.as_bytes()).map_err(io)?;
         f.sync_all().map_err(io)?;
         Ok(path)
@@ -1304,6 +1313,18 @@ document_prefix = "title: none | text: "
             Config::write_default(dir.path()).is_err(),
             "must not overwrite"
         );
+    }
+
+    /// S20: the configuration names the hub, the inference endpoint and the policy profile,
+    /// and was created readable by every account. Created 0600 now, not tightened after.
+    #[cfg(unix)]
+    #[test]
+    fn the_default_configuration_is_created_for_its_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = Config::write_default(dir.path()).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{mode:o}");
     }
 
     #[test]

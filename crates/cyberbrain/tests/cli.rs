@@ -6094,3 +6094,49 @@ fn the_terminal_token_goes_to_a_private_file_and_not_to_stdout() {
     assert!(address.trim().starts_with("http://127.0.0.1:"), "{address}");
     assert!(address.contains("#/?t="), "{address}");
 }
+
+/// S20 (review 2026-11-10/19): the record and the configuration were created 0644, readable
+/// by every account on the machine, and the record holds who did what to which note. A new
+/// store makes both 0600 as it creates them; an older store's files are pulled to 0600 the
+/// next time it is opened, when they belong to whoever opens it. Calibrated against the old
+/// code: both files stood at 0644 after `init` and stayed there after a command.
+#[cfg(unix)]
+#[test]
+fn the_record_and_the_configuration_are_this_accounts_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let cb = Cb::new();
+    let mode = |name: &str| {
+        std::fs::metadata(cb.store.join(name))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    for name in ["audit.db", "cyberbrain.toml"] {
+        assert_eq!(mode(name), 0o600, "{name} after init: {:o}", mode(name));
+    }
+    // A store from before: the files as an older version left them.
+    for name in ["audit.db", "cyberbrain.toml"] {
+        std::fs::set_permissions(cb.store.join(name), std::fs::Permissions::from_mode(0o644))
+            .unwrap();
+    }
+    let out = Cb::bin()
+        .arg("--store")
+        .arg(&cb.store)
+        .arg("status")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    for name in ["audit.db", "cyberbrain.toml"] {
+        assert_eq!(mode(name), 0o600, "{name} after opening: {:o}", mode(name));
+    }
+    // A command that rewrites the configuration keeps it that way.
+    let out = Cb::bin()
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["policy", "consent", "--withdraw"])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(mode("cyberbrain.toml"), 0o600, "after a rewrite");
+}
