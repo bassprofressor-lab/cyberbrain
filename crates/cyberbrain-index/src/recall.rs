@@ -668,17 +668,25 @@ impl Index {
     /// As [`superseded`](Self::superseded), as of `at`: a replacement counts from the
     /// successor's `valid_from`, or, without one, from when the successor was written. A
     /// successor the index does not hold counts always, as it did before validity existed.
+    ///
+    /// A note that claims to replace another (`supersedes`) counts only from a ring at least
+    /// as trusted as the one it replaces (S8, 2026-11-10): a ring 4 note marked a ring 2
+    /// decision as superseded and took its place at the top of recall, which turned the
+    /// rings' order of trust upside down. `superseded_by`, set on the old note itself, counts
+    /// from any ring: that is the note giving way, not being pushed.
     pub fn superseded_at(&self, at: jiff::Timestamp) -> Result<HashMap<String, String>> {
         let mut stmt = self
             .conn
             .prepare_cached(
                 "SELECT p.old, p.new, s.valid_from, s.created FROM ( \
-                   SELECT name AS old, superseded_by AS new FROM notes \
+                   SELECT name AS old, superseded_by AS new, 0 AS claimed FROM notes \
                    WHERE superseded_by IS NOT NULL \
                    UNION ALL \
-                   SELECT j.value, n.name FROM notes n, json_each(n.supersedes) j \
+                   SELECT j.value, n.name, 1 FROM notes n, json_each(n.supersedes) j \
                    WHERE n.supersedes <> '[]' \
                  ) p LEFT JOIN notes s ON s.name = p.new \
+                     LEFT JOIN notes o ON o.name = p.old \
+                 WHERE p.claimed = 0 OR s.ring IS NULL OR o.ring IS NULL OR s.ring <= o.ring \
                  ORDER BY 1, 2",
             )
             .ix()?;

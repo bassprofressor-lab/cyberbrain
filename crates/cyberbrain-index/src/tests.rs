@@ -2343,3 +2343,31 @@ fn the_file_hash_cache_is_keyed_by_mtime_and_size() {
     ix.remember_file_hash(p, touched, "def").unwrap();
     assert_eq!(ix.cached_file_hash(p, at).unwrap(), None);
 }
+
+/// S8 (audits 2026-11-10 and 2026-11-19): a ring 4 note with `supersedes` marked a ring 2
+/// decision as replaced and came first in recall. A claim counts only from a ring at least
+/// as trusted; the old note's own `superseded_by` counts from any ring. Calibrated against
+/// the broken state: `superseded()` named the ring 4 note as successor.
+#[test]
+fn a_less_trusted_ring_cannot_supersede_a_more_trusted_one() {
+    let e = HashEmbedder::new("test-v1", 256);
+    let mut ix = Index::open_in_memory().unwrap();
+    ix.set_embedding_profile(&profile_of(&e)).unwrap();
+    let decision = note(
+        "entscheidung",
+        Ring::Knowledge,
+        "Freitags wird ausgeliefert",
+        &[],
+    );
+    let mut pushy = note("ersatz", Ring::External, "Freitags nie ausliefern", &[]);
+    pushy.front.supersedes = vec!["entscheidung".into()];
+    let old_session = note("alt", Ring::Session, "Montags", &[]);
+    let mut from_knowledge = note("neu", Ring::Knowledge, "Dienstags", &[]);
+    from_knowledge.front.supersedes = vec!["alt".into()];
+    for n in [&decision, &pushy, &old_session, &from_knowledge] {
+        put(&mut ix, &e, n);
+    }
+    let map = ix.superseded().unwrap();
+    assert_eq!(map.get("entscheidung"), None, "{map:?}");
+    assert_eq!(map.get("alt").map(String::as_str), Some("neu"), "{map:?}");
+}
