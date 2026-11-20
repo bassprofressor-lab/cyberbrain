@@ -51,7 +51,7 @@ jobs:
         run: pip install --break-system-packages blake3 cryptography
       # --no-fail-fast: cargo otherwise stops at the first failing test binary, and on
       # windows a failure in the hook tests hid four more in cyberbrain-embed (2026-09-28).
-      - run: cargo test --workspace --no-default-features --no-fail-fast
+      - run: cargo test --locked --workspace --no-default-features --no-fail-fast
 
   # The installer is the only artefact nobody can try on the machine that writes it, so it
   # gets built on every push rather than first at release time, where a typo in the script
@@ -62,8 +62,10 @@ jobs:
     # On the job rather than on the step that uses it: a step's own `env:` is not visible to
     # that step's `if`, so the condition would have read empty and the check would have
     # skipped itself for ever, quietly.
+    # Only whether it is set, not the licence: the licence itself is given to the one step
+    # that uses it (N11, review 2026-11-19), not to every step of the job.
     env:
-      HUB_TEST_LICENCE: ${{ secrets.HUB_TEST_LICENCE }}
+      HAS_HUB_TEST_LICENCE: ${{ secrets.HUB_TEST_LICENCE != '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -83,7 +85,7 @@ jobs:
         run: npm ci && npm run build
         working-directory: ui
 
-      - run: cargo build --release -p cyberbrain -p cyberbrain-desktop
+      - run: cargo build --locked --release -p cyberbrain -p cyberbrain-desktop
       - shell: bash
         run: |
           if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
@@ -191,7 +193,9 @@ jobs:
       # skipped without a word otherwise, because a check that quietly passes when it did
       # not run is worse than no check.
       - name: a pinned client delivers, and a wrong pin does not
-        if: ${{ env.HUB_TEST_LICENCE != '' }}
+        if: ${{ env.HAS_HUB_TEST_LICENCE == 'true' }}
+        env:
+          HUB_TEST_LICENCE: ${{ secrets.HUB_TEST_LICENCE }}
         shell: pwsh
         run: |
           $data = "$env:ProgramData\Cyberbrain"
@@ -279,7 +283,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: cargo build --release -p cyberbrain --no-default-features
+      - run: cargo build --locked --release -p cyberbrain --no-default-features
       - name: install into a path containing a space
         shell: cmd
         run: |
@@ -305,7 +309,7 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
-      - run: cargo build --release -p cyberbrain --no-default-features
+      - run: cargo build --locked --release -p cyberbrain --no-default-features
       - name: run it where no toolchain, sqlite or openssl exists
         run: |
           docker run --rm -v "$PWD/target/release/cyberbrain:/cyberbrain:ro" \
@@ -383,12 +387,12 @@ jobs:
         working-directory: ui
       # The page exists now, so this is the one place the embed and its build-script
       # guard are exercised: a mock bundle here must fail the build.
-      - run: cargo build --release -p cyberbrain --features ui
+      - run: cargo build --locked --release -p cyberbrain --features ui
       # And the one place the launcher's tests can start a real server. The `test` job
       # builds --no-default-features, where `serve` has no page and refuses; there those
       # six stand down and say so. Release, because that is the binary just built: they
       # look for `cyberbrain` beside their own test binary.
-      - run: cargo test --release -p cyberbrain-desktop
+      - run: cargo test --locked --release -p cyberbrain-desktop
 
   benchmarks:
     name: performance budgets
@@ -409,4 +413,4 @@ jobs:
       # cyberbrain-documents is left out: its ignored tests read real PDFs with PDFium and the
       # OCR models, which are run-time files no runner has (docs/DOCUMENTS.md); they run where
       # those files are, and say so when they are missing instead of passing.
-      - run: cargo test --workspace --release --no-default-features --exclude cyberbrain-documents -- --ignored --nocapture
+      - run: cargo test --locked --workspace --release --no-default-features --exclude cyberbrain-documents -- --ignored --nocapture

@@ -70,7 +70,7 @@ jobs:
         working-directory: ui
 
       - name: build the binary
-        run: cargo build --release -p cyberbrain --features documents
+        run: cargo build --locked --release -p cyberbrain --features documents
 
       - name: it runs on glibc 2.39 (Ubuntu 24.04)
         if: matrix.name == 'linux-x86_64'
@@ -105,7 +105,7 @@ jobs:
       # click" way in, and it only means anything on the platform that has a Start menu.
       - name: build the desktop launcher
         if: matrix.os == 'windows-latest'
-        run: cargo build --release -p cyberbrain-desktop
+        run: cargo build --locked --release -p cyberbrain-desktop
 
       - name: makensis is on the runner
         if: matrix.os == 'windows-latest'

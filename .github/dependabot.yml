@@ -5,3 +5,16 @@ updates:
     directory: /
     schedule:
       interval: weekly
+  # N11 (review 2026-11-19): the crates and the two npm trees too, not only the actions.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /ui
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /site
+    schedule:
+      interval: weekly
