@@ -12,6 +12,61 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+Open findings of the review of 2026-11-19 (and 2026-11-10), second round.
+
+### Upgrading
+
+- **Hub sign-in is slowed past 20 refusals** from one address in ten minutes: `/login`
+  answers 429 with `Retry-After`, the wait doubling up to five minutes. Behind a reverse
+  proxy every visitor is the proxy's address.
+- **With `serve --terminal`** (the desktop application always starts it so) accepting or
+  rejecting a proposal, resolving a PII hold and `POST /command` need the session token
+  header the page already sends. Scripts calling those routes on a desktop window are
+  refused; `serve` without `--terminal` is unchanged.
+- **Link-local addresses** (169.254.0.0/16, fe80::/10) need the same waiver as a public
+  endpoint. The AgentGuard key goes over plain http only to this machine.
+- **`forget` at a terminal** asks for the note's name; `--yes` skips it, scripts and pipes
+  are not asked.
+
+### Security
+
+- `scan` checks notes that did not come through `write` (dropped in by hand with `pii: none`
+  or without the field): a finding is recorded as `scan.pii-found` and the note marked
+  `pii: flagged` (rings 0 and 1 keep their bytes and get the row only).
+- The PII hint also finds German tax ids, VAT ids, social insurance numbers (each with its
+  check digit) and dates named as a date of birth.
+- Explicit anchors from MCP, an agent or a served store only name files `find` shows (no
+  hidden or ignored files), and every refusal reads the same.
+- Compaction snapshot instructions keep only citations this store resolves.
+- A hub erasure marker never removes a ring 0 or 1 note here.
+- Hub: `hub admin reset` ends the administrator sessions of the old password; disclosed
+  bundles are written 0600; pages carry a CSP and `no-store`; device tokens, credentials
+  and invitation codes carry 256 random bits.
+- `hub … --as -` reads the credential from stdin; given on the command line it warns.
+- `serve`: at most four commands at once per window, at most 256 waiting PII holds.
+- CI and release build `--locked`; the hub test licence reaches only the step that uses it;
+  Dependabot also watches cargo and npm.
+
+### Fixed
+
+- `policy subject` also searches note names and heads (tags, bereich) and waiting
+  proposals (`file_hits`).
+- `status` counts the files `scan` skips as unreadable.
+
+### Web UI
+
+- The simple answer is rendered as markdown with its heading as title, and a block that is
+  only a `*Für:*` search line is not chosen; the question follows the address; the English
+  operator lines stay in the full view; a missing note offers the way back to the list; the
+  forget button and labels are German; on a phone the list folds away while a note is open;
+  touch targets are 44 px.
+
+### Performance
+
+- `/api/v1/status` no longer runs a dry scan and the whole `doctor` (10,000 notes:
+  2.5 s to 1.0 s). `/api/v1/notes` takes `limit` and `offset` (total in `x-total-count`).
+- With the Ollama embedder the vectors of recent queries are kept in the process.
+
 ## [0.11.0] - 2026-11-20
 
 Findings of the review of 2026-11-19 (and the open ones from 2026-11-10). Read *Upgrading*
