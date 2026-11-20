@@ -7,6 +7,7 @@
 use crate::vectors::{VectorCache, normalize};
 use crate::{Index, SqlResultExt};
 use cyberbrain_core::{Embedder, Error, Hit, RecallResult, Result, Ring};
+use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 
 /// The constant in `1 / (RRF_K + rank)`.
@@ -406,6 +407,7 @@ impl Index {
         // holds the index still between then and now: a note another process moved into a
         // foreign bereich in the meantime would otherwise be handed out on the strength of
         // where it used to be. A candidate the filter now rejects is left out quietly.
+        let filtered = opts.bereich.is_some() || opts.scope.is_some();
         let mut sql = String::from(
             "SELECT n.id, n.name, n.ring, b.text, n.updated, n.tags, b.locator, n.bereich FROM blocks b \
              JOIN notes n ON n.id = b.note_id WHERE b.citation = ?1",
@@ -437,11 +439,24 @@ impl Index {
             });
             let (id, name, ring, text, updated, tags, locator, bereich) = match row {
                 Ok(row) => row,
-                // Filtered out, or gone: a writer in another process replaced or erased the
-                // note between the search and this read. Its other version is either found by
-                // the search as well or does not exist; failing the whole recall for it, as
-                // this did ("hit vanished during recall"), answered nothing at all (K12).
-                Err(rusqlite::Error::QueryReturnedNoRows) => continue,
+                Err(rusqlite::Error::QueryReturnedNoRows) if filtered => continue,
+                // K12 (2026-11-10): a writer in another process replaced or erased the note
+                // between the search and this read; its block went with it, in the same
+                // transaction. The whole recall failed for it ("hit vanished during recall").
+                // A block that is still there without its note is damage to the index, and
+                // that still fails loudly below.
+                Err(rusqlite::Error::QueryReturnedNoRows)
+                    if self
+                        .conn
+                        .query_row("SELECT 1 FROM blocks WHERE citation = ?1", [&cit], |_| {
+                            Ok(())
+                        })
+                        .optional()
+                        .ix()?
+                        .is_none() =>
+                {
+                    continue;
+                }
                 Err(e) => {
                     return Err(Error::Index(format!(
                         "hit {cit} vanished during recall: {e}"

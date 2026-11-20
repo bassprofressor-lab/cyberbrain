@@ -2371,3 +2371,55 @@ fn a_less_trusted_ring_cannot_supersede_a_more_trusted_one() {
     assert_eq!(map.get("entscheidung"), None, "{map:?}");
     assert_eq!(map.get("alt").map(String::as_str), Some("neu"), "{map:?}");
 }
+
+/// Erases a note through a second connection while recall embeds the query: a writer in
+/// another process, between the search and the reading of its hits.
+struct ErasingEmbedder {
+    inner: HashEmbedder,
+    db: PathBuf,
+    note: NoteId,
+}
+
+impl Embedder for ErasingEmbedder {
+    fn dim(&self) -> usize {
+        self.inner.dim()
+    }
+    fn profile_id(&self) -> &str {
+        self.inner.profile_id()
+    }
+    fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>> {
+        self.inner.embed(texts)
+    }
+    fn embed_query(&self, query: &str) -> Result<Vec<f32>> {
+        Index::open(&self.db)
+            .unwrap()
+            .delete_note(&self.note)
+            .unwrap();
+        self.inner.embed(&[query]).map(|mut v| v.remove(0))
+    }
+}
+
+/// K12 (audits 2026-11-10 and 2026-11-19): a note erased by another process between the
+/// search and the reading of its hits failed the whole recall ("hit vanished during
+/// recall"). Calibrated against the broken state: `recall` returned that error.
+#[test]
+fn a_note_erased_during_recall_is_left_out_not_fatal() {
+    let dir = tempfile::tempdir().unwrap();
+    let db = dir.path().join("i.db");
+    let goes = note("geht", Ring::Knowledge, "Ladung und Konto", &[]);
+    let e = ErasingEmbedder {
+        inner: HashEmbedder::new("test-v1", 256),
+        db: db.clone(),
+        note: goes.front.id,
+    };
+    let mut ix = Index::open(&db).unwrap();
+    ix.set_embedding_profile(&profile_of(&e.inner)).unwrap();
+    let stays = note("bleibt", Ring::Knowledge, "Ladung und Tour", &[]);
+    put(&mut ix, &e.inner, &stays);
+    put(&mut ix, &e.inner, &goes);
+    let r = ix
+        .recall("Ladung", Some(&e), &RecallOptions::default())
+        .unwrap();
+    let names: Vec<&str> = r.hits.iter().map(|h| h.note_name.as_str()).collect();
+    assert_eq!(names, ["bleibt"], "{r:?}");
+}
