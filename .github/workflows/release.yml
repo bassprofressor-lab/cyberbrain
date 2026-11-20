@@ -41,13 +41,13 @@ jobs:
           - os: ubuntu-24.04
             name: linux-x86_64
             bin: cyberbrain
-          - os: windows-latest
+          - os: windows-2025
             name: windows-x86_64
             bin: cyberbrain.exe
           # Apple silicon. The Claude Code plugin downloads the binary for the machine it runs
           # on, and without this asset it fails on every Mac (2026-10-04). Intel Macs are not
           # built: no plugin user has asked, and an untested binary is worse than none.
-          - os: macos-latest
+          - os: macos-26
             name: macos-aarch64
             bin: cyberbrain
     steps:
@@ -104,20 +104,21 @@ jobs:
       # The desktop launcher and its installer, Windows only: this is the "install and
       # click" way in, and it only means anything on the platform that has a Start menu.
       - name: build the desktop launcher
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2025'
         run: cargo build --locked --release -p cyberbrain-desktop
 
       - name: makensis is on the runner
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2025'
         shell: bash
         run: |
           if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
-            choco install nsis -y --no-progress
+            # N11: pinned, the approved Chocolatey release on 2026-11-20.
+            choco install nsis --version 3.13.0 -y --no-progress
           fi
           echo "/c/Program Files (x86)/NSIS" >> "$GITHUB_PATH"
 
       - name: build the installer
-        if: matrix.os == 'windows-latest'
+        if: matrix.os == 'windows-2025'
         shell: bash
         run: |
           # The version comes from the manifest, not from the tag: a dispatch run has no
@@ -221,7 +222,7 @@ jobs:
     name: attach to the release
     needs: [build, dependents]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

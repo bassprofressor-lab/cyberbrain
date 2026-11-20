@@ -27,7 +27,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # N11: runner images by version, not `-latest`, which moves on its own (ubuntu-latest
+        # goes to 26.04 in November 2026). What `-latest` pointed at on 2026-11-20, from the
+        # runner-images README; raise them on purpose.
+        os: [ubuntu-24.04, windows-2025, macos-26]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -47,8 +50,9 @@ jobs:
       # blake3 that test skips itself — loudly, but it skips — so one job installs it and
       # actually runs the comparison. `cryptography` checks the Ed25519 signatures of signed
       # bundles; without it the signed half of the comparison skips itself the same way.
-      - if: matrix.os == 'ubuntu-latest'
-        run: pip install --break-system-packages blake3 cryptography
+      # Versions pinned (N11), the current releases on PyPI on 2026-11-20.
+      - if: matrix.os == 'ubuntu-24.04'
+        run: pip install --break-system-packages blake3==1.0.11 cryptography==50.0.2
       # --no-fail-fast: cargo otherwise stops at the first failing test binary, and on
       # windows a failure in the hook tests hid four more in cyberbrain-embed (2026-09-28).
       - run: cargo test --locked --workspace --no-default-features --no-fail-fast
@@ -58,7 +62,7 @@ jobs:
   # would surface with a tag already public.
   desktop-installer:
     name: desktop launcher and installer
-    runs-on: windows-latest
+    runs-on: windows-2025
     # On the job rather than on the step that uses it: a step's own `env:` is not visible to
     # that step's `if`, so the condition would have read empty and the check would have
     # skipped itself for ever, quietly.
@@ -89,7 +93,8 @@ jobs:
       - shell: bash
         run: |
           if ! command -v makensis > /dev/null && [ ! -x "/c/Program Files (x86)/NSIS/makensis.exe" ]; then
-            choco install nsis -y --no-progress
+            # N11: pinned, the approved Chocolatey release on 2026-11-20.
+            choco install nsis --version 3.13.0 -y --no-progress
           fi
           export PATH="/c/Program Files (x86)/NSIS:$PATH"
           staging="$(pwd)/target/release"
@@ -276,7 +281,7 @@ jobs:
   # this is here to catch all happen at invocation, not at build.
   windows-hook:
     name: windows hook through cmd.exe
-    runs-on: windows-latest
+    runs-on: windows-2025
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -302,7 +307,7 @@ jobs:
   # Built on the toolchain image, run on a bare one.
   bare-runtime:
     name: release binary runs on a bare image
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -312,12 +317,14 @@ jobs:
       - run: cargo build --locked --release -p cyberbrain --no-default-features
       - name: run it where no toolchain, sqlite or openssl exists
         run: |
+          # N11: by digest, so the bare image is the one that was checked (trixie-slim and
+          # 13.7-slim on 2026-11-20, Docker Hub).
           docker run --rm -v "$PWD/target/release/cyberbrain:/cyberbrain:ro" \
-            debian:trixie-slim /cyberbrain --version
+            debian:trixie-20261104-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2 /cyberbrain --version
 
   licences:
     name: licences and advisories
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -347,7 +354,7 @@ jobs:
   # decision. `cc` for bundled SQLite is the whole permitted list.
   c-footprint:
     name: build-time C footprint
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -363,7 +370,7 @@ jobs:
 
   ui:
     name: ui builds and typechecks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -396,7 +403,7 @@ jobs:
 
   benchmarks:
     name: performance budgets
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
