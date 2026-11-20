@@ -132,6 +132,46 @@ fn write_exit(o: &WriteOutcome) -> Result<i32> {
     }
 }
 
+/// The hub credential for `--as` (N10, review 2026-11-19). `--as -` reads it from the first
+/// line of stdin; given literally on the command line it works as before but says that it is
+/// readable in the process list and the shell history. `CYBERBRAIN_HUB_PRINCIPAL_TOKEN` is
+/// the quiet way, and the one clap fills `--as` from when the option is absent.
+fn credential(given: Option<&str>) -> Result<Option<String>> {
+    let argv: Vec<String> = std::env::args().collect();
+    credential_from(given, &argv, &mut std::io::stdin().lock())
+}
+
+fn credential_from(
+    given: Option<&str>,
+    argv: &[String],
+    stdin: &mut dyn std::io::BufRead,
+) -> Result<Option<String>> {
+    let Some(given) = given else {
+        return Ok(None);
+    };
+    if given == "-" {
+        let mut line = String::new();
+        stdin
+            .read_line(&mut line)
+            .map_err(|e| Error::Config(format!("cannot read the credential from stdin: {e}")))?;
+        let t = line.trim().to_string();
+        if t.is_empty() {
+            return Err(Error::Config("--as -: stdin held no credential".into()));
+        }
+        return Ok(Some(t));
+    }
+    if argv
+        .iter()
+        .any(|a| a == given || a == &format!("--as={given}"))
+    {
+        eprintln!(
+            "cyberbrain: the credential given with --as is readable in the process list and \
+             your shell history; use `--as -` (stdin) or CYBERBRAIN_HUB_PRINCIPAL_TOKEN"
+        );
+    }
+    Ok(Some(given.to_string()))
+}
+
 /// Who is at this command line: the operator, or an agent running it through its shell?
 ///
 /// 2026-09-25: every CLI command opened the store as `Actor::Operator`. An agent that ran
@@ -2303,7 +2343,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
             // with `offered_body` in it — the whole turned-away note text — to anybody who
             // could open the file. Two doors, one lock.
             let who = store
-                .principal_for(as_.as_deref(), hub::access::Role::Editor)
+                .principal_for(
+                    credential(as_.as_deref())?.as_deref(),
+                    hub::access::Role::Editor,
+                )
                 .map_err(|d| Error::Config(d.to_string()))?;
             if let Some(id) = resolve {
                 // Against this person's bereiche, not against the id alone. Otherwise a
@@ -2451,7 +2494,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 GrantCommand::Approve { id, as_, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let who = store
-                        .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                        .principal_for(
+                            credential(as_.as_deref())?.as_deref(),
+                            hub::access::Role::Countersigner,
+                        )
                         .map_err(|d| Error::Config(d.to_string()))?;
                     use hub::store::CountersignOutcome as O;
                     let outcome = store.countersign_grant(id, &who, &now())?;
@@ -2707,7 +2753,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let who = store
-                .principal_for(as_.as_deref(), hub::access::Role::Auditor)
+                .principal_for(
+                    credential(as_.as_deref())?.as_deref(),
+                    hub::access::Role::Auditor,
+                )
                 .map_err(|d| Error::Config(d.to_string()))?;
             let req = store.create_request(
                 &who,
@@ -2736,7 +2785,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
         } => {
             let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
             let who = store
-                .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                .principal_for(
+                    credential(as_.as_deref())?.as_deref(),
+                    hub::access::Role::Countersigner,
+                )
                 .map_err(|d| Error::Config(d.to_string()))?;
             let expires = (jiff::Timestamp::now()
                 + std::time::Duration::from_secs((*hours).max(1) as u64 * 3600))
@@ -3109,7 +3161,10 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 RetentionCommand::Approve { id, as_, data } => {
                     let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
                     let who = store
-                        .principal_for(as_.as_deref(), hub::access::Role::Countersigner)
+                        .principal_for(
+                            credential(as_.as_deref())?.as_deref(),
+                            hub::access::Role::Countersigner,
+                        )
                         .map_err(|d| Error::Config(d.to_string()))?;
                     use hub::store::PurgeOutcome as O;
                     let outcome = store.countersign_purge(id, &who, &now())?;
@@ -3502,5 +3557,20 @@ mod tests {
         assert_eq!(audit_exit_code(&v), 1);
         v.searches_verified = Some(Ok(2));
         assert_eq!(audit_exit_code(&v), 0);
+    }
+}
+
+#[cfg(test)]
+mod credential_tests {
+    use super::credential_from;
+
+    #[test]
+    fn as_dash_reads_the_credential_from_stdin() {
+        let mut stdin = std::io::Cursor::new(b"cbp_geheim\n".to_vec());
+        let got = credential_from(Some("-"), &["cyberbrain".into()], &mut stdin).unwrap();
+        assert_eq!(got.as_deref(), Some("cbp_geheim"));
+        let mut empty = std::io::Cursor::new(Vec::new());
+        assert!(credential_from(Some("-"), &[], &mut empty).is_err());
+        assert_eq!(credential_from(None, &[], &mut empty).unwrap(), None);
     }
 }

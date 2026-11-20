@@ -1017,6 +1017,7 @@ pub enum HubCommand {
         /// version stands. Either way the conflict is closed with a record of which way.
         #[arg(long)]
         take_offered: bool,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
@@ -1040,6 +1041,7 @@ pub enum HubCommand {
         from: Option<String>,
         #[arg(long, value_name = "TIMESTAMP")]
         to: Option<String>,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
@@ -1051,6 +1053,7 @@ pub enum HubCommand {
         /// How long the window stays open.
         #[arg(long, default_value_t = crate::hub::access::DEFAULT_WINDOW_HOURS)]
         hours: i64,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
@@ -1066,6 +1069,7 @@ pub enum HubCommand {
         request: String,
         #[arg(long, value_name = "PATH")]
         out_dir: PathBuf,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
@@ -1228,6 +1232,7 @@ pub enum RetentionCommand {
     /// person who proposed it.
     Approve {
         id: String,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
@@ -1363,6 +1368,7 @@ pub enum GrantCommand {
     /// bereich at it, every note text on the hub would be one form away from them.
     Approve {
         id: String,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
         #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
         as_: Option<String>,
         #[arg(long, value_name = "PATH")]
