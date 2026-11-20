@@ -202,16 +202,21 @@ fn server_binary() -> PathBuf {
         };
     });
     // target/<profile>/deps/<test binary> -> target/<profile>/cyberbrain
-    let mut dir = std::env::current_exe().expect("test binary path");
-    dir.pop();
-    if dir.ends_with("deps") {
-        dir.pop();
-    }
-    let exe = dir.join(if cfg!(windows) {
+    // `target/<profile>/deps/<test>` up to cargo 1.99; from 1.100 the test binaries sit
+    // deeper (`target/<profile>/build/<pkg>/<hash>/out/<test>`). The first directory above
+    // the test binary that holds the built `cyberbrain` file is `target/<profile>`.
+    let name = if cfg!(windows) {
         "cyberbrain.exe"
     } else {
         "cyberbrain"
-    });
+    };
+    let me = std::env::current_exe().expect("test binary path");
+    let exe = me
+        .ancestors()
+        .skip(1)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file() && *p != me)
+        .unwrap_or_else(|| me.with_file_name(name));
     assert!(
         exe.is_file(),
         "cyberbrain is not built at {}; run `cargo build -p cyberbrain` first",
