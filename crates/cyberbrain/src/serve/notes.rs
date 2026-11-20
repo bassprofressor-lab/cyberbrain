@@ -844,7 +844,12 @@ pub async fn resolve_hold(
     headers: axum::http::HeaderMap,
     ApiJson(res): ApiJson<PiiHoldResolution>,
 ) -> ApiResult<Response> {
-    crate::terminal::decision_guard(&st, &headers)?;
+    // `mark-reviewed` says a person looked and found nothing personal, and only the operator
+    // says that. Redacting, flagging or discarding is the writer's own business and stays
+    // open where there is no token to ask for; with one, every answer wants it.
+    if st.terminal.is_some() || res.action == "mark-reviewed" {
+        crate::terminal::decision_guard(&st, &headers)?;
+    }
     let choice = match res.action.as_str() {
         "redact" => Some(OperatorChoice::Redact),
         "mark-reviewed" => Some(OperatorChoice::MarkReviewed),

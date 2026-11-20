@@ -257,12 +257,61 @@ async fn an_operator_decision_without_the_session_token_is_refused() {
 }
 
 #[tokio::test]
-async fn with_the_session_token_or_without_a_terminal_the_decision_is_heard() {
+async fn with_the_session_token_the_decision_is_heard() {
     for (uri, body) in DECISIONS {
         let with = post(Some(cfg()), uri, body, Some(&"a".repeat(64))).await;
         assert_ne!(with, StatusCode::FORBIDDEN, "{uri}: with token");
-        // `serve` at a prompt has no token to ask for (open, see the report).
-        let plain = post(None, uri, body, None).await;
-        assert_ne!(plain, StatusCode::FORBIDDEN, "{uri}: no terminal");
+    }
+}
+
+/// The body of a refusal, for the routes above.
+async fn post_body(
+    terminal: Option<TerminalConfig>,
+    uri: &str,
+    body: &str,
+) -> (StatusCode, String) {
+    let (_dir, app) = store();
+    let router = router_with(app, PathBuf::new(), terminal, Vec::new());
+    let req = Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .header("content-type", "application/json");
+    let resp = router
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = resp.status();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// S5, the rest (2026-11-20): `serve` without `--terminal` has no token to ask for, and it
+/// took every decision from every process that reached the port. It refuses them now, in
+/// German, and says where the decision can be made instead.
+#[tokio::test]
+async fn without_a_terminal_an_operator_decision_is_refused_and_says_where_to_go() {
+    for (uri, body) in DECISIONS {
+        let (status, text) = post_body(None, uri, body).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{uri}: {text}");
+        assert!(text.contains("--terminal"), "{uri}: {text}");
+        assert!(text.contains("cyberbrain review"), "{uri}: {text}");
+        assert!(text.contains("Betreiber"), "{uri}: not German: {text}");
+    }
+}
+
+/// What is not a decision for the operator stays open without a terminal: a person who
+/// wrote a note with an address in it may still redact it or throw it away from the page.
+#[tokio::test]
+async fn without_a_terminal_redacting_or_discarding_a_hold_is_not_refused() {
+    for action in ["redact", "discard", "proceed"] {
+        let (status, text) = post_body(
+            None,
+            "/api/v1/holds/gibt-es-nicht",
+            &format!(r#"{{"action":"{action}"}}"#),
+        )
+        .await;
+        assert_ne!(status, StatusCode::FORBIDDEN, "{action}: {text}");
     }
 }

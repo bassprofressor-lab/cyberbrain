@@ -193,17 +193,28 @@ fn guard(st: &ServeState, headers: &HeaderMap) -> Result<(), ApiError> {
 ///
 /// A served store answers every process of this account, and an agent is one of them: with
 /// the operator's `serve` running, `curl -X POST …/proposals/x/decision` was a review by the
-/// operator. When this run has a terminal token (the desktop application always starts one),
-/// these routes want it, as the terminal does. The page has it from the fragment, a process
-/// that only reaches the port does not. Without `--terminal` there is no token to ask for and
-/// nothing changes; `serve` at a prompt keeps answering as before.
+/// operator. These routes want this run's session token, as the terminal does. The page has
+/// it from the fragment, a process that only reaches the port does not.
+///
+/// Without `--terminal` there is no token, and nothing that tells the operator's page from
+/// any other caller. Until 2026-11-20 that meant the decision was taken from anybody; now it
+/// is refused, and the refusal says where the decision can be made instead. A `serve` at a
+/// prompt still reads, writes and searches as before.
 pub(crate) fn decision_guard(st: &ServeState, headers: &HeaderMap) -> Result<(), ApiError> {
     match st.terminal.as_ref() {
-        None => Ok(()),
+        None => Err(refusal(
+            "Diese Entscheidung trifft nur der Betreiber, und dieses Fenster kann nicht zeigen, \
+             dass es seins ist: `cyberbrain serve` läuft ohne `--terminal` und hat darum kein \
+             Sitzungs-Token, und jedes Programm auf diesem Rechner erreicht denselben Port. \
+             Entweder `cyberbrain serve --terminal` starten und die Adresse aus der Datei \
+             öffnen, die es nennt (die Desktop-App macht das von selbst), oder am Terminal \
+             entscheiden: `cyberbrain review`.",
+        )),
         Some(cfg) if constant_time_eq(cfg.token.as_bytes(), token_of(headers).as_bytes()) => Ok(()),
         Some(_) => Err(refusal(
-            "this window decides for the operator only with its session token; open it from \
-             the address `serve --terminal` printed, or decide at a terminal (`cyberbrain review`)",
+            "Diese Entscheidung trifft nur der Betreiber, und dafür braucht dieses Fenster das \
+             Sitzungs-Token: die Adresse öffnen, die `cyberbrain serve --terminal` in seine \
+             Datei geschrieben hat, oder am Terminal entscheiden (`cyberbrain review`).",
         )),
     }
 }

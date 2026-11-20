@@ -56,6 +56,16 @@ fn ours() -> Vec<String> {
     ]
 }
 
+/// The session token every fixture's page holds. Decisions over HTTP want it (S5), and the
+/// page always has it, so the fixtures send it unless a test says otherwise.
+const SESSION: &str = "5e55105e55105e55105e55105e55105e55105e55105e55105e55105e55105e55";
+
+fn session() -> crate::terminal::TerminalConfig {
+    crate::terminal::TerminalConfig {
+        token: SESSION.to_string(),
+    }
+}
+
 struct Fx {
     _dir: tempfile::TempDir,
     store: PathBuf,
@@ -65,7 +75,7 @@ struct Fx {
 
 impl Fx {
     fn new() -> Fx {
-        Fx::with_router(|app| router_with(app, PathBuf::new(), None, ours()))
+        Fx::with_router(|app| router_with(app, PathBuf::new(), Some(session()), ours()))
     }
 
     /// A fixture whose `POST /command` runs the real `cyberbrain` this test run built,
@@ -99,7 +109,7 @@ impl Fx {
         ));
         let exe = cli_binary();
         Fx::with_router(move |app| {
-            crate::serve::router_with_child_env(app, exe.clone(), None, ours(), env)
+            crate::serve::router_with_child_env(app, exe.clone(), Some(session()), ours(), env)
         })
     }
 
@@ -113,7 +123,7 @@ impl Fx {
                        model = \"embeddinggemma:300m-qat-q4_0\"\ndim = 768\n\
                        digest = \"9284ddb28f3e32696e612d3bf6bf9666c560c0aa6106f8be01f71d147d5c5cb2\"\n"
             },
-            |app| router_with(app, PathBuf::new(), None, ours()),
+            |app| router_with(app, PathBuf::new(), Some(session()), ours()),
         )
     }
 
@@ -160,6 +170,12 @@ impl Fx {
         extra: &[(&str, &str)],
     ) -> (StatusCode, HeaderMap, Vec<u8>) {
         let mut b = Request::builder().method(method).uri(path);
+        if !extra
+            .iter()
+            .any(|(k, _)| k.eq_ignore_ascii_case("x-cyberbrain-terminal-token"))
+        {
+            b = b.header("x-cyberbrain-terminal-token", SESSION);
+        }
         for (k, v) in extra {
             b = b.header(*k, *v);
         }
