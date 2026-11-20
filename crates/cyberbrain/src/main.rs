@@ -553,6 +553,19 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
         Command::McpClient { command } => {
             match command {
                 cli::McpClientCommand::Add { name, expires } => {
+                    // N6 (2026-11-19): an agent issued itself a lasting bearer token for
+                    // `mcp --http`, a way into the store that outlives its session.
+                    if !matches!(cli_actor(), Actor::Operator | Actor::Cli) {
+                        return Err(Error::PolicyRefusal {
+                            profile: "mcp".into(),
+                            reason: format!(
+                                "a client token is a lasting way into the store, so the \
+                                 operator issues it; {} is not the operator. Ask them to run \
+                                 `cyberbrain mcp-client add {name}` in their own terminal",
+                                cli_actor()
+                            ),
+                        });
+                    }
                     let expires_at = expires
                         .as_deref()
                         .map(|e| expiry::parse(e, jiff::Timestamp::now()))

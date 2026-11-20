@@ -5876,3 +5876,19 @@ fn verify_export_without_an_expected_key_is_not_evidence() {
         .unwrap();
     assert!(checked.status.success(), "{}", text(&checked));
 }
+
+/// N6 (audit 2026-11-19): an agent issued itself a lasting bearer token for `mcp --http`,
+/// without an audit row. Calibrated against the broken state: "client probe registered".
+#[test]
+fn an_agent_cannot_issue_itself_an_mcp_client_token() {
+    let home = tempfile::tempdir().unwrap();
+    let out = Cb::bin()
+        .env("XDG_CONFIG_HOME", home.path())
+        .env("APPDATA", home.path())
+        .env("CLAUDECODE", "1")
+        .args(["mcp-client", "add", "probe"])
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(!text(&out).contains("registered"), "{}", text(&out));
+}

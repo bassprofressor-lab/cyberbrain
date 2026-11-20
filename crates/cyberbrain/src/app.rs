@@ -4258,8 +4258,29 @@ impl App {
     /// `--grant` grants exactly what the store's file asks for now, nothing more, and records
     /// it in the audit log; a key the store later adds needs a new grant. `--revoke` removes the
     /// store's entry. Neither touches the store's own file.
+    /// Refuse a decision that is the operator's: what the store may send where, what the
+    /// log is signed with. The same boundary as rings 0/1 and `signoff`; an agent after a
+    /// prompt injection from the repository it works in is exactly who must not make it
+    /// (S9, S4, 2026-11-10).
+    pub(crate) fn refuse_unless_operator(&self, what: &str) -> Result<()> {
+        if matches!(self.actor, Actor::Operator | Actor::Cli) && !self.refuses_resident_writes() {
+            return Ok(());
+        }
+        Err(Error::PolicyRefusal {
+            profile: format!("{:?}", self.policy.profile()).to_lowercase(),
+            reason: format!(
+                "{what} is the operator's decision, and {} is not the operator. Ask them to \
+                 run it in their own terminal",
+                self.actor
+            ),
+        })
+    }
+
     pub fn trust(&self, grant: bool, revoke: bool) -> Result<TrustReport> {
         use cyberbrain_core::waivers;
+        if grant {
+            self.refuse_unless_operator("`cyberbrain trust --grant`")?;
+        }
         let requested = Config::waivers_requested(&self.root)?;
         let file = waivers::path();
         let action = if grant {
@@ -5694,19 +5715,7 @@ impl App {
                 // S4 (2026-11-10): an agent could make the key every later row is signed
                 // with. Whoever holds the key decides what the log can prove; that is the
                 // operator, the same boundary as `signoff` and rings 0/1.
-                if !matches!(self.actor, Actor::Operator | Actor::Cli)
-                    || self.refuses_resident_writes()
-                {
-                    return Err(Error::PolicyRefusal {
-                        profile: format!("{:?}", self.policy.profile()).to_lowercase(),
-                        reason: format!(
-                            "the audit key decides what the log can prove, so the operator \
-                             makes it; {} is not the operator. Ask them to run `cyberbrain \
-                             policy audit-key --init` in their own terminal",
-                            self.actor
-                        ),
-                    });
-                }
+                self.refuse_unless_operator("making the audit key")?;
                 let k = crate::audit_bridge::create_audit_key(&self.root)?;
                 // Into the log it goes, with the fingerprint: the first signed row is then
                 // the one that says which key signs from here on. It is written by a log
@@ -5874,15 +5883,46 @@ impl App {
             return Ok(report);
         }
         let w = self.writers(dry_run)?;
+        // S14 (2026-11-10): the sweep had no ring lock and its rows named only `retention`,
+        // never who started it. Rings 0 and 1 are erased by the operator only, as with
+        // `forget`; and the run itself is one row under the caller's name.
+        let mut queue = report.queue.clone();
+        let operator =
+            matches!(self.actor, Actor::Operator | Actor::Cli) && !self.refuses_resident_writes();
+        if !operator {
+            let (resident, rest): (Vec<_>, Vec<_>) = queue
+                .items
+                .into_iter()
+                .partition(|i| i.is_due() && i.ring.is_resident());
+            queue.items = rest;
+            for item in resident {
+                report.applied.push(RetentionOutcome {
+                    name: item.name.clone(),
+                    result: Err(format!(
+                        "ring {} is the operator's; {} does not erase it. The operator runs \
+                         `cyberbrain policy retention --apply` at a terminal",
+                        item.ring.as_u8(),
+                        self.actor
+                    )),
+                    item,
+                });
+            }
+        }
+        w.policy.get().audit().record_raw(
+            &self.actor.to_string(),
+            "retention.sweep",
+            "retention",
+            json!({
+                "due": queue.items.iter().filter(|i| i.is_due()).count(),
+                "refused_resident": report.applied.len(),
+                "dry_run": dry_run,
+            }),
+        )?;
         let mut eraser = StoreEraser {
             notes: w.notes.as_ref(),
             index: w.index.as_ref(),
         };
-        for (item, result) in w
-            .policy
-            .get()
-            .apply_retention(&mut eraser, &report.queue, dry_run)
-        {
+        for (item, result) in w.policy.get().apply_retention(&mut eraser, &queue, dry_run) {
             report.applied.push(RetentionOutcome {
                 name: item.name.clone(),
                 item,
@@ -5913,6 +5953,9 @@ impl App {
     /// Persist consent in `cyberbrain.toml` (SPEC §12.1: consent lives in the file, not in
     /// memory). Edits the one key in place so the operator's comments survive.
     pub fn policy_consent(&self, grant: bool) -> Result<ConsentReport> {
+        if grant {
+            self.refuse_unless_operator("`cyberbrain policy consent --grant`")?;
+        }
         let path = self.store.config_path();
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
@@ -7707,5 +7750,98 @@ mod accept_keeps_head_tests {
         assert!(r.is_err());
         assert!(!root.join("notes").join("r2").join("neu.md").exists());
         assert!(root.join("proposals").join("neu.md").exists());
+    }
+}
+
+#[cfg(test)]
+mod operator_decision_tests {
+    //! S9, S14 (audits 2026-11-10 and 2026-11-19): decisions that are the operator's.
+    use super::*;
+
+    fn req(ring: Ring, name: &str) -> WriteRequest {
+        WriteRequest {
+            ring,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: "*Für: frist*\n\nText.".to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: Some(Some("P1D".into())),
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+            anchors: crate::app::Anchoring::default(),
+        }
+    }
+
+    /// Moves a note's `created` a year back, so its one-day retention is due.
+    fn backdate(path: &Path) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let out: Vec<String> = text
+            .lines()
+            .map(|l| match l.strip_prefix("created: ") {
+                Some(_) => "created: 2025-01-01T00:00:00Z".to_string(),
+                None => l.to_string(),
+            })
+            .collect();
+        std::fs::write(path, out.join("\n") + "\n").unwrap();
+    }
+
+    fn store() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        (dir, root)
+    }
+
+    /// Calibrated against the broken state: the agent's sweep erased the ring 1 note, and no
+    /// row named the agent.
+    #[test]
+    fn an_agents_retention_sweep_leaves_rings_0_and_1_and_names_the_agent() {
+        let (_d, root) = store();
+        let op = App::open(Some(&root), Actor::Operator).unwrap();
+        op.write(req(Ring::Protocol, "protokoll")).unwrap();
+        op.write(req(Ring::Knowledge, "wissen")).unwrap();
+        backdate(&root.join("notes").join("r1").join("protokoll.md"));
+        backdate(&root.join("notes").join("r2").join("wissen.md"));
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:t".into())).unwrap();
+        let r = agent.policy_retention(true, false).unwrap();
+        assert!(root.join("notes").join("r1").join("protokoll.md").exists());
+        assert!(
+            !root.join("notes").join("r2").join("wissen.md").exists(),
+            "{:?}",
+            r
+        );
+        assert!(
+            r.applied
+                .iter()
+                .any(|o| o.name == "protokoll" && o.result.is_err()),
+            "{:?}",
+            r.applied
+        );
+        let rows = op
+            .policy()
+            .audit()
+            .read(&cyberbrain_policy::AuditFilter::default())
+            .unwrap();
+        assert!(
+            rows.iter()
+                .any(|e| e.action == "retention.sweep" && e.actor.starts_with("agent:")),
+            "no row names who started the sweep"
+        );
+    }
+
+    /// Calibrated against the broken state: both calls succeeded for the agent.
+    #[test]
+    fn an_agent_grants_itself_neither_waivers_nor_consent() {
+        let (_d, root) = store();
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:t".into())).unwrap();
+        assert!(agent.trust(true, false).is_err());
+        assert!(agent.policy_consent(true).is_err());
     }
 }
