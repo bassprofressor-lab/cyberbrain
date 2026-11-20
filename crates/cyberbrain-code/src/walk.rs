@@ -285,7 +285,12 @@ impl<'o> Walk<'o> {
                 self.skipped.binary += 1;
                 continue;
             }
-            let text = String::from_utf8_lossy(&bytes);
+            // A UTF-8 byte order mark (C# and other files saved on Windows) is not part of
+            // the first line: left in, it hid a definition on line 1 from every pattern
+            // anchored at the start of a line (K11, 2026-11-10). It holds no newline, so line
+            // numbers stay as they are.
+            let text =
+                String::from_utf8_lossy(bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes));
             self.files_scanned += 1;
             self.bytes_scanned += size;
             f(File {

@@ -806,3 +806,17 @@ fn an_arrow_in_impl_generics_does_not_end_them() {
         .collect();
     assert_eq!(impls, ["Holder", "Wrapper"]);
 }
+
+/// K11 (audits 2026-11-10 and 2026-11-19): `find` missed a definition on line 1 of a file
+/// that starts with a UTF-8 byte order mark, and found the one on line 3. Calibrated against
+/// the broken state: only `zweite` was found.
+#[test]
+fn a_byte_order_mark_does_not_hide_the_first_line() {
+    let t = TempTree::new();
+    t.write(
+        "bom.py",
+        b"\xEF\xBB\xBFdef bomfunktion():\n    pass\ndef zweite():\n    pass\n",
+    );
+    assert_eq!(def_names(t.path(), "bomfunktion"), ["bom.py:function:1"]);
+    assert_eq!(def_names(t.path(), "zweite"), ["bom.py:function:3"]);
+}
