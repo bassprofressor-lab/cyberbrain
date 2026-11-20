@@ -757,12 +757,14 @@ into the hub's own log. `hub retention show` says what a purge would remove toda
 `hub retention list` every purge there has been.
 
 The period is days, weeks, months or years (`P90D`, `P18M`, `P2Y`). Hours are refused, and so
-is a period of nothing. The cutoff is fixed when the purge is proposed.
+is a period of nothing. The cutoff is fixed when the purge is proposed. A row's age is counted
+from when the hub received it, by the hub's clock, not from the time the device wrote on it: a
+machine whose clock is years off would otherwise lose yesterday's rows or keep old ones.
 
 **What goes is the start of each chain, never a selection.** Everything before the first row
-that is not old enough is removed, and nothing after it. A device whose clock once ran
-backwards has an old-looking row after a newer one, and that row stays, because removing it
-would cut a hole in the middle of the chain. The hash of the last removed row becomes the
+that is not old enough is removed, and nothing after it. Should the hub's own clock once have
+run backwards, an old-looking row after a newer one stays, because removing it would cut a
+hole in the middle of the chain. The hash of the last removed row becomes the
 device's floor, and `hub verify` checks what remains from there:
 
 ```console

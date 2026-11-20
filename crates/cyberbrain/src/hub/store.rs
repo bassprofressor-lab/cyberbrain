@@ -2776,14 +2776,20 @@ impl HubStore {
     /// Per device: how many rows a purge with this cutoff removes, and the seq it stops below.
     ///
     /// A prefix of the chain, never a selection. Everything before the first row that is not
-    /// old enough goes, and nothing after it, even a row that looks old: a device whose clock
-    /// once ran backwards has one, and removing it would cut a hole no floor can bridge.
+    /// old enough goes, and nothing after it, even a row that looks old: a removed row in the
+    /// middle would cut a hole no floor can bridge.
+    ///
+    /// "Old" is by the hub's clock, `received_at`, not the device's `ts` (S18, 2026-11-20). A
+    /// device's clock is the device's: one set years back had what it delivered yesterday
+    /// purged at the next signature, one running ahead kept what the agreement says must go.
+    /// The period an agreement sets is how long the hub holds a row, and the hub knows when it
+    /// took each one in.
     pub fn purge_plan(&self, cutoff: &str) -> Result<Vec<(String, i64, i64)>> {
         let mut out = Vec::new();
         for d in self.devices()? {
             let boundary: i64 = ix(self.conn.query_row(
                 "SELECT coalesce(
-                     (SELECT min(seq) FROM entries WHERE device = ?1 AND ts >= ?2),
+                     (SELECT min(seq) FROM entries WHERE device = ?1 AND received_at >= ?2),
                      (SELECT coalesce(max(seq), 0) + 1 FROM entries WHERE device = ?1))",
                 params![d.id, cutoff],
                 |r| r.get(0),

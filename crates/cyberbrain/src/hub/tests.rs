@@ -878,27 +878,40 @@ fn a_backup_never_writes_over_an_existing_file() {
     assert_eq!(std::fs::read(&to).unwrap(), b"last night's backup");
 }
 
-/// A device with rows whose timestamps are chosen, chained the way a real client chains them.
+/// A device with rows whose timestamps are chosen, chained the way a real client chains them,
+/// each received by the hub at the time its own clock says.
 ///
 /// The chain hash covers a row's `_chain.at`, not its `ts`, so a client's rows can be re-dated
 /// for a test without breaking the chain.
 fn hub_with_rows_at(stamps: &[&str]) -> HubStore {
+    let pairs: Vec<(&str, &str)> = stamps.iter().map(|s| (*s, *s)).collect();
+    hub_with_rows(&pairs)
+}
+
+/// [`hub_with_rows_at`], with the device's clock (`ts`) and the hub's (`received_at`) chosen
+/// apart: one delivery per row, at its own hub time.
+fn hub_with_rows(rows_at: &[(&str, &str)]) -> HubStore {
     let mut hub = HubStore::in_memory().unwrap();
     let (device, _) = hub.add_device("laptop", NOW).unwrap();
     let client = Client::new();
-    for i in 0..stamps.len() {
+    for i in 0..rows_at.len() {
         client.act(&format!("n{i}"));
     }
     let mut rows = client.sink.rows();
-    for (row, ts) in rows.iter_mut().zip(stamps) {
+    for (row, (ts, _)) in rows.iter_mut().zip(rows_at) {
         row.ts = ts.parse().unwrap();
     }
-    let last = rows
-        .last()
-        .and_then(|r| r.chain_hash())
-        .unwrap()
-        .to_string();
-    hub.append(&device, &rows, &last, None, NOW).unwrap();
+    for (row, (_, received)) in rows.iter().zip(rows_at) {
+        let device = hub
+            .devices()
+            .unwrap()
+            .into_iter()
+            .find(|d| d.id == device.id)
+            .unwrap();
+        let anchor = row.chain_hash().unwrap().to_string();
+        hub.append(&device, std::slice::from_ref(row), &anchor, None, received)
+            .unwrap();
+    }
     hub
 }
 
@@ -1077,7 +1090,46 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
     }
 }
 
-/// A device whose clock once ran backwards loses only the unbroken start of its chain.
+/// S18 (review 2026-11-10/19): a purge cut by the device's own clock. A machine whose clock
+/// stood years behind had rows that arrived yesterday purged at the next signature, and one
+/// whose clock ran ahead kept rows the agreement says must go. The cut is now by when the hub
+/// received a row, which is the hub's clock. Calibrated against the old cut: the first purge
+/// below removed both rows, the second none.
+#[test]
+fn a_purge_goes_by_when_the_hub_received_a_row_not_by_the_device_clock() {
+    // A device two years behind, delivering now.
+    let behind = hub_with_rows(&[
+        ("2022-01-10T00:00:00Z", "2026-09-01T00:00:00Z"),
+        ("2022-01-11T00:00:00Z", "2026-09-02T00:00:00Z"),
+    ]);
+    behind.set_retention("P2Y", "cli", NOW).unwrap();
+    let (purge, would) = behind.propose_purge("24 Monate", "cli", NOW).unwrap();
+    assert_eq!(
+        would, 0,
+        "rows the hub took in last week are not two years old"
+    );
+    behind
+        .countersign_purge(&purge.id, &countersigner(&behind, "Rat"), NOW)
+        .unwrap();
+    assert_eq!(behind.total_entries().unwrap(), 2);
+
+    // A device whose clock runs ahead, delivering in 2023.
+    let ahead = hub_with_rows(&[
+        ("2026-09-01T00:00:00Z", "2023-01-10T00:00:00Z"),
+        ("2026-09-02T00:00:00Z", "2023-01-11T00:00:00Z"),
+    ]);
+    ahead.set_retention("P2Y", "cli", NOW).unwrap();
+    let (purge, would) = ahead.propose_purge("24 Monate", "cli", NOW).unwrap();
+    assert_eq!(would, 2, "rows held since 2023 are past the period");
+    ahead
+        .countersign_purge(&purge.id, &countersigner(&ahead, "Rat"), NOW)
+        .unwrap();
+    assert_eq!(ahead.total_entries().unwrap(), 0);
+    let r = report::verify(&ahead).unwrap();
+    assert!(r.ok, "{r:?}");
+}
+
+/// A clock that once ran backwards costs only the unbroken start of a chain.
 #[test]
 fn a_purge_removes_a_prefix_and_never_cuts_a_hole() {
     let hub = hub_with_rows_at(&[
