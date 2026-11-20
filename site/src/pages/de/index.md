@@ -30,7 +30,7 @@ caveat: contradiction check skipped: fewer than two hits, nothing to compare
 Die Hinweise am Ende zählen so viel wie der Treffer. Cyberbrain sagt, was es **nicht** getan hat: Hier lag kein Modell bereit, also wurde nur nach Wörtern gesucht, und bei einem einzigen Treffer gab es nichts zu vergleichen. Ein ungeprüftes Ergebnis sieht nie aus wie ein geprüftes.
 
 <div class="cards">
-  <div class="card"><div class="k">Version</div><div class="v">0.11.0</div><div class="s">erschienen am 20.11.2026</div></div>
+  <div class="card"><div class="k">Version</div><div class="v">0.12.0</div><div class="s">erschienen am 20.11.2026</div></div>
   <div class="card"><div class="k">Programm für Linux</div><div class="v">23 MB</div><div class="s">mit Weboberfläche</div></div>
   <div class="card"><div class="k">Plattformen</div><div class="v">3</div><div class="s">Linux, Windows, macOS (Apple-Chip)</div></div>
   <div class="card"><div class="k">Telemetrie</div><div class="v">keine</div><div class="s">es gibt keinen Code dafür</div></div>
@@ -61,6 +61,6 @@ Alle vier sind dasselbe Programm und arbeiten auf demselben Store.
 
 ## Stand
 
-0.11.0 ist jung. Das README dieser Version zählt 1.240 Tests und 18 Browsertests und sagt, dass es an einem echten Bestand eines Betreibers lief (1.086 Notizen in fünf Projekten) und an wenig sonst. Das Windows-Installationsprogramm ist der neueste Teil. Wenn etwas hakt, hilft ein [Issue](https://github.com/bassprofressor-lab/cyberbrain/issues).
+0.12.0 ist jung. Das README dieser Version zählt 1.271 Tests und 18 Browsertests und sagt, dass es an einem echten Bestand eines Betreibers lief (1.086 Notizen in fünf Projekten) und an wenig sonst. Das Windows-Installationsprogramm ist der neueste Teil. Wenn etwas hakt, hilft ein [Issue](https://github.com/bassprofressor-lab/cyberbrain/issues).
 
 Lizenz: [FSL-1.1-ALv2](https://github.com/bassprofressor-lab/cyberbrain/blob/main/LICENSE.md). Für alles nutzbar außer für ein Konkurrenzprodukt; jede Version wird zwei Jahre nach ihrem Erscheinen Apache-2.0.
