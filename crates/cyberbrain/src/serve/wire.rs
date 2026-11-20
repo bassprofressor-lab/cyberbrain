@@ -223,6 +223,10 @@ pub struct NoteListParams {
     pub kind: Option<NoteKind>,
     pub q: Option<String>,
     pub sort: Option<String>,
+    /// M2: at most this many, after `offset`. Absent: all of them, as before. The total
+    /// before paging is in the `x-total-count` header.
+    pub limit: Option<usize>,
+    pub offset: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize)]

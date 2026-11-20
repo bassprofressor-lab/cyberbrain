@@ -242,29 +242,24 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
         let db_bytes = file_bytes(&root.join(DB_FILE));
         let models_bytes = dir_bytes(&app.store().models_dir());
 
-        // Staleness as a count: the real scan with no-op writers is the one comparison
-        // that can say how many files differ from the index (App::status gives a bool).
-        let dry = app.scan(ScanOptions {
-            full: false,
-            dry_run: true,
-        })?;
-        let stale_notes = dry.indexed_new + dry.reindexed_changed + dry.dropped_missing_file.len();
+        // Staleness as a count, from the comparison `App::status` already made (M1, review
+        // 2026-11-19: a dry scan here and a whole `doctor` below read every file twice more,
+        // and the page took 3 s at 10,000 notes).
+        let stale_notes = s.stale_notes;
 
-        // Orphan vectors and FTS health come from the index's own integrity check, which
-        // `doctor` runs; the counts are read out of its findings.
-        let doc = app.doctor()?;
+        // Orphan vectors and FTS health from the index's own integrity check, the one of
+        // `doctor`'s checks this page shows.
         let mut orphan_vectors = 0usize;
         let mut fts_ok = true;
-        for f in doc.findings.iter().filter(|f| f.check == "index integrity") {
-            if f.detail.contains("vectors without a block") {
-                orphan_vectors += f
-                    .detail
+        for detail in app.index_integrity()? {
+            if detail.contains("vectors without a block") {
+                orphan_vectors += detail
                     .split_whitespace()
                     .next()
                     .and_then(|n| n.parse::<usize>().ok())
                     .unwrap_or(0);
             }
-            if f.detail.contains("FTS") {
+            if detail.contains("FTS") {
                 fts_ok = false;
             }
         }
@@ -273,9 +268,6 @@ pub async fn status(State(st): State<Arc<ServeState>>) -> ApiResult<Json<StatusR
                 "{} file(s) under notes/ could not be read and are not counted in the ring totals; `doctor` names them",
                 tree.unreadable.len()
             ));
-        }
-        if !doc.checks_run.contains(&"index integrity") {
-            caveats.push("index integrity was not checked; orphan_vectors and fts_ok are unmeasured".into());
         }
 
         let (last_scan, last_full_scan) = {

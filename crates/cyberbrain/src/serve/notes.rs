@@ -285,8 +285,9 @@ pub fn render_findings(body: &str, findings: &[Finding]) -> Vec<PiiFinding> {
 pub async fn list_notes(
     State(st): State<Arc<ServeState>>,
     ApiQuery(p): ApiQuery<NoteListParams>,
-) -> ApiResult<Json<Vec<NoteSummary>>> {
+) -> ApiResult<Response> {
     let ring = p.ring.map(Ring::try_from).transpose()?;
+    let (limit, offset) = (p.limit, p.offset.unwrap_or(0));
     let sort = match p.sort.as_deref() {
         None | Some("updated") => "updated",
         Some("name") => "name",
@@ -323,7 +324,18 @@ pub async fn list_notes(
             "ring" => out.sort_by(|a, b| a.ring.cmp(&b.ring).then(a.name.cmp(&b.name))),
             _ => out.sort_by(|a, b| b.updated.cmp(&a.updated).then(a.name.cmp(&b.name))),
         }
-        Ok(Json(out))
+        let total = out.len();
+        let page: Vec<NoteSummary> = out
+            .into_iter()
+            .skip(offset)
+            .take(limit.unwrap_or(usize::MAX))
+            .collect();
+        let mut resp = Json(page).into_response();
+        resp.headers_mut().insert(
+            axum::http::HeaderName::from_static("x-total-count"),
+            axum::http::HeaderValue::from(total),
+        );
+        Ok(resp)
     })
     .await
 }

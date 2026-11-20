@@ -676,6 +676,9 @@ pub struct StatusReport {
     pub notes_on_disk: usize,
     pub notes_per_ring: [usize; 5],
     pub files_skipped: usize,
+    /// Notes whose file is new, changed or gone against the index; `index_stale` is whether
+    /// this is above zero. Counted here so `serve` need not run a dry scan for it (M1).
+    pub stale_notes: usize,
     pub resident_tokens: usize,
     pub resident_cap: usize,
     pub index: IndexStats,
@@ -4520,6 +4523,12 @@ impl App {
         })
     }
 
+    /// The index's own integrity check, which `doctor` runs among a dozen others. `serve`'s
+    /// status page needs only this one (M1).
+    pub fn index_integrity(&self) -> Result<Vec<String>> {
+        lock_index(&self.index)?.integrity()
+    }
+
     pub fn doctor(&self) -> Result<DoctorReport> {
         let mut findings = Vec::new();
         let mut checks = Vec::new();
@@ -4973,6 +4982,7 @@ impl App {
             notes_on_disk: listing.entries.len(),
             notes_per_ring: per_ring,
             files_skipped: listing.skipped.len() + unreadable.len(),
+            stale_notes: not_indexed + changed + gone,
             resident_tokens: self.store.resident_tokens()?,
             resident_cap: self.store.resident_cap(),
             daemon: crate::daemon::state(&self.root),

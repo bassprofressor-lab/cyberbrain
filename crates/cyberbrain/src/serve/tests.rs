@@ -442,6 +442,27 @@ async fn notes_list_detail_and_graph_come_from_the_files() {
     let (s, _) = fx.get("/api/v1/notes?sort=sideways").await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 
+    // M2: a page of the list, and the total in a header; without `limit` all of them.
+    let all = list.as_array().unwrap().len();
+    assert!(all >= 3, "{list}");
+    let (s, h, b) = fx
+        .raw(
+            Method::GET,
+            "/api/v1/notes?sort=name&limit=2&offset=1",
+            None,
+            &[],
+        )
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let page: Value = serde_json::from_slice(&b).unwrap();
+    assert_eq!(page.as_array().unwrap().len(), 2, "{page}");
+    let by_name = fx.ok("/api/v1/notes?sort=name").await;
+    assert_eq!(page[0]["name"], by_name[1]["name"]);
+    assert_eq!(
+        h.get("x-total-count").and_then(|v| v.to_str().ok()),
+        Some(all.to_string().as_str())
+    );
+
     let d = fx.ok("/api/v1/notes/pg18-moves-pgdata").await;
     assert_eq!(d["path"], "notes/r2/pg18-moves-pgdata.md");
     assert_eq!(d["outbound"][0]["target"], "docker-bind-mount-inode-drift");
