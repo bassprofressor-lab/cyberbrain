@@ -964,6 +964,7 @@ fn policy_subcommands_work_over_a_real_store() {
     assert_eq!(
         r["audit_preview"],
         serde_json::json!([
+            "retention.sweep",
             "retention.expired",
             "note.erase.requested",
             "note.erase.completed"
