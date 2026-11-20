@@ -136,7 +136,31 @@ pub fn advance(root: &Path, row: i64, hash: &str, at: &str, key: Option<&AuditKe
         })?;
     }
     let text = serde_json::to_string(&anchor).expect("anchor serialises") + "\n";
-    crate::hub::client::write_owner_only(&path, &text).map_err(|e| Error::Io { path, source: e })
+    write_quietly(&path, &text).map_err(|e| Error::Io { path, source: e })
+}
+
+/// Owner-only, whole or not at all (written beside it, then renamed), and without `fsync`:
+/// this runs after every audit row, and a crash that loses the newest anchor leaves the
+/// previous one, which is a weaker check, never a false alarm. An fsync per row would cost
+/// every hook that records something a disk flush.
+fn write_quietly(path: &Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let tmp = path.with_extension(format!("{}.tmp", cyberbrain_core::NoteId::generate()));
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let done = opts
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(text.as_bytes()))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
 }
 
 /// Check the whole log against the anchor. `hashes` are the chain hashes of every row,
