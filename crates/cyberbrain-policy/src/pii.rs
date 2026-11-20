@@ -2,7 +2,8 @@
 //!
 //! # This is a heuristic. Read that sentence twice.
 //!
-//! The scanner looks for the *shapes* of email addresses, IPv4 and IPv6 addresses,
+//! The scanner looks for the *shapes* of email addresses, IPv4 and IPv6 addresses, German tax
+//! and VAT ids, social insurance numbers, dates named as a date of birth,
 //! API-key-like strings, IBANs and phone numbers. It will miss things (a name is not a
 //! shape; a phone number written "oh three seven one" is not a shape) and it will flag
 //! things that are not personal data (a documentation address, a loopback IP). Every
@@ -33,7 +34,8 @@ use std::sync::LazyLock;
 
 /// The sentence every caller-facing surface must carry.
 pub const DISCLAIMER: &str = "PII detection is heuristic: it finds the shapes of emails, IP \
-    addresses, API keys, IBANs and phone numbers. It misses what has no shape and flags some \
+    addresses, API keys, IBANs, phone numbers, German tax and VAT ids, social insurance numbers \
+    and dates named as a date of birth. It misses what has no shape and flags some \
     things that are harmless. It is a seatbelt, not a guarantee.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -45,16 +47,28 @@ pub enum PiiKind {
     ApiKey,
     Iban,
     Phone,
+    /// German tax identification number (Steuer-ID, § 139b AO): eleven digits, check digit.
+    TaxId,
+    /// German VAT id (USt-IdNr.): `DE` and nine digits, check digit.
+    VatId,
+    /// German social insurance number (SV-/Rentenversicherungsnummer), check digit.
+    SocialSecurity,
+    /// A date named as a date of birth (`geb.`, `Geburtsdatum`, `date of birth`, …).
+    BirthDate,
 }
 
 impl PiiKind {
-    pub const ALL: [PiiKind; 6] = [
+    pub const ALL: [PiiKind; 10] = [
         PiiKind::Email,
         PiiKind::ApiKey,
         PiiKind::Iban,
         PiiKind::Ipv6,
         PiiKind::Ipv4,
         PiiKind::Phone,
+        PiiKind::TaxId,
+        PiiKind::VatId,
+        PiiKind::SocialSecurity,
+        PiiKind::BirthDate,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -65,6 +79,10 @@ impl PiiKind {
             PiiKind::ApiKey => "api-key",
             PiiKind::Iban => "iban",
             PiiKind::Phone => "phone",
+            PiiKind::TaxId => "tax-id",
+            PiiKind::VatId => "vat-id",
+            PiiKind::SocialSecurity => "social-security",
+            PiiKind::BirthDate => "birth-date",
         }
     }
 
@@ -78,7 +96,13 @@ impl PiiKind {
             PiiKind::Iban => 2,
             PiiKind::Ipv6 => 3,
             PiiKind::Ipv4 => 4,
-            PiiKind::Phone => 5,
+            // Before the phone number: eleven digits are both shapes, and the checksum says
+            // which one it is.
+            PiiKind::TaxId => 5,
+            PiiKind::VatId => 2,
+            PiiKind::SocialSecurity => 5,
+            PiiKind::BirthDate => 5,
+            PiiKind::Phone => 6,
         }
     }
 
@@ -90,6 +114,10 @@ impl PiiKind {
             PiiKind::ApiKey => "[redacted:api-key]",
             PiiKind::Iban => "[redacted:iban]",
             PiiKind::Phone => "[redacted:phone]",
+            PiiKind::TaxId => "[redacted:tax-id]",
+            PiiKind::VatId => "[redacted:vat-id]",
+            PiiKind::SocialSecurity => "[redacted:social-security]",
+            PiiKind::BirthDate => "[redacted:birth-date]",
         }
     }
 }
@@ -146,6 +174,10 @@ pub fn scan_kinds(text: &str, kinds: &[PiiKind]) -> Vec<Finding> {
             PiiKind::ApiKey => find_api_keys(text, &mut raw),
             PiiKind::Iban => find_ibans(text, &mut raw),
             PiiKind::Phone => find_phones(text, &mut raw),
+            PiiKind::TaxId => find_tax_ids(text, &mut raw),
+            PiiKind::VatId => find_vat_ids(text, &mut raw),
+            PiiKind::SocialSecurity => find_social_security(text, &mut raw),
+            PiiKind::BirthDate => find_birth_dates(text, &mut raw),
         }
     }
     resolve_overlaps(text, raw)
@@ -813,6 +845,154 @@ fn find_ibans(text: &str, out: &mut Vec<Finding>) {
     }
 }
 
+// ---- German identifiers (S19, review 2026-11-10/19) ----
+//
+// For the people this is sold to (tax advisers, law firms) these matter more than a phone
+// number. Each carries a check digit, and only numbers whose check digit holds are reported,
+// so an order number of the same length mostly passes.
+
+/// ISO 7064 MOD 11,10 over all but the last digit; true when the last digit is its check.
+fn mod11_10_ok(digits: &[u8]) -> bool {
+    let Some((check, body)) = digits.split_last() else {
+        return false;
+    };
+    let mut product = 10u32;
+    for d in body {
+        let mut sum = (u32::from(*d) + product) % 10;
+        if sum == 0 {
+            sum = 10;
+        }
+        product = (sum * 2) % 11;
+    }
+    let expected = (11 - product) % 10;
+    expected == u32::from(*check)
+}
+
+fn digits_of(s: &str) -> Vec<u8> {
+    s.bytes()
+        .filter(u8::is_ascii_digit)
+        .map(|b| b - b'0')
+        .collect()
+}
+
+static TAX_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\b[1-9]\d(?:[ ]?\d){9}\b").expect("tax id regex"));
+
+fn find_tax_ids(text: &str, out: &mut Vec<Finding>) {
+    for m in TAX_ID.find_iter(text) {
+        let d = digits_of(m.as_str());
+        if d.len() != 11 || !mod11_10_ok(&d) {
+            continue;
+        }
+        // § 139b AO: among the first ten digits exactly one repeats (twice or three times).
+        let mut count = [0u8; 10];
+        for x in &d[..10] {
+            count[usize::from(*x)] += 1;
+        }
+        let repeated = count.iter().filter(|c| **c >= 2).count();
+        if repeated != 1 || count.iter().any(|c| *c > 3) {
+            continue;
+        }
+        push(
+            out,
+            PiiKind::TaxId,
+            text,
+            m.start(),
+            m.end(),
+            Confidence::Medium,
+            "eleven digits shaped and checked like a German tax id (Steuer-ID)",
+        );
+    }
+}
+
+static VAT_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\bDE ?\d{3} ?\d{3} ?\d{3}\b").expect("vat id regex"));
+
+fn find_vat_ids(text: &str, out: &mut Vec<Finding>) {
+    for m in VAT_ID.find_iter(text) {
+        let d = digits_of(m.as_str());
+        if d.len() != 9 || !mod11_10_ok(&d) {
+            continue;
+        }
+        push(
+            out,
+            PiiKind::VatId,
+            text,
+            m.start(),
+            m.end(),
+            Confidence::High,
+            "DE and nine digits with a valid check digit: a German VAT id (USt-IdNr.)",
+        );
+    }
+}
+
+static SV_NR: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\b(\d{2}) ?(\d{2})(\d{2})(\d{2}) ?([A-Z]) ?(\d{2})(\d)\b").expect("sv regex")
+});
+
+fn find_social_security(text: &str, out: &mut Vec<Finding>) {
+    for c in SV_NR.captures_iter(text) {
+        let m = c.get(0).expect("whole match");
+        let num = |i: usize| c[i].parse::<u32>().unwrap_or(0);
+        let (day, month) = (num(2), num(3));
+        // The birth date in it; a day above 31 is not one (the +50 rule is not used).
+        if !(1..=31).contains(&day) || !(1..=12).contains(&month) {
+            continue;
+        }
+        let letter = u32::from(c[5].as_bytes()[0] - b'A' + 1);
+        let mut digits: Vec<u32> = Vec::with_capacity(12);
+        for i in [1, 2, 3, 4] {
+            digits.extend(c[i].bytes().map(|b| u32::from(b - b'0')));
+        }
+        digits.push(letter / 10);
+        digits.push(letter % 10);
+        digits.extend(c[6].bytes().map(|b| u32::from(b - b'0')));
+        const WEIGHTS: [u32; 12] = [2, 1, 2, 5, 7, 1, 2, 1, 2, 1, 2, 1];
+        let sum: u32 = digits
+            .iter()
+            .zip(WEIGHTS)
+            .map(|(d, w)| {
+                let p = d * w;
+                p / 10 + p % 10
+            })
+            .sum();
+        if sum % 10 != num(7) {
+            continue;
+        }
+        push(
+            out,
+            PiiKind::SocialSecurity,
+            text,
+            m.start(),
+            m.end(),
+            Confidence::High,
+            "German social insurance number: birth date, letter and a valid check digit",
+        );
+    }
+}
+
+static BIRTH_DATE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"(?i)\b(?:geb\.|geboren(?:\s+am)?|geburtsdatum|geburtstag|date\s+of\s+birth|born(?:\s+on)?|dob)\s*:?\s*(\d{1,2}\.\s?\d{1,2}\.\s?(?:\d{4}|\d{2})|\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4})",
+    )
+    .expect("birth date regex")
+});
+
+fn find_birth_dates(text: &str, out: &mut Vec<Finding>) {
+    for c in BIRTH_DATE.captures_iter(text) {
+        let d = c.get(1).expect("the date");
+        push(
+            out,
+            PiiKind::BirthDate,
+            text,
+            d.start(),
+            d.end(),
+            Confidence::High,
+            "a date named as a date of birth",
+        );
+    }
+}
+
 // ---- phone ----
 
 static PHONE_INTL: LazyLock<Regex> = LazyLock::new(|| {
@@ -1342,6 +1522,61 @@ mod tests {
             f.iter()
                 .any(|f| f.kind == PiiKind::ApiKey && f.matched == "Kr7!mzQ9wLp2vT"),
             "{f:?}"
+        );
+    }
+
+    // ---- S19: German identifiers ----
+
+    fn kinds_in(text: &str) -> Vec<PiiKind> {
+        scan(text).into_iter().map(|f| f.kind).collect()
+    }
+
+    #[test]
+    fn german_identifiers_are_found_when_their_check_digit_holds() {
+        assert_eq!(
+            kinds_in("Steuer-ID 86095742719 liegt vor."),
+            [PiiKind::TaxId]
+        );
+        assert_eq!(kinds_in("Steuer-ID 86 095 742 719."), [PiiKind::TaxId]);
+        assert_eq!(kinds_in("USt-IdNr. DE136695976"), [PiiKind::VatId]);
+        assert_eq!(kinds_in("USt-IdNr. DE 136 695 976"), [PiiKind::VatId]);
+        assert_eq!(
+            kinds_in("SV-Nr. 65 170839 J 003"),
+            [PiiKind::SocialSecurity]
+        );
+        assert_eq!(kinds_in("SV-Nr. 65170839J003"), [PiiKind::SocialSecurity]);
+        assert_eq!(
+            kinds_in("geb. 17.08.1939 in Chemnitz"),
+            [PiiKind::BirthDate]
+        );
+        assert_eq!(kinds_in("Geburtsdatum: 1939-08-17"), [PiiKind::BirthDate]);
+        assert_eq!(kinds_in("date of birth 17/08/1939"), [PiiKind::BirthDate]);
+    }
+
+    #[test]
+    fn numbers_of_the_same_shape_without_the_check_digit_are_not() {
+        assert!(kinds_in("Auftrag 12345678901 geliefert").is_empty());
+        assert!(kinds_in("DE123456789").is_empty());
+        assert!(kinds_in("65 170839 J 004").is_empty());
+        assert!(
+            kinds_in("65 991339 J 003").is_empty(),
+            "day 99 is no birth date"
+        );
+        assert!(
+            kinds_in("Release am 17.08.2026").is_empty(),
+            "a date alone is not a birth date"
+        );
+    }
+
+    #[test]
+    fn german_identifiers_are_redacted_with_their_own_placeholder() {
+        let text = "ID 86095742719, DE136695976, geb. 01.02.1990";
+        let f = scan(text);
+        let (out, n) = redact(text, &f);
+        assert_eq!(n, 3, "{f:?}");
+        assert_eq!(
+            out,
+            "ID [redacted:tax-id], [redacted:vat-id], geb. [redacted:birth-date]"
         );
     }
 }

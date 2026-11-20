@@ -449,7 +449,7 @@ export interface NoteCreateRequest {
  * crate's `ipv4`/`ipv6` into `ip`. `line`/`col` are 1-based, col in chars.
  */
 export interface PiiFinding {
-  kind: "email" | "ip" | "api-key" | "iban" | "phone";
+  kind: "email" | "ip" | "api-key" | "iban" | "phone" | "tax-id" | "vat-id" | "social-security" | "birth-date";
   /** Masked excerpt, e.g. `j***@example.org`. Never the raw match. */
   excerpt: string;
   line: number;

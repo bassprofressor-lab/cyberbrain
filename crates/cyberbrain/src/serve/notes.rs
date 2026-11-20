@@ -221,6 +221,10 @@ pub fn finding_kind(k: PiiKind) -> &'static str {
         PiiKind::ApiKey => "api-key",
         PiiKind::Iban => "iban",
         PiiKind::Phone => "phone",
+        PiiKind::TaxId => "tax-id",
+        PiiKind::VatId => "vat-id",
+        PiiKind::SocialSecurity => "social-security",
+        PiiKind::BirthDate => "birth-date",
     }
 }
 
@@ -251,6 +255,9 @@ pub fn mask(kind: PiiKind, matched: &str) -> String {
         PiiKind::ApiKey => format!("{}…", head(6)),
         PiiKind::Iban => format!("{} **** ****", head(4)),
         PiiKind::Phone => format!("{}…{}", head(4), tail(2)),
+        PiiKind::TaxId | PiiKind::SocialSecurity => format!("{}…{}", head(2), tail(1)),
+        PiiKind::VatId => format!("{}…", head(4)),
+        PiiKind::BirthDate => "**.**.****".to_string(),
     }
 }
 

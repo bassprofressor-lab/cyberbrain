@@ -126,7 +126,7 @@ export const en = {
   },
   enums: {
     kind: { knowledge: "knowledge", bug: "bug", lesson: "lesson", decision: "decision", reference: "reference", session: "session" },
-    pii: { email: "email address", ip: "IP address", "api-key": "API key", iban: "IBAN", phone: "phone number" },
+    pii: { email: "email address", ip: "IP address", "api-key": "API key", iban: "IBAN", phone: "phone number", "tax-id": "German tax id", "vat-id": "VAT id", "social-security": "social insurance number", "birth-date": "date of birth" },
     destination: { loopback: "this machine", private: "private network", public: "public", unresolved: "unresolved", none: "no address" },
   },
   error: {

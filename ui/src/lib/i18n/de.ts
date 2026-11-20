@@ -120,7 +120,7 @@ export const de: Dict = {
   },
   enums: {
     kind: { knowledge: "Wissen", bug: "Fehler", lesson: "Erfahrung", decision: "Entscheidung", reference: "Verweis", session: "Sitzung" },
-    pii: { email: "E-Mail-Adresse", ip: "IP-Adresse", "api-key": "API-Schlüssel", iban: "IBAN", phone: "Telefonnummer" },
+    pii: { email: "E-Mail-Adresse", ip: "IP-Adresse", "api-key": "API-Schlüssel", iban: "IBAN", phone: "Telefonnummer", "tax-id": "Steuer-ID", "vat-id": "USt-IdNr.", "social-security": "Sozialversicherungsnummer", "birth-date": "Geburtsdatum" },
     destination: { loopback: "dieser Rechner", private: "privates Netz", public: "öffentlich", unresolved: "ungeklärt", none: "keine Adresse" },
   },
   error: {
