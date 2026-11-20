@@ -5106,6 +5106,10 @@ fn an_agent_that_sheds_its_marker_is_still_an_agent() {
             .env("CLAUDECODE", "1")
             .env("CLAUDE_CODE_SESSION_ID", "f1f1f1f1-test")
             .env("CYBERBRAIN_NO_DAEMON", "1")
+            .env(
+                "CYBERBRAIN_AUDIT_ANCHORS",
+                std::env::temp_dir().join("cyberbrain-test-anchors"),
+            )
             .env_remove("CYBERBRAIN_TEST_IGNORE_LINEAGE")
             .output()
             .unwrap();

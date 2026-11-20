@@ -187,6 +187,20 @@ fn start_fake(server: &Path, dir: &Path) -> Result<Server, StartError> {
 
 /// The binary under test, built by the same `cargo test` run that gets here.
 fn server_binary() -> PathBuf {
+    // The stores these tests make get audit head anchors (cyberbrain's audit_anchor.rs); they
+    // go to a scratch directory, not into the home directory of whoever runs the tests. Set
+    // once, before the first child is started, and inherited by every one of them.
+    static ANCHORS: std::sync::Once = std::sync::Once::new();
+    ANCHORS.call_once(|| {
+        // SAFETY: set once, before this test binary starts any child that reads it; nothing
+        // in these tests reads the variable from another thread at the same time.
+        unsafe {
+            std::env::set_var(
+                "CYBERBRAIN_AUDIT_ANCHORS",
+                std::env::temp_dir().join("cyberbrain-test-anchors"),
+            )
+        };
+    });
     // target/<profile>/deps/<test binary> -> target/<profile>/cyberbrain
     let mut dir = std::env::current_exe().expect("test binary path");
     dir.pop();

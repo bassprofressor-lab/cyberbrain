@@ -85,7 +85,18 @@ impl Fx {
         Fx::with_cli_env(env)
     }
 
-    fn with_cli_env(env: Vec<(String, Option<String>)>) -> Fx {
+    fn with_cli_env(mut env: Vec<(String, Option<String>)>) -> Fx {
+        // The child is the real binary, not this test harness: its audit head anchors go to
+        // a scratch directory, not into the home directory of whoever runs the tests.
+        env.push((
+            crate::audit_anchor::ENV.into(),
+            Some(
+                crate::audit_anchor::dir()
+                    .expect("tests have an anchor directory")
+                    .to_string_lossy()
+                    .into_owned(),
+            ),
+        ));
         let exe = cli_binary();
         Fx::with_router(move |app| {
             crate::serve::router_with_child_env(app, exe.clone(), None, ours(), env)
