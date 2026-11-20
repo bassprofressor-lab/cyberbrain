@@ -40,6 +40,11 @@ pub enum Command {
         /// Where to create it. Defaults to `.cyberbrain` in the working directory.
         #[arg(long)]
         path: Option<PathBuf>,
+        /// Make the store without an audit key. Its log is then a hash chain only, which
+        /// anybody who can write to the store can rewrite and re-hash without a trace;
+        /// `policy audit-key --init` adds a key later.
+        #[arg(long)]
+        no_audit_key: bool,
     },
 
     /// Rebuild the index from the notes tree.
@@ -529,7 +534,9 @@ pub enum Command {
     /// Check an audit export somebody handed you.
     ///
     /// Needs no store, no configuration and no network: everything the check uses is in the
-    /// file. Exits non-zero when the chain does not hold.
+    /// file. Exits 0 only when the file holds and is signed with the key `--expect-key`
+    /// names; 4 when it holds but was not checked against a key (consistent, not evidence:
+    /// whoever can write the log can rewrite and re-hash it); 1 or 2 when it does not hold.
     VerifyExport {
         /// An audit bundle (`policy audit --export`) or an erasure report (`forget --report`).
         #[arg(value_name = "PATH")]

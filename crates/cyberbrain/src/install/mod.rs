@@ -148,7 +148,9 @@ const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// are refused, and it is where an agent would drop `CLAUDECODE` (`hook::events::bash_verdict`).
 /// Post-tool-use has nothing to do for a shell command and keeps the narrow matcher.
 /// WebFetch since the governance check (2026-09-25, `hook::governance::TOOLS`).
-const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|WebFetch";
+/// Read and Grep since 0.10.8: the audit log's signing key is refused to read (S4,
+/// `hook::events::pre_read`); every other read is allowed at once.
+const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|WebFetch|Read|Grep";
 
 /// The pre-tool-use matcher for a store whose `[governance] tools` may name more than the
 /// default (F3, 2026-11-04): the default, plus each extra entry as a pattern (`mcp__*` →

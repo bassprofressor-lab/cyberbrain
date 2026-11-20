@@ -87,6 +87,15 @@ pub struct StoreAuditSink {
     /// The search log (SPEC §12.6.3): its oldest rows are pruned, so an empty log does not
     /// start at the genesis marker but at the anchor the last pruning left behind.
     prunable: bool,
+    /// The store this is the main log of, when it is: see [`StoreAuditSink::guarding`].
+    guard: Option<Guard>,
+}
+
+/// What the main log of a store checks around each append.
+struct Guard {
+    root: std::path::PathBuf,
+    /// The key the head anchor is signed with: the one the log signs its rows with.
+    key: Option<cyberbrain_policy::AuditKey>,
 }
 
 /// The search log beside `audit.db`: `search.access` rows only, chained and signed like the
@@ -98,7 +107,27 @@ impl StoreAuditSink {
         Self {
             store: Mutex::new(store),
             prunable: false,
+            guard: None,
         }
+    }
+
+    /// The main log of the store at `root`, whose rows are signed with `key` when it has one.
+    ///
+    /// Two things follow. An unsigned row is refused once the store has a key file, because
+    /// such a row can only come from a process that opened the store before the key was made
+    /// (N1, 2026-11-19: a daemon started earlier went on appending unsigned rows behind the
+    /// signed ones, and every later check reported a broken chain that nobody had broken).
+    /// And every row moves the head anchor outside the store forward (`audit_anchor`, S3).
+    pub fn guarding(
+        mut self,
+        root: &std::path::Path,
+        key: Option<cyberbrain_policy::AuditKey>,
+    ) -> Self {
+        self.guard = Some(Guard {
+            root: root.to_path_buf(),
+            key,
+        });
+        self
     }
 
     /// The search log, which may be pruned (see [`AuditStore::open_prunable`]).
@@ -106,6 +135,7 @@ impl StoreAuditSink {
         Self {
             store: Mutex::new(store),
             prunable: true,
+            guard: None,
         }
     }
 
@@ -139,6 +169,22 @@ impl StoreAuditSink {
                 .collect::<Result<Vec<_>>>()?;
             report(&events)
         })
+    }
+
+    /// Every row's number and chain hash, oldest first: what the head anchor is checked
+    /// against. Rows without a chain hash are left out; the chain walk reports them.
+    pub fn chain_hashes(&self) -> Result<Vec<(i64, String)>> {
+        let rows = self.lock()?.read(&cyberbrain_index::AuditFilter {
+            since: None,
+            action: None,
+            subject: None,
+            contains: None,
+            limit: None,
+        })?;
+        Ok(rows
+            .iter()
+            .filter_map(|r| stored_chain_hash(r).map(|h| (r.seq, h)))
+            .collect())
     }
 
     pub fn count(&self) -> Result<usize> {
@@ -232,6 +278,18 @@ impl AuditSink for StoreAuditSink {
         let detail = serde_json::to_string(&event.detail)
             .map_err(|e| Error::Index(format!("audit detail does not serialise: {e}")))?;
         let expected_prev = event.chain_prev().map(str::to_owned);
+        if let Some(g) = &self.guard
+            && event.chain_version() < cyberbrain_policy::audit::CHAIN_V2
+            && g.root.join(AUDIT_KEY_FILE).exists()
+        {
+            return Err(Error::Config(format!(
+                "this process opened the store before it had an audit key, and would append \
+                 an unsigned row behind signed ones; the chain would read as broken from here \
+                 on. Nothing was recorded. Restart it (a background daemon restarts by itself; \
+                 `cyberbrain serve` and `cyberbrain mcp --http` need a restart): {}",
+                g.root.join(AUDIT_KEY_FILE).display()
+            )));
+        }
         let empty_head = self.head_when_empty()?;
         let row = NewAuditEntry {
             // One clock, and it is the writer's. Letting the store stamp its own would
@@ -244,7 +302,7 @@ impl AuditSink for StoreAuditSink {
             subject: Some(event.subject.clone()),
             detail: Some(detail),
         };
-        self.lock()?.append_after(|last| {
+        let stored = self.lock()?.append_after(|last| {
             if let Some(expected) = &expected_prev {
                 let actual = last
                     .and_then(stored_chain_hash)
@@ -260,6 +318,14 @@ impl AuditSink for StoreAuditSink {
             }
             Ok(row)
         })?;
+        // The row is in. A head anchor that cannot be written weakens the next check, it does
+        // not undo the row, so a failure here is not the append's failure: the check says
+        // "no anchor" or names an older row, never a false alarm.
+        if let Some(g) = &self.guard
+            && let (Some(hash), Some(at)) = (event.chain_hash(), event.chain_at())
+        {
+            let _ = crate::audit_anchor::advance(&g.root, stored.seq, hash, at, g.key.as_ref());
+        }
         Ok(())
     }
 

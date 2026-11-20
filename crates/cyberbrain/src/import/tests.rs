@@ -395,8 +395,8 @@ fn dry_run_reports_the_same_numbers_and_writes_nothing() {
             .read(&Default::default())
             .unwrap()
             .len(),
-        1,
-        "only store.init in the log after a dry run"
+        2,
+        "only store.init and audit.key.created in the log after a dry run"
     );
     let real = import(&fx.app, &p, false).unwrap();
     assert_eq!(counts(&dry), counts(&real));

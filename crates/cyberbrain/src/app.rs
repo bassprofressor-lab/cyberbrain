@@ -193,6 +193,8 @@ pub struct InitReport {
     pub audit_db: PathBuf,
     #[serde(serialize_with = "cyberbrain_core::path_serde::slash")]
     pub index_db: PathBuf,
+    /// The fingerprint of the audit key made with the store; `None` with `--no-audit-key`.
+    pub audit_key: Option<String>,
     pub next_steps: Vec<String>,
 }
 
@@ -1237,16 +1239,18 @@ impl App {
         let config = Config::load(&root)?;
         let store = Store::with_config(&root, &config)?;
         // 2. The record, before anything that could produce one.
-        let audit_sink = Arc::new(StoreAuditSink::new(AuditStore::open(
-            &root.join(AUDIT_DB_FILE),
-        )?));
+        let audit_key = crate::audit_bridge::load_audit_key(&root)?;
+        let audit_sink = Arc::new(
+            StoreAuditSink::new(AuditStore::open(&root.join(AUDIT_DB_FILE))?)
+                .guarding(&root, audit_key.clone()),
+        );
         // 3 + 4. The only audit writer, and the gate built from it. With the store's key,
         // when it has one, so every row from here on is signed (F2).
         let policy = Policy::with_audit_key(
             policy_config(&config),
             audit_sink.clone(),
             actor.clone(),
-            crate::audit_bridge::load_audit_key(&root)?,
+            audit_key,
         );
         let gate = policy.gate();
         // 5. The cache.
@@ -1281,7 +1285,15 @@ impl App {
     }
 
     /// Create a store. Refuses to touch a directory that already is one.
+    #[cfg(test)]
     pub fn init(path: &Path, actor: &Actor) -> Result<InitReport> {
+        Self::init_with(path, actor, true)
+    }
+
+    /// [`init`](Self::init), and whether the store gets an audit key. Without one the log is
+    /// a hash chain only, which anybody with write access to the store can rewrite and
+    /// re-hash without a trace (S2); `init --no-audit-key` says so when it is asked for.
+    pub fn init_with(path: &Path, actor: &Actor, audit_key: bool) -> Result<InitReport> {
         if Config::path_in(path).exists() || is_store(path) {
             return Err(Error::Config(format!(
                 "{} is already a cyberbrain store; nothing was changed",
@@ -1292,22 +1304,45 @@ impl App {
         Store::create(path, cap)?;
         let config = Config::write_default(path)?;
         let audit_db = path.join(AUDIT_DB_FILE);
-        let sink = Arc::new(StoreAuditSink::new(AuditStore::open(&audit_db)?));
+        // S2 (2026-11-10, again 2026-11-19): without a key the chain is arithmetic anybody
+        // can redo, so a log rewritten and re-hashed checked out clean. A new store gets its
+        // key with its first row, and every row it writes is signed from the start.
+        let key = if audit_key {
+            Some(crate::audit_bridge::create_audit_key(path)?)
+        } else {
+            None
+        };
+        // A store made again where an old one stood starts a new log; the old one's head
+        // anchor would report it as cut short.
+        if let Some(old) = crate::audit_anchor::path_for(path) {
+            let _ = std::fs::remove_file(old);
+        }
+        let sink =
+            Arc::new(StoreAuditSink::new(AuditStore::open(&audit_db)?).guarding(path, key.clone()));
         let index_db = path.join(DB_FILE);
         let _ = Index::open(&index_db)?;
         let cfg = Config::load(path)?;
-        let policy = Policy::new(policy_config(&cfg), sink, actor.clone());
+        let policy = Policy::with_audit_key(policy_config(&cfg), sink, actor.clone(), key.clone());
         policy.audit().record_raw(
             &actor.to_string(),
             "store.init",
             format!("store:{}", Slash(path)),
             json!({ "profile": cfg.policy.profile }),
         )?;
+        if let Some(key) = &key {
+            policy.audit().record_raw(
+                &actor.to_string(),
+                "audit.key.created",
+                "audit",
+                json!({ "fingerprint": key.fingerprint(), "public_key": key.public_hex() }),
+            )?;
+        }
         Ok(InitReport {
             store: path.to_path_buf(),
             config,
             audit_db,
             index_db,
+            audit_key: key.as_ref().map(|k| k.fingerprint()),
             next_steps: vec![
                 "write a note:   cyberbrain write --ring 2 --kind knowledge --name first-note --body 'what you learned'"
                     .into(),
@@ -1352,6 +1387,9 @@ impl App {
         let mut files = vec![
             cyberbrain_core::config::Config::path_in(&self.root),
             self.config.model_dir().join(MANIFEST_FILE),
+            // N1 (2026-11-19): a daemon that kept the key state it started with appended
+            // unsigned rows behind the first signed one after `policy audit-key --init`.
+            self.root.join(AUDIT_KEY_FILE),
         ];
         // The user's waivers decide where this store may send notes (0.8.2). A daemon that
         // kept the grants it started with would go on honouring a revoked one until it idled
@@ -5554,6 +5592,12 @@ impl App {
                  (`verify-export --expect-key`)"
             )));
         }
+        // S3: the chain cannot see rows missing at its end. The head anchor outside the store
+        // can, as far as the anchor itself is out of reach (audit_anchor.rs says how far).
+        if let Some(anchor) = crate::audit_anchor::load(&self.root)? {
+            let own = self.policy.audit().key().map(|k| k.public_hex());
+            crate::audit_anchor::check(&anchor, &self.audit_sink.chain_hashes()?, own.as_deref())?;
+        }
         Ok(report)
     }
 
@@ -5593,6 +5637,22 @@ impl App {
         let (key, created) = match crate::audit_bridge::load_audit_key(&self.root)? {
             Some(k) => (Some(k), false),
             None if init => {
+                // S4 (2026-11-10): an agent could make the key every later row is signed
+                // with. Whoever holds the key decides what the log can prove; that is the
+                // operator, the same boundary as `signoff` and rings 0/1.
+                if !matches!(self.actor, Actor::Operator | Actor::Cli)
+                    || self.refuses_resident_writes()
+                {
+                    return Err(Error::PolicyRefusal {
+                        profile: format!("{:?}", self.policy.profile()).to_lowercase(),
+                        reason: format!(
+                            "the audit key decides what the log can prove, so the operator \
+                             makes it; {} is not the operator. Ask them to run `cyberbrain \
+                             policy audit-key --init` in their own terminal",
+                            self.actor
+                        ),
+                    });
+                }
                 let k = crate::audit_bridge::create_audit_key(&self.root)?;
                 // Into the log it goes, with the fingerprint: the first signed row is then
                 // the one that says which key signs from here on. It is written by a log
@@ -7398,5 +7458,78 @@ mod stale_name_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod audit_key_change_tests {
+    //! N1 (audit 2026-11-19): `policy audit-key --init` while another process had the store
+    //! open (the daemon) made the chain "broken" for good: that process kept appending
+    //! unsigned rows behind the first signed one, and a real tampering was from then on
+    //! indistinguishable from the key change.
+    use super::*;
+
+    fn req(name: &str) -> WriteRequest {
+        WriteRequest {
+            ring: Ring::Knowledge,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: "text".to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+            anchors: crate::app::Anchoring::default(),
+        }
+    }
+
+    /// Calibrated against the broken state: the second write succeeded unsigned, and the
+    /// check then failed with "row is unsigned, but row … before it was signed".
+    #[test]
+    fn a_process_older_than_the_key_appends_nothing_unsigned() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init_with(&root, &Actor::Operator, false).unwrap();
+        let older = App::open(Some(&root), Actor::Operator).unwrap();
+        older.write(req("vorher")).unwrap();
+
+        let op = App::open(Some(&root), Actor::Operator).unwrap();
+        assert!(op.audit_key(true).unwrap().created);
+
+        let e = older.write(req("nachher")).unwrap_err();
+        assert!(e.to_string().contains("Restart"), "{e}");
+        let fresh = App::open(Some(&root), Actor::Operator).unwrap();
+        fresh.write(req("nachher")).unwrap();
+        let r = fresh.verify_audit_chain().unwrap();
+        assert!(r.signed >= 2, "{r:?}");
+    }
+
+    /// The daemon retires on a change of what it watches, before it answers (daemon.rs). The
+    /// key file is one of those now.
+    #[test]
+    fn the_daemon_watches_the_key_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init_with(&root, &Actor::Operator, false).unwrap();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        assert!(app.watched_files().contains(&root.join(AUDIT_KEY_FILE)));
+    }
+
+    /// S4: an agent does not make the key.
+    #[test]
+    fn an_agent_cannot_make_the_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init_with(&root, &Actor::Operator, false).unwrap();
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:t".into())).unwrap();
+        assert!(agent.audit_key(true).is_err());
+        assert!(!root.join(AUDIT_KEY_FILE).exists());
     }
 }

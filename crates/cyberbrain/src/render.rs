@@ -25,6 +25,20 @@ pub fn init(r: &InitReport) -> String {
         Slash(&r.audit_db),
         Slash(&r.index_db)
     );
+    match &r.audit_key {
+        Some(fp) => {
+            let _ = writeln!(
+                s,
+                "Audit key: {fp} (every audit row is signed with it; keep this fingerprint \
+                 somewhere outside this machine to check exports against later)\n"
+            );
+        }
+        None => s.push_str(
+            "Audit key: none. The audit log is a hash chain only: anybody who can write to the \
+             store can rewrite and re-hash it without a trace. `cyberbrain policy audit-key \
+             --init` makes one.\n\n",
+        ),
+    }
     for step in &r.next_steps {
         let _ = writeln!(s, "  - {step}");
     }
@@ -1252,6 +1266,7 @@ mod tests {
             config: p(&["proj", ".cyberbrain", "config.toml"]),
             audit_db: p(&["proj", ".cyberbrain", "audit.db"]),
             index_db: p(&["proj", ".cyberbrain", "index.db"]),
+            audit_key: None,
             next_steps: vec![],
         }
     }

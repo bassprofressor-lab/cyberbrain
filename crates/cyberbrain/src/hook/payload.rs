@@ -88,6 +88,22 @@ impl Payload {
             .filter(|s| !s.trim().is_empty())
     }
 
+    /// The file or folder a `Read` or `Grep` call reads; `None` for any other tool, and for
+    /// a `Grep` without a path (it searches the working directory, where the key folder's own
+    /// `.gitignore` keeps ripgrep out of it).
+    pub fn read_file(&self) -> Option<PathBuf> {
+        let key = match self.tool_name.as_deref()? {
+            "Read" => "file_path",
+            "Grep" => "path",
+            _ => return None,
+        };
+        self.tool_input
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(PathBuf::from)
+    }
+
     pub fn edited_file(&self) -> Option<PathBuf> {
         let tool = self.tool_name.as_deref()?;
         let key = match tool {

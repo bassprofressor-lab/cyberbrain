@@ -2006,3 +2006,70 @@ fn session_context_names_hook_entries_an_older_install_left_behind() {
 
 // The compaction mod's snapshot (hook pre-compact-snapshot), in a file of its own.
 mod snapshot;
+
+/// S4 (audits 2026-11-10 and 2026-11-19): the private signing key was refused to write, but
+/// an agent could read it (`head -c` went through, and `Read` was never asked about), and
+/// with it rewrite the log and sign it again. Calibrated against the broken state: all four
+/// calls were allowed.
+#[test]
+fn pre_tool_use_refuses_to_read_the_signing_key() {
+    let f = fixture();
+    let app = f.open();
+    let key = f.store.join("keys").join("audit.ed25519");
+    let read = f.payload(serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": { "file_path": key.to_string_lossy() },
+        "tool_use_id": "toolu_r1",
+    }));
+    let grep = f.payload(serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Grep",
+        "tool_input": { "pattern": ".", "path": f.store.join("keys").to_string_lossy() },
+        "tool_use_id": "toolu_r2",
+    }));
+    let bash = |cmd: String, id: &str| {
+        f.payload(serde_json::json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Bash",
+            "tool_input": { "command": cmd },
+            "tool_use_id": id,
+        }))
+    };
+    for (what, payload) in [
+        ("Read", read),
+        ("Grep", grep),
+        (
+            "head",
+            bash(format!("head -c 64 {}", key.display()), "toolu_r3"),
+        ),
+        (
+            "cat glob",
+            bash("cat .cyberbrain/k*/*".to_string(), "toolu_r4"),
+        ),
+    ] {
+        let out = run(Some(&app), HookEvent::PreToolUse, &payload);
+        assert!(!out.stdout.is_empty(), "{what}: {}", out.stderr);
+        let (d, why) = decision(&out);
+        assert_eq!(d, "deny", "{what}: {why}");
+        assert!(why.contains("signing key"), "{what}: {why}");
+    }
+    // Everything else stays readable.
+    let note = f.payload(serde_json::json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Read",
+        "tool_input": { "file_path": f.store.join("notes").join("r2").join("x.md").to_string_lossy() },
+        "tool_use_id": "toolu_r5",
+    }));
+    let out = run(Some(&app), HookEvent::PreToolUse, &note);
+    assert!(out.stdout.is_empty(), "{}", out.stdout);
+    let ls = bash(
+        "ls .cyberbrain/notes && cat README.md".to_string(),
+        "toolu_r6",
+    );
+    assert!(
+        run(Some(&app), HookEvent::PreToolUse, &ls)
+            .stdout
+            .is_empty()
+    );
+}

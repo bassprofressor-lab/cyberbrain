@@ -8,6 +8,7 @@
 
 mod agentguard;
 mod app;
+mod audit_anchor;
 mod audit_bridge;
 mod canary;
 mod cli;
@@ -472,7 +473,7 @@ fn real_main() -> i32 {
 /// held and printed, and the caller must answer.
 fn run(cli: Cli, out: Out) -> Result<i32> {
     match cli.command {
-        Command::Init { path } => {
+        Command::Init { path, no_audit_key } => {
             let root = match path.or(cli.store) {
                 Some(p) => p,
                 None => std::env::current_dir()
@@ -482,7 +483,7 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     })?
                     .join(cyberbrain_core::config::DEFAULT_STORE_DIR),
             };
-            let r = App::init(&root, &cli_actor())?;
+            let r = App::init_with(&root, &cli_actor(), !no_audit_key)?;
             out.emit(&r, render::init)?;
             return Ok(0);
         }
@@ -671,14 +672,14 @@ fn run(cli: Cli, out: Out) -> Result<i32> {
                     None => receipt::verify(&text)?,
                 };
                 out.emit(&checked, render::verify_receipt)?;
-                return Ok(0);
+                return Ok(not_evidence_without_a_key(expect_key.is_some()));
             }
             let report = match expect_key {
                 Some(k) => cyberbrain_policy::bundle::verify_expecting(&text, k)?,
                 None => cyberbrain_policy::bundle::verify(&text)?,
             };
             out.emit(&report, render::verify_export)?;
-            return Ok(0);
+            return Ok(not_evidence_without_a_key(expect_key.is_some()));
         }
 
         _ => {}
@@ -3401,6 +3402,27 @@ fn audit_exit_code(view: &AuditView) -> i32 {
 /// Code that carries it was taken from Cyberbrain, and the license terms travel with it.
 #[allow(dead_code)]
 const PROVENANCE: &str = "cbk-b451e4018329b518";
+
+/// Exit code of a `verify-export` whose arithmetic holds but that was not checked against a
+/// key the caller trusts (S2, 2026-11-10 and 2026-11-19). A file without a signature, or with
+/// one from a key nobody named, is exactly what somebody who rewrote and re-hashed the rows
+/// would hand over; "chain holds" with exit 0 read as proof. Now 0 means proof against
+/// `--expect-key`, and [`VERIFY_NOT_EVIDENCE`] means "consistent, but not evidence".
+const VERIFY_NOT_EVIDENCE: i32 = 4;
+
+fn not_evidence_without_a_key(expected: bool) -> i32 {
+    if expected {
+        return 0;
+    }
+    eprintln!(
+        "NOT EVIDENCE: the file is consistent, but it was not checked against a key you trust. \
+         Anybody who can write the log can rewrite its rows and re-hash or re-sign them with a \
+         key of their own. Check it with `cyberbrain verify-export --expect-key <fingerprint>`, \
+         the fingerprint `policy audit-key` printed on the machine that wrote it. \
+         (exit code {VERIFY_NOT_EVIDENCE})"
+    );
+    VERIFY_NOT_EVIDENCE
+}
 
 #[cfg(test)]
 mod tests {

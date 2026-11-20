@@ -21,9 +21,15 @@ security issue rather than a bug:
 - **Data leaves the machine on a path that is not in the egress register.** The register is
   closed at compile time and `cyberbrain policy egress` prints it. Anything outbound that is
   not on that list, including a lookup, a preconnect or a redirect chain, belongs here.
-- **The audit log can be changed without `policy audit --verify` noticing.** The chain is
-  blake3 over each row and its predecessor; a modification, deletion, reordering or
-  re-signing that verifies clean is a finding.
+- **The audit log of a store with an audit key can be changed without `policy audit
+  --verify` noticing.** Each row is chained to its predecessor (blake3) and signed with the
+  store's Ed25519 key; a new store gets its key at `init` (since 0.10.8). Rows missing at
+  the end, or an older copy of `audit.db` put back, are checked against the head anchor that
+  every append moves forward in the user's state directory, outside the store. An export is
+  evidence only when checked against the expected key: `verify-export --expect-key
+  <fingerprint>` exits 0, without `--expect-key` it exits 4 ("consistent, not evidence").
+  Within those limits, a modification, deletion, reordering, truncation or re-signing that
+  verifies clean is a finding.
 - **`forget` leaves something behind.** File, blocks, vectors, FTS rows, links and
   derivatives go in one transaction. A copy that survives in any cache is a finding.
 - **The PII gate can be walked past.** Under profile `eu`/`ch` a write with findings is held
@@ -54,6 +60,16 @@ Ordinary crashes, wrong results and unhelpful errors are welcome as normal issue
   hands work to something the operator already runs outside it, is the operator to this
   program; on macOS and Windows so is one that drops `CLAUDECODE`. Where that matters, the
   boundary with credentials is the hub or AgentGuard.
+- **The limits of the audit log, said plainly.** A store made with `init --no-audit-key`
+  (or before 0.10.8 without `policy audit-key --init`) has a hash chain only: whoever can
+  write to the store can rewrite and re-hash it, and the check shows that the file is
+  consistent, not who wrote it. The private key lies in the store (`keys/audit.ed25519`,
+  0600) and the head anchor in the user's state directory, so a process running as the same
+  user can read the one and rewrite the other. The hooks refuse an agent's tools to read,
+  copy or write the key and to make it (`policy audit-key --init` is the operator's), but
+  that is attribution, not a sandbox (see above). Against the same user, and against a
+  restored backup of the whole home directory, only a record on another machine helps: a
+  hub or a timestamping service that countersigns the head. That is not built yet.
 - The PII scan misses something. It is documented as heuristic, a seatbelt rather than a
   guarantee, and it says so on every screen that shows it.
 - The inference endpoint you configured yourself sees the note text you asked it to check.

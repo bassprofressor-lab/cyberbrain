@@ -55,6 +55,12 @@ impl Cb {
         c.env("CYBERBRAIN_TEST_IGNORE_LINEAGE", "1");
         // Each test is one process against a throwaway store: no resident daemon (daemon.rs).
         c.env("CYBERBRAIN_NO_DAEMON", "1");
+        // Head anchors of the audit logs (audit_anchor.rs) go to a scratch directory, not into
+        // the home directory of whoever runs the tests.
+        c.env(
+            "CYBERBRAIN_AUDIT_ANCHORS",
+            std::env::temp_dir().join("cyberbrain-test-anchors"),
+        );
         c
     }
 
@@ -63,6 +69,24 @@ impl Cb {
         let store = dir.path().join("store");
         let out = Self::bin()
             .args(["init", "--path"])
+            .arg(&store)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        Self { _dir: dir, store }
+    }
+
+    /// A store made with `init --no-audit-key`: what every store was before 0.10.8, and what
+    /// a store from before signing still is.
+    fn unsigned() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let store = dir.path().join("store");
+        let out = Self::bin()
+            .args(["init", "--no-audit-key", "--path"])
             .arg(&store)
             .output()
             .unwrap();
@@ -1432,7 +1456,8 @@ fn an_exported_bundle_verifies_with_nothing_but_the_file() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&check.stdout);
-    assert!(check.status.success(), "{stdout}");
+    // Holds, but nobody named a key: consistent, not evidence (exit 4).
+    assert_eq!(check.status.code(), Some(4), "{stdout}");
     assert!(stdout.contains("chain holds over"), "{stdout}");
 }
 
@@ -1550,7 +1575,8 @@ fn the_independent_python_checker_agrees() {
         out.status.success(),
         "the independent checker rejected a bundle this binary wrote:\n{stdout}"
     );
-    assert!(stdout.contains("chain holds over 4 row(s)"), "{stdout}");
+    // store.init, audit.key.created (a new store is signed from its first row), three writes.
+    assert!(stdout.contains("chain holds over 5 row(s)"), "{stdout}");
 }
 
 /// K10: an export narrowed by `--action` wrote its file, then failed its own check, because
@@ -1578,7 +1604,7 @@ fn an_export_narrowed_by_action_verifies_here_and_in_python() {
 
     let check = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
     let said = text(&check);
-    assert!(check.status.success(), "{said}");
+    assert_eq!(check.status.code(), Some(4), "{said}");
     assert!(said.contains("selected row(s)"), "{said}");
 
     let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1614,7 +1640,7 @@ fn python_with(modules: &str) -> bool {
 /// as unsigned, not as a fault.
 #[test]
 fn a_store_from_before_signing_keeps_verifying_and_signs_from_the_key_on() {
-    let cb = Cb::new();
+    let cb = Cb::unsigned();
     cb.write("2", "alt", "vor dem schluessel");
     let before = cb.ok(&["policy", "audit-key"]);
     assert_eq!(before["present"], false, "{before}");
@@ -1657,7 +1683,7 @@ fn a_store_from_before_signing_keeps_verifying_and_signs_from_the_key_on() {
 
 #[test]
 fn a_signed_export_verifies_against_its_fingerprint_and_no_other() {
-    let cb = Cb::new();
+    let cb = Cb::unsigned();
     cb.write("2", "vorher", "unsigniert");
     let fp = cb.ok(&["policy", "audit-key", "--init"])["fingerprint"]
         .as_str()
@@ -1722,7 +1748,7 @@ fn a_signed_export_verifies_against_its_fingerprint_and_no_other() {
 
     // Without a key there is nothing to sign with, and the export says so instead of
     // writing an unsigned file the caller would pass on as signed.
-    let plain = Cb::new();
+    let plain = Cb::unsigned();
     let (_, code, err) = plain.json(&[
         "policy",
         "audit",
@@ -1736,7 +1762,7 @@ fn a_signed_export_verifies_against_its_fingerprint_and_no_other() {
 
 #[test]
 fn forget_writes_a_signed_report_that_verifies_and_breaks_when_edited() {
-    let cb = Cb::new();
+    let cb = Cb::unsigned();
     cb.write("2", "weg", "das soll weg");
     let fp = cb.ok(&["policy", "audit-key", "--init"])["fingerprint"]
         .as_str()
@@ -1789,7 +1815,7 @@ fn forget_writes_a_signed_report_that_verifies_and_breaks_when_edited() {
     assert!(!bad.status.success(), "an edited report verified");
 
     // --sign on a store without a key stops before anything is erased.
-    let plain = Cb::new();
+    let plain = Cb::unsigned();
     plain.write("2", "bleibt", "noch da");
     let (_, code, err) = plain.json(&[
         "forget",
@@ -5383,7 +5409,7 @@ fn searches_by_a_limited_client_are_audited_without_the_query_text() {
     ]);
     assert!(out.status.success(), "{}", text(&out));
     let check = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
-    assert!(check.status.success(), "{}", text(&check));
+    assert_eq!(check.status.code(), Some(4), "{}", text(&check));
     assert_eq!(
         std::fs::read_to_string(&file).unwrap().lines().count(),
         3 + 2,
@@ -5758,4 +5784,95 @@ fn a_signoff_is_refused_to_an_agent_and_without_a_terminal() {
     );
     let hits = cb.ok(&["recall", "unique-marker-signoff"]);
     assert!(hits["hits"][0].get("signed_off").is_none(), "{hits:#}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Audit chain S2–S4 (audits 2026-11-10 and 2026-11-19): what the log can prove.
+
+/// S2: a store without a key had a log anybody could rewrite and re-hash. A new store now
+/// signs from its first row. Calibrated against the broken state: `unsigned` was 3, `signed` 0.
+#[test]
+fn a_new_store_signs_its_audit_log_from_the_first_row() {
+    let cb = Cb::new();
+    cb.write("2", "erste", "eine notiz");
+    assert!(cb.store.join("keys").join("audit.ed25519").is_file());
+    let v = cb.ok(&["policy", "audit", "--verify"]);
+    assert!(v["verified"]["Ok"].is_number(), "{v}");
+    assert_eq!(v["chain"]["unsigned"], 0, "{v}");
+    assert!(v["chain"]["signed"].as_u64().unwrap() >= 3, "{v}");
+}
+
+/// S3: rows cut from the end of the log, or an older copy put back, left a shorter chain that
+/// checked out ("chain holds over 5 row(s)"). The head anchor outside the store sees it.
+/// Calibrated against the broken state: `--verify` answered Ok after the cut.
+#[test]
+fn rows_cut_from_the_end_of_the_audit_log_are_found() {
+    let cb = Cb::new();
+    cb.write("2", "a", "text");
+    // A copy of the log as it stood then: a backup, an older checkout.
+    let copy = cb.store.join("..").join("audit-copy.db");
+    rusqlite::Connection::open(cb.store.join("audit.db"))
+        .unwrap()
+        .execute("VACUUM INTO ?1", [copy.to_str().unwrap()])
+        .unwrap();
+    for n in ["b", "c", "d"] {
+        cb.write("2", n, "text");
+    }
+    let v = cb.ok(&["policy", "audit", "--verify"]);
+    assert!(v["verified"]["Ok"].is_number(), "{v}");
+    // Put the copy back: the three newer writes are gone from the log, and what is left is
+    // a perfectly good, shorter chain.
+    for side in ["audit.db-wal", "audit.db-shm"] {
+        let _ = std::fs::remove_file(cb.store.join(side));
+    }
+    std::fs::copy(&copy, cb.store.join("audit.db")).unwrap();
+    let (v, code, _) = cb.json(&["policy", "audit", "--verify"]);
+    assert_eq!(code, 1, "{v}");
+    let why = v["verified"]["Err"].as_str().unwrap_or_default();
+    assert!(why.contains("removed from the end"), "{v}");
+}
+
+/// S4: an agent made the key every later row is signed with. Calibrated against the broken
+/// state: the command succeeded and wrote `audit.key.created` with the agent as actor.
+#[test]
+fn an_agent_cannot_make_the_audit_key() {
+    let cb = Cb::unsigned();
+    let out = cb.as_agent_of("claude-code", "s1", &["policy", "audit-key", "--init"]);
+    assert_eq!(out.status.code(), Some(3), "{}", text(&out));
+    assert!(!cb.store.join("keys").join("audit.ed25519").exists());
+}
+
+/// S2, the export side: a bundle rewritten and re-hashed by somebody without the key checked
+/// out with exit 0. Now exit 0 needs `--expect-key`; without it the answer is 4, "consistent,
+/// not evidence". Calibrated against the broken state: exit 0.
+#[test]
+fn verify_export_without_an_expected_key_is_not_evidence() {
+    let cb = Cb::new();
+    cb.write("2", "n", "text");
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("e.jsonl");
+    let fp = cb.ok(&["policy", "audit-key"])["fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        cb.run(&[
+            "policy",
+            "audit",
+            "--export",
+            file.to_str().unwrap(),
+            "--signed"
+        ])
+        .status
+        .success()
+    );
+    let plain = Cb::bin().arg("verify-export").arg(&file).output().unwrap();
+    assert_eq!(plain.status.code(), Some(4), "{}", text(&plain));
+    assert!(text(&plain).contains("NOT EVIDENCE"), "{}", text(&plain));
+    let checked = Cb::bin()
+        .args(["verify-export", "--expect-key", &fp])
+        .arg(&file)
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "{}", text(&checked));
 }

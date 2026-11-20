@@ -229,7 +229,7 @@ fn the_matcher_covers_every_tool_the_hook_reads() {
     use crate::hook::payload::Payload;
     let payload = |tool: &str| {
         Payload::parse(&format!(
-            r#"{{"tool_name":"{tool}","tool_input":{{"file_path":"/x","notebook_path":"/x"}}}}"#
+            r#"{{"tool_name":"{tool}","tool_input":{{"file_path":"/x","notebook_path":"/x","path":"/x"}}}}"#
         ))
     };
     for tool in TOOL_MATCHER.split('|') {
@@ -254,6 +254,7 @@ fn the_matcher_covers_every_tool_the_hook_reads() {
         assert!(
             payload(tool).edited_file().is_some()
                 || bash(tool).bash_command().is_some()
+                || payload(tool).read_file().is_some()
                 || crate::hook::governance::TOOLS.contains(&tool),
             "{tool} is in the pre-tool-use matcher, so the hook has to have something to do with it"
         );

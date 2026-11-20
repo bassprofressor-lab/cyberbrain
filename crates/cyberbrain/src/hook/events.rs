@@ -773,6 +773,36 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
                 .to_string(),
         });
     }
+    // The signing key is refused to read as well (S4, 2026-11-10 and 2026-11-19: `head -c`
+    // on it went through). Whoever has the private key can rewrite the log and sign it again;
+    // nothing the agent does needs the key's bytes. A heuristic on the command text like the
+    // rest of this function: it stops the ordinary way of doing it, not a determined process
+    // of the same user (SECURITY.md says so).
+    let key_word = cmd
+        .split(|c: char| ";|&()\n".contains(c))
+        .flat_map(|simple| {
+            let w: Vec<&str> = simple
+                .split(|c: char| c.is_whitespace() || "`'\"".contains(c))
+                .filter(|t| !t.is_empty())
+                .collect();
+            // Listing the folder shows names, not the key; copying or archiving it does not.
+            let lists = matches!(w.first(), Some(&("ls" | "stat" | "test" | "[")));
+            w.into_iter()
+                .filter(move |t| names_signing_key(platform, t, !lists))
+        })
+        .next();
+    if let Some(w) = key_word {
+        return Some(BashVerdict {
+            decision: "deny",
+            reason: format!(
+                "this command touches `{}`, the audit log's private signing key. Whoever holds \
+                 it can rewrite the log and sign it again, so no agent reads or copies it. The \
+                 operator manages it with `cyberbrain policy audit-key`; its fingerprint, which \
+                 is all a check needs, is in `cyberbrain status`.",
+                w.trim_matches(['\'', '"'])
+            ),
+        });
+    }
     // A path is guarded when it names ring 0/1, the audit log or the signing key, or a
     // directory that holds them: the store itself, or its notes/ tree (`rm -rf .cyberbrain`
     // takes all of it). The configuration is asked about rather than refused, as it is for the
@@ -939,6 +969,31 @@ fn guard_of(platform: paths::Platform, word: &str) -> Option<&'static str> {
         }
     }
     verdict
+}
+
+/// Whether a word of a command names the private signing key or the folder that holds it,
+/// read or written: the key file by its name anywhere (`audit.ed25519`, `*.ed25519`), the
+/// folder under the default store name, and globs whose fixed part leads there.
+fn names_signing_key(platform: paths::Platform, word: &str, folder_too: bool) -> bool {
+    let mut t = word.trim_matches(['\'', '"']).replace('\\', "/");
+    if platform.folds_case() {
+        t = t.to_lowercase();
+    }
+    let t = fold_dots(&t);
+    if t.contains(".ed25519") || t.contains(".cyberbrain/keys/") {
+        return true;
+    }
+    if t.ends_with(".cyberbrain/keys") {
+        return folder_too;
+    }
+    match t.find(['*', '?', '[', '{']) {
+        Some(w) => {
+            let head = &t[..w];
+            head.rsplit_once(".cyberbrain/")
+                .is_some_and(|(_, rest)| !rest.is_empty() && "keys/audit.ed25519".starts_with(rest))
+        }
+        None => false,
+    }
 }
 
 /// Lexical `.`, `..` and `//` folding of a slash path.
@@ -1350,6 +1405,54 @@ fn pre_bash(ctx: &Ctx<'_>, out: &mut HookOutput, cmd: &str) -> Result<()> {
     Ok(())
 }
 
+/// `Read` and `Grep` of the signing key (S4). Everything else stays readable: the hook is
+/// asked about reads only so that this one file, or the folder it lies in, is not.
+fn pre_read(ctx: &Ctx<'_>, out: &mut HookOutput, file: &Path) -> Result<()> {
+    let cwd = ctx.cwd();
+    let full = cwd.join(file);
+    let target = paths::classify_host(ctx.root(), &cwd, file).or_else(|| {
+        let root = std::fs::canonicalize(ctx.root()).ok()?;
+        let real = resolve_existing_prefix(&full)?;
+        paths::classify_host(&root, &root, &real)
+    });
+    let is_key_dir = |p: &Path| {
+        let keys = ctx.root().join("keys");
+        p == keys
+            || std::fs::canonicalize(p)
+                .ok()
+                .zip(std::fs::canonicalize(&keys).ok())
+                .is_some_and(|(a, b)| a == b)
+    };
+    if target != Some(StoreTarget::SigningKey) && !is_key_dir(&full) {
+        out.note("pre-tool-use: read of a file the hooks do not guard; allowing");
+        return Ok(());
+    }
+    let tool = ctx.payload.tool_name.as_deref().unwrap_or("tool");
+    let rel = paths::display_inside(ctx.root(), &cwd, file);
+    let reason = format!(
+        "`{rel}` is the audit log's private signing key. Whoever holds it can rewrite the log \
+         and sign it again, so no agent reads it. Its fingerprint, which is all a check needs, \
+         is in `cyberbrain status`; the operator manages the key with `cyberbrain policy \
+         audit-key`."
+    );
+    record_refusal(
+        ctx,
+        out,
+        format!("file:{rel}"),
+        json!({ "tool": tool, "target": "SigningKey", "session": ctx.payload.session_id, "reason": reason }),
+    );
+    out.note(format!("pre-tool-use: deny {tool} on {rel}"));
+    out.stdout = json!({
+        "hookSpecificOutput": {
+            "hookEventName": harness_event_name(ctx.event),
+            "permissionDecision": "deny",
+            "permissionDecisionReason": reason,
+        }
+    })
+    .to_string();
+    Ok(())
+}
+
 /// The store's own guard first; when it has nothing to say, the governance service
 /// (`governance.rs`) is asked about the call.
 fn pre_tool_use(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
@@ -1422,6 +1525,9 @@ fn canary_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> bool {
 fn store_guard(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     if let Some(cmd) = ctx.payload.bash_command() {
         return pre_bash(ctx, out, cmd);
+    }
+    if let Some(file) = ctx.payload.read_file() {
+        return pre_read(ctx, out, &file);
     }
     let Some((target, rel)) = edited_store_file(ctx, out) else {
         return Ok(());
