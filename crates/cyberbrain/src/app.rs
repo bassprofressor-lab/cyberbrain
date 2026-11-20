@@ -1647,6 +1647,13 @@ impl App {
                 None
             }
         };
+        if let Err(e) = self.free_name_from_stale_row(w, &note.front.name, note.front.id) {
+            step.index_failed = Some(format!(
+                "the file is written and recorded, but a stale index row holds its name and \
+                 could not be dropped ({e}); `cyberbrain scan` retries"
+            ));
+            return step;
+        }
         match w.index.upsert_note(note, &blocks, vectors.as_deref()) {
             Ok(o) => {
                 step.blocks = o.blocks;
@@ -1934,6 +1941,11 @@ impl App {
                     None
                 }
             };
+            // K3: a note deleted by hand and written again under its name has a new id; the
+            // old row still holds the name and the index would refuse the new one.
+            if matches!(decision, Decision::New) {
+                self.free_name_from_stale_row(&w, &note.front.name, note.front.id)?;
+            }
             match w.index.upsert_note(&note, &blocks, vectors.as_deref()) {
                 Ok(_) => match decision {
                     Decision::New => report.indexed_new += 1,
@@ -1958,7 +1970,9 @@ impl App {
             }
             // Looked at again before the row goes: the listing is from the start of the scan,
             // and a file that exists now is not "missing at scan" whatever the listing says.
-            if self.indexed_path(&rec).is_ok_and(|p| p.is_file()) {
+            // A file that is there but carries another id is not this row's file either (K3).
+            let gone = self.indexed_path(&rec).map_or(true, |p| !p.is_file());
+            if !gone && !self.row_is_stale(&rec) {
                 continue;
             }
             let erased = w.index.delete_note(&rec.front.id)?;
@@ -1970,7 +1984,11 @@ impl App {
                     "name": erased.name,
                     "ring": erased.ring,
                     "path": erased.path,
-                    "reason": "file missing at scan",
+                    "reason": if gone {
+                        "file missing at scan"
+                    } else {
+                        "its file now holds another note of the same name"
+                    },
                     "counts": erased.counts,
                     "dry_run": opts.dry_run,
                 }),
@@ -2496,6 +2514,58 @@ impl App {
     /// the original's file while `recall --id` read the original's text (K1, audit 2026-11-10).
     fn indexed_path(&self, rec: &cyberbrain_index::NoteRecord) -> Result<PathBuf> {
         self.store.note_path(rec.front.ring, &rec.front.name)
+    }
+
+    /// Whether an index row no longer describes any file: the file at its path is gone, or
+    /// that file now carries another id. The second case is a note deleted by hand and
+    /// written again under the same name before a scan ran (K3, 2026-11-10): the path exists,
+    /// so "is the file there" said the old row was fine, and the new note was refused for a
+    /// name the old row still held. A file that cannot be read keeps its row; that is damage
+    /// for `doctor`, not proof that the row is stale.
+    fn row_is_stale(&self, rec: &cyberbrain_index::NoteRecord) -> bool {
+        let Ok(path) = self.indexed_path(rec) else {
+            return false;
+        };
+        if !path.is_file() {
+            return true;
+        }
+        self.store
+            .read_path(&path)
+            .is_ok_and(|n| n.front.id != rec.front.id)
+    }
+
+    /// Free `note`'s name from a stale row of another id before the note is indexed (K3).
+    /// Without this the index refuses the note ("name already used by note …"), `recall`
+    /// keeps answering with the deleted text, and only `scan --full` helps. The drop is
+    /// recorded like the one in `scan`, with the reason. Returns the dropped row's id.
+    fn free_name_from_stale_row(
+        &self,
+        w: &Writers<'_>,
+        name: &str,
+        id: NoteId,
+    ) -> Result<Option<cyberbrain_index::Erasure>> {
+        let holder = lock_index(&self.index)?.note_by_name(name)?;
+        let Some(rec) = holder else {
+            return Ok(None);
+        };
+        if rec.front.id == id || !self.row_is_stale(&rec) {
+            return Ok(None);
+        }
+        let erased = w.index.delete_note(&rec.front.id)?;
+        w.policy.get().audit().record_raw(
+            &self.actor.to_string(),
+            "index.note-dropped",
+            format!("note:{}", erased.id),
+            json!({
+                "name": erased.name,
+                "ring": erased.ring,
+                "path": erased.path,
+                "reason": "its file now holds another note of the same name",
+                "replaced_by": id.to_string(),
+                "counts": erased.counts,
+            }),
+        )?;
+        Ok(Some(erased))
     }
 
     fn note_view_at(&self, path: &Path) -> Result<NoteView> {
@@ -4017,11 +4087,27 @@ impl App {
         let req = self.erase_request(target, EraseReason::OperatorForget, dry_run)?;
         self.refuse_resident_erase_unless_operator(&req.name, req.ring, dry_run)?;
         let w = self.writers(dry_run)?;
+        // K4 (2026-11-10): a note deleted by hand and written again under its name leaves
+        // the old row in the index until a scan. Erasing the new note alone reported "nothing
+        // of the note left" while `recall` still answered with the old text.
+        let stale = self.free_name_from_stale_row(&w, &req.name, req.note_id)?;
         let mut eraser = StoreEraser {
             notes: w.notes.as_ref(),
             index: w.index.as_ref(),
         };
         let mut report = w.policy.get().forget(&mut eraser, &req)?;
+        if let Some(e) = stale {
+            report.blocks += e.counts.blocks;
+            report.fts_rows += e.counts.fts_rows;
+            report.vectors += e.counts.vectors;
+            report.links_out += e.counts.links_out;
+            report.links_in_unresolved += e.counts.links_in_unresolved;
+            report.notes.push(format!(
+                "an older index row of the same name (id {}, its file deleted by hand) still \
+                 held {} block(s) of earlier text; removed as well and counted above",
+                e.id, e.counts.blocks
+            ));
+        }
         // The erasure is in the record by now; whether its pages left the disk is only known
         // after the checkpoint, so the report says it and the audit row cannot.
         report.scrub = w.index.scrub()?;
@@ -7143,6 +7229,174 @@ mod enrol_tests {
             std::fs::read_to_string(&path)
                 .unwrap()
                 .contains("hub.example")
+        );
+    }
+}
+
+#[cfg(test)]
+mod stale_name_tests {
+    //! K3/K4 (audit 2026-11-10, again F1/F2 on 2026-11-19): a note deleted by hand and
+    //! written again under its name before any scan. The old row kept the name, the index
+    //! refused the new note on every `write` and `scan`, `recall` answered with the deleted
+    //! text, and `forget` reported a complete erasure while that text stayed retrievable.
+    use super::*;
+
+    fn req(name: &str, body: &str) -> WriteRequest {
+        WriteRequest {
+            ring: Ring::Knowledge,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: body.to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+            anchors: crate::app::Anchoring::default(),
+        }
+    }
+
+    fn store() -> (tempfile::TempDir, App) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let app = App::open(Some(&root), Actor::Operator).unwrap();
+        (dir, app)
+    }
+
+    fn texts(app: &App, q: &str) -> Vec<String> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(app.recall(q, &RecallRequest::default()))
+            .unwrap()
+            .hits
+            .into_iter()
+            .map(|h| h.text)
+            .collect()
+    }
+
+    fn file(app: &App) -> PathBuf {
+        app.root().join("notes").join("r2").join("preis.md")
+    }
+
+    /// Writes `preis` with the old price and deletes its file by hand. No scan runs.
+    fn deleted_by_hand(app: &App) -> NoteId {
+        let WriteOutcome::Written(w) = app
+            .write(req("preis", "Der Preis beträgt 100 Euro im Monat."))
+            .unwrap()
+        else {
+            panic!()
+        };
+        std::fs::remove_file(file(app)).unwrap();
+        w.id
+    }
+
+    /// Calibrated against the broken state: "0 blocks", `index_failed` set, and recall
+    /// returned "100 Euro".
+    #[test]
+    fn write_after_a_hand_deletion_indexes_the_new_note() {
+        let (_d, app) = store();
+        let old = deleted_by_hand(&app);
+        let WriteOutcome::Written(w) = app
+            .write(req("preis", "Der Preis beträgt 250 Euro im Monat."))
+            .unwrap()
+        else {
+            panic!()
+        };
+        assert_ne!(w.id, old, "the file was gone, so this is a new note");
+        assert!(w.index_failed.is_none(), "{:?}", w.index_failed);
+        assert!(w.blocks > 0, "{w:?}");
+        let hits = texts(&app, "Preis Euro");
+        assert!(hits.iter().any(|t| t.contains("250 Euro")), "{hits:?}");
+        assert!(!hits.iter().any(|t| t.contains("100 Euro")), "{hits:?}");
+        assert!(
+            lock_index(&app.index)
+                .unwrap()
+                .note(&old)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The file put back by hand with a new id (an editor, a `git checkout`, another tool).
+    /// Calibrated against the broken state: the scan skipped it with "the index refused it".
+    #[test]
+    fn scan_drops_the_row_whose_file_now_holds_another_note() {
+        let (_d, app) = store();
+        let WriteOutcome::Written(w) = app
+            .write(req("preis", "Der Preis beträgt 100 Euro im Monat."))
+            .unwrap()
+        else {
+            panic!()
+        };
+        let text = std::fs::read_to_string(file(&app)).unwrap();
+        let fresh = NoteId::generate();
+        std::fs::remove_file(file(&app)).unwrap();
+        std::fs::write(
+            file(&app),
+            text.replace(&w.id.to_string(), &fresh.to_string())
+                .replace("100 Euro", "250 Euro"),
+        )
+        .unwrap();
+        let r = app
+            .scan(ScanOptions {
+                full: false,
+                dry_run: false,
+            })
+            .unwrap();
+        assert!(r.skipped.is_empty(), "{:?}", r.skipped);
+        assert_eq!(r.indexed_new, 1);
+        let hits = texts(&app, "Preis Euro");
+        assert!(hits.iter().any(|t| t.contains("250 Euro")), "{hits:?}");
+        assert!(!hits.iter().any(|t| t.contains("100 Euro")), "{hits:?}");
+        let dropped = app
+            .policy()
+            .audit()
+            .read(&cyberbrain_policy::AuditFilter::default())
+            .unwrap()
+            .into_iter()
+            .any(|e| e.action == "index.note-dropped" && e.subject == format!("note:{}", w.id));
+        assert!(dropped, "the drop is recorded");
+    }
+
+    /// The same state reached without `write` (the new file came in by hand), then `forget`.
+    /// Calibrated against the broken state: "nothing of the note left", and recall still
+    /// returned "100 Euro".
+    #[test]
+    fn forget_in_that_state_leaves_no_old_text_behind() {
+        let (_d, app) = store();
+        let WriteOutcome::Written(w) = app
+            .write(req("preis", "Der Preis beträgt 100 Euro im Monat."))
+            .unwrap()
+        else {
+            panic!()
+        };
+        let text = std::fs::read_to_string(file(&app)).unwrap();
+        std::fs::remove_file(file(&app)).unwrap();
+        std::fs::write(
+            file(&app),
+            text.replace(&w.id.to_string(), &NoteId::generate().to_string())
+                .replace("100 Euro", "250 Euro"),
+        )
+        .unwrap();
+        let report = app.forget("preis", false).unwrap();
+        assert!(report.file_removed);
+        assert!(report.blocks > 0, "{report:?}");
+        assert!(texts(&app, "Preis Euro").is_empty());
+        assert!(
+            lock_index(&app.index)
+                .unwrap()
+                .note(&w.id)
+                .unwrap()
+                .is_none()
         );
     }
 }
