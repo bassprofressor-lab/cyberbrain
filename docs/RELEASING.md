@@ -26,6 +26,9 @@ $ cargo test --workspace 2>&1 | awk '/^test result: ok\./ {s+=$4} END {print s}'
                                               # count the lines: `grep -c` answers how many
                                               # test binaries there are, which is 18 and
                                               # was never the number in the README.
+$ scripts/check-dependents.sh . light <light-checkout>       # Light also runs in the release job
+$ scripts/check-dependents.sh . business <business-checkout> # until BUSINESS_REPOSITORY is set,
+                                              # the release job only warns for business
 $ (cd ui && npm ci && npm run build && npm run licenses)
 $ cp -r ui/dist crates/cyberbrain/ui-dist     # the step that cannot be skipped
 $ cargo package -p cyberbrain --list --allow-dirty | grep -c '^ui-dist/'  # must not be 0

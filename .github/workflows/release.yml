@@ -187,18 +187,24 @@ jobs:
           repository: bassprofressor-lab/cyberbrain-light
           path: light
           persist-credentials: false
+      # business has no remote yet (20.11.2026). Until BUSINESS_REPOSITORY and BUSINESS_CHECKOUT_TOKEN
+      # are set, this leg warns and is skipped; the release checklist then runs
+      # scripts/check-dependents.sh against a local business checkout before tagging. Light is always checked.
       - name: business is configured
+        id: cfg
         if: matrix.product == 'business'
         env:
           REPO: ${{ vars.BUSINESS_REPOSITORY }}
           HAS_TOKEN: ${{ secrets.BUSINESS_CHECKOUT_TOKEN != '' }}
         run: |
           if [ -z "$REPO" ] || [ "$HAS_TOKEN" != "true" ]; then
-            echo "::error::set the variable BUSINESS_REPOSITORY and the secret BUSINESS_CHECKOUT_TOKEN (see the comment on this job)"
-            exit 1
+            echo "::warning::business not checked here: set the variable BUSINESS_REPOSITORY and the secret BUSINESS_CHECKOUT_TOKEN, and run scripts/check-dependents.sh locally before the tag"
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        if: matrix.product == 'business'
+        if: matrix.product == 'business' && steps.cfg.outputs.ok == 'true'
         with:
           repository: ${{ vars.BUSINESS_REPOSITORY }}
           ref: ${{ vars.BUSINESS_REF || 'main' }}
@@ -206,7 +212,9 @@ jobs:
           path: business
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+        if: matrix.product == 'light' || steps.cfg.outputs.ok == 'true'
       - name: build and test ${{ matrix.product }} against this core
+        if: matrix.product == 'light' || steps.cfg.outputs.ok == 'true'
         run: cyberbrain-p0/scripts/check-dependents.sh cyberbrain-p0 ${{ matrix.product }} ${{ matrix.product }}
 
   publish:
