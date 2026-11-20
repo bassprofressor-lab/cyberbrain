@@ -1807,6 +1807,20 @@ impl HubStore {
         Ok(ErasureCount { notes, conflicts })
     }
 
+    /// Whether this bereich holds a note of this name, as a held note, a conflict row or an
+    /// earlier erasure. An erasure marker is only written for one it does (S15): a marker
+    /// travels to every receiver of the bereich, and one for a name the bereich never held is
+    /// about somebody else's note.
+    pub fn bereich_knows_note(&self, bereich: &str, name: &str) -> Result<bool> {
+        ix(self.conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM synced_notes WHERE bereich = ?1 AND name = ?2)
+                 OR EXISTS (SELECT 1 FROM note_conflicts WHERE bereich = ?1 AND name = ?2)
+                 OR EXISTS (SELECT 1 FROM erasures WHERE bereich = ?1 AND name = ?2)",
+            params![bereich, name],
+            |r| r.get(0),
+        ))
+    }
+
     /// Was this note erased, and when? Checked before taking a delivery, so a machine that
     /// still has its own copy cannot put it back.
     pub fn erased_at(&self, bereich: &str, name: &str) -> Result<Option<String>> {

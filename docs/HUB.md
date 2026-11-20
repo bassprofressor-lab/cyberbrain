@@ -533,6 +533,10 @@ and they are for the `editor` role and only for the bereiche that editor was ass
 held in any conflict row for it, and leaves a tombstone so that machines which already
 pulled it learn it went rather than merely stopping to see it. It is deliberately not behind
 `allow_note_sync`: a setting must not be able to stand between somebody and Art. 17.
+An erasure applies to the bereich the note belongs to and nowhere else: the hub refuses one for
+a name that bereich does not hold, and a machine pulling with `--apply-erasures` removes only a
+note of that bereich. A note of the same name in another bereich, or one that was never shared,
+stays and the pull says so.
 
 **What `forget` does not do.** Erasing a note locally does not reach the hub. `cyberbrain
 forget` says so when the note had a bereich and the store is enrolled, and names the command

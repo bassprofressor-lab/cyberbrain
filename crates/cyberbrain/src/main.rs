@@ -2356,6 +2356,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                 for e in v["erasures"].as_array().cloned().unwrap_or_default() {
                     if e["held_here"].as_bool().unwrap_or(false)
                         && !e["removed"].as_bool().unwrap_or(false)
+                        && e["kept"].is_null()
                     {
                         s.push_str(&format!(
                             "  erased at the hub but still here: {} — `cyberbrain forget {}` \

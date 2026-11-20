@@ -422,6 +422,19 @@ pub fn erase_note(
         )));
     }
 
+    // S15: a marker goes to every receiver of this bereich, so it is written only for a note
+    // the bereich holds. A name it never held is somebody else's note — in another bereich,
+    // or never shared — and erasing it is not this device's to ask.
+    let known = hub
+        .bereich_knows_note(&req.bereich, &req.name)
+        .map_err(|e| Refusal::BadBundle(format!("cannot read the held notes: {e}")))?;
+    if !known {
+        return Err(Refusal::BadBundle(format!(
+            "bereich {} holds no note {}; an erasure applies only to the bereich the note \
+             belongs to, and nothing was erased",
+            req.bereich, req.name
+        )));
+    }
     let count = hub
         .erase_note(&req.bereich, &req.name, &device.id, now)
         .map_err(|e| Refusal::BadBundle(format!("erasure failed: {e}")))?;

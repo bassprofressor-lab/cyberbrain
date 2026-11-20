@@ -5449,7 +5449,14 @@ impl App {
             // the hub, so a marker that names one here is about somebody else's note of the
             // same name, and the rules of this machine are not erased from outside.
             let resident = held.as_ref().is_some_and(|n| n.front.ring.is_resident());
-            let remove = apply_erasures && exists && !resident && !dry_run;
+            // And a marker is about one bereich's note (S15, 2026-11-20). A note of the same
+            // name that belongs to another bereich, or to none because it was never shared,
+            // is not the one that was withdrawn.
+            let marker_bereich = e["bereich"].as_str();
+            let other_bereich = held.as_ref().is_some_and(|n| {
+                marker_bereich.is_none() || n.front.bereich.as_deref() != marker_bereich
+            });
+            let remove = apply_erasures && exists && !resident && !other_bereich && !dry_run;
             let mut row = serde_json::json!({
                 "name": name,
                 "erased_at": e["erased_at"],
@@ -5459,6 +5466,10 @@ impl App {
             if resident {
                 row["kept"] = serde_json::json!(
                     "ring 0 or 1 here; the hub does not erase this machine's rules"
+                );
+            } else if other_bereich {
+                row["kept"] = serde_json::json!(
+                    "the note here does not belong to the bereich the erasure was made in"
                 );
             }
             erasures.push(row);
@@ -5534,8 +5545,12 @@ impl App {
         // An erasure this machine was told about but did not act on must come round again.
         // Advancing the cursor past it would mean the only warning was the one nobody
         // acted on, and the copy stays here for good.
+        // A note kept on purpose (ring 0/1, or another bereich's) is not waiting for anything;
+        // holding the cursor for it would fetch the same marker on every pull for good.
         let unfinished = erasures.iter().any(|e| {
-            e["held_here"].as_bool().unwrap_or(false) && !e["removed"].as_bool().unwrap_or(false)
+            e["held_here"].as_bool().unwrap_or(false)
+                && !e["removed"].as_bool().unwrap_or(false)
+                && e["kept"].is_null()
         });
         // The same for a note this machine could not write: it has to be offered again.
         let unfinished = unfinished || retry;
@@ -6753,7 +6768,7 @@ fn a_hub_erasure_never_removes_ring_0_or_1() {
     let app = App::open(Some(&root), cyberbrain_policy::Actor::Operator).unwrap();
     let head = |id: &str, name: &str, ring: u8| {
         format!(
-            "---\nid: {id}\nname: {name}\nring: {ring}\nkind: knowledge\ncreated: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nText.\n"
+            "---\nid: {id}\nname: {name}\nring: {ring}\nkind: knowledge\nbereich: disposition\ncreated: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nText.\n"
         )
     };
     let r0 = root.join("notes/r0/regel.md");
@@ -6761,8 +6776,8 @@ fn a_hub_erasure_never_removes_ring_0_or_1() {
     std::fs::write(&r0, head("01ARZ3NDEKTSV4RRFFQ69G5FB0", "regel", 0)).unwrap();
     std::fs::write(&r2, head("01ARZ3NDEKTSV4RRFFQ69G5FB1", "wissen", 2)).unwrap();
     let erased = [
-        serde_json::json!({ "name": "regel", "erased_at": "2026-11-20T00:00:00Z" }),
-        serde_json::json!({ "name": "wissen", "erased_at": "2026-11-20T00:00:00Z" }),
+        serde_json::json!({ "bereich": "disposition", "name": "regel", "erased_at": "2026-11-20T00:00:00Z" }),
+        serde_json::json!({ "bereich": "disposition", "name": "wissen", "erased_at": "2026-11-20T00:00:00Z" }),
     ];
     let pulled = app.apply_pulled(&[], &erased, true, false).unwrap();
     assert!(r0.is_file(), "ring 0 stays: {:?}", pulled.erasures);
@@ -6770,6 +6785,72 @@ fn a_hub_erasure_never_removes_ring_0_or_1() {
     assert!(pulled.erasures[0]["kept"].is_string());
     assert!(!r2.exists(), "ring 2 goes as before: {:?}", pulled.erasures);
     assert_eq!(pulled.erasures[1]["removed"], true);
+}
+
+/// S15 (review 2026-11-10/19): a marker names a bereich and a name, and the pull removed
+/// whatever note here had that name. A note of the same name in another bereich, or one never
+/// shared at all, went with it. A marker now removes only a note that belongs to its bereich.
+/// Calibrated against the old pull: both notes below were removed.
+#[cfg(test)]
+#[test]
+fn a_hub_erasure_removes_only_a_note_of_its_own_bereich() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("store");
+    App::init(&root, &cyberbrain_policy::Actor::Operator).unwrap();
+    let app = App::open(Some(&root), cyberbrain_policy::Actor::Operator).unwrap();
+    let note = |id: &str, name: &str, bereich: Option<&str>| {
+        let line = bereich
+            .map(|b| format!("bereich: {b}\n"))
+            .unwrap_or_default();
+        format!(
+            "---\nid: {id}\nname: {name}\nring: 2\nkind: knowledge\n{line}created: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nText.\n"
+        )
+    };
+    let fremd = root.join("notes/r2/gehalt.md");
+    let privat = root.join("notes/r2/notiz.md");
+    let eigen = root.join("notes/r2/tour.md");
+    std::fs::write(
+        &fremd,
+        note("01ARZ3NDEKTSV4RRFFQ69G5FC0", "gehalt", Some("hr")),
+    )
+    .unwrap();
+    std::fs::write(&privat, note("01ARZ3NDEKTSV4RRFFQ69G5FC1", "notiz", None)).unwrap();
+    std::fs::write(
+        &eigen,
+        note("01ARZ3NDEKTSV4RRFFQ69G5FC2", "tour", Some("disposition")),
+    )
+    .unwrap();
+    let marker = |name: &str| serde_json::json!({ "bereich": "disposition", "name": name, "erased_at": "2026-11-20T00:00:00Z" });
+    let pulled = app
+        .apply_pulled(
+            &[],
+            &[marker("gehalt"), marker("notiz"), marker("tour")],
+            true,
+            false,
+        )
+        .unwrap();
+    assert!(
+        fremd.is_file(),
+        "a note of bereich hr went: {:?}",
+        pulled.erasures
+    );
+    assert!(
+        privat.is_file(),
+        "a note never shared went: {:?}",
+        pulled.erasures
+    );
+    assert_eq!(pulled.erasures[0]["removed"], false);
+    assert!(
+        pulled.erasures[0]["kept"].is_string(),
+        "{:?}",
+        pulled.erasures
+    );
+    assert!(
+        !eigen.exists(),
+        "the bereich's own note goes: {:?}",
+        pulled.erasures
+    );
+    assert_eq!(pulled.erasures[2]["removed"], true);
 }
 
 #[cfg(test)]

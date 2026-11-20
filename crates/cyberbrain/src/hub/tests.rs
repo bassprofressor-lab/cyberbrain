@@ -3428,7 +3428,73 @@ fn an_erased_note_cannot_be_re_offered() {
 fn a_receive_only_device_may_still_erase() {
     let (mut hub, device, token) = hub_with_device();
     grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Receive);
+    // Held in the bereich, delivered by another machine: what a reader finds is there.
+    let (sender, sender_token) = hub.add_device("sender", NOW).unwrap();
+    grant_in_force(&hub, "g2", &sender.id, "disposition", Direction::Both);
+    let n = deliver(vec![wire_from(
+        "irgendwas",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Text.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&sender_token), &n, NOW).unwrap();
     let req = serde_json::json!({ "bereich": "disposition", "name": "irgendwas" }).to_string();
+    assert!(super::erase_note(&mut hub, Some(&token), &req, NOW).is_ok());
+}
+
+/// S15 (review 2026-11-10/19), the hub's half. A marker names a bereich and a name, and the
+/// hub wrote one for any name a device asked about in any bereich it had a grant in, held or
+/// not. Every receiver of that bereich then got a marker for a note that was not the
+/// bereich's — and a receiver before this version removes by name alone. The hub now writes a
+/// marker only for a note the bereich holds (or held: asking twice is not an error).
+/// Calibrated against the old hub: the erasure went through and the marker stood.
+#[test]
+fn a_device_cannot_erase_a_note_of_another_bereich() {
+    let (mut hub, device, token) = hub_with_device();
+    grant_in_force(&hub, "g1", &device.id, "disposition", Direction::Both);
+    let (hr, hr_token) = hub.add_device("hr-laptop", NOW).unwrap();
+    grant_in_force(&hub, "g2", &hr.id, "hr", Direction::Both);
+    let n = deliver(vec![wire_from(
+        "gehalt",
+        "hr",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Gehaltsliste.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&hr_token), &n, NOW).unwrap();
+
+    let req = serde_json::json!({ "bereich": "disposition", "name": "gehalt" }).to_string();
+    let r = super::erase_note(&mut hub, Some(&token), &req, NOW);
+    assert!(
+        matches!(&r, Err(super::Refusal::BadBundle(m)) if m.contains("disposition")),
+        "{r:?}"
+    );
+    assert!(hub.erased_at("disposition", "gehalt").unwrap().is_none());
+    assert_eq!(
+        hub.synced_notes("hr").unwrap().len(),
+        1,
+        "hr keeps its note"
+    );
+
+    // Erasing in its own bereich still works, and asking again is not an error.
+    let (sender, sender_token) = hub.add_device("sender", NOW).unwrap();
+    grant_in_force(&hub, "g3", &sender.id, "disposition", Direction::Both);
+    let n = deliver(vec![wire_from(
+        "tour",
+        "disposition",
+        "2026-09-10T09:00:00Z",
+        None,
+        "Tourenplan.",
+    )]);
+    super::ingest_notes(&mut hub, &collecting(), Some(&sender_token), &n, NOW).unwrap();
+    let req = serde_json::json!({ "bereich": "disposition", "name": "tour" }).to_string();
+    assert_eq!(
+        super::erase_note(&mut hub, Some(&token), &req, NOW)
+            .unwrap()
+            .notes,
+        1
+    );
     assert!(super::erase_note(&mut hub, Some(&token), &req, NOW).is_ok());
 }
 
