@@ -4052,16 +4052,44 @@ impl App {
         // that exists, and until this moment nothing did.
         let now = jiff::Timestamp::now();
         let existing = self.store.read(&name).ok();
+        // K5 (2026-11-10, again 2026-11-19): the head was the proposal's alone, so accepting
+        // an edit of an existing note dropped what the proposal did not say: retention,
+        // bereich, supersedes, the validity bounds, the anchors. A proposal cannot say
+        // "remove this" (an absent field and a removed one look the same in its head), so
+        // what it leaves out is kept from the note, as `write` keeps it.
+        let keep = existing.as_ref().map(|n| &n.front);
+        let p = &note.front;
         let accepted = Note {
             front: Frontmatter {
-                id: existing
-                    .as_ref()
-                    .map(|n| n.front.id)
-                    .unwrap_or_else(NoteId::generate),
-                created: existing.as_ref().map(|n| n.front.created).unwrap_or(now),
+                id: keep.map(|f| f.id).unwrap_or_else(NoteId::generate),
+                created: keep.map(|f| f.created).unwrap_or(now),
                 updated: now,
                 pii,
-                ..note.front.clone()
+                bereich: p
+                    .bereich
+                    .clone()
+                    .or_else(|| keep.and_then(|f| f.bereich.clone())),
+                retention: p
+                    .retention
+                    .clone()
+                    .or_else(|| keep.and_then(|f| f.retention.clone())),
+                supersedes: if p.supersedes.is_empty() {
+                    keep.map(|f| f.supersedes.clone()).unwrap_or_default()
+                } else {
+                    p.supersedes.clone()
+                },
+                superseded_by: p
+                    .superseded_by
+                    .clone()
+                    .or_else(|| keep.and_then(|f| f.superseded_by.clone())),
+                valid_from: p.valid_from.or_else(|| keep.and_then(|f| f.valid_from)),
+                invalid_at: p.invalid_at.or_else(|| keep.and_then(|f| f.invalid_at)),
+                anchors: if p.anchors.is_empty() {
+                    keep.map(|f| f.anchors.clone()).unwrap_or_default()
+                } else {
+                    p.anchors.clone()
+                },
+                ..p.clone()
             },
             body: note.body.clone(),
             path: PathBuf::new(),
@@ -4077,7 +4105,12 @@ impl App {
                 path: path.clone(),
                 ..accepted
             };
-            policy.record_write(&accepted.front, bytes)?;
+            // K8 (2026-11-10): as in `write`, a note the chain does not mention is put back
+            // rather than left standing when its row cannot be written.
+            if let Err(e) = policy.record_write(&accepted.front, bytes) {
+                Self::undo_note_write(&w, &accepted, existing.as_ref(), &e);
+                return Err(e);
+            }
             self.attest_resident(policy, &accepted, "review accept")?;
             // The proposal goes before the index is asked: an index failure must not leave
             // a waiting proposal next to the note it became (C15, 2026-10-31).
@@ -7531,5 +7564,101 @@ mod audit_key_change_tests {
         let agent = App::open(Some(&root), Actor::Agent("claude-code:t".into())).unwrap();
         assert!(agent.audit_key(true).is_err());
         assert!(!root.join(AUDIT_KEY_FILE).exists());
+    }
+}
+
+#[cfg(test)]
+mod accept_keeps_head_tests {
+    //! K5 (audit 2026-11-10, again F3 on 2026-11-19).
+    use super::*;
+
+    fn req(name: &str, body: &str) -> WriteRequest {
+        WriteRequest {
+            ring: Ring::Knowledge,
+            kind: cyberbrain_core::NoteKind::Knowledge,
+            name: name.to_string(),
+            body: body.to_string(),
+            tags: Vec::new(),
+            bereich: None,
+            retention: None,
+            force: false,
+            choice: None,
+            expected_updated: None,
+            supersedes: None,
+            valid_from: None,
+            invalid_at: None,
+            arriving: None,
+            dry_run: false,
+            anchors: crate::app::Anchoring::default(),
+        }
+    }
+
+    /// Accepting an agent's edit of an existing note kept only id and created; retention and
+    /// bereich went. Calibrated against the broken state: both were `None` after the accept.
+    #[test]
+    fn accepting_an_edit_keeps_what_the_proposal_did_not_say() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let op = App::open(Some(&root), Actor::Operator).unwrap();
+        let mut first = req("frist", "*Für: frist*\n\nDrei Monate.");
+        first.bereich = Some(Some("recht".into()));
+        first.retention = Some(Some("P30D".into()));
+        first.supersedes = Some(vec!["alte-frist".into()]);
+        op.write(first).unwrap();
+
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:test".into())).unwrap();
+        agent
+            .propose(req("frist", "*Für: frist*\n\nVier Monate."), "agent-a")
+            .unwrap();
+        op.review(ReviewRequest {
+            name: "frist".into(),
+            accept: true,
+            reason: String::new(),
+            by: "christoph".into(),
+            force: true,
+            from_agentguard: false,
+            dry_run: false,
+        })
+        .unwrap();
+        let n = op.store.read("frist").unwrap();
+        assert!(n.body.contains("Vier Monate"), "{}", n.body);
+        assert_eq!(n.front.bereich.as_deref(), Some("recht"));
+        assert_eq!(n.front.retention.as_deref(), Some("P30D"));
+        assert_eq!(n.front.supersedes, vec!["alte-frist".to_string()]);
+    }
+
+    /// K8 (2026-11-10): the acceptance wrote the note, then failed on its audit row and left
+    /// the file standing, a note the chain does not mention. Calibrated against the broken
+    /// state: `notes/r2/neu.md` existed after the failed accept.
+    #[test]
+    fn an_accept_whose_row_cannot_be_written_leaves_no_note() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let agent = App::open(Some(&root), Actor::Agent("claude-code:test".into())).unwrap();
+        agent
+            .propose(req("neu", "*Für: neu*\n\nText."), "agent-a")
+            .unwrap();
+        let op = App::open(Some(&root), Actor::Operator).unwrap();
+        rusqlite::Connection::open(root.join("audit.db"))
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER test_fail BEFORE INSERT ON audit \
+                 BEGIN SELECT RAISE(ABORT, 'disk full'); END;",
+            )
+            .unwrap();
+        let r = op.review(ReviewRequest {
+            name: "neu".into(),
+            accept: true,
+            reason: String::new(),
+            by: "christoph".into(),
+            force: false,
+            from_agentguard: false,
+            dry_run: false,
+        });
+        assert!(r.is_err());
+        assert!(!root.join("notes").join("r2").join("neu.md").exists());
+        assert!(root.join("proposals").join("neu.md").exists());
     }
 }
