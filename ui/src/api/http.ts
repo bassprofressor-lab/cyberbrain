@@ -38,6 +38,7 @@ import {
   type TranscriptionStatus,
   type UsageReport,
 } from "./types";
+import { terminalToken } from "@/lib/terminalToken";
 
 const BASE = "/api/v1";
 
@@ -52,9 +53,13 @@ function qs(params: Record<string, string | number | boolean | undefined | null>
 }
 
 async function request<T>(method: string, path: string, body?: unknown, raw?: Blob): Promise<T> {
+  // `serve --terminal` refuses operator decisions (proposals, holds, commands) without this
+  // header. Sent on every request, and only when there is a token: without `--terminal` the
+  // server never looks at it, and a request without one must stay exactly what it was.
+  const token = terminalToken();
   const init: RequestInit = {
     method,
-    headers: { Accept: "application/json" },
+    headers: token ? { Accept: "application/json", "x-cyberbrain-terminal-token": token } : { Accept: "application/json" },
     // Belt and braces with the CSP: never send credentials, never follow to another origin.
     credentials: "omit",
     redirect: "error",
