@@ -213,7 +213,8 @@ pub fn render(v: &View) -> String {
 
     h.push_str(&format!(
         "<header><h1>Cyberbrain Hub</h1><p class=sub>version {} · record <code>{}</code> \
-         <a href=\"/logout\">sign out</a></p></header>",
+         <form method=post action=\"/logout\" style=\"display:inline\">\
+         <button type=submit>sign out</button></form></p></header>",
         esc(&v.version),
         esc(&v.record.display().to_string())
     ));

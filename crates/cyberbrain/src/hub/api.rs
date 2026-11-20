@@ -49,7 +49,9 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/login", get(login_page).post(login))
         // POST from the forms on the conflicts and requests pages, GET from the link on the
         // main page. With GET alone the forms answered 405 and the session stayed open.
-        .route("/logout", get(logout).post(logout))
+        // POST only (N9, 2026-11-19): a GET that ends the session is one any other website
+        // can trigger with an image tag; the same-origin rule below covers POSTs.
+        .route("/logout", post(logout))
         .route("/password", post(change_password))
         .route("/licence", post(install_licence))
         .route("/devices", post(add_device))
@@ -133,8 +135,21 @@ impl HubState {
 /// with a session. The one thing such a page cannot change is the name it carries, so the
 /// `Host` has to be a loopback name as well. A reverse proxy on the same machine now counts
 /// as the network it forwards, which is what it is.
+///
+/// S16 (2026-11-10, again 2026-11-19): a proxy that does not rewrite `Host` (nginx without
+/// `proxy_set_header Host`) sends exactly the loopback name, and every visitor behind it was
+/// "at the machine" and could claim an unclaimed hub. A request that carries a forwarding
+/// header came through a proxy and is never local.
 pub(crate) fn at_the_machine(who: &std::net::SocketAddr, headers: &HeaderMap) -> bool {
-    who.ip().is_loopback() && host_is_loopback(host_of(headers).as_deref())
+    let forwarded = [
+        "forwarded",
+        "x-forwarded-for",
+        "x-forwarded-host",
+        "x-real-ip",
+    ]
+    .iter()
+    .any(|h| headers.contains_key(*h));
+    !forwarded && who.ip().is_loopback() && host_is_loopback(host_of(headers).as_deref())
 }
 
 /// The `Host` a request names, without the port.
@@ -1938,7 +1953,9 @@ async fn approve(
         };
         // Seven days, which is the window `hub approve` offers by default. It is a decision
         // with a clock on it: an approval without one is a permanent right nobody granted.
-        let until = (now + jiff::Span::new().days(7)).to_string();
+        // A `SignedDuration`, not `Span::days`: a timestamp has no calendar, and adding days
+        // to it panicked on every approval through this page (S17, 2026-11-10).
+        let until = (now + jiff::SignedDuration::from_hours(7 * 24)).to_string();
         let message = match hub.approve_request(&id, &who, &until, &now.to_string()) {
             Ok(r) => Ok(format!(
                 "{} is open until {}.",

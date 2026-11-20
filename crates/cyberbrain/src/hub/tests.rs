@@ -5251,3 +5251,76 @@ fn alerts_name_tokens_that_run_out_this_week_and_those_that_did() {
             .any(|(k, t)| *k == "token-expired" && t.contains("A. Udit"))
     );
 }
+
+async fn post_as(
+    state: Arc<super::api::HubState>,
+    uri: &str,
+    cookie: Option<&str>,
+    method: &str,
+) -> axum::response::Response {
+    let mut b = Request::builder().method(method).uri(uri);
+    if let Some(c) = cookie {
+        b = b.header("cookie", c);
+    }
+    let mut req = b.body(Body::empty()).unwrap();
+    req.extensions_mut().insert(ConnectInfo(
+        "192.168.1.20:51000"
+            .parse::<std::net::SocketAddr>()
+            .unwrap(),
+    ));
+    super::api::router(state).oneshot(req).await.unwrap()
+}
+
+/// S17 (audits 2026-11-10 and 2026-11-19): approving an access request on the web page
+/// panicked every time (`Timestamp + Span::days`), so only the CLI could approve.
+/// Calibrated against the broken state: the handler panicked.
+#[tokio::test]
+async fn a_countersigner_approves_an_access_request_on_the_page() {
+    let (hub, device, auditor, council, _) = hub_with_activity();
+    let who = hub.principal_for(Some(&auditor), Role::Auditor).unwrap();
+    let req = hub
+        .create_request(&who, Some(&device), None, None, "a reason", NOW)
+        .unwrap();
+    let state = state_for(hub, true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &council).await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let r = post_as(
+        state.clone(),
+        &format!("/requests/{}/approve", req.id),
+        Some(&cookie),
+        "POST",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let body = get_as(state, "/requests", &cookie).await;
+    assert!(body.contains("is open until"), "{body}");
+}
+
+/// S16 (audits 2026-11-10 and 2026-11-19): behind a proxy on the same machine that leaves
+/// `Host` alone, every visitor was "at the machine" and could claim an unclaimed hub.
+/// Calibrated against the broken state: 303 with a session.
+#[tokio::test]
+async fn a_request_through_a_proxy_is_not_at_the_machine() {
+    let state = state_for(HubStore::in_memory().unwrap(), false);
+    let r = claim_with(
+        state.clone(),
+        &[
+            ("host", "127.0.0.1:7788"),
+            ("x-forwarded-for", "203.0.113.9"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
+    assert!(!admin::is_claimed(&state.hub.lock().unwrap()));
+}
+
+/// N9 (audit 2026-11-19): `GET /logout` ended the session, so any website could sign a
+/// visitor out with an image tag. Calibrated against the broken state: 303 for the GET.
+#[tokio::test]
+async fn signing_out_takes_a_post() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", "correct horse battery").await;
+    let cookie = cookie_of(&r).split(';').next().unwrap().to_string();
+    let r = post_as(state.clone(), "/logout", Some(&cookie), "GET").await;
+    assert_eq!(r.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
