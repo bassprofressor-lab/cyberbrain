@@ -12,6 +12,67 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+Findings of the review of 2026-11-19 (and the open ones from 2026-11-10). Read *Upgrading*
+first: two of the changes are visible to scripts.
+
+### Upgrading
+
+- **`verify-export` exits 4 without `--expect-key`.** It used to exit 0 for any file whose
+  arithmetic held, which a rewritten and re-hashed file does too. 0 now means "holds and is
+  signed with the key you named"; 4 means "consistent, not evidence"; 1 or 2 "does not hold".
+  A scheduled job that checked exports without a key turns red: give it the fingerprint.
+- **`init` makes the audit key.** A new store signs every row from its first one
+  (`init --no-audit-key` for the old behaviour). Existing stores are unchanged; `policy
+  audit-key --init` adds a key, as before, now only for the operator.
+- **The pre-tool-use hook also sees `Read` and `Grep`**, to refuse reading the audit signing
+  key. Run `cyberbrain install` again to update the hook entries.
+
+### Security
+
+- The audit log gets a head anchor outside the store (user state directory,
+  `CYBERBRAIN_AUDIT_ANCHORS`): every row moves it forward, signed with the store's key, and
+  `policy audit --verify` reports rows cut from the end or an older `audit.db` put back. It
+  does not help against a process of the same user, which can rewrite the anchor too
+  (SECURITY.md says so).
+- A process that opened the store before it had a key no longer appends unsigned rows behind
+  signed ones (the background daemon after `policy audit-key --init` made the chain read as
+  broken for good). It refuses with "Restart"; the daemon retires before its next answer.
+- Agents are refused: making the audit key, `trust --grant`, `policy consent --grant`,
+  `mcp-client add`, reading the signing key through Bash, Read or Grep, and erasing rings 0
+  and 1 through `policy retention --apply`. A retention sweep now records who started it.
+- A note in a less trusted ring can no longer `supersedes` one in a more trusted ring.
+- Hub: approving an access request on the page no longer panics; a request through a proxy
+  (forwarding headers) is never "at the machine"; sign-out is POST only; an unknown stored
+  role is refused instead of read as admin; `hub.db`, its WAL and backups are 0600.
+- A note a hook or agent redacted is marked `pii: flagged`, not `reviewed`; compaction
+  snapshots are written 0600.
+- Release binaries carry a build provenance attestation (`gh attestation verify`).
+
+### Fixed
+
+- A note deleted by hand and written again under its name was refused by the index on every
+  `write` and `scan` ("0 blocks"), `recall` kept answering with the deleted text, and
+  `forget` reported a complete erasure while that text stayed. The stale row is now dropped
+  (recorded as `index.note-dropped`); `forget` also takes a waiting proposal of the same name.
+- Accepting a proposal for an existing note kept only its id and creation date; retention,
+  bereich, supersedes, validity and anchors are now kept, and a failed audit row puts the
+  file back.
+- Parallel `propose` of one name: one wins, the others are refused (seven texts used to
+  vanish silently).
+- `policy audit --export --until` now ends the period.
+- `find` sees a definition on line 1 of a file with a UTF-8 byte order mark.
+- `recall` skips a hit another process erased meanwhile instead of failing.
+- Session start shows rings 0 and 1 even when its audit row cannot be written, and saves the
+  session state atomically. A second identical pre-tool-use call without `tool_use_id` gets
+  its own verdict instead of standing down.
+- `cargo deny check` passes again: chrono (unmaintained, via pdfium-render) is an explained
+  exception with a review date.
+
+### Release
+
+- The release workflow builds and tests Cyberbrain Light and cyberbrain-business against the
+  core it is about to release (`scripts/check-dependents.sh`), and stops when either is red.
+
 ## [0.10.7] — 2026-11-16
 
 ### Fixed
