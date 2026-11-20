@@ -1051,6 +1051,7 @@ fn a_signature_reads_as_a_name_and_not_as_an_id() {
             .filter(|g| g.is_pending())
             .collect(),
         purges: vec![waiting],
+        assignments: Vec::new(),
         names: hub.principal_names().unwrap(),
         log: hub.hub_events(1000).unwrap(),
         devices: Vec::new(),
@@ -1479,6 +1480,7 @@ fn the_signing_page_does_not_offer_your_own_request() {
         requests: vec![(req, state)],
         grants: Vec::new(),
         purges: Vec::new(),
+        assignments: Vec::new(),
         names: hub.principal_names().unwrap(),
         log: Vec::new(),
         devices: Vec::new(),
@@ -3857,7 +3859,10 @@ fn an_editor_is_offered_the_conflicts_of_their_own_bereiche_only() {
     let (rita, _) = hub
         .add_principal("Rita", super::access::Role::Editor, NOW)
         .unwrap();
-    hub.assign_bereich(&rita.id, "disposition", NOW).unwrap();
+    hub.assign_bereich(&rita.id, "disposition", "cli", NOW)
+        .unwrap();
+    hub.countersign_assignment(&rita.id, "disposition", &countersigner(&hub, "Rat"), NOW)
+        .unwrap();
 
     let mine = hub.conflicts_for_principal(&rita.id).unwrap();
     assert_eq!(mine.len(), 1, "one bereich, one conflict");
@@ -5028,6 +5033,80 @@ async fn a_credential_shown_once_is_shown_to_its_own_session_only() {
     );
 }
 
+/// S18 (review 2026-11-10/19): giving an editor a bereich is what lets a person read the
+/// note texts held for it, and the administrator did it alone: add an editor, assign a
+/// bereich, sign in with the credential shown once, read. HUB.md says the operator does not
+/// read note text. An assignment now waits for a countersigner, as a grant does, and the
+/// signature puts both in the hub's log. Calibrated against the old hub: the editor held the
+/// bereich the moment the administrator assigned it.
+#[tokio::test]
+async fn an_editor_reads_a_bereich_only_once_somebody_else_has_countersigned_it() {
+    let (state, cookie, _dir) = admin_on_page().await;
+    let (editor, _) = state
+        .hub
+        .lock()
+        .unwrap()
+        .add_principal("R. Berger", Role::Editor, NOW)
+        .unwrap();
+    let (_council, council_token) = state
+        .hub
+        .lock()
+        .unwrap()
+        .add_principal("Betriebsrat", Role::Countersigner, NOW)
+        .unwrap();
+    let r = form_post(
+        &state,
+        &cookie,
+        &format!("/principals/{}/bereiche", editor.id),
+        "bereich=disposition",
+    )
+    .await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let held = |state: &Arc<super::api::HubState>| {
+        state.hub.lock().unwrap().bereiche_of(&editor.id).unwrap()
+    };
+    assert!(
+        held(&state).is_empty(),
+        "the administrator alone gave an editor a bereich: {:?}",
+        held(&state)
+    );
+    assert!(
+        page_as(&state, &cookie)
+            .await
+            .contains("waiting for a countersignature"),
+        "the administrator's page says it is waiting"
+    );
+
+    let r = sign_in_from(state.clone(), "192.168.1.20:51000", &council_token).await;
+    let council = cookie_of(&r).split(';').next().unwrap().to_string();
+    let body = get_as(state.clone(), "/requests", &council).await;
+    assert!(
+        body.contains("R. Berger") && body.contains("disposition"),
+        "the waiting assignment has to be on the countersigner's page: {body}"
+    );
+    let uri = format!("/principals/{}/bereiche/disposition/approve", editor.id);
+    // The administrator cannot sign it.
+    let _ = form_post(&state, &cookie, &uri, "").await;
+    assert!(held(&state).is_empty(), "the administrator signed it");
+    let r = form_post(&state, &council, &uri, "").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    assert_eq!(held(&state), ["disposition"]);
+    let signed = state
+        .hub
+        .lock()
+        .unwrap()
+        .hub_events(100)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.action == "principal.assignment_countersigned")
+        .expect("the signature is in the hub's log");
+    let detail = signed.detail.to_string();
+    assert!(
+        detail.contains("Betriebsrat") && detail.contains("disposition"),
+        "{detail}"
+    );
+}
+
 #[tokio::test]
 async fn people_are_added_assigned_and_withdrawn_from_the_page() {
     let (state, cookie, _dir) = admin_on_page().await;
@@ -5049,9 +5128,15 @@ async fn people_are_added_assigned_and_withdrawn_from_the_page() {
     )
     .await;
     assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    // Written down, waiting for a countersignature (S18).
     assert_eq!(
-        state.hub.lock().unwrap().bereiche_of(&editor.id).unwrap(),
-        ["disposition"]
+        state
+            .hub
+            .lock()
+            .unwrap()
+            .assignments_of(&editor.id)
+            .unwrap(),
+        [("disposition".to_string(), false)]
     );
     let r = form_post(
         &state,
@@ -5066,7 +5151,7 @@ async fn people_are_added_assigned_and_withdrawn_from_the_page() {
             .hub
             .lock()
             .unwrap()
-            .bereiche_of(&editor.id)
+            .assignments_of(&editor.id)
             .unwrap()
             .is_empty()
     );

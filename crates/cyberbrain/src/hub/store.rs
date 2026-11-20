@@ -163,6 +163,16 @@ impl Names {
     }
 }
 
+/// An editor's bereich written down and waiting for a countersignature.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PendingAssignment {
+    pub principal: String,
+    pub bereich: String,
+    /// `hub-page`, `cli` or a principal's id.
+    pub assigned_by: Option<String>,
+    pub added_at: String,
+}
+
 /// What came of a countersignature attempt. Each one is a different sentence to the person
 /// holding the credential, so they are not collapsed into a bool.
 #[derive(Debug, Clone, PartialEq)]
@@ -435,10 +445,15 @@ impl HubStore {
              -- Which bereiche a person is responsible for. Only `editor` principals have
              -- these: an admin has none and gets none, because seeing note text is not part
              -- of running the machine.
+             -- An assignment takes effect when a countersigner signs it (S18): until then
+             -- `approved_at` is NULL and the editor sees nothing of the bereich.
              CREATE TABLE IF NOT EXISTS principal_bereiche (
-                 principal  TEXT NOT NULL REFERENCES principals(id),
-                 bereich    TEXT NOT NULL,
-                 added_at   TEXT NOT NULL,
+                 principal   TEXT NOT NULL REFERENCES principals(id),
+                 bereich     TEXT NOT NULL,
+                 added_at    TEXT NOT NULL,
+                 assigned_by TEXT,
+                 approved_by TEXT,
+                 approved_at TEXT,
                  PRIMARY KEY (principal, bereich)
              );
 
@@ -621,6 +636,24 @@ impl HubStore {
                 "erasures",
                 "sync_seq",
                 "ALTER TABLE erasures ADD COLUMN sync_seq INTEGER",
+            ),
+            // S18 (2026-11-20): an editor's bereich takes a countersignature, as a grant does,
+            // and for the reason given above an assignment from before arrives unsigned: the
+            // editor sees that bereich again once a countersigner has signed it.
+            (
+                "principal_bereiche",
+                "assigned_by",
+                "ALTER TABLE principal_bereiche ADD COLUMN assigned_by TEXT",
+            ),
+            (
+                "principal_bereiche",
+                "approved_by",
+                "ALTER TABLE principal_bereiche ADD COLUMN approved_by TEXT",
+            ),
+            (
+                "principal_bereiche",
+                "approved_at",
+                "ALTER TABLE principal_bereiche ADD COLUMN approved_at TEXT",
             ),
         ] {
             if !self.has_column(table, column)? {
@@ -1945,15 +1978,113 @@ impl HubStore {
         Ok(out)
     }
 
-    /// Put a person in charge of a bereich. Only meaningful for an `editor`; the caller
-    /// checks the role, this writes.
-    pub fn assign_bereich(&self, principal: &str, bereich: &str, now: &str) -> Result<()> {
+    /// Write down that a person is to be in charge of a bereich. Only meaningful for an
+    /// `editor`; the caller checks the role, this writes. It takes effect when somebody else
+    /// countersigns it ([`countersign_assignment`](Self::countersign_assignment)): an editor
+    /// reads the note texts of their bereiche, and the administrator who writes this must not
+    /// be the one who decides it (S18). Asking again for one already there changes nothing.
+    pub fn assign_bereich(
+        &self,
+        principal: &str,
+        bereich: &str,
+        by: &str,
+        now: &str,
+    ) -> Result<()> {
         ix(self.conn.execute(
-            "INSERT INTO principal_bereiche (principal, bereich, added_at) VALUES (?, ?, ?)
+            "INSERT INTO principal_bereiche (principal, bereich, added_at, assigned_by)
+             VALUES (?, ?, ?, ?)
              ON CONFLICT(principal, bereich) DO NOTHING",
-            params![principal, bereich, now],
+            params![principal, bereich, now, by],
         ))?;
         Ok(())
+    }
+
+    /// The second signature on an assignment. Refuses the person who wrote it, one already
+    /// signed and one that is not there, as [`countersign_grant`](Self::countersign_grant)
+    /// does, and puts both names in the hub's log.
+    pub fn countersign_assignment(
+        &self,
+        principal: &str,
+        bereich: &str,
+        who: &super::access::Principal,
+        now: &str,
+    ) -> Result<CountersignOutcome> {
+        let row: Option<(Option<String>, Option<String>)> = ix(self
+            .conn
+            .query_row(
+                "SELECT assigned_by, approved_by FROM principal_bereiche
+                 WHERE principal = ? AND bereich = ?",
+                params![principal, bereich],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional())?;
+        let Some((assigned_by, approved_by)) = row else {
+            return Ok(CountersignOutcome::Unknown);
+        };
+        if let Some(by) = approved_by {
+            return Ok(CountersignOutcome::AlreadySigned {
+                by: self.principal_names()?.of(&by).to_string(),
+            });
+        }
+        // The editor is never the countersigner of their own reading, whatever role the
+        // credential was checked for; and two signatures from one hand are one.
+        if assigned_by.as_deref() == Some(who.id.as_str()) || principal == who.id {
+            return Ok(CountersignOutcome::SamePerson);
+        }
+        ix(self.conn.execute(
+            "UPDATE principal_bereiche SET approved_by = ?, approved_at = ?
+             WHERE principal = ? AND bereich = ? AND approved_at IS NULL",
+            params![who.id, now, principal, bereich],
+        ))?;
+        let names = self.principal_names()?;
+        self.record(
+            &who.id,
+            "principal.assignment_countersigned",
+            serde_json::json!({
+                "principal": principal,
+                "name": names.of(principal),
+                "bereich": bereich,
+                "assigned_by": assigned_by,
+                "by": who.name,
+            }),
+            now,
+        )?;
+        Ok(CountersignOutcome::Signed)
+    }
+
+    /// Assignments written and not yet countersigned, for the countersigner's page.
+    pub fn pending_assignments(&self) -> Result<Vec<PendingAssignment>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT principal, bereich, assigned_by, added_at FROM principal_bereiche
+             WHERE approved_at IS NULL ORDER BY added_at, principal, bereich",
+        ))?;
+        let rows = ix(stmt.query_map([], |r| {
+            Ok(PendingAssignment {
+                principal: r.get(0)?,
+                bereich: r.get(1)?,
+                assigned_by: r.get(2)?,
+                added_at: r.get(3)?,
+            })
+        }))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
+    }
+
+    /// Every bereich written down for a person, and whether it is countersigned.
+    pub fn assignments_of(&self, principal: &str) -> Result<Vec<(String, bool)>> {
+        let mut stmt = ix(self.conn.prepare(
+            "SELECT bereich, approved_at IS NOT NULL FROM principal_bereiche
+             WHERE principal = ? ORDER BY bereich",
+        ))?;
+        let rows = ix(stmt.query_map(params![principal], |r| Ok((r.get(0)?, r.get(1)?))))?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(ix(r)?);
+        }
+        Ok(out)
     }
 
     /// Take a bereich away from a person. Whether there was one to take.
@@ -1965,10 +2096,11 @@ impl HubStore {
         Ok(n > 0)
     }
 
-    /// The bereiche a person is responsible for.
+    /// The bereiche a person is responsible for: the countersigned ones, and only those.
     pub fn bereiche_of(&self, principal: &str) -> Result<Vec<String>> {
         let mut stmt = ix(self.conn.prepare(
-            "SELECT bereich FROM principal_bereiche WHERE principal = ? ORDER BY bereich",
+            "SELECT bereich FROM principal_bereiche
+             WHERE principal = ? AND approved_at IS NOT NULL ORDER BY bereich",
         ))?;
         let rows = ix(stmt.query_map(params![principal], |r| r.get::<_, String>(0)))?;
         let mut out = Vec::new();

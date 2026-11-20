@@ -56,7 +56,8 @@ pub struct View {
     /// looking at the fleet is the one person who can do something about it.
     pub encrypted: bool,
     /// The people with a role, and for an editor the bereiche they are responsible for.
-    pub people: Vec<(super::access::Principal, Vec<String>)>,
+    /// Each bereich with whether it is countersigned (S18): one waiting shows as such.
+    pub people: Vec<(super::access::Principal, Vec<(String, bool)>)>,
     /// Fleet invitations, withdrawn and used-up ones included.
     pub codes: Vec<super::store::EnrolmentCode>,
     /// When the page was made, to say which invitations still work.
@@ -96,7 +97,7 @@ impl View {
             .unwrap_or_default()
             .into_iter()
             .map(|p| {
-                let b = hub.bereiche_of(&p.id).unwrap_or_default();
+                let b = hub.assignments_of(&p.id).unwrap_or_default();
                 (p, b)
             })
             .collect();
@@ -392,13 +393,18 @@ fn people_card(v: &View) -> String {
         let live = p.is_active();
         let areas = if p.role == super::access::Role::Editor && live {
             let mut s = String::new();
-            for b in bereiche {
+            for (b, signed) in bereiche {
                 s.push_str(&format!(
                     "<form method=post action=\"/principals/{id}/bereiche/{b}/remove\" \
-                     style=\"display:inline\"><code>{b}</code> \
+                     style=\"display:inline\"><code>{b}</code>{waiting} \
                      <button type=submit>remove</button></form> ",
                     id = esc(&p.id),
-                    b = esc(b)
+                    b = esc(b),
+                    waiting = if *signed {
+                        ""
+                    } else {
+                        " <span class=muted>(waiting for a countersignature)</span>"
+                    }
                 ));
             }
             s.push_str(&format!(
@@ -411,7 +417,7 @@ fn people_card(v: &View) -> String {
         } else {
             bereiche
                 .iter()
-                .map(|b| esc(b))
+                .map(|(b, _)| esc(b))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
@@ -786,6 +792,8 @@ pub struct SigningView<'a> {
     pub grants: Vec<super::sync_access::BereichGrant>,
     /// Purges of old activity rows waiting for a second signature. Countersigners only.
     pub purges: Vec<super::store::Purge>,
+    /// Editors' bereiche waiting for a second signature (S18). Countersigners only.
+    pub assignments: Vec<super::store::PendingAssignment>,
     /// Who the ids in grants, purges and the log are.
     pub names: super::store::Names,
     /// The hub's own log. Countersigners only — it is the record of who looked at what.
@@ -839,6 +847,38 @@ pub fn signing_page(v: &SigningView<'_>) -> String {
                     why = esc(&g.reason),
                     by = esc(v.names.of(&g.granted_by)),
                     id = esc(&g.id),
+                ));
+            }
+            h.push_str("</tbody></table>");
+        }
+        h.push_str("</section>");
+    }
+
+    // --- editors' bereiche -------------------------------------------------------------
+    if signing {
+        h.push_str("<section class=card><h2>Editors waiting for a second signature</h2>");
+        if v.assignments.is_empty() {
+            h.push_str("<p class=muted>Nothing waiting.</p>");
+        } else {
+            h.push_str(
+                "<p class=muted>An editor reads the note texts held for their bereiche. None of \
+                 these sees anything until you sign it, and signing puts both names in the \
+                 log.</p>\
+                 <table><thead><tr><th>Person<th>Bereich<th>Written by<th>When\
+                 <th></tr></thead><tbody>",
+            );
+            for a in &v.assignments {
+                h.push_str(&format!(
+                    "<tr><td>{who}<td>{b}<td>{by}<td>{at}\
+                     <td><form method=post action=\"/principals/{id}/bereiche/{b}/approve\">\
+                     <button type=submit>Countersign</button></form></tr>",
+                    who = esc(v.names.of(&a.principal)),
+                    b = esc(&a.bereich),
+                    by = esc(v
+                        .names
+                        .of(a.assigned_by.as_deref().unwrap_or("before 2026-11-20"))),
+                    at = esc(&a.added_at),
+                    id = esc(&a.principal),
                 ));
             }
             h.push_str("</tbody></table>");

@@ -64,6 +64,10 @@ pub fn router(state: Arc<HubState>) -> Router {
             "/principals/{id}/bereiche/{bereich}/remove",
             post(unassign_bereich),
         )
+        .route(
+            "/principals/{id}/bereiche/{bereich}/approve",
+            post(countersign_assignment),
+        )
         .route("/enrolment-codes", post(add_enrolment_code))
         .route("/enrolment-codes/{id}/revoke", post(revoke_enrolment_code))
         .route("/health", get(health))
@@ -1181,7 +1185,7 @@ async fn assign_bereich(
             Some(_) => {}
         }
         let now = jiff::Timestamp::now().to_string();
-        hub.assign_bereich(&id, bereich, &now)
+        hub.assign_bereich(&id, bereich, "hub-page", &now)
             .map_err(|e| e.to_string())?;
         hub.record(
             "hub-page",
@@ -1190,7 +1194,10 @@ async fn assign_bereich(
             &now,
         )
         .map_err(|e| e.to_string())?;
-        Ok(format!("{id} now sees conflicts in {bereich}."))
+        Ok(format!(
+            "{id} is written down for {bereich}. It takes effect when a countersigner signs it \
+             (on /requests, or `cyberbrain hub principal approve`)."
+        ))
     })();
     page_outcome(&state, &headers, outcome)
 }
@@ -1702,6 +1709,11 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
     } else {
         Vec::new()
     };
+    let assignments = if role == Role::Countersigner {
+        hub.pending_assignments().unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let log = if role == Role::Countersigner {
         hub.hub_events(super::page::LOG_ON_PAGE).unwrap_or_default()
     } else {
@@ -1722,6 +1734,7 @@ async fn get_requests(State(state): State<Arc<HubState>>, headers: HeaderMap) ->
         requests,
         grants,
         purges,
+        assignments,
         names: hub.principal_names().unwrap_or_default(),
         log,
         devices,
@@ -2023,6 +2036,54 @@ async fn approve(
                 r.expires_at.as_deref().unwrap_or(&until)
             )),
             Err(d) => Err(d.to_string()),
+        };
+        state.set_flash(&headers, message);
+    }
+    Redirect::to("/requests").into_response()
+}
+
+/// The second signature on an editor's bereich, from the page (S18). Countersigners only.
+async fn countersign_assignment(
+    State(state): State<Arc<HubState>>,
+    headers: HeaderMap,
+    axum::extract::Path((id, bereich)): axum::extract::Path<(String, String)>,
+) -> Response {
+    use super::access::Role;
+    use super::store::CountersignOutcome as O;
+    let Some((_, name, role)) = signer_of(&state, &headers) else {
+        return Redirect::to("/login").into_response();
+    };
+    if role != Role::Countersigner {
+        return Redirect::to("/requests").into_response();
+    }
+    let now = jiff::Timestamp::now().to_string();
+    {
+        let Ok(hub) = state.hub() else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, PLAINTEXT).into_response();
+        };
+        let token =
+            super::admin::cookie_from(headers.get(header::COOKIE).and_then(|v| v.to_str().ok()));
+        let Some(who) = session_principal(&state, token.as_deref(), &hub) else {
+            return Redirect::to("/login").into_response();
+        };
+        let person = hub
+            .principal_names()
+            .map(|n| n.of(&id).to_string())
+            .unwrap_or_else(|_| id.clone());
+        let message = match hub.countersign_assignment(&id, &bereich, &who, &now) {
+            Ok(O::Signed) => Ok(format!(
+                "{person} now sees conflicts in {bereich}, countersigned by {name}."
+            )),
+            Ok(O::Unknown | O::Withdrawn) => {
+                Err(format!("{person} is not written down for {bereich}."))
+            }
+            Ok(O::AlreadySigned { by }) => Err(format!(
+                "{person} in {bereich} was already countersigned by {by}."
+            )),
+            Ok(O::SamePerson) => Err(format!(
+                "{person} in {bereich}: two signatures from one hand are one signature."
+            )),
+            Err(e) => Err(e.to_string()),
         };
         state.set_flash(&headers, message);
     }

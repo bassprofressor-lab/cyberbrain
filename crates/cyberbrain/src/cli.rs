@@ -1397,12 +1397,26 @@ pub enum GrantCommand {
 #[derive(Debug, Subcommand)]
 pub enum PrincipalCommand {
     /// Put a person in charge of a bereich. Only an `editor` has these: seeing note text is
-    /// not part of running the machine, so an administrator gets none.
+    /// not part of running the machine, so an administrator gets none. It takes effect when
+    /// a countersigner signs it (`principal approve`).
     Assign {
         #[arg(long, value_name = "PRINCIPAL")]
         principal: String,
         #[arg(long)]
         bereich: String,
+        #[arg(long, value_name = "PATH")]
+        data: Option<PathBuf>,
+    },
+    /// Countersign an editor's bereich, which makes it take effect. Needs a countersigner,
+    /// and not the person who wrote it.
+    Approve {
+        #[arg(long, value_name = "PRINCIPAL")]
+        principal: String,
+        #[arg(long)]
+        bereich: String,
+        /// The credential. `-` reads it from stdin; on the command line it shows in `ps`.
+        #[arg(long, value_name = "TOKEN", env = "CYBERBRAIN_HUB_PRINCIPAL_TOKEN")]
+        as_: Option<String>,
         #[arg(long, value_name = "PATH")]
         data: Option<PathBuf>,
     },

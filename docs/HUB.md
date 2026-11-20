@@ -576,15 +576,23 @@ unnoticed.
 |---|---|---|
 | **admin** | devices, gaps, versions, seats, licence | activity rows |
 | **auditor** | activity — only inside an approved window | anything without a countersignature |
-| **countersigner** | every request, with its reason; the whole access log; bereich grants waiting to be signed | rows, unless also an auditor |
+| **countersigner** | every request, with its reason; the whole access log; bereich grants and editors' bereiche waiting to be signed | rows, unless also an auditor |
 | **editor** | note conflicts in the bereiche they were assigned, both texts | anything outside those bereiche; activity of any kind |
 
 ```console
 $ cyberbrain hub principal add "M. Kraus" --role auditor
 $ cyberbrain hub principal add "Works council" --role countersigner
 $ cyberbrain hub principal add "R. Berger" --role editor
-$ cyberbrain hub principal assign R. Berger --bereich disposition
+$ cyberbrain hub principal assign --principal <id of R. Berger> --bereich disposition
+$ cyberbrain hub principal approve --principal <id of R. Berger> --bereich disposition --as $COUNCIL
 ```
+
+Giving an editor a bereich is what lets a person read the note texts held for it, so it takes
+two people like a grant does: the administrator writes it down, and it takes effect when a
+countersigner signs it, with the command above or with a button on `/requests`. Both names go
+into the hub's log (`principal.assigned`, `principal.assignment_countersigned`). An assignment
+from before this rule arrives unsigned after the upgrade; the editor sees that bereich again
+once a countersigner has signed it.
 
 Credentials are shown once and stored as a hash, like device tokens. Granting a role is
 itself an entry in the hub's log.
@@ -598,7 +606,7 @@ show the end, and alerts name a token a week before it runs out (`token-expiring
 has (`token-expired`).
 
 The administrator's page does the same for auditors and editors: add a person (the credential
-is shown once, after adding), withdraw one, give an editor a bereich or take it away, and make
+is shown once, after adding), withdraw one, give an editor a bereich (which then waits for a countersignature) or take it away, and make
 or withdraw fleet invitations (the file is written to `invitations/` next to the record,
 readable by its owner only). Countersigners and administrators are not made from the page: the
 people who sign would otherwise be made by the person whose acts they sign, from anywhere on
@@ -633,7 +641,8 @@ to make a new request rather than extend the old one — so the reason is stated
 Signing in with an auditor or countersigner credential opens `/requests` rather than the
 operator's page. An auditor asks there and sees their own requests and nothing else — the
 reasons other people wrote are not their business. A countersigner sees every request with
-its reason, the bereich grants waiting for a second signature, and the hub's own log, and
+its reason, the bereich grants and editors' bereiche waiting for a second signature, and the
+hub's own log, and
 approves or countersigns with a button.
 
 This matters more than a convenience. The two roles this hub's promise rests on used to have

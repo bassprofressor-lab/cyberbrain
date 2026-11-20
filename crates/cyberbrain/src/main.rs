@@ -2668,7 +2668,7 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         Some(_) => {}
                     }
                     let stamp = now();
-                    store.assign_bereich(principal, bereich, &stamp)?;
+                    store.assign_bereich(principal, bereich, "cli", &stamp)?;
                     let _ = store.record(
                         "cli",
                         "principal.assigned",
@@ -2676,16 +2676,70 @@ fn run_hub(command: &cli::HubCommand, store: Option<&std::path::Path>, out: Out)
                         &stamp,
                     );
                     out.emit(
-                        &serde_json::json!({ "principal": principal, "bereich": bereich }),
+                        &serde_json::json!({
+                            "principal": principal, "bereich": bereich, "state": "waiting"
+                        }),
                         |v| {
                             format!(
-                                "{} now sees conflicts in {}\n",
+                                "{} is written down for {}. It takes effect when a \
+                                 countersigner signs it:\n  cyberbrain hub principal approve \
+                                 --principal {} --bereich {} --as <credential>\n",
+                                v["principal"].as_str().unwrap_or_default(),
+                                v["bereich"].as_str().unwrap_or_default(),
                                 v["principal"].as_str().unwrap_or_default(),
                                 v["bereich"].as_str().unwrap_or_default()
                             )
                         },
                     )?;
                     Ok(0)
+                }
+                PrincipalCommand::Approve {
+                    principal,
+                    bereich,
+                    as_,
+                    data,
+                } => {
+                    let store = hub::HubStore::open(&hub::data_path(data.clone()))?;
+                    let who = store
+                        .principal_for(
+                            credential(as_.as_deref())?.as_deref(),
+                            hub::access::Role::Countersigner,
+                        )
+                        .map_err(|d| Error::Config(d.to_string()))?;
+                    use hub::store::CountersignOutcome as O;
+                    let outcome = store.countersign_assignment(principal, bereich, &who, &now())?;
+                    let (state, line) = match &outcome {
+                        O::Signed => (
+                            "signed",
+                            format!(
+                                "{principal} now sees conflicts in {bereich}, countersigned by {}.",
+                                who.name
+                            ),
+                        ),
+                        O::Unknown | O::Withdrawn => (
+                            "unknown",
+                            format!("{principal} is not written down for {bereich}."),
+                        ),
+                        O::AlreadySigned { by } => (
+                            "already-signed",
+                            format!("{principal} in {bereich} was already countersigned by {by}."),
+                        ),
+                        O::SamePerson => (
+                            "same-person",
+                            format!(
+                                "{principal} in {bereich}: two signatures from one hand are one \
+                                 signature; somebody else has to countersign it."
+                            ),
+                        ),
+                    };
+                    out.emit(
+                        &serde_json::json!({
+                            "principal": principal, "bereich": bereich, "state": state,
+                            "message": line
+                        }),
+                        |v| format!("{}\n", v["message"].as_str().unwrap_or_default()),
+                    )?;
+                    Ok(if matches!(outcome, O::Signed) { 0 } else { 1 })
                 }
                 PrincipalCommand::Unassign {
                     principal,
