@@ -347,6 +347,7 @@ impl AuditSink for StoreAuditSink {
         // store has no actor filter. Every condition matched here means the limit can only be
         // applied here, after them.
         let narrowed = filter.since.is_some()
+            || filter.until.is_some()
             || filter.action.is_some()
             || filter.actor.is_some()
             || filter.bereich.is_some();
@@ -358,8 +359,22 @@ impl AuditSink for StoreAuditSink {
         let mut out = Vec::with_capacity(rows.len());
         for r in rows {
             let e = to_event(r)?;
+            // The period is judged on the chain's own timestamp, which the hash covers; the
+            // `ts` column is not in the hash (S11, 2026-11-10). They are the same instant for
+            // every row this program writes; a row without a chain falls back to `ts`.
+            let at = e
+                .chain_at()
+                .and_then(|a| a.parse::<jiff::Timestamp>().ok())
+                .unwrap_or(e.ts);
             if let Some(since) = filter.since
-                && e.ts < since
+                && at < since
+            {
+                continue;
+            }
+            // S11: `--until` was accepted, written into the bundle's header as its period,
+            // and not applied: the bundle carried every row after it too.
+            if let Some(until) = filter.until
+                && at > until
             {
                 continue;
             }
@@ -520,5 +535,35 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rows.len(), 2);
+    }
+
+    /// S11 (audits 2026-11-10 and 2026-11-19): `--until` was taken into the export header
+    /// and not applied; the bundle held every row after it. Calibrated against the broken
+    /// state: all three rows came back.
+    #[test]
+    fn until_ends_the_period() {
+        let (log, _sink) = log();
+        let mut at = Vec::new();
+        for i in 0..3 {
+            at.push(
+                log.record(
+                    &Actor::Cli,
+                    AuditAction::NoteWrite,
+                    format!("note:{i}"),
+                    json!({}),
+                )
+                .unwrap()
+                .ts,
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let rows = log
+            .read(&AuditFilter {
+                until: Some(at[1]),
+                ..AuditFilter::default()
+            })
+            .unwrap();
+        let subjects: Vec<&str> = rows.iter().map(|r| r.subject.as_str()).collect();
+        assert_eq!(subjects, ["note:0", "note:1"]);
     }
 }
