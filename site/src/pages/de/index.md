@@ -36,7 +36,7 @@ Die Hinweise am Ende zählen so viel wie der Treffer. Cyberbrain sagt, was es **
   <div class="card"><div class="k">Telemetrie</div><div class="v">keine</div><div class="s">es gibt keinen Code dafür</div></div>
 </div>
 
-<sub>Größe der Release-Datei `cyberbrain-linux-x86_64` von 0.11.0 (22.728.480 Bytes).</sub>
+<sub>Größe der Release-Datei `cyberbrain-linux-x86_64` von 0.12.0 (22.955.680 Bytes).</sub>
 
 ## Vier Zugänge
 
