@@ -122,6 +122,12 @@ pub fn scan(r: &ScanReport) -> String {
     for f in &r.link_writeback_failed {
         let _ = writeln!(s, "  links NOT written back: {f}");
     }
+    for n in &r.pii_found {
+        let _ = writeln!(
+            s,
+            "  personal data in {n}, which did not come through `write`: recorded in the audit log, marked pii: flagged"
+        );
+    }
     for o in &r.oversized_blocks {
         let _ = writeln!(
             s,

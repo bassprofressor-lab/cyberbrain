@@ -5912,3 +5912,49 @@ fn a_second_identical_call_without_an_id_gets_the_same_verdict() {
     assert_eq!(decision(&first).as_deref(), Some("deny"), "{first}");
     assert_eq!(decision(&second).as_deref(), Some("deny"), "{second}");
 }
+
+/// S7 (review 2026-11-10/19): a file dropped into `notes/r2` with `pii: none`, an e-mail
+/// address and an IBAN was indexed and found by `recall`, with no audit row at all. It is
+/// still indexed, but recorded and marked `flagged`; ring 0 keeps its bytes.
+#[test]
+fn a_note_that_skipped_the_write_gate_is_checked_by_scan() {
+    let cb = Cb::new();
+    let dropped = cb.note_path("2", "kundendaten");
+    std::fs::write(
+        &dropped,
+        "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAW\nname: kundendaten\nring: 2\nkind: knowledge\npii: none\ncreated: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nKunde erika@example.org zahlt auf DE89 3704 0044 0532 0130 00.\n",
+    )
+    .unwrap();
+    let clean = cb.note_path("2", "sauber");
+    std::fs::write(
+        &clean,
+        "---\nid: 01ARZ3NDEKTSV4RRFFQ69G5FAX\nname: sauber\nring: 2\nkind: knowledge\npii: none\ncreated: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nNichts Persoenliches hier.\n",
+    )
+    .unwrap();
+    let s = cb.ok(&["scan"]);
+    assert_eq!(s["pii_found"], serde_json::json!(["kundendaten"]), "{s}");
+    let text = std::fs::read_to_string(&dropped).unwrap();
+    assert!(text.contains("pii: flagged"), "{text}");
+    assert!(
+        std::fs::read_to_string(&clean)
+            .unwrap()
+            .contains("pii: none")
+    );
+    let rows = cb.audit_rows();
+    let row = rows
+        .iter()
+        .find(|r| r["action"] == "scan.pii-found")
+        .expect("an audit row for the finding");
+    let detail = row["detail"].to_string();
+    assert!(
+        !detail.contains("erika@example.org"),
+        "no matched text: {detail}"
+    );
+    assert!(!detail.contains("3704"), "no matched text: {detail}");
+    // Still findable: hiding a file somebody put there would be the second surprise.
+    let r = cb.ok(&["recall", "erika"]);
+    assert!(r.to_string().contains("kundendaten"), "{r}");
+    // A second scan has nothing new to say.
+    let s = cb.ok(&["scan"]);
+    assert_eq!(s["pii_found"], serde_json::json!([]), "{s}");
+}

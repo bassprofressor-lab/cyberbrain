@@ -247,6 +247,10 @@ pub struct ScanReport {
     pub skipped: Vec<SkippedFile>,
     pub links_written_back: usize,
     pub link_writeback_failed: Vec<String>,
+    /// Notes that reached `notes/` without the write gate (dropped in by hand or by a tool)
+    /// and carry personal data by the scanner's shapes. Each is recorded in the audit log
+    /// as `scan.pii-found` and, outside rings 0 and 1, stamped `pii: flagged` (S7).
+    pub pii_found: Vec<String>,
     pub oversized_blocks: Vec<OversizedBlock>,
     /// Notes indexed without vectors because embedding them failed; the next scan retries.
     pub unvectorised: usize,
@@ -1809,6 +1813,56 @@ impl App {
 
     // ----- scan --------------------------------------------------------------------------
 
+    /// The write gate's scan for a note that did not come through it (S7, review
+    /// 2026-11-10/19: a file with `pii: none`, an e-mail address and an IBAN dropped into
+    /// `notes/r2` was indexed and found by `recall`, with no audit row at all).
+    ///
+    /// The note is still indexed: hiding a file somebody put there on purpose would be a
+    /// second surprise. What changes is that it is no longer silent. The audit log gets a row
+    /// (kinds and offsets, never the matched text) and the note's head says `flagged`, which
+    /// is what the gate writes for findings nobody reviewed. Rings 0 and 1 keep their bytes,
+    /// because rewriting them would cost the operator's attestation; they get the row only.
+    fn check_unscanned_pii(
+        &self,
+        w: &Writers,
+        note: &mut Note,
+        report: &mut ScanReport,
+    ) -> Result<()> {
+        let mut findings = cyberbrain_policy::pii::scan(&note.body);
+        for t in &note.front.tags {
+            findings.extend(cyberbrain_policy::pii::scan(t));
+        }
+        if findings.is_empty() {
+            return Ok(());
+        }
+        let claimed = note.front.pii;
+        let stamp = !note.front.ring.is_resident();
+        w.policy.get().audit().record_raw(
+            &self.actor.to_string(),
+            "scan.pii-found",
+            format!("note:{}", note.front.id),
+            json!({
+                "name": note.front.name,
+                "ring": note.front.ring,
+                "claimed": claimed,
+                "findings": findings.iter().map(|f| f.audit_view()).collect::<Vec<_>>(),
+                "stamped": stamp,
+                "dry_run": report.dry_run,
+            }),
+        )?;
+        if stamp {
+            note.front.pii = PiiState::Flagged;
+            if let Err(e) = w.notes.write(note) {
+                report.link_writeback_failed.push(format!(
+                    "{}: pii: flagged not written back: {e}",
+                    note.front.name
+                ));
+            }
+        }
+        report.pii_found.push(note.front.name.clone());
+        Ok(())
+    }
+
     pub fn scan(&self, opts: ScanOptions) -> Result<ScanReport> {
         let started = Instant::now();
         let w = self.writers(opts.dry_run)?;
@@ -1834,6 +1888,7 @@ impl App {
                 .collect(),
             links_written_back: 0,
             link_writeback_failed: Vec::new(),
+            pii_found: Vec::new(),
             oversized_blocks: Vec::new(),
             unvectorised: 0,
             unvectorised_reason: None,
@@ -1952,6 +2007,13 @@ impl App {
                     continue;
                 }
                 _ => {}
+            }
+
+            // S7: a file that claims to be clean (or says nothing) did not necessarily pass
+            // the write gate; `write` stamps what it scanned. Only new and changed notes are
+            // looked at, so an unchanged store costs nothing here.
+            if matches!(note.front.pii, PiiState::None | PiiState::Unscanned) {
+                self.check_unscanned_pii(&w, &mut note, &mut report)?;
             }
 
             let (blocks, oversized) = blocks_of(&note, MAX_BLOCK_TOKENS);
