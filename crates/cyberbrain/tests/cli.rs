@@ -5893,3 +5893,18 @@ fn an_agent_cannot_issue_itself_an_mcp_client_token() {
     assert_eq!(out.status.code(), Some(3), "{}", text(&out));
     assert!(!text(&out).contains("registered"), "{}", text(&out));
 }
+
+/// K6 (audits 2026-11-10 and 2026-11-19): a second identical pre-tool-use payload without a
+/// `tool_use_id` within two seconds stood down with empty output, which the harness reads as
+/// "allow", after the first run had denied. Calibrated against the broken state: the second
+/// verdict was empty.
+#[test]
+fn a_second_identical_call_without_an_id_gets_the_same_verdict() {
+    let cb = Cb::new();
+    let target = cb.store.join("notes").join("r0").join("regel.md");
+    let input = serde_json::json!({ "file_path": target, "content": "x" });
+    let first = pre_tool_use(&cb, "Write", input.clone());
+    let second = pre_tool_use(&cb, "Write", input);
+    assert_eq!(decision(&first).as_deref(), Some("deny"), "{first}");
+    assert_eq!(decision(&second).as_deref(), Some("deny"), "{second}");
+}

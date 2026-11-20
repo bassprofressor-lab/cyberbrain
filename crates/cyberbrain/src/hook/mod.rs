@@ -250,8 +250,13 @@ pub fn run_with(
         // and the release binary is checked end to end. The snapshot has one caller, the
         // compaction mod, which runs it again on purpose (`precompute`, then the compaction):
         // a second call answered with nothing would lose the summary its instructions.
+        //
+        // A pre-tool-use verdict is deduplicated only by the call's own `tool_use_id` (K6,
+        // 2026-11-10): without one, two identical calls within two seconds are two calls, and
+        // the second one standing down answered "no opinion" after the first one's "deny".
         if let (false, None, Some(a)) = (cfg!(test), &stand_down, app)
             && !matches!(event, HookEvent::PreCompactSnapshot)
+            && (!matches!(event, HookEvent::PreToolUse) || dedupe::has_tool_use_id(stdin))
             && !dedupe::claim(a.root(), name, stdin, std::time::SystemTime::now())
         {
             let mut out = HookOutput::empty();

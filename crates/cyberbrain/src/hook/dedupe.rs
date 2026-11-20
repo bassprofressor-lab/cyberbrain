@@ -27,6 +27,15 @@ pub const WINDOW: Duration = Duration::from_secs(2);
 /// Claims older than this are removed when a new one is written.
 const SWEEP_AFTER: Duration = Duration::from_secs(600);
 
+/// Whether a payload names its tool call. Only such a payload can be told apart from a
+/// second, genuine call with the same input.
+pub fn has_tool_use_id(stdin: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(stdin)
+        .ok()
+        .and_then(|v| v.get("tool_use_id")?.as_str().map(|s| !s.trim().is_empty()))
+        .unwrap_or(false)
+}
+
 fn claims_dir(root: &Path) -> PathBuf {
     sessions_dir(root).join(".claims")
 }
