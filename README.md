@@ -16,7 +16,7 @@
 **English** · [Deutsch](README.de.md)
 
 [Install](#install) · [Five minutes](#five-minutes) · [Features](#at-a-glance) ·
-[How it works](#how-it-works) · [What it needs](#what-it-needs) ·
+[How it works](#how-it-works) · [Architecture](docs/ARCHITECTURE.md) · [What it needs](#what-it-needs) ·
 [Compliance](#built-for-the-eu-switchable-off) · [Changelog](CHANGELOG.md) · [Spec](docs/SPEC.md)
 
 </div>
@@ -50,6 +50,10 @@ with a head anchor kept outside the store.
 | **Hybrid search** | SQLite FTS5 for the words and local vectors for the meaning, fused into one ranking |
 | **Honest results** | every answer says what was *not* checked, as a caveat |
 | **Four ways in** | command line, agent hooks, MCP server, web page with HTTP API |
+| **Proposals and sign-off** | agents propose for rings 0 and 1, a person reviews; with AgentGuard configured the approval runs there |
+| **Anchored to code** | a note that names `path:line` keeps the file's hash, and recall says when the code moved |
+| **PDFs and scans** | `cyberbrain documents` turns each document into a note whose citations carry the page |
+| **Windows without a terminal** | a Start-menu entry and tray icon open the same web page |
 | **Team hub, optional** | one machine collects the others' audit trail; note sharing only when switched on |
 | **Compliance built in** | egress register, erasure, subject access, PII check, signed hash-chained audit log |
 
@@ -189,6 +193,9 @@ readable without this tool. The index is derived and can be deleted at any time;
 `cyberbrain scan` rebuilds it. Retrieval is lexical and semantic at once, SQLite FTS5 for
 the words and a flat cosine scan over local embeddings for the meaning, fused into one
 ranking. `recall --stand <date>` searches the store as it stood on that day.
+
+The whole map, from the four ways in to the hub, with one diagram per part:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### Three properties that keep a memory worth trusting
 
@@ -445,7 +452,7 @@ Cyberbrain is an original work. It shares no source code with any other memory t
 history documents it decision by decision.
 
 <details>
-<summary>The eight crates</summary>
+<summary>The nine crates</summary>
 
 <br>
 
@@ -459,6 +466,7 @@ history documents it decision by decision.
 | [`cyberbrain-llm`](https://crates.io/crates/cyberbrain-llm) | the optional OpenAI-compatible client |
 | [`cyberbrain-policy`](https://crates.io/crates/cyberbrain-policy) | egress register, audit chain, PII gate, profiles, obligations |
 | [`cyberbrain-documents`](https://crates.io/crates/cyberbrain-documents) | PDFs and scans into notes with page locators (PDFium, PP-OCRv6); the `documents` feature, [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) |
+| `cyberbrain-desktop` | Windows Start-menu entry and tray icon that starts `cyberbrain serve`; ships in the Windows installer, not on crates.io |
 
 </details>
 

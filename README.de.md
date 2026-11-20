@@ -16,7 +16,7 @@
 [English](README.md) · **Deutsch**
 
 [Installieren](#installieren) · [Fünf Minuten](#fünf-minuten) · [Funktionen](#auf-einen-blick) ·
-[Wie es arbeitet](#wie-es-arbeitet) · [Was es braucht](#was-es-braucht) ·
+[Wie es arbeitet](#wie-es-arbeitet) · [Aufbau](docs/ARCHITECTURE.md) · [Was es braucht](#was-es-braucht) ·
 [Compliance](#für-die-eu-gebaut-abschaltbar) · [Changelog](CHANGELOG.md) · [Spezifikation](docs/SPEC.md)
 
 </div>
@@ -50,6 +50,10 @@ neuer Store von der ersten Zeile an signiert, samt Kopf-Anker außerhalb des Sto
 | **Hybride Suche** | SQLite FTS5 für die Wörter und lokale Vektoren für die Bedeutung, zu einer Rangfolge verschmolzen |
 | **Ehrliche Ergebnisse** | jede Antwort sagt als Caveat, was *nicht* geprüft wurde |
 | **Vier Wege hinein** | Kommandozeile, Agenten-Hooks, MCP-Server, Weboberfläche mit HTTP-API |
+| **Vorschläge und Abzeichnung** | Agenten schlagen für die Ringe 0 und 1 vor, ein Mensch prüft; mit AgentGuard läuft die Freigabe dort |
+| **An den Code gebunden** | eine Notiz, die `pfad:zeile` nennt, merkt sich den Hash der Datei, und recall sagt, wenn sich der Code geändert hat |
+| **PDFs und Scans** | `cyberbrain documents` macht aus jedem Dokument eine Notiz, deren Zitate die Seite tragen |
+| **Windows ohne Terminal** | ein Eintrag im Startmenü und ein Symbol im Infobereich öffnen dieselbe Weboberfläche |
 | **Zentraleinheit, optional** | ein Rechner sammelt die Nachweise der übrigen ein; Notizen teilen nur, wenn eingeschaltet |
 | **Compliance eingebaut** | Ausgangsregister, Löschung, Auskunft, PII-Prüfung, signiertes Audit-Log mit Hashkette |
 
@@ -198,6 +202,9 @@ lesbar auch ohne dieses Werkzeug. Der Index ist abgeleitet und darf jederzeit ge
 für die Wörter und ein flacher Kosinus-Durchlauf über lokale Einbettungen für die Bedeutung,
 zu einer Rangfolge verschmolzen. `recall --stand <datum>` sucht im Store, wie er an diesem
 Tag aussah.
+
+Die ganze Karte, von den vier Wegen hinein bis zur Zentraleinheit, mit einem Diagramm je Teil:
+[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (englisch).
 
 ### Drei Eigenschaften, die ein Gedächtnis vertrauenswürdig halten
 
@@ -471,7 +478,7 @@ Gedächtnis-Werkzeug; §0 von [`docs/SPEC.md`](docs/SPEC.md) hält die Grenze fe
 gebaut wurde, und die Commit-Historie belegt das Entscheidung für Entscheidung.
 
 <details>
-<summary>Die acht Pakete</summary>
+<summary>Die neun Pakete</summary>
 
 <br>
 
@@ -485,6 +492,7 @@ gebaut wurde, und die Commit-Historie belegt das Entscheidung für Entscheidung.
 | [`cyberbrain-llm`](https://crates.io/crates/cyberbrain-llm) | der optionale OpenAI-kompatible Client |
 | [`cyberbrain-policy`](https://crates.io/crates/cyberbrain-policy) | Ausgangsregister, Audit-Kette, PII-Gate, Profile, Pflichtenkatalog |
 | [`cyberbrain-documents`](https://crates.io/crates/cyberbrain-documents) | PDFs und Scans als Notizen mit Seitenangabe (PDFium, PP-OCRv6); Feature `documents`, [`docs/DOCUMENTS.md`](docs/DOCUMENTS.md) |
+| `cyberbrain-desktop` | Startmenü-Eintrag und Symbol im Infobereich unter Windows, startet `cyberbrain serve`; kommt mit dem Windows-Installer, nicht auf crates.io |
 
 </details>
 
