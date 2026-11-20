@@ -103,8 +103,41 @@ impl App {
         is_default.then(|| parent.to_path_buf())
     }
 
+    /// Whether this caller reaches the memory only (MCP, an agent, a hook, or a served
+    /// store, which answers any local process), not the file system (N5, review 2026-11-19).
+    fn anchors_restricted(&self) -> bool {
+        matches!(self.actor, Actor::Mcp | Actor::Agent(_) | Actor::Hook(_))
+            || self.refuses_resident_writes()
+    }
+
     /// One anchor, hashed now. `Err` says why not, in words for the person who named it.
+    ///
+    /// For a caller that reaches only the memory (see `anchors_restricted`) the file must be
+    /// one `find` would show (no hidden entry, not ignored), and every refusal is the same
+    /// sentence: `write` with `anchors: [".env"]` put the SHA-256 of `.env` into the note's
+    /// head, and the different refusals said which paths exist (N5).
     fn resolve_anchor(
+        &self,
+        root: &Path,
+        raw: &str,
+        lines: Option<&str>,
+        at: jiff::Timestamp,
+    ) -> std::result::Result<Anchor, String> {
+        if !self.anchors_restricted() {
+            return self.resolve_anchor_any(root, raw, lines, at);
+        }
+        const REFUSED: &str = "cannot be anchored from here: only files inside the project \
+             that `find` shows (not hidden, not ignored) are";
+        let a = self
+            .resolve_anchor_any(root, raw, lines, at)
+            .map_err(|_| REFUSED.to_string())?;
+        match cyberbrain_code::excluded(root, Path::new(&a.path)) {
+            Some(false) => Ok(a),
+            _ => Err(REFUSED.to_string()),
+        }
+    }
+
+    fn resolve_anchor_any(
         &self,
         root: &Path,
         raw: &str,
@@ -679,6 +712,39 @@ mod tests {
                 "{spec} wrote the note"
             );
         }
+    }
+
+    /// N5: over MCP (or from an agent, or a served store) a named anchor is limited to files
+    /// `find` would show, and every refusal reads the same, so it tells nothing about which
+    /// paths exist. The operator at a terminal keeps anchoring anything in the project.
+    #[test]
+    fn a_memory_only_caller_anchors_only_what_find_shows_and_learns_nothing_else() {
+        let p = project(Actor::Mcp);
+        std::fs::write(p.root.join(".env"), "SECRET=1\n").unwrap();
+        std::fs::write(p.root.join(".cyberbrainignore"), "geheim/\n").unwrap();
+        std::fs::create_dir_all(p.root.join("geheim")).unwrap();
+        std::fs::write(p.root.join("geheim/x.rs"), "fn x() {}\n").unwrap();
+        let mut said = Vec::new();
+        for spec in [
+            ".env",
+            "geheim/x.rs",
+            "src/missing.rs",
+            "src",
+            "../outside.rs",
+        ] {
+            let e = write(&p.app, "probe", "text", explicit(&[spec])).unwrap_err();
+            said.push(e.to_string().replace(spec, "<spec>"));
+            assert!(
+                p.app.store().read("probe").is_err(),
+                "{spec} wrote the note"
+            );
+        }
+        said.dedup();
+        assert_eq!(said.len(), 1, "one sentence for every refusal: {said:?}");
+        write(&p.app, "ok", "Guard.", explicit(&["src/lib.rs:1"])).unwrap();
+        // The operator at a terminal is not limited.
+        let op = App::open(Some(p.app.root()), Actor::Operator).unwrap();
+        write(&op, "env", "Env.", explicit(&[".env"])).unwrap();
     }
 
     /// `find` names the notes anchored to the file it found something in.

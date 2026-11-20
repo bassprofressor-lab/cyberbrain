@@ -304,6 +304,43 @@ impl<'o> Walk<'o> {
     }
 }
 
+/// Whether `find` would leave the file at `rel` (root-relative) out of the tree: a hidden
+/// entry on the way, the store, or an ignore rule (`.cyberbrainignore`, `.gitignore`) of any
+/// directory from the root down. Used where a path comes from a caller that only reaches the
+/// memory, to keep it to what `find` would show anyway (N5, 2026-11-20).
+///
+/// `None` when the rules cannot be read; the caller decides what that means.
+pub fn excluded(root: &Path, rel: &Path) -> Option<bool> {
+    use std::path::Component;
+    let parts: Vec<&std::ffi::OsStr> = rel
+        .components()
+        .filter_map(|c| match c {
+            Component::Normal(p) => Some(p),
+            _ => None,
+        })
+        .collect();
+    if parts.iter().any(|p| p.to_string_lossy().starts_with('.')) {
+        return Some(true);
+    }
+    let opts = FindOptions::default();
+    let mut walk = Walk::new(root, &opts).ok()?;
+    let root = walk.root.clone();
+    let mut matchers: Vec<Matcher> = Vec::new();
+    let mut dir = root.clone();
+    let mut rel_so_far = String::new();
+    for (i, part) in parts.iter().enumerate() {
+        walk.load_matchers(&dir, &rel_so_far, &mut matchers).ok()?;
+        let next = dir.join(part);
+        let is_dir = i + 1 < parts.len();
+        if Walk::ignored_by(&matchers, &next, is_dir).is_some() {
+            return Some(true);
+        }
+        rel_so_far = join_rel(&rel_so_far, &part.to_string_lossy());
+        dir = next;
+    }
+    Some(false)
+}
+
 fn join_rel(rel: &str, name: &str) -> String {
     if rel.is_empty() {
         name.to_string()
