@@ -80,7 +80,27 @@ pub fn router(state: Arc<HubState>) -> Router {
         .route("/purges/{id}/approve", post(countersign_purge))
         .route("/api/v1/fleet", get(get_fleet))
         .layer(axum::middleware::from_fn(browser_guard))
+        .layer(axum::middleware::from_fn(page_headers))
         .with_state(state)
+}
+
+/// S20: the hub's pages carry no script and load nothing from elsewhere, and say so, and no
+/// answer (a device token shown once, a disclosure listing) stays in a browser cache.
+const HUB_CSP: &str = "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; \
+     frame-ancestors 'none'; base-uri 'none'";
+
+async fn page_headers(req: axum::extract::Request, next: axum::middleware::Next) -> Response {
+    let mut resp = next.run(req).await;
+    let h = resp.headers_mut();
+    h.entry(header::CONTENT_SECURITY_POLICY)
+        .or_insert(axum::http::HeaderValue::from_static(HUB_CSP));
+    h.entry(header::CACHE_CONTROL)
+        .or_insert(axum::http::HeaderValue::from_static("no-store"));
+    h.entry(header::X_CONTENT_TYPE_OPTIONS)
+        .or_insert(axum::http::HeaderValue::from_static("nosniff"));
+    h.entry(header::REFERRER_POLICY)
+        .or_insert(axum::http::HeaderValue::from_static("no-referrer"));
+    resp
 }
 
 impl HubState {

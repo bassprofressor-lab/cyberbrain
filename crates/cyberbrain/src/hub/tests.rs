@@ -5413,3 +5413,24 @@ fn the_record_and_its_backups_are_the_owners_alone() {
         assert_eq!(mode, 0o600, "{}", wal.display());
     }
 }
+
+/// S20: CSP and no-store on the hub's answers.
+#[tokio::test]
+async fn hub_pages_carry_a_csp_and_are_not_cached() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state, "127.0.0.1:40000", "wrong").await;
+    let h = r.headers();
+    let csp = h
+        .get(axum::http::header::CONTENT_SECURITY_POLICY)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(
+        csp.contains("default-src 'none'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    assert_eq!(
+        h.get(axum::http::header::CACHE_CONTROL)
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store")
+    );
+}

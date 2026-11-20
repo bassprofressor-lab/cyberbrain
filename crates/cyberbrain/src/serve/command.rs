@@ -35,6 +35,33 @@ const TIMEOUT: Duration = Duration::from_secs(120);
 /// what the page cannot draw it does not need to be sent.
 const MAX_OUTPUT: usize = 256 * 1024;
 
+/// Commands running at once from this window (S20). Each is a process with a store open; a
+/// page or a local process that sends a hundred at once gets the 101st refused, not a
+/// machine full of them.
+pub const MAX_RUNNING: usize = 4;
+
+/// One slot of [`MAX_RUNNING`], given back on drop. The count is the window's own
+/// (`ServeState::running`), so two windows do not share one limit.
+pub(crate) struct Slot(std::sync::Arc<std::sync::atomic::AtomicUsize>);
+
+impl Slot {
+    pub(crate) fn take(running: &std::sync::Arc<std::sync::atomic::AtomicUsize>) -> Option<Slot> {
+        use std::sync::atomic::Ordering;
+        running
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+                (n < MAX_RUNNING).then_some(n + 1)
+            })
+            .ok()
+            .map(|_| Slot(std::sync::Arc::clone(running)))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CommandRequest {
     /// The line as typed, without the leading `cyberbrain`.
@@ -59,6 +86,13 @@ pub async fn run(
     Json(req): Json<CommandRequest>,
 ) -> ApiResult<Json<CommandResult>> {
     crate::terminal::decision_guard(&st, &headers)?;
+    let _slot = Slot::take(&st.running).ok_or_else(|| {
+        ApiError::new(
+            axum::http::StatusCode::TOO_MANY_REQUESTS,
+            "busy",
+            format!("{MAX_RUNNING} commands are already running here; wait for one to finish"),
+        )
+    })?;
     let argv = tokenise(&req.line)
         .map_err(ApiError::bad_request)?
         .ok_or_else(|| ApiError::bad_request("there is no command in that line"))?;
@@ -464,4 +498,21 @@ pub fn tokenise(line: &str) -> Result<Option<Vec<String>>, String> {
         out.push(cur);
     }
     Ok((!out.is_empty()).then_some(out))
+}
+
+#[cfg(test)]
+mod slot_tests {
+    use super::*;
+
+    #[test]
+    fn no_more_than_max_running_at_once() {
+        let running = std::sync::Arc::default();
+        let held: Vec<Slot> = std::iter::from_fn(|| Slot::take(&running))
+            .take(MAX_RUNNING + 3)
+            .collect();
+        assert_eq!(held.len(), MAX_RUNNING);
+        assert!(Slot::take(&running).is_none());
+        drop(held);
+        assert!(Slot::take(&running).is_some(), "given back on drop");
+    }
 }

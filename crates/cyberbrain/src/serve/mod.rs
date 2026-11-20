@@ -80,6 +80,8 @@ pub struct ServeState {
     /// it so a child is the operator or an agent on purpose, not by whoever ran the suite
     /// (F5, audit 2026-11-04: run from Claude Code, an inherited `CLAUDECODE` hid H1).
     pub child_env: Vec<(String, Option<String>)>,
+    /// Commands running from this window now (`command::MAX_RUNNING`).
+    pub running: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// Run a synchronous `App` call off the async runtime's threads.
@@ -131,6 +133,7 @@ pub fn router_with_child_env(
         terminal,
         origins: origins.clone(),
         child_env,
+        running: Arc::default(),
     });
     // The recording is the one body here measured in megabytes rather than kilobytes.
     let upload_limit = usize::try_from(

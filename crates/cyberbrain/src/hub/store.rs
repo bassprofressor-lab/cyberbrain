@@ -656,7 +656,7 @@ impl HubStore {
         expires_at: Option<&str>,
     ) -> Result<(Device, String)> {
         let id = format!("dev_{}", cyberbrain_core::NoteId::generate());
-        let token = format!("cbh_{}", cyberbrain_core::NoteId::generate());
+        let token = format!("cbh_{}", secret_part());
         let device = Device {
             id: id.clone(),
             name: name.to_string(),
@@ -1033,6 +1033,14 @@ fn row_to_device(r: &rusqlite::Row<'_>) -> rusqlite::Result<Device> {
     })
 }
 
+/// The secret half of a device token, a person's credential or an enrolment code: 256 random
+/// bits in hex (S20: it was a ULID, 80 random bits beside a readable timestamp).
+fn secret_part() -> String {
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).expect("the operating system has randomness");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Tokens are stored as a hash, like passwords, for the same reason.
 fn token_hash(token: &str) -> String {
     blake3::hash(token.as_bytes()).to_hex().to_string()
@@ -1054,6 +1062,19 @@ mod tests {
         assert_eq!(stored, token_hash(&token));
         assert!(s.device_by_token(&token).unwrap().is_some());
         assert!(s.device_by_token("cbh_wrong").unwrap().is_none());
+    }
+
+    #[test]
+    fn tokens_carry_256_random_bits() {
+        let s = HubStore::in_memory().unwrap();
+        let (_, a) = s.add_device("a", "2026-09-07T00:00:00Z").unwrap();
+        let (_, b) = s.add_device("b", "2026-09-07T00:00:00Z").unwrap();
+        for t in [&a, &b] {
+            let secret = t.strip_prefix("cbh_").unwrap();
+            assert_eq!(secret.len(), 64, "{t}");
+            assert!(secret.chars().all(|c| c.is_ascii_hexdigit()), "{t}");
+        }
+        assert_ne!(a, b);
     }
 
     #[test]
@@ -2345,7 +2366,7 @@ impl HubStore {
         expires_at: Option<&str>,
     ) -> Result<(Principal, String)> {
         let id = format!("who_{}", cyberbrain_core::NoteId::generate());
-        let token = format!("cbp_{}", cyberbrain_core::NoteId::generate());
+        let token = format!("cbp_{}", secret_part());
         ix(self.conn.execute(
             "INSERT INTO principals (id, name, role, token_hash, created_at, expires_at)
              VALUES (?, ?, ?, ?, ?, ?)",
@@ -3091,7 +3112,7 @@ impl HubStore {
             return Err(Error::Config("--uses has to be between 1 and 1000".into()));
         }
         let expires_at = invitation_expiry(expires, now)?;
-        let code = format!("cbe_{}", cyberbrain_core::NoteId::generate());
+        let code = format!("cbe_{}", secret_part());
         let c = EnrolmentCode {
             id: format!("ec_{}", cyberbrain_core::NoteId::generate()),
             label: label.trim().to_string(),
