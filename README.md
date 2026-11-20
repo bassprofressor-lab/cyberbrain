@@ -252,7 +252,8 @@ An agent writes most notes. `cyberbrain signoff <note>` is how a person says the
 it shows the note, asks you to type its name, and records your identity and the hash of the
 text in the audit chain. Recall and the page then show `[checked by you on …]` until the text
 changes. Only at a terminal, and only as the operator: an agent, MCP, a hook or the page are
-refused.
+refused. The mark is a row in the audit chain and is exactly as strong as that chain: on a
+store with an audit key it cannot be added or changed without the key, on one without it can.
 
 ## Team: the hub
 
@@ -376,8 +377,9 @@ that, `--revoke` takes it back; a cloned project cannot switch them on by itself
 - **Erasure that erases** (GDPR Art. 17): `cyberbrain forget` removes the note, its blocks,
   its vectors, its index rows and its derivatives in one transaction, and prints what went.
   `--report FILE --sign` writes an erasure report somebody else can check.
-- **Subject access** (Art. 15): `cyberbrain policy subject <identifier>` returns everything
-  stored about it, with citations.
+- **Subject access** (Art. 15): `cyberbrain policy subject <identifier>` returns the note
+  text and audit rows that mention it, with citations. It does not yet search note names,
+  tags, `bereich` or waiting proposals; check those by hand until it does.
 - **A PII check before a note is written**, holding the write for your decision rather than
   redacting behind your back.
 - **An append-only audit log** with a blake3 hash chain, and a `verify` that names the first

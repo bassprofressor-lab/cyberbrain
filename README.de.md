@@ -264,7 +264,9 @@ Die meisten Notizen schreibt ein Agent. Mit `cyberbrain signoff <notiz>` bestät
 dass er den Inhalt geprüft hat: die Notiz wird gezeigt, ihr Name muss eingetippt werden, und
 Identität und Hash des Texts landen in der Audit-Kette. recall und die Seite zeigen dann
 `[checked by … on …]`, bis sich der Text ändert. Nur am Terminal und nur als Betreiber: Agent,
-MCP, Hook und Seite werden abgewiesen.
+MCP, Hook und Seite werden abgewiesen. Der Vermerk ist eine Zeile der Audit-Kette und genau so
+belastbar wie sie: in einem Store mit Audit-Schlüssel lässt er sich ohne den Schlüssel weder
+setzen noch ändern, in einem ohne schon.
 
 ## Im Team: die Zentraleinheit
 
@@ -396,8 +398,9 @@ frei, `--revoke` nimmt es zurück. Ein geklontes Projekt kann sie nicht selbst e
   Blöcke, ihre Vektoren, ihre Indexzeilen und ihre Ableitungen in einer Transaktion und
   druckt, was weg ist. `--report DATEI --sign` schreibt einen Löschbericht, den jemand
   anderes nachprüfen kann.
-- **Auskunft** (Art. 15): `cyberbrain policy subject <kennung>` gibt alles zurück, was zu ihr
-  gespeichert ist, mit Zitaten.
+- **Auskunft** (Art. 15): `cyberbrain policy subject <kennung>` gibt Notiztext und
+  Audit-Zeilen zurück, die sie nennen, mit Zitaten. Notiznamen, Tags, `bereich` und wartende
+  Vorschläge durchsucht es noch nicht; die bis dahin von Hand prüfen.
 - **Eine PII-Prüfung, bevor eine Notiz geschrieben wird**, die den Schreibvorgang für deine
   Entscheidung anhält, statt hinter deinem Rücken zu schwärzen.
 - **Ein Audit-Log, an das nur angehängt wird**, mit blake3-Hashkette, und ein `verify`, das

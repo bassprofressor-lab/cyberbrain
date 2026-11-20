@@ -114,7 +114,7 @@ Holt einen vorhandenen Baum von Markdown-Notizen in den Store, gesteuert über e
 
 ### documents
 
-Nur in den Release-Programmen oder mit `cargo install cyberbrain --features documents`. Holt PDFs und Scans herein: eine Notiz je Dokument in Ring 4, jede Seite unter einer Ortsangabe (`p. 3`), sodass ein Treffer die Seite nennt. Seiten, die nur ein Bild sind, werden erkannt, wenn die OCR-Dateien in `models/` liegen. Was wohin gehört: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
+Nur in den Release-Programmen oder mit `cargo install cyberbrain --features documents`. So von crates.io gebaut, hängt es über oar-ocr weiter an zip 8.x (vier RUSTSEC-Meldungen); Repository und Release-Programme ziehen zip 9, was `[patch.crates-io]` bei einer Installation von crates.io nicht kann. Für dieses Feature besser das Release-Programm. Holt PDFs und Scans herein: eine Notiz je Dokument in Ring 4, jede Seite unter einer Ortsangabe (`p. 3`), sodass ein Treffer die Seite nennt. Seiten, die nur ein Bild sind, werden erkannt, wenn die OCR-Dateien in `models/` liegen. Was wohin gehört: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
 
 ```text
 cyberbrain documents add <PFAD>... [--bereich <B>] [--threads <N>] [--accept-pii] [--dry-run]
@@ -235,7 +235,7 @@ Von Haus aus Port 7777. Siehe [Weboberfläche und HTTP-API](../serve/).
 | `policy obligations` | was das aktive Profil über das Recht behauptet, mit Grundlage und Sicherheit |
 | `policy audit` | das Audit-Log: `--limit`, `--action`, `--subject`, `--since`, `--until`, `--verify`, `--export <PFAD>`, `--signed` |
 | `policy audit-key [--init]` | der Ed25519-Schlüssel des Stores für das Audit-Log und sein Fingerabdruck |
-| `policy subject <KENNUNG>` | alles, was zu einer Kennung gespeichert ist (DSGVO Art. 15) |
+| `policy subject <KENNUNG>` | Notiztext und Audit-Zeilen, die eine Kennung nennen (DSGVO Art. 15); Namen, Tags, `bereich` und Vorschläge noch nicht |
 | `policy retention [--apply] [--dry-run]` | Notizen, deren Aufbewahrungsfrist abgelaufen ist; `--apply` löscht sie über `forget` |
 | `policy model-card` | Herkunft, Lizenz und Hash jeder Modelldatei im Einsatz |
 | `policy attest [--yes]` | die aktuellen Dateien in Ring 0 und 1 zu denen des Betreibers erklären |

@@ -32,9 +32,11 @@ security issue rather than a bug:
   verifies clean is a finding.
 - **`forget` leaves something behind.** File, blocks, vectors, FTS rows, links and
   derivatives go in one transaction. A copy that survives in any cache is a finding.
-- **The PII gate can be walked past.** Under profile `eu`/`ch` a write with findings is held
-  for the operator. A path that writes anyway, or that puts the matched text into the audit
-  log, is a finding.
+- **The PII gate can be walked past.** Under profile `eu`/`ch` a write with findings is held.
+  Whoever writes decides how it goes on: redact, or `--force` (MCP `force: true`), which
+  writes the note marked `pii: flagged` for the operator to see; a redaction an agent or hook
+  chose is marked `flagged` too, never `reviewed`. A path that writes without one of those
+  decisions and its mark, or that puts the matched text into the audit log, is a finding.
 - **An agent writes or erases rings 0 and 1 as the operator** through a surface that is
   meant to refuse it: `serve` without `--allow-resident-writes` (its note routes and its
   command line alike), or, on Linux, a CLI or daemon call from a process that still descends

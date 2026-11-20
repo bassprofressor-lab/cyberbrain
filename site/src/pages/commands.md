@@ -113,7 +113,7 @@ Bring an existing tree of Markdown notes into the store, driven by a TOML mappin
 
 ### documents
 
-Release binaries only, or `cargo install cyberbrain --features documents`. Bring PDFs and scans in: one note per document in ring 4, every page under a locator (`p. 3`), so a recall hit names the page. Pages that are only an image are recognised when the OCR files are in `models/`. What goes where: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
+Release binaries only, or `cargo install cyberbrain --features documents`. Built from crates.io that way, it still links zip 8.x through oar-ocr (four RUSTSEC advisories); the repository and the release binaries patch it to zip 9, which `[patch.crates-io]` cannot do for an install from crates.io. Prefer the release binary for this feature. Bring PDFs and scans in: one note per document in ring 4, every page under a locator (`p. 3`), so a recall hit names the page. Pages that are only an image are recognised when the OCR files are in `models/`. What goes where: [`docs/DOCUMENTS.md`](https://github.com/bassprofressor-lab/cyberbrain/blob/main/docs/DOCUMENTS.md).
 
 ```text
 cyberbrain documents add <PATH>... [--bereich <B>] [--threads <N>] [--accept-pii] [--dry-run]
@@ -234,7 +234,7 @@ Default port 7777. See [Web page and HTTP API](../serve/).
 | `policy obligations` | what the active profile claims about the law, with basis and confidence |
 | `policy audit` | the audit log: `--limit`, `--action`, `--subject`, `--since`, `--until`, `--verify`, `--export <PATH>`, `--signed` |
 | `policy audit-key [--init]` | the store's Ed25519 audit key and its fingerprint |
-| `policy subject <IDENTIFIER>` | everything stored about an identifier (GDPR Art. 15) |
+| `policy subject <IDENTIFIER>` | note text and audit rows that mention an identifier (GDPR Art. 15); names, tags, `bereich` and proposals not yet |
 | `policy retention [--apply] [--dry-run]` | notes whose retention has expired; `--apply` erases them through `forget` |
 | `policy model-card` | identity, source, licence and hash of every model artefact in use |
 | `policy attest [--yes]` | declare the current files in rings 0 and 1 to be the operator's |
