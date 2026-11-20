@@ -4167,6 +4167,27 @@ impl App {
             index: w.index.as_ref(),
         };
         let mut report = w.policy.get().forget(&mut eraser, &req)?;
+        // S12 (2026-11-10): a waiting proposal of the same name stayed behind, and accepting
+        // it later put the erased text back. It goes with the note, and the report says so.
+        if self
+            .store
+            .proposal_path(&req.name)
+            .is_ok_and(|p| p.is_file())
+        {
+            if !dry_run {
+                self.store.remove_proposal(&req.name)?;
+            }
+            report.notes.push(format!(
+                "a waiting proposal of the same name {} as well; accepting it would have \
+                 written the text again",
+                if dry_run {
+                    "would be removed"
+                } else {
+                    "was removed"
+                }
+            ));
+            report.derivatives += 1;
+        }
         if let Some(e) = stale {
             report.blocks += e.counts.blocks;
             report.fts_rows += e.counts.fts_rows;
@@ -7490,6 +7511,32 @@ mod stale_name_tests {
                 .note(&w.id)
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    /// S12 (audits 2026-11-10 and 2026-11-19): `forget` left a waiting proposal of the same
+    /// name; it still stood in `review`, and accepting it wrote the erased text again.
+    /// Calibrated against the broken state: `proposals/preis.md` was still there.
+    #[test]
+    fn forget_takes_a_waiting_proposal_of_the_same_name_with_it() {
+        let (_d, app) = store();
+        deleted_by_hand(&app);
+        app.write(req("preis", "Der Preis beträgt 100 Euro im Monat."))
+            .unwrap();
+        let agent = App::open(Some(app.root()), Actor::Agent("claude-code:t".into())).unwrap();
+        agent
+            .propose(
+                req("preis", "Der Preis beträgt 300 Euro im Monat."),
+                "agent-a",
+            )
+            .unwrap();
+        let proposal = app.root().join("proposals").join("preis.md");
+        assert!(proposal.is_file());
+        let report = app.forget("preis", false).unwrap();
+        assert!(!proposal.exists());
+        assert!(
+            report.notes.iter().any(|n| n.contains("proposal")),
+            "{report:?}"
         );
     }
 }
