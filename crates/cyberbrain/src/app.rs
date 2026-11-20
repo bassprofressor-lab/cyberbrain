@@ -5292,14 +5292,26 @@ impl App {
         let mut erasures = Vec::new();
         for e in erased {
             let name = e["name"].as_str().unwrap_or_default().to_string();
-            let exists = self.store.read(&name).is_ok();
-            erasures.push(serde_json::json!({
+            let held = self.store.read(&name).ok();
+            let exists = held.is_some();
+            // S15: a marker names a note by name only. Rings 0 and 1 never travel through
+            // the hub, so a marker that names one here is about somebody else's note of the
+            // same name, and the rules of this machine are not erased from outside.
+            let resident = held.as_ref().is_some_and(|n| n.front.ring.is_resident());
+            let remove = apply_erasures && exists && !resident && !dry_run;
+            let mut row = serde_json::json!({
                 "name": name,
                 "erased_at": e["erased_at"],
                 "held_here": exists,
-                "removed": apply_erasures && exists && !dry_run,
-            }));
-            if apply_erasures && exists && !dry_run {
+                "removed": remove,
+            });
+            if resident {
+                row["kept"] = serde_json::json!(
+                    "ring 0 or 1 here; the hub does not erase this machine's rules"
+                );
+            }
+            erasures.push(row);
+            if remove {
                 // The same path `cyberbrain forget` takes, so a distributed erasure is not a
                 // second, weaker way of deleting things.
                 self.forget(&name, false)?;
@@ -6579,6 +6591,34 @@ mod pull_tests {
             "the cursor must wait for the note that did not land"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn a_hub_erasure_never_removes_ring_0_or_1() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("store");
+    App::init(&root, &cyberbrain_policy::Actor::Operator).unwrap();
+    let app = App::open(Some(&root), cyberbrain_policy::Actor::Operator).unwrap();
+    let head = |id: &str, name: &str, ring: u8| {
+        format!(
+            "---\nid: {id}\nname: {name}\nring: {ring}\nkind: knowledge\ncreated: 2026-09-01T00:00:00Z\nupdated: 2026-09-01T00:00:00Z\n---\n\nText.\n"
+        )
+    };
+    let r0 = root.join("notes/r0/regel.md");
+    let r2 = root.join("notes/r2/wissen.md");
+    std::fs::write(&r0, head("01ARZ3NDEKTSV4RRFFQ69G5FB0", "regel", 0)).unwrap();
+    std::fs::write(&r2, head("01ARZ3NDEKTSV4RRFFQ69G5FB1", "wissen", 2)).unwrap();
+    let erased = [
+        serde_json::json!({ "name": "regel", "erased_at": "2026-11-20T00:00:00Z" }),
+        serde_json::json!({ "name": "wissen", "erased_at": "2026-11-20T00:00:00Z" }),
+    ];
+    let pulled = app.apply_pulled(&[], &erased, true, false).unwrap();
+    assert!(r0.is_file(), "ring 0 stays: {:?}", pulled.erasures);
+    assert_eq!(pulled.erasures[0]["removed"], false);
+    assert!(pulled.erasures[0]["kept"].is_string());
+    assert!(!r2.exists(), "ring 2 goes as before: {:?}", pulled.erasures);
+    assert_eq!(pulled.erasures[1]["removed"], true);
 }
 
 #[cfg(test)]
