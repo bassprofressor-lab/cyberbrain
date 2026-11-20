@@ -5930,7 +5930,10 @@ impl App {
 
     pub fn policy_subject(&self, identifier: &str) -> Result<SubjectAccessReport> {
         self.refuse_limited_audit_reader("a subject access report")?;
-        let source = IndexSubjectSource { index: &self.index };
+        let source = IndexSubjectSource {
+            index: &self.index,
+            store: &self.store,
+        };
         self.policy.subject_access(&source, identifier)
     }
 
@@ -6203,6 +6206,7 @@ impl ModelInventory for App {
 
 struct IndexSubjectSource<'a> {
     index: &'a Mutex<Index>,
+    store: &'a Store,
 }
 
 impl SubjectSource for IndexSubjectSource<'_> {
@@ -6218,6 +6222,62 @@ impl SubjectSource for IndexSubjectSource<'_> {
                 text,
             })
             .collect())
+    }
+
+    fn files(&self) -> Result<Vec<cyberbrain_policy::SubjectFile>> {
+        let root = self.store.root().to_path_buf();
+        let rel = |p: &Path| cyberbrain_core::Slash(p.strip_prefix(&root).unwrap_or(p)).to_string();
+        let split = |raw: &str| -> (String, String) {
+            // `---\n<head>\n---\n<body>`; a file without a head is all body.
+            if let Some(rest) = raw.strip_prefix("---")
+                && let Some(end) = rest.find("\n---")
+            {
+                return (rest[..end].to_string(), rest[end + 4..].to_string());
+            }
+            (String::new(), raw.to_string())
+        };
+        let mut out = Vec::new();
+        for entry in self.store.list()?.entries {
+            let Ok(raw) = std::fs::read_to_string(&entry.path) else {
+                continue;
+            };
+            let (head, body) = split(&raw);
+            let name = entry
+                .path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            out.push(cyberbrain_policy::SubjectFile {
+                path: rel(&entry.path),
+                kind: "note",
+                note_name: name,
+                head,
+                body,
+            });
+        }
+        if let Ok(dir) = std::fs::read_dir(self.store.proposals_dir()) {
+            for e in dir.flatten() {
+                let p = e.path();
+                if !p.is_file() {
+                    continue;
+                }
+                let Ok(raw) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let (head, body) = split(&raw);
+                out.push(cyberbrain_policy::SubjectFile {
+                    path: rel(&p),
+                    kind: "proposal",
+                    note_name: p
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    head,
+                    body,
+                });
+            }
+        }
+        Ok(out)
     }
 }
 

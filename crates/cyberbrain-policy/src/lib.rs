@@ -53,7 +53,9 @@ pub use pii::{Finding, PiiKind};
 pub use policy::{Policy, PolicyStatus};
 pub use profile::{ALL_PROFILES, Obligation, Profile, ProfileExt, Topic, parse_profile};
 pub use retention::{RetentionItem, RetentionQueue, RetentionStatus};
-pub use subject::{Identifier, SubjectAccessReport, SubjectBlock, SubjectSource};
+pub use subject::{
+    FileHit, Identifier, SubjectAccessReport, SubjectBlock, SubjectFile, SubjectSource,
+};
 pub use write_gate::{OperatorChoice, ResolvedWrite, ScanStatus, WriteVerdict};
 
 use serde::{Deserialize, Serialize};

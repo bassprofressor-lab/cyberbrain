@@ -120,6 +120,40 @@ pub struct SubjectBlock {
 /// re-checks and trims. Over-returning is fine, under-returning is not.
 pub trait SubjectSource {
     fn blocks_mentioning(&self, identifier: &Identifier) -> Result<Vec<SubjectBlock>>;
+
+    /// The files themselves, whole: name, head (tags, `bereich`, …) and body of every note,
+    /// and every waiting proposal (S13, review 2026-11-10/19: a person named only in a note's
+    /// name, tags or `bereich`, or only in a proposal, was reported as "0 blocks"). Over-
+    /// returning is fine here too; this side re-checks.
+    fn files(&self) -> Result<Vec<SubjectFile>> {
+        Ok(Vec::new())
+    }
+}
+
+/// One file under `notes/` or `proposals/`, as it lies on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubjectFile {
+    /// Relative to the store, with forward slashes.
+    pub path: String,
+    /// `note` or `proposal`.
+    pub kind: &'static str,
+    pub note_name: String,
+    /// The head of the file (frontmatter), as text.
+    pub head: String,
+    pub body: String,
+}
+
+/// A file that names the identifier where the block search does not look: the file name or
+/// head of a note, or anywhere in a proposal.
+#[derive(Debug, Clone, Serialize)]
+pub struct FileHit {
+    pub path: String,
+    pub kind: &'static str,
+    pub note_name: String,
+    /// `name`, `head`, `body`, in the order found; a note's body is listed only when the
+    /// block search did not report it (a stale index).
+    pub found_in: Vec<&'static str>,
+    pub excerpt: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -151,6 +185,8 @@ pub struct SubjectAccessReport {
     pub law: &'static str,
     pub response_deadline: String,
     pub note_hits: Vec<NoteHit>,
+    /// Files that name the identifier outside the indexed text (S13).
+    pub file_hits: Vec<FileHit>,
     pub audit_hits: Vec<AuditHit>,
     /// Blocks the source returned that did not actually contain the identifier.
     pub trimmed: usize,
@@ -182,6 +218,36 @@ pub fn subject_access(
         });
     }
     note_hits.sort_by(|a, b| a.ring.cmp(&b.ring).then(a.note_name.cmp(&b.note_name)));
+
+    let mut file_hits = Vec::new();
+    for f in source.files()? {
+        let mut found_in = Vec::new();
+        let mut excerpt_of = None;
+        if ident.matches(&f.note_name) {
+            found_in.push("name");
+            excerpt_of.get_or_insert_with(|| f.note_name.clone());
+        }
+        if let Some(o) = ident.occurrences(&f.head).first() {
+            found_in.push("head");
+            excerpt_of.get_or_insert_with(|| excerpt(&f.head, *o));
+        }
+        let body_reported =
+            f.kind == "note" && note_hits.iter().any(|h| h.note_name == f.note_name);
+        if !body_reported && let Some(o) = ident.occurrences(&f.body).first() {
+            found_in.push("body");
+            excerpt_of.get_or_insert_with(|| excerpt(&f.body, *o));
+        }
+        if let Some(excerpt) = excerpt_of {
+            file_hits.push(FileHit {
+                path: f.path,
+                kind: f.kind,
+                note_name: f.note_name,
+                found_in,
+                excerpt,
+            });
+        }
+    }
+    file_hits.sort_by(|a, b| a.path.cmp(&b.path));
 
     let hash = ident.hash();
     let mut audit_hits = Vec::new();
@@ -219,10 +285,11 @@ pub fn subject_access(
         law: profile.law(),
         response_deadline: profile.access_response_deadline().to_string(),
         note_hits,
+        file_hits,
         audit_hits,
         trimmed,
         caveats: vec![
-            "Matching is a case-insensitive substring search over note blocks and audit rows. It finds the identifier as written; it does not find a person described without it.".into(),
+            "Matching is a case-insensitive substring search over note blocks, the names, heads and bodies of the files under notes/ and proposals/, and audit rows. It finds the identifier as written; it does not find a person described without it.".into(),
             "The files under notes/ are authoritative. If the index is stale, run `cyberbrain scan` and repeat.".into(),
             "Audit rows never store personal data from notes, so audit hits are rows that name the identifier in a subject field or an earlier request for it (by hash).".into(),
         ],
@@ -234,6 +301,7 @@ pub fn subject_access(
         json!({
             "profile": profile,
             "note_hits": report.note_hits.len(),
+            "file_hits": report.file_hits.len(),
             "audit_hits": report.audit_hits.len(),
             "trimmed": trimmed,
             "response_deadline": report.response_deadline,
@@ -292,6 +360,22 @@ impl SubjectAccessReport {
                 },
                 h.excerpt
             ));
+        }
+        if !self.file_hits.is_empty() {
+            s.push_str(&format!(
+                "\n## Files: name, head, proposals ({} file(s))\n\n",
+                self.file_hits.len()
+            ));
+            for f in &self.file_hits {
+                s.push_str(&format!(
+                    "- **{}** ({}) `{}` — in {}\n  > {}\n",
+                    f.note_name,
+                    f.kind,
+                    f.path,
+                    f.found_in.join(", "),
+                    f.excerpt
+                ));
+            }
         }
         s.push_str(&format!(
             "\n## Audit log ({} row(s))\n\n",

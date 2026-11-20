@@ -466,6 +466,15 @@ pub async fn subject(
                 excerpt: h.excerpt.clone(),
             });
         }
+        // S13: names, heads and proposals, which the block search does not see.
+        for f in &r.file_hits {
+            hits.push(SubjectAccessHit {
+                r#where: "note",
+                r#ref: f.path.clone(),
+                citation: None,
+                excerpt: format!("({}: {}) {}", f.kind, f.found_in.join(", "), f.excerpt),
+            });
+        }
         for a in &r.audit_hits {
             hits.push(SubjectAccessHit {
                 r#where: "audit",

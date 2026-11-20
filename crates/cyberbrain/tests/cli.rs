@@ -5958,3 +5958,58 @@ fn a_note_that_skipped_the_write_gate_is_checked_by_scan() {
     let s = cb.ok(&["scan"]);
     assert_eq!(s["pii_found"], serde_json::json!([]), "{s}");
 }
+
+/// S13 (review 2026-11-10/19): a person named only in a note's name and tags, or only in a
+/// waiting proposal, was "Notes (0 block(s))" in the subject access report.
+#[test]
+fn subject_access_looks_at_names_heads_and_proposals() {
+    let cb = Cb::new();
+    cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "kunde-musterfrau",
+        "--tags",
+        "musterfrau",
+        "--body",
+        "Zahlt immer puenktlich.",
+    ]);
+    let out = cb.as_person(
+        "anna",
+        &[
+            "propose",
+            "--ring",
+            "2",
+            "--kind",
+            "knowledge",
+            "--name",
+            "neue-kundin",
+            "--body",
+            "Erika Musterfrau ruft freitags an.",
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+    let s = cb.ok(&["policy", "subject", "Musterfrau"]);
+    let files = s["file_hits"].as_array().expect("file_hits");
+    let paths: Vec<&str> = files.iter().filter_map(|f| f["path"].as_str()).collect();
+    assert!(paths.contains(&"notes/r2/kunde-musterfrau.md"), "{s}");
+    assert!(paths.contains(&"proposals/neue-kundin.md"), "{s}");
+    let note = files
+        .iter()
+        .find(|f| f["path"] == "notes/r2/kunde-musterfrau.md")
+        .unwrap();
+    assert_eq!(note["found_in"], serde_json::json!(["name", "head"]), "{s}");
+    // The text stays out of the audit row, as before.
+    let rows = cb.audit_rows();
+    let row = rows
+        .iter()
+        .find(|r| r["action"] == "subject.access")
+        .unwrap();
+    assert!(
+        !row.to_string().to_lowercase().contains("musterfrau"),
+        "{row}"
+    );
+}
