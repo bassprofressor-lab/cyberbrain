@@ -3138,7 +3138,18 @@ impl App {
                     Some(c) => {
                         self.refuse_review_unless_operator(&name, c)?;
                         let r = policy.resolve_hold(&name, &req.body, &findings, c)?;
-                        (r.body, r.pii, r.redacted)
+                        // `reviewed` says a person saw the findings. When a hook or an agent
+                        // chose the redaction, nobody did (N3/F8, 2026-11-19: every
+                        // compaction snapshot was stamped `reviewed`); `flagged` keeps it in
+                        // front of the operator.
+                        let pii = if r.pii == PiiState::Reviewed
+                            && !matches!(self.actor, Actor::Operator | Actor::Cli)
+                        {
+                            PiiState::Flagged
+                        } else {
+                            r.pii
+                        };
+                        (r.body, pii, r.redacted)
                     }
                 }
             }
@@ -3616,7 +3627,18 @@ impl App {
                     Some(c) => {
                         self.refuse_review_unless_operator(&name, c)?;
                         let r = policy.resolve_hold(&name, &req.body, &findings, c)?;
-                        (r.body, r.pii, r.redacted)
+                        // `reviewed` says a person saw the findings. When a hook or an agent
+                        // chose the redaction, nobody did (N3/F8, 2026-11-19: every
+                        // compaction snapshot was stamped `reviewed`); `flagged` keeps it in
+                        // front of the operator.
+                        let pii = if r.pii == PiiState::Reviewed
+                            && !matches!(self.actor, Actor::Operator | Actor::Cli)
+                        {
+                            PiiState::Flagged
+                        } else {
+                            r.pii
+                        };
+                        (r.body, pii, r.redacted)
                     }
                 }
             }

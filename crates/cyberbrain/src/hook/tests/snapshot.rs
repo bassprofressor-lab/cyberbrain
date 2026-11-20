@@ -250,3 +250,27 @@ fn pre_compact_message_names_the_snapshot_only_when_the_mod_is_installed() {
     assert!(with.stdout.contains("snapshot"), "{}", with.stdout);
     assert!(!with.stdout.contains("does not survive"), "{}", with.stdout);
 }
+
+/// N3/F8 (audit 2026-11-19): a snapshot whose personal data the hook redacted was stamped
+/// `pii: reviewed`, though no person saw it, and lay readable for every local account.
+/// Calibrated against the broken state: `Reviewed` and mode 0644.
+#[test]
+fn a_snapshot_redacted_by_the_hook_is_flagged_and_the_owners_alone() {
+    let f = fixture();
+    let out = snapshot(
+        &f,
+        serde_json::json!([
+            { "role": "user", "text": "Mail max.mustermann@example.com about it", "tools": [] },
+        ]),
+    );
+    let v = answer(&out);
+    let name = v["snapshot"]["name"].as_str().unwrap();
+    let note = f.open().store().read(name).unwrap();
+    assert_eq!(note.front.pii, cyberbrain_core::PiiState::Flagged);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(&note.path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+}

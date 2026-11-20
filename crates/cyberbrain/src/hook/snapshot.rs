@@ -202,7 +202,16 @@ fn keep(
         other => other,
     };
     match written {
-        Ok(WriteOutcome::Written(_)) => {}
+        Ok(WriteOutcome::Written(w)) => {
+            // Conversation text, kept 30 days: the owner's alone, like a key file (N3).
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(&w.path, std::fs::Permissions::from_mode(0o600));
+            }
+            #[cfg(not(unix))]
+            let _ = &w;
+        }
         Ok(other) => {
             out.note(format!(
                 "pre-compact-snapshot: the snapshot was not written ({}); the summary is \
