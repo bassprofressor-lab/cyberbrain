@@ -31,7 +31,7 @@ toml = "1.1.5"
 # that cargo-deny reads, where the archived GTK3 bindings show up as an advisory about code
 # this project never builds. On Windows neither default contributes anything.
 tray-icon = { version = "0.24.2", default-features = false }
-rfd = { version = "0.17.2", default-features = false }
+rfd = { version = "0.18.0", default-features = false }
 # The tray wants straight RGBA; the icon is a PNG so that one file feeds the tray, the
 # installer and the shortcut. This is the only decoder in the graph.
 png = "0.18.1"
