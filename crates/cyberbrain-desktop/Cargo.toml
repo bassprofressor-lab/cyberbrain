@@ -45,7 +45,7 @@ png = "0.18.1"
 # selectors, cssparser, string_cache) and bindings for Android and iOS, all of it in the
 # lock file of a launcher that runs on Windows and nowhere else, all of it read by
 # cargo-deny. The price of the smaller graph is the window below being ours to write.
-webview2-com = "0.38.2"
+webview2-com = "0.39.1"
 # The typed half of windows-rs, which webview2-com already speaks. `windows-sys` stays for
 # everything in `sys`: they are two views of the same API and neither is being replaced.
 windows = { version = "0.61.3", features = [
