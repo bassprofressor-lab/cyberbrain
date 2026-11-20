@@ -335,7 +335,7 @@ jobs:
       # reads manifests and the lockfile, it does not compile anything.
       - name: keep the toolchain pin out of the deny container
         run: mv rust-toolchain.toml rust-toolchain.toml.off
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2
         with:
           command: check
       - run: mv rust-toolchain.toml.off rust-toolchain.toml
