@@ -4833,7 +4833,9 @@ impl App {
             per_ring[e.ring.as_u8() as usize] += 1;
         }
         let index = lock_index(&self.index)?.stats()?;
-        let (not_indexed, changed, gone, _) = self.staleness()?;
+        // F9: the unreadable files are skipped by `scan` and listed by `doctor`; status used to
+        // drop them here and say "0 files skipped".
+        let (not_indexed, changed, gone, unreadable) = self.staleness()?;
         let embedder = self.embedder_summary();
         let matches_index = match (&index.embedding, self.model_identity()) {
             (Some(stored), ModelIdentity::Ready(_)) => {
@@ -4869,7 +4871,7 @@ impl App {
             config: self.store.config_path(),
             notes_on_disk: listing.entries.len(),
             notes_per_ring: per_ring,
-            files_skipped: listing.skipped.len(),
+            files_skipped: listing.skipped.len() + unreadable.len(),
             resident_tokens: self.store.resident_tokens()?,
             resident_cap: self.store.resident_cap(),
             daemon: crate::daemon::state(&self.root),

@@ -6013,3 +6013,20 @@ fn subject_access_looks_at_names_heads_and_proposals() {
         "{row}"
     );
 }
+
+/// F9 (review 2026-11-19): `scan` skipped unreadable files and `doctor` named them, while
+/// `status` said "0 files skipped".
+#[test]
+fn status_counts_the_files_scan_skips() {
+    let cb = Cb::new();
+    cb.write("2", "gut", "lesbar");
+    std::fs::write(
+        cb.note_path("2", "kaputt"),
+        "---\nname: kaputt\n---\nno ring\n",
+    )
+    .unwrap();
+    let s = cb.ok(&["scan"]);
+    assert_eq!(s["skipped"].as_array().unwrap().len(), 1, "{s}");
+    let st = cb.ok(&["status"]);
+    assert_eq!(st["files_skipped"], 1, "{st}");
+}
