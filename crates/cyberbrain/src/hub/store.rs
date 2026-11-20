@@ -188,6 +188,10 @@ impl HubStore {
             })?;
         }
         let conn = ix(Connection::open(path))?;
+        // The record holds note text, people and their credentials' hashes: the owner's alone
+        // (S18, 2026-11-10: hub.db, its WAL and backups were 0644). SQLite gives the WAL and
+        // shared-memory files the database's own mode, so this covers them as they appear.
+        owner_only(path);
         // The CLI opens this file while the server holds it open too. Without a timeout the
         // second writer fails at once with "database is locked" instead of waiting its turn.
         ix(conn.busy_timeout(std::time::Duration::from_secs(10)))?;
@@ -228,6 +232,7 @@ impl HubStore {
             ))
         })?;
         ix(self.conn.execute("VACUUM INTO ?1", params![target]))?;
+        owner_only(to);
         Ok(())
     }
 
@@ -2613,11 +2618,42 @@ impl HubStore {
     }
 }
 
+/// 0600 where there are modes. Best effort: a file system without them (a mounted share)
+/// keeps whatever it has, and the record still opens.
+fn owner_only(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for p in [
+            path.to_path_buf(),
+            path.with_extension("db-wal"),
+            path.with_extension("db-shm"),
+        ] {
+            if p.exists() {
+                let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o600));
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+}
+
 fn row_to_principal(r: &rusqlite::Row<'_>) -> rusqlite::Result<Principal> {
     Ok(Principal {
         id: r.get(0)?,
         name: r.get(1)?,
-        role: Role::parse(&r.get::<_, String>(2)?).unwrap_or(Role::Admin),
+        // An unknown role is no role. It became Admin here (S20, 2026-11-10): a row written by
+        // a newer hub, or edited by hand, handed out every right there is.
+        role: {
+            let raw = r.get::<_, String>(2)?;
+            Role::parse(&raw).map_err(|e| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    2,
+                    rusqlite::types::Type::Text,
+                    format!("{e}; refusing to guess one").into(),
+                )
+            })?
+        },
         created_at: r.get(3)?,
         revoked_at: r.get(4)?,
         expires_at: r.get(5)?,

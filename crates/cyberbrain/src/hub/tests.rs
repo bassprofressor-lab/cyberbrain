@@ -5324,3 +5324,54 @@ async fn signing_out_takes_a_post() {
     let r = post_as(state.clone(), "/logout", Some(&cookie), "GET").await;
     assert_eq!(r.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
+
+/// S20 (audits 2026-11-10 and 2026-11-19): a principal whose stored role the hub does not
+/// know was read as Admin. Calibrated against the broken state: `principals()` returned the
+/// row with `Role::Admin`.
+#[test]
+fn an_unknown_role_is_no_role_at_all() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hub.db");
+    let hub = HubStore::open(&path).unwrap();
+    let (who, _) = hub.add_principal("mara", Role::Auditor, NOW).unwrap();
+    drop(hub);
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute(
+            "UPDATE principals SET role = 'superuser' WHERE id = ?1",
+            [&who.id],
+        )
+        .unwrap();
+    let hub = HubStore::open(&path).unwrap();
+    match hub.principals() {
+        Ok(all) => assert!(
+            all.iter().all(|p| p.id != who.id || p.role != Role::Admin),
+            "an unknown role became admin: {all:?}"
+        ),
+        Err(e) => assert!(e.to_string().contains("superuser"), "{e}"),
+    }
+}
+
+/// S18, file modes (audits 2026-11-10 and 2026-11-19): `hub.db`, its WAL and every backup
+/// were 0644, readable by every account on the machine. Calibrated against the broken
+/// state: 0644.
+#[cfg(unix)]
+#[test]
+fn the_record_and_its_backups_are_the_owners_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("hub.db");
+    let hub = HubStore::open(&path).unwrap();
+    hub.add_device("laptop", NOW).unwrap();
+    let backup = dir.path().join("copy.db");
+    hub.backup_to(&backup).unwrap();
+    for p in [&path, &backup] {
+        let mode = std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{}", p.display());
+    }
+    let wal = dir.path().join("hub.db-wal");
+    if wal.exists() {
+        let mode = std::fs::metadata(&wal).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "{}", wal.display());
+    }
+}
