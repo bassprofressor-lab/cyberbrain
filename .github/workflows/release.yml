@@ -23,6 +23,15 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
+    # N4 (review 2026-11-19): a checksum file from the same run proves nothing about where a
+    # binary came from; whoever can swap one can swap both. A build provenance attestation is
+    # signed by GitHub for this workflow and commit: `gh attestation verify <file> --repo
+    # <owner>/<repo>`. Writing one needs the OIDC token and the attestations scope, nothing
+    # else; contents stays read.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
       fail-fast: false
       matrix:
@@ -137,14 +146,72 @@ jobs:
           if command -v sha256sum > /dev/null; then sha256sum * > "SHA256SUMS-${{ matrix.name }}"; else shasum -a 256 * > "SHA256SUMS-${{ matrix.name }}"; fi
           cat "SHA256SUMS-${{ matrix.name }}"
 
+      - name: attest where the files came from
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/cyberbrain-*
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.name }}
           path: dist/*
 
+  # The products built on this core, built and tested against it before anything is attached
+  # to a release (review 2026-11-19: core 0.10.5/0.10.6 broke Cyberbrain Light and
+  # cyberbrain-business, and nobody noticed because neither was built at release time). Red
+  # here stops `publish`. scripts/check-dependents.sh says what is done to each; it runs the
+  # same on a workstation.
+  #
+  # cyberbrain-business is private. The job needs the repository variable BUSINESS_REPOSITORY
+  # (owner/name), optionally BUSINESS_REF (default main), and the secret
+  # BUSINESS_CHECKOUT_TOKEN, a fine-grained token with read access to that repository's
+  # contents and nothing else. Without them the job fails rather than passing unchecked: a
+  # release that could not be checked against business is not one that was.
+  dependents:
+    name: ${{ matrix.product }} against this core
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        product: [light, business]
+    steps:
+      # Checked out as cyberbrain-p0, the name business's path dependencies expect next to it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: cyberbrain-p0
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: matrix.product == 'light'
+        with:
+          repository: bassprofressor-lab/cyberbrain-light
+          path: light
+          persist-credentials: false
+      - name: business is configured
+        if: matrix.product == 'business'
+        env:
+          REPO: ${{ vars.BUSINESS_REPOSITORY }}
+          HAS_TOKEN: ${{ secrets.BUSINESS_CHECKOUT_TOKEN != '' }}
+        run: |
+          if [ -z "$REPO" ] || [ "$HAS_TOKEN" != "true" ]; then
+            echo "::error::set the variable BUSINESS_REPOSITORY and the secret BUSINESS_CHECKOUT_TOKEN (see the comment on this job)"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: matrix.product == 'business'
+        with:
+          repository: ${{ vars.BUSINESS_REPOSITORY }}
+          ref: ${{ vars.BUSINESS_REF || 'main' }}
+          token: ${{ secrets.BUSINESS_CHECKOUT_TOKEN }}
+          path: business
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - name: build and test ${{ matrix.product }} against this core
+        run: cyberbrain-p0/scripts/check-dependents.sh cyberbrain-p0 ${{ matrix.product }} ${{ matrix.product }}
+
   publish:
     name: attach to the release
-    needs: build
+    needs: [build, dependents]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -166,7 +233,8 @@ jobs:
           draft: true
           files: out/*
           body: |
-            Binaries for ${{ github.ref_name }}. Verify with `sha256sum -c SHA256SUMS`.
+            Binaries for ${{ github.ref_name }}. Verify with `sha256sum -c SHA256SUMS`, and where
+            they came from with `gh attestation verify <file> --repo ${{ github.repository }}`.
 
             Nothing is needed at runtime: no system SQLite, no OpenSSL, no model server, no
             node. `cyberbrain --help` to start, `cyberbrain init` in a project.
