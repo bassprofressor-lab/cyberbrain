@@ -438,7 +438,7 @@ pub fn disclose(
         .map_err(|e| Denied::NotAuthorised(format!("cannot write to {}: {e}", dir.display())))?;
     let mut files = Vec::new();
     for (name, text) in bundles {
-        std::fs::write(dir.join(&name), &text)
+        write_disclosure(&dir.join(&name), &text)
             .map_err(|e| Denied::NotAuthorised(format!("cannot write {name}: {e}")))?;
         files.push(name);
     }
@@ -453,4 +453,24 @@ pub fn disclose(
         "directory": dir,
         "expires_at": req.expires_at,
     }))
+}
+
+/// A disclosed bundle is what an auditor was allowed to see, not everybody on the machine
+/// (S18: it was written 0644). 0600 on Unix; an existing file is narrowed too.
+fn write_disclosure(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        f.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    f.write_all(text.as_bytes())
 }

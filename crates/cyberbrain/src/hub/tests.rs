@@ -1334,6 +1334,16 @@ fn an_approved_request_opens_a_window_that_closes_itself() {
     let out =
         report::disclose(&hub, Some(&auditor), &req.id, dir.path(), now_ts(), "test").unwrap();
     assert_eq!(out["rows"].as_i64(), Some(2));
+    #[cfg(unix)]
+    for f in out["files"].as_array().unwrap() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.path().join(f.as_str().unwrap());
+        let mode = std::fs::metadata(&p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "S18: a disclosure is for the auditor: {mode:o}"
+        );
+    }
 
     // Two hours later it does not, and the message says to ask again rather than extend.
     let later = now_ts() + std::time::Duration::from_secs(2 * 3600);
@@ -2098,24 +2108,20 @@ async fn a_refused_sign_in_is_recorded_with_where_it_came_from() {
     assert!(state.hub.lock().unwrap().verify_hub_chain().is_ok());
 }
 
-/// One address fills at most its share of a log that cannot be emptied, says once that it
-/// went past it, and is still never locked out: the operator can sign in afterwards.
+/// One address fills at most its share of a log that cannot be emptied and says once that it
+/// went past it. Past that share it is slowed (N2, 2026-11-20): answered 429 with a growing
+/// wait and the password not looked at; another address is not affected, and after the wait
+/// the operator signs in.
 #[tokio::test]
-async fn refused_sign_ins_are_capped_per_address_and_never_lock() {
+async fn refused_sign_ins_are_capped_per_address_and_then_slowed() {
     use super::attempts::MAX_RECORDED;
     let state = state_for(hub_with_password("correct horse battery"), true);
-    let mut burst = tokio::task::JoinSet::new();
-    for n in 0..MAX_RECORDED + 5 {
-        let state = state.clone();
-        burst.spawn(
-            async move { sign_in_from(state, "10.9.9.9:40000", &format!("wrong-{n}")).await },
-        );
-    }
-    while let Some(r) = burst.join_next().await {
+    for n in 0..=MAX_RECORDED {
+        let r = sign_in_from(state.clone(), "10.9.9.9:40000", &format!("wrong-{n}")).await;
         assert_eq!(
-            r.unwrap().status(),
+            r.status(),
             StatusCode::OK,
-            "a refusal is the sign-in page again"
+            "refusal {n} is the sign-in page again"
         );
     }
     assert_eq!(refused_sign_ins(&state).len(), MAX_RECORDED as usize);
@@ -2131,12 +2137,44 @@ async fn refused_sign_ins_are_capped_per_address_and_never_lock() {
     assert_eq!(quiet.len(), 1, "said once, not once per refusal");
     assert_eq!(quiet[0].detail["from"], "10.9.9.9");
 
+    // Even the right password waits now: it is not looked at.
     let r = sign_in_from(state.clone(), "10.9.9.9:40000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(r.headers().get(axum::http::header::RETRY_AFTER).is_some());
+    let r = sign_in_from(state.clone(), "10.9.9.8:40000", "correct horse battery").await;
     assert_eq!(
         r.status(),
         StatusCode::SEE_OTHER,
-        "no lock on the operator's own password"
+        "another address is not slowed"
     );
+
+    // The 429 counted as well (2 s now); after it, the operator is in.
+    tokio::time::sleep(std::time::Duration::from_millis(2_100)).await;
+    let r = sign_in_from(state.clone(), "10.9.9.9:40000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER, "the wait ends");
+}
+
+/// S18: `hub admin reset` (another process, the record only) ends the administrator
+/// sessions opened with the old password.
+#[tokio::test]
+async fn a_password_reset_in_the_record_ends_the_old_admin_sessions() {
+    let state = state_for(hub_with_password("correct horse battery"), true);
+    let r = sign_in_from(state.clone(), "127.0.0.1:40000", "correct horse battery").await;
+    assert_eq!(r.status(), StatusCode::SEE_OTHER);
+    let cookie = cookie_of(&r);
+    let token = cookie
+        .split(';')
+        .next()
+        .and_then(|c| c.split_once('='))
+        .map(|(_, v)| v.to_string())
+        .unwrap();
+    let who = |state: &Arc<super::api::HubState>| {
+        state.sessions.who(&token, jiff::Timestamp::now()).is_some()
+            && super::api::session_who_for_tests(state, &token).is_some()
+    };
+    assert!(who(&state), "signed in");
+    admin::set_password(&state.hub.lock().unwrap(), "ein ganz neues passwort").unwrap();
+    assert!(!who(&state), "the old cookie is no longer good");
 }
 
 /// Argon2 is the slow part of a sign-in on purpose, and it ran while the hub's one mutex was

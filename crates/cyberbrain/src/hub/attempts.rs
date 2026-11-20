@@ -46,6 +46,11 @@ pub const MAX_GUESSES: u32 = 10;
 /// person can act on.
 pub const MAX_RECORDED: u32 = 20;
 
+/// The longest a sign-in from one address is made to wait once it is past `MAX_RECORDED`
+/// (N2). Short enough that an operator behind the same proxy is not kept out for long,
+/// long enough that guessing at network speed is over.
+pub const MAX_SIGN_IN_WAIT: Duration = Duration::from_secs(5 * 60);
+
 /// Addresses tracked at once. Past this, new addresses share one count: a flood from many
 /// addresses then locks them together, which is the better failure than unbounded memory.
 const MAX_SOURCES: usize = 4096;
@@ -76,6 +81,8 @@ struct Window {
     /// Admitted and not settled yet. Counted against the limit, so a hundred requests sent at
     /// once cannot all pass the check before the first of them is refused.
     pending: u32,
+    /// Sign-ins only: no attempt from this address is heard before this.
+    until: Option<Instant>,
 }
 
 impl Window {
@@ -85,6 +92,7 @@ impl Window {
             guesses: 0,
             recorded: 0,
             pending: 0,
+            until: None,
         }
     }
 
@@ -140,6 +148,13 @@ impl SignInRefusals {
         let w = map.entry(source).or_insert_with(|| Window::new(now));
         w.roll(now);
         w.recorded = w.recorded.saturating_add(1);
+        // N2: past the cap the address is also slowed, and every further refusal doubles
+        // the wait (1 s, 2 s, 4 s … up to `MAX_SIGN_IN_WAIT`). It used to be only no longer
+        // written down, at full speed.
+        if let Some(excess) = w.recorded.checked_sub(MAX_RECORDED).filter(|e| *e > 0) {
+            let wait = Duration::from_secs(1u64 << (excess - 1).min(16)).min(MAX_SIGN_IN_WAIT);
+            w.until = Some(now + wait);
+        }
         match w.recorded {
             n if n <= MAX_RECORDED => Entry::Refusal,
             n if n == MAX_RECORDED + 1 => {
@@ -147,6 +162,21 @@ impl SignInRefusals {
             }
             _ => Entry::Nothing,
         }
+    }
+}
+
+impl SignInRefusals {
+    /// How long this address must still wait before a sign-in is looked at, if at all.
+    pub fn wait(&self, ip: IpAddr, now: Instant) -> Option<Duration> {
+        let mut map = self.by_source.lock().unwrap_or_else(|p| p.into_inner());
+        let w = map.get_mut(&Source::of(ip))?;
+        w.roll(now);
+        let until = w.until?;
+        (until > now).then(|| {
+            until
+                .saturating_duration_since(now)
+                .max(Duration::from_secs(1))
+        })
     }
 }
 
@@ -393,5 +423,28 @@ mod tests {
             a.admit(ip("203.0.113.200"), t0 + WINDOW).is_ok(),
             "windows that are over make room again"
         );
+    }
+
+    #[test]
+    fn past_the_cap_a_sign_in_waits_longer_each_time() {
+        let r = SignInRefusals::default();
+        let t0 = Instant::now();
+        let a = ip("10.1.1.1");
+        for _ in 0..MAX_RECORDED {
+            r.refused(a, t0);
+        }
+        assert_eq!(r.wait(a, t0), None, "up to the cap, no wait");
+        r.refused(a, t0);
+        assert_eq!(r.wait(a, t0), Some(Duration::from_secs(1)));
+        r.refused(a, t0);
+        assert_eq!(r.wait(a, t0), Some(Duration::from_secs(2)));
+        r.refused(a, t0);
+        assert_eq!(r.wait(a, t0), Some(Duration::from_secs(4)));
+        for _ in 0..30 {
+            r.refused(a, t0);
+        }
+        assert_eq!(r.wait(a, t0), Some(MAX_SIGN_IN_WAIT), "capped");
+        assert_eq!(r.wait(ip("10.1.1.2"), t0), None, "per address");
+        assert_eq!(r.wait(a, t0 + WINDOW), None, "the window ends it");
     }
 }

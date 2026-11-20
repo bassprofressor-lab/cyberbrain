@@ -251,6 +251,11 @@ enum Who {
 /// in the record did not reach a session already open (2026-09-29). A principal's session is
 /// now checked against the record on every request: gone or revoked closes it, and the role
 /// is the one the record holds. The hub's own administrator has no record row to check.
+#[cfg(test)]
+pub(crate) fn session_who_for_tests(state: &HubState, token: &str) -> Option<super::admin::Who> {
+    session_who(state, token)
+}
+
 fn session_who(state: &HubState, token: &str) -> Option<super::admin::Who> {
     let hub = state.hub().ok()?;
     session_who_in(state, token, &hub)
@@ -264,6 +269,16 @@ fn session_who_in(
     hub: &super::store::HubStore,
 ) -> Option<super::admin::Who> {
     let who = state.sessions.who(token, jiff::Timestamp::now())?;
+    if who == super::admin::Who::Admin {
+        // S18: `hub admin reset` changed the password in the record; the cookies of the old
+        // one end here rather than staying good for as long as somebody keeps using them.
+        let stored = super::admin::stored_password(hub);
+        if !state.sessions.admin_still_holds(token, stored.as_deref()) {
+            state.sessions.close(token);
+            return None;
+        }
+        return Some(who);
+    }
     let super::admin::Who::Principal { id, .. } = &who else {
         return Some(who);
     };
@@ -497,6 +512,21 @@ async fn login(
     if !password_may_travel(&state, &headers, &from) {
         return (StatusCode::FORBIDDEN, PLAINTEXT).into_response();
     }
+    // N2/S18: past the cap of recorded refusals an address waits, and is answered 429
+    // without the password being looked at. The attempt still counts.
+    let now = std::time::Instant::now();
+    if let Some(left) = state.sign_in_refusals.wait(from.ip(), now) {
+        let _ = state.sign_in_refusals.refused(from.ip(), now);
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            [(header::RETRY_AFTER, left.as_secs().to_string())],
+            format!(
+                "Too many refused sign-ins from this address. Try again in {} s.",
+                left.as_secs()
+            ),
+        )
+            .into_response();
+    }
     // Two kinds of caller arrive at the same box: the administrator with the hub password,
     // and a person with the credential `hub principal add` printed for them. Tried in that
     // order, and the refusal is the same sentence either way — saying which one nearly
@@ -570,7 +600,14 @@ async fn login(
         )));
     };
     let home = home_for(&who);
+    let is_admin = who == super::admin::Who::Admin;
     let token = state.sessions.open_as(jiff::Timestamp::now(), who);
+    if is_admin
+        && let Ok(hub) = state.hub()
+        && let Some(s) = super::admin::stored_password(&hub)
+    {
+        state.sessions.bind_admin(&token, &s);
+    }
     (
         [(
             header::SET_COOKIE,
@@ -674,6 +711,9 @@ async fn change_password(
                             headers.get(header::COOKIE).and_then(|v| v.to_str().ok()),
                         );
                         state.sessions.close_admin_except(mine.as_deref());
+                        if let Some(mine) = mine.as_deref() {
+                            state.sessions.bind_admin(mine, &hash);
+                        }
                         "The password has been changed. Other administrator sessions were \
                          signed out."
                             .to_string()

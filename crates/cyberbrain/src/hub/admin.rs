@@ -121,6 +121,11 @@ pub enum Who {
 #[derive(Default)]
 pub struct Sessions {
     open: Mutex<HashMap<String, (jiff::Timestamp, Who)>>,
+    /// The stored password hash each administrator session was opened under (S18). `hub
+    /// admin reset` runs in another process and cannot reach `open`; what it changes is the
+    /// record, and a session whose password is no longer the stored one ends at its next
+    /// request.
+    admin_password: Mutex<HashMap<String, String>>,
 }
 
 impl Sessions {
@@ -176,6 +181,34 @@ impl Sessions {
     pub fn close(&self, token: &str) {
         if let Ok(mut open) = self.open.lock() {
             open.remove(token);
+        }
+        if let Ok(mut bound) = self.admin_password.lock() {
+            bound.remove(token);
+        }
+    }
+
+    /// Tie an administrator session to the stored password it proved.
+    pub fn bind_admin(&self, token: &str, stored: &str) {
+        if let Ok(mut bound) = self.admin_password.lock() {
+            bound.insert(token.to_string(), stored.to_string());
+        }
+    }
+
+    /// Whether an administrator session still stands on `stored`. A session never bound
+    /// (opened by `claim`, or before this check existed) is bound now, to what is stored.
+    pub fn admin_still_holds(&self, token: &str, stored: Option<&str>) -> bool {
+        let Some(stored) = stored else {
+            return false;
+        };
+        let Ok(mut bound) = self.admin_password.lock() else {
+            return false;
+        };
+        match bound.get(token) {
+            Some(b) => b == stored,
+            None => {
+                bound.insert(token.to_string(), stored.to_string());
+                true
+            }
         }
     }
 }
