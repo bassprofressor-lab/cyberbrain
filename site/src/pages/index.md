@@ -35,7 +35,7 @@ The caveats matter as much as the hit. Cyberbrain says what it did **not** do: h
   <div class="card"><div class="k">telemetry</div><div class="v">none</div><div class="s">there is no code for it</div></div>
 </div>
 
-<sub>Size of the 0.10.7 release file `cyberbrain-linux-x86_64` (22,657,312 bytes).</sub>
+<sub>Size of the 0.11.0 release file `cyberbrain-linux-x86_64` (22,728,480 bytes).</sub>
 
 ## Four ways in
 
