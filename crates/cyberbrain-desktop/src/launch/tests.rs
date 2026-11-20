@@ -329,6 +329,28 @@ fn a_line_without_a_token_is_not_a_terminal_address() {
     );
 }
 
+/// `serve` names a file instead of printing the token (S20). The launcher reads the address
+/// from it, removes it, and takes nothing that is not a terminal address.
+#[test]
+fn the_terminal_address_is_read_from_the_file_serve_names_and_the_file_goes() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("terminal-7777.url");
+    std::fs::write(&file, "http://127.0.0.1:7777/#/?t=abc123\n").unwrap();
+    let line = format!("{TERMINAL_ADDRESS_MARKER}{}", file.display());
+    assert_eq!(
+        read_token_file(&line).as_deref(),
+        Some("http://127.0.0.1:7777/#/?t=abc123")
+    );
+    assert!(!file.exists(), "the file is removed once read");
+
+    std::fs::write(&file, "http://127.0.0.1:7777/\n").unwrap();
+    assert!(
+        read_token_file(&line).is_none(),
+        "an address without a token"
+    );
+    assert!(read_token_file("cyberbrain serve: http://127.0.0.1:7777/").is_none());
+}
+
 #[test]
 fn two_projects_can_be_open_at_once() {
     let server = server_binary();

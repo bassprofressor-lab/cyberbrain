@@ -26,8 +26,10 @@
 //! but the weight then sits entirely on the token, and everywhere that token can be read is
 //! a hole. Two were: the address was handed to a browser as a command-line argument, where
 //! `/proc` makes it public to every account, and the saved-connections file was written
-//! world-readable. Both closed; the reasoning is written down here because the next such
-//! hole will be found by re-reading this paragraph.
+//! world-readable. Both closed. A third was stdout, which a service manager's journal keeps:
+//! the address now goes into a file only this account can read (2026-11-20). The reasoning
+//! is written down here because the next such hole will be found by re-reading this
+//! paragraph.
 //!
 //! What none of this claims to stop is the user's own account. A process running as you can
 //! start a shell without asking us.

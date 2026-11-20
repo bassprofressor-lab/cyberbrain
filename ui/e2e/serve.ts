@@ -6,7 +6,7 @@
  * silently testing nothing — a suite that passes because it never ran is worse than none.
  */
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -63,11 +63,15 @@ export async function serve(seed: Seed[] = []): Promise<Serving> {
     const timer = setTimeout(() => fail(new Error(`no address in:\n${seen}`)), 20_000);
     child.stdout.on("data", (b: Buffer) => {
       seen += b.toString();
-      // The second address is the one with the token; the first is the plain one.
-      const m = seen.match(/http:\/\/127\.0\.0\.1:\d+\/#\/\?t=[0-9a-f]+/);
+      // The address with the token is not on stdout (it ends up in logs); `serve` names
+      // the file that holds it, readable by this account only.
+      const m = seen.match(/cyberbrain serve: terminal address in (.+)\r?\n/);
       if (m) {
-        clearTimeout(timer);
-        ok(m[0]);
+        const address = readFileSync(m[1].trim(), "utf8").trim();
+        if (/^http:\/\/127\.0\.0\.1:\d+\/#\/\?t=[0-9a-f]+$/.test(address)) {
+          clearTimeout(timer);
+          ok(address);
+        }
       }
     });
     child.on("exit", (code) => fail(new Error(`serve exited with ${code}:\n${seen}`)));

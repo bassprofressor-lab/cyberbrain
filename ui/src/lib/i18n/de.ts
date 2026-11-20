@@ -620,7 +620,7 @@ export const de: Dict = {
     empty: "Kein Terminal offen.",
     emptyHow: "Einen Befehl tippen, oder einfach eine Shell öffnen.",
     noToken: "Diese Adresse trägt keinen Terminal-Token.",
-    noTokenHow: "Ein Terminal gibt es nur mit `cyberbrain serve --terminal`, und nur unter der Adresse, die dabei ausgegeben wird — der Token steht darin. Diese Adresse öffnen, oder den Desktop-Starter benutzen.",
+    noTokenHow: "Ein Terminal gibt es nur mit `cyberbrain serve --terminal`, und nur unter der Adresse in der Datei, deren Pfad dabei ausgegeben wird — der Token steht darin. Diese Adresse öffnen, oder den Desktop-Starter benutzen.",
     saved: "gespeichert:",
     save: "Merken",
     namePrompt: "Ein Name für diese Verbindung:",

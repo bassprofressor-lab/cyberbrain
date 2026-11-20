@@ -35,6 +35,7 @@ Drei weitere Grenzen stützen das:
 - **Nur das eigene Konto.** Unter Linux kann sich nur dein Konto (und root) verbinden.
 - **Nur unter dem eigenen Namen.** Jede Route antwortet nur unter `127.0.0.1:<port>`, `localhost:<port>` und `[::1]:<port>`, alles andere bekommt `421 Misdirected Request`. Das verhindert DNS-Rebinding, bei dem eine Webseite ihren eigenen Namen auf 127.0.0.1 umbiegt und die API dann als ihre eigene liest. Es heißt auch: Ein Alias in `/etc/hosts` oder ein vorgeschalteter Reverse Proxy funktioniert nicht, und ein SSH-Tunnel muss dieselbe Portnummer weiterleiten.
 - **Ring 0 und 1 bleiben am Terminal.** Ohne `--allow-resident-writes` schreibt der Server sie nicht, weil jedes Programm auf dem Rechner, auch ein Agent, ihn ohne Zugangsdaten erreichen könnte.
+- **Entscheidungen des Betreibers brauchen das Sitzungs-Token.** Vorschläge annehmen oder ablehnen, einen PII-Halt als geprüft markieren und die Befehlszeile antworten nur einer Seite, die das Token dieses Laufs hat, und das hat nur `serve --terminal`. Ein einfaches `serve` lehnt sie ab und sagt, wohin: `serve --terminal`, der Desktop-Starter oder `cyberbrain review` am Terminal.
 
 ```console
 $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.0.1:7777/
@@ -43,7 +44,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.
 
 ## Das Terminal
 
-`cyberbrain serve --terminal` setzt eine echte Shell in die Seite: `ssh`, einen Agenten, alles, was man an einer Eingabeaufforderung startet, im Verzeichnis des Projekts. Ohne ausdrücklichen Wunsch ist es aus, weil jede andere Route Notizen liest oder schreibt und diese einen Prozess startet. Ist es an, trägt die beim Start ausgegebene Adresse ein Token in ihrem Fragment; nur diese Adresse öffnen. Ein Verbindungsaufbau von einem anderen Ursprung wird abgelehnt.
+`cyberbrain serve --terminal` setzt eine echte Shell in die Seite: `ssh`, einen Agenten, alles, was man an einer Eingabeaufforderung startet, im Verzeichnis des Projekts. Ohne ausdrücklichen Wunsch ist es aus, weil jede andere Route Notizen liest oder schreibt und diese einen Prozess startet. Ist es an, trägt die Adresse, die die Seite öffnet, ein Token in ihrem Fragment. Ausgegeben wird sie nicht, weil die Standardausgabe in Protokollen landet: `serve` schreibt sie in eine Datei, die nur das eigene Konto lesen kann (in `$XDG_RUNTIME_DIR/cyberbrain/serve/`, sonst `~/.local/state/cyberbrain/serve/`, unter Windows `%LOCALAPPDATA%\cyberbrain\serve\`), und nennt den Pfad. Nur diese Adresse öffnen. Ein Verbindungsaufbau von einem anderen Ursprung wird abgelehnt.
 
 Das Ausgangsregister führt das Terminal als den einen Weg, den dieses Programm nicht vermittelt. Was darin läuft, gehört dir, läuft in deinem Namen und wird von Cyberbrain weder erlaubt noch festgehalten. Es steht im Register, damit niemand das Register für vollständig hält, während eine Shell einen Tastendruck entfernt ist.
 

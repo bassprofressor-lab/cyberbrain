@@ -626,7 +626,7 @@ export const en = {
     empty: "No terminal is open.",
     emptyHow: "Type a command, or open a plain shell.",
     noToken: "This address carries no terminal token.",
-    noTokenHow: "A terminal is offered only by `cyberbrain serve --terminal`, and only at the address it prints — the token is in that address. Open that one, or use the desktop launcher.",
+    noTokenHow: "A terminal is offered only by `cyberbrain serve --terminal`, and only at the address in the file whose path it prints — the token is in that address. Open that one, or use the desktop launcher.",
     saved: "saved:",
     save: "Save",
     namePrompt: "A name for this connection:",

@@ -286,11 +286,19 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
         }
     );
     if terminal.is_some() {
+        // Not on stdout (S20): stdout is what a service manager's journal or a redirected log
+        // keeps, readable by whoever reads the log, long after this run. The file is this
+        // account's alone from the moment it exists.
+        let file = write_terminal_address(&url, bound.port())?;
         println!(
-            "cyberbrain serve: terminal enabled. Open this address yourself, and nothing \
-             else — the token in it is what opens a terminal, it is new every run, and it \
-             does not belong in a ticket or a log:\n{url}\n\
-             cyberbrain serve: not opening a browser for you, because the address would go \
+            "cyberbrain serve: terminal enabled. The address that opens it carries this run's \
+             token, so it is not printed here; it is in a file only this account can read. \
+             Open that address yourself, and nothing else — it is new every run and does \
+             not belong in a ticket or a log."
+        );
+        println!("{TERMINAL_ADDRESS_MARKER}{}", file.display());
+        println!(
+            "cyberbrain serve: not opening a browser for you, because the address would go \
              into that browser's command line, where every account on this machine can read \
              it."
         );
@@ -309,6 +317,92 @@ pub async fn serve(app: Arc<App>, port: u16, open: bool, terminal: bool) -> Resu
     )
     .await
     .map_err(|e| Error::Config(format!("serve: {e}")))
+}
+
+/// Printed on stdout, followed by the path of the file holding the address with the terminal
+/// token. Matched by the desktop launcher, which reads the file, so the wording is part of
+/// the interface between the two programs rather than a message.
+pub const TERMINAL_ADDRESS_MARKER: &str = "cyberbrain serve: terminal address in ";
+
+/// Where the terminal address files go: this account's runtime directory where there is one
+/// (`$XDG_RUNTIME_DIR`, which the system makes per user and clears at logout), otherwise
+/// beside the other per-user state, `%LOCALAPPDATA%` on Windows.
+fn terminal_address_dir() -> Result<PathBuf> {
+    let base = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("cyberbrain"))
+    } else {
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .filter(|d| !d.is_empty())
+            .map(|d| PathBuf::from(d).join("cyberbrain"))
+            .or_else(|| {
+                std::env::var_os("XDG_STATE_HOME")
+                    .filter(|d| !d.is_empty())
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .map(|h| PathBuf::from(h).join(".local").join("state"))
+                    })
+                    .map(|d| d.join("cyberbrain"))
+            })
+    };
+    base.map(|b| b.join("serve")).ok_or_else(|| {
+        Error::Config(
+            "serve --terminal: there is no per-user directory to put the terminal address in \
+             (neither XDG_RUNTIME_DIR nor HOME, or LOCALAPPDATA on Windows, is set)"
+                .into(),
+        )
+    })
+}
+
+/// Write the address with the token to a file of its own, readable by this account only, and
+/// return where. The modes are set as the directory and the file are created, so there is no
+/// moment at which another account could open either.
+fn write_terminal_address(url: &str, port: u16) -> Result<PathBuf> {
+    let dir = terminal_address_dir()?;
+    let io = |path: &std::path::Path| {
+        let path = path.to_path_buf();
+        move |source| Error::Io { path, source }
+    };
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(&dir).map_err(io(&dir))?;
+    // A stale file from an earlier run on this port, and files nobody collected for a day: a
+    // run started by the desktop launcher has its file removed once it is read, one started
+    // at a prompt leaves it behind, holding a token that died with that run.
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        for e in entries.flatten() {
+            let old = e
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_some_and(|age| age > day);
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("terminal-") && name.ends_with(".url") && old {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
+    let file = dir.join(format!("terminal-{port}.url"));
+    let _ = std::fs::remove_file(&file);
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(&file).map_err(io(&file))?;
+    std::io::Write::write_all(&mut f, format!("{url}\n").as_bytes()).map_err(io(&file))?;
+    f.sync_all().map_err(io(&file))?;
+    Ok(file)
 }
 
 /// Whether to hand the address to a browser, or leave it to the person.

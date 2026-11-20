@@ -1,7 +1,8 @@
 /**
  * The terminal token, taken from the address once and kept for this tab.
  *
- * `cyberbrain serve --terminal` prints an address with the token in its *fragment*, which a
+ * `cyberbrain serve --terminal` writes an address with the token in its *fragment* to a file
+ * only this account can read (not to stdout, which ends up in logs). The fragment is what a
  * browser keeps to itself and never sends to a server. The page takes it on arrival and
  * removes it from the address, so it is not left in a bookmark, in the history, or on screen
  * behind somebody.

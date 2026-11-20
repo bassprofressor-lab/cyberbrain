@@ -34,6 +34,7 @@ Three more boundaries hold this up:
 - **Only your own account.** On Linux only your account (and root) can connect.
 - **Only under its own name.** Every route answers only under `127.0.0.1:<port>`, `localhost:<port>` and `[::1]:<port>`. Anything else gets `421 Misdirected Request`. That stops DNS rebinding, where a web page resolves its own name to 127.0.0.1 and then reads the API as its own. It also means an `/etc/hosts` alias or a reverse proxy in front does not work, and an SSH tunnel has to forward the same port number.
 - **Rings 0 and 1 stay at the terminal.** Without `--allow-resident-writes`, the server does not write them, because any program on this machine, an agent included, could reach it without credentials.
+- **The operator's decisions need the session token.** Accepting or rejecting a proposal, marking a PII hold as reviewed and the command line answer only a page that holds this run's token, which only `serve --terminal` has. A plain `serve` refuses them and says where to go instead: `serve --terminal`, the desktop launcher, or `cyberbrain review` at a terminal.
 
 ```console
 $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.0.1:7777/
@@ -42,7 +43,7 @@ $ curl -s -o /dev/null -w '%{http_code}\n' -H 'Host: evil.example' http://127.0.
 
 ## The terminal
 
-`cyberbrain serve --terminal` puts a real shell into the page: `ssh`, an agent, anything you would run at a prompt, in the project's directory. It is off unless you ask for it, because every other route reads or writes notes and this one starts a process. With it on, the address printed at start carries a token in its fragment; open that address and no other. A handshake from any other origin is refused.
+`cyberbrain serve --terminal` puts a real shell into the page: `ssh`, an agent, anything you would run at a prompt, in the project's directory. It is off unless you ask for it, because every other route reads or writes notes and this one starts a process. With it on, the address that opens the page carries a token in its fragment. It is not printed, because standard output ends up in logs: `serve` writes it to a file only your account can read (in `$XDG_RUNTIME_DIR/cyberbrain/serve/`, otherwise `~/.local/state/cyberbrain/serve/`, on Windows `%LOCALAPPDATA%\cyberbrain\serve\`) and prints the path. Open that address and no other. A handshake from any other origin is refused.
 
 The egress register lists the terminal as the one path this program does not mediate. What runs in it is yours, in your name, and neither permitted nor recorded by Cyberbrain. It is listed so the register is not read as complete while a shell is one keystroke away.
 

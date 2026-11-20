@@ -161,7 +161,8 @@ against that page's store, and hands back the same stdout, stderr and exit code.
 
 `cyberbrain serve --terminal` puts a real terminal in the page: a shell, `ssh`, an agent, in
 the project's directory. It is off unless you ask for it, it needs a token the address
-carries in its fragment, and it refuses a handshake from any other origin. The egress
+carries in its fragment (written to a file only your account can read, whose path `serve`
+prints, rather than to the output), and it refuses a handshake from any other origin. The egress
 register lists it as the one path this program does not mediate, because a register that
 left it out while `ssh` is one keystroke away would be false.
 

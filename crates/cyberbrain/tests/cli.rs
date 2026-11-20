@@ -6030,3 +6030,67 @@ fn status_counts_the_files_scan_skips() {
     let st = cb.ok(&["status"]);
     assert_eq!(st["files_skipped"], 1, "{st}");
 }
+
+/// S20 (review 2026-11-10/19): `serve --terminal` printed the address carrying the terminal
+/// token on stdout, and stdout is where a service manager's journal or a redirected log
+/// keeps it, readable long after the run. The address now goes into a file only this
+/// account can read, created that way rather than tightened afterwards, and stdout names the
+/// file. Calibrated against the old code: the token stood on stdout and no file was named.
+#[cfg(unix)]
+#[test]
+fn the_terminal_token_goes_to_a_private_file_and_not_to_stdout() {
+    use std::io::{BufRead, BufReader};
+    use std::os::unix::fs::PermissionsExt;
+    let cb = Cb::new();
+    let runtime = tempfile::tempdir().unwrap();
+    let mut child = Cb::bin()
+        .env("XDG_RUNTIME_DIR", runtime.path())
+        .arg("--store")
+        .arg(&cb.store)
+        .args(["serve", "--port", "0", "--no-open", "--terminal"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    let mut seen = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut file = None;
+    while std::time::Instant::now() < deadline {
+        let Ok(line) = rx.recv_timeout(std::time::Duration::from_millis(500)) else {
+            if file.is_some() {
+                break;
+            }
+            continue;
+        };
+        if let Some(p) = line.strip_prefix("cyberbrain serve: terminal address in ") {
+            file = Some(PathBuf::from(p.trim()));
+        }
+        seen.push(line);
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    let out = seen.join("\n");
+    assert!(!out.contains("#/?t="), "the token is on stdout:\n{out}");
+    let file = file.unwrap_or_else(|| panic!("no file named on stdout:\n{out}"));
+    assert!(file.starts_with(runtime.path()), "{}", file.display());
+    let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "{mode:o}");
+    let dir_mode = std::fs::metadata(file.parent().unwrap())
+        .unwrap()
+        .permissions()
+        .mode()
+        & 0o777;
+    assert_eq!(dir_mode, 0o700, "{dir_mode:o}");
+    let address = std::fs::read_to_string(&file).unwrap();
+    assert!(address.trim().starts_with("http://127.0.0.1:"), "{address}");
+    assert!(address.contains("#/?t="), "{address}");
+}

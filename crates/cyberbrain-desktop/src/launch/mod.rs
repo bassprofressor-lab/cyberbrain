@@ -325,9 +325,13 @@ pub fn start(server: &Path, project_dir: &Path) -> Result<Server, StartError> {
                     said = true;
                     let _ = tx.send(Signal::Url(url));
                 }
+            } else if let Some(url) = read_token_file(&line) {
+                // The second address: same server, with the terminal token in its fragment.
+                // Since 2026-11-20 `serve` names a file that holds it rather than printing
+                // it, because stdout ends up in logs.
+                let _ = tx.send(Signal::TokenUrl(url));
             } else if let Some(url) = parse_token_url(&line) {
-                // The second address, printed after the first: same server, with the
-                // terminal token in its fragment.
+                // The same address printed on stdout, from a `serve` older than that.
                 let _ = tx.send(Signal::TokenUrl(url));
             }
             append(&d, &line);
@@ -414,6 +418,26 @@ enum Signal {
 pub fn parse_token_url(line: &str) -> Option<String> {
     let url = parse_serve_url(line)?;
     url.contains("#/?t=").then_some(url)
+}
+
+/// The line `cyberbrain serve --terminal` prints before the path of the file that holds the
+/// address with the token. Duplicated from `cyberbrain::serve::TERMINAL_ADDRESS_MARKER` for
+/// the reason [`NO_PAGE_MARKER`] is; `a_started_server_offers_a_terminal_and_the_launcher_finds_its_address`
+/// checks the real binary.
+pub const TERMINAL_ADDRESS_MARKER: &str = "cyberbrain serve: terminal address in ";
+
+/// The address in the file this line names, if it is the line naming one.
+///
+/// The file is removed once read: the launcher is its only reader, and a token in a file
+/// nobody needs any more is one more place to find it.
+pub fn read_token_file(line: &str) -> Option<String> {
+    let path = line
+        .trim()
+        .strip_prefix(TERMINAL_ADDRESS_MARKER.trim_end())?
+        .trim();
+    let text = std::fs::read_to_string(path).ok()?;
+    let _ = std::fs::remove_file(path);
+    parse_token_url(text.trim())
 }
 
 /// The line `cyberbrain serve` prints when its build has no page.
