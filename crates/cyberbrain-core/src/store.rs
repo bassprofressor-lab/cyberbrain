@@ -263,6 +263,59 @@ impl Store {
         Ok(target)
     }
 
+    /// [`write_proposal`](Self::write_proposal), but only if no proposal of that name is
+    /// waiting, decided in one step. Checking first and writing after let eight parallel
+    /// `propose` calls each report success while seven of their texts were overwritten
+    /// (K7, 2026-11-10). The file appears whole (written beside it, then linked into place);
+    /// where the file system has no links, it is created exclusively and filled.
+    pub fn create_proposal(&self, note: &Note) -> Result<PathBuf> {
+        let target = self.proposal_path(&note.front.name)?;
+        let dir = self.proposals_dir();
+        fs::create_dir_all(&dir).map_err(|e| Error::Io {
+            path: dir.clone(),
+            source: e,
+        })?;
+        let text = frontmatter::render(&note.front, &note.body)?;
+        let taken = || {
+            Error::Config(format!(
+                "a proposal named {} is already waiting; `cyberbrain review {} --reject` it \
+                 first, or propose under another name",
+                note.front.name, note.front.name
+            ))
+        };
+        let tmp = dir.join(format!(".cb-tmp-{}", ulid::Ulid::generate()));
+        write_atomic(&tmp, text.as_bytes())?;
+        let linked = fs::hard_link(&tmp, &target);
+        let _ = fs::remove_file(&tmp);
+        match linked {
+            Ok(()) => Ok(target),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Err(taken()),
+            Err(_) => {
+                let mut f = match fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&target)
+                {
+                    Ok(f) => f,
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Err(taken()),
+                    Err(e) => {
+                        return Err(Error::Io {
+                            path: target,
+                            source: e,
+                        });
+                    }
+                };
+                f.write_all(text.as_bytes())
+                    .and_then(|_| f.sync_all())
+                    .map_err(|e| Error::Io {
+                        path: target.clone(),
+                        source: e,
+                    })?;
+                Ok(target)
+            }
+        }
+    }
+
     pub fn remove_proposal(&self, name: &str) -> Result<PathBuf> {
         let path = self.proposal_path(name)?;
         fs::remove_file(&path).map_err(|e| Error::Io {

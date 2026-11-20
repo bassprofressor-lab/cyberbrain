@@ -3693,7 +3693,7 @@ impl App {
         let path = if req.dry_run {
             self.store.proposal_path(&name)?
         } else {
-            self.store.write_proposal(&note)?
+            self.store.create_proposal(&note)?
         };
 
         // A2: an agent's proposal also goes to AgentGuard, where an admin can approve it.
@@ -7865,5 +7865,58 @@ mod operator_decision_tests {
         let agent = App::open(Some(&root), Actor::Agent("claude-code:t".into())).unwrap();
         assert!(agent.trust(true, false).is_err());
         assert!(agent.policy_consent(true).is_err());
+    }
+}
+
+#[cfg(test)]
+mod parallel_propose_tests {
+    use super::*;
+
+    /// K7 (audits 2026-11-10 and 2026-11-19): eight parallel `propose` of one name all
+    /// reported success and one file was left; seven texts were gone without a word.
+    /// Calibrated against the broken state: more than one success.
+    #[test]
+    fn parallel_proposals_of_one_name_have_one_winner() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("store");
+        App::init(&root, &Actor::Operator).unwrap();
+        let n = 12;
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(n));
+        let handles: Vec<_> = (0..n)
+            .map(|i| {
+                let root = root.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    let app =
+                        App::open(Some(&root), Actor::Agent(format!("claude-code:{i}"))).unwrap();
+                    let req = WriteRequest {
+                        ring: Ring::Knowledge,
+                        kind: cyberbrain_core::NoteKind::Knowledge,
+                        name: "gleich".into(),
+                        body: format!("*Für: gleich*\n\nText {i}."),
+                        tags: Vec::new(),
+                        bereich: None,
+                        retention: None,
+                        force: false,
+                        choice: None,
+                        expected_updated: None,
+                        supersedes: None,
+                        valid_from: None,
+                        invalid_at: None,
+                        arriving: None,
+                        dry_run: false,
+                        anchors: crate::app::Anchoring::default(),
+                    };
+                    barrier.wait();
+                    app.propose(req, "agent").is_ok()
+                })
+            })
+            .collect();
+        let ok = handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .filter(|ok| *ok)
+            .count();
+        assert_eq!(ok, 1, "{ok} proposals reported success for one file");
     }
 }
