@@ -92,6 +92,17 @@ pub trait IndexWriter: Send + Sync {
     fn scrub(&self) -> Result<Option<cyberbrain_policy::ScrubStatus>> {
         Ok(None)
     }
+    /// Notes near note `id` in `ring`, for the write-time "does this replace …?" hint. A
+    /// dry run wrote no vectors and has no neighbours to name.
+    fn neighbours_of(
+        &self,
+        _id: &NoteId,
+        _ring: cyberbrain_core::Ring,
+        _k: usize,
+        _min_cosine: f32,
+    ) -> Result<Vec<cyberbrain_index::Neighbour>> {
+        Ok(Vec::new())
+    }
 }
 
 pub fn lock_index(index: &Mutex<Index>) -> Result<MutexGuard<'_, Index>> {
@@ -130,6 +141,16 @@ impl IndexWriter for SqliteIndexWriter {
 
     fn clear(&self) -> Result<Erased> {
         lock_index(&self.index)?.clear()
+    }
+
+    fn neighbours_of(
+        &self,
+        id: &NoteId,
+        ring: cyberbrain_core::Ring,
+        k: usize,
+        min_cosine: f32,
+    ) -> Result<Vec<cyberbrain_index::Neighbour>> {
+        lock_index(&self.index)?.neighbours_of(id, ring, k, min_cosine)
     }
 
     fn scrub(&self) -> Result<Option<cyberbrain_policy::ScrubStatus>> {

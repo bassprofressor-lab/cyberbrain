@@ -24,6 +24,7 @@ pub mod audit;
 pub mod index;
 pub mod recall;
 pub mod schema;
+pub mod similar;
 pub mod vectors;
 
 /// Provenance marker of Cyberbrain (Krynex Labs, FSL-1.1-ALv2): a string that exists only in this source.
@@ -43,6 +44,7 @@ pub use recall::{
     DEDUP_MIN_CHARS, Everyone, NoteFacts, RRF_K, RecallOptions, Visibility, dedup_key,
 };
 pub use schema::SCHEMA_VERSION;
+pub use similar::Neighbour;
 
 /// Maps a `rusqlite` failure onto the tree-wide error type. `rusqlite::Error` is foreign to
 /// both crates, so a `From` impl is not possible.

@@ -457,6 +457,23 @@ pub fn written(w: &WrittenNote) -> String {
             w.audit_preview.join(", ")
         );
     }
+    if !w.may_replace.is_empty() {
+        let _ = writeln!(
+            s,
+            "older note(s) close in content and name; if this note replaces one, say so, and \
+             recall ranks the old one below it (another part of a series is not a replacement):"
+        );
+        for m in &w.may_replace {
+            let _ = writeln!(
+                s,
+                "  {} (created {}): cyberbrain invalidate {} --by {}",
+                m.name,
+                m.created.get(..10).unwrap_or(&m.created),
+                m.name,
+                w.name
+            );
+        }
+    }
     s
 }
 

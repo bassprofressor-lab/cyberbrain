@@ -12,6 +12,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+### Added
+
+- **`write` asks whether a new note replaces an older one.** A new note in ring 2 or 3 names
+  up to two older notes of the same kind that are close in content and in name, with the
+  command that marks the replacement (`cyberbrain invalidate <old> --by <new>`). Nothing is
+  marked by itself. Recall has ranked a replaced note below its successor since 0.7, but only
+  when somebody said so, and in a real store of 3,399 notes 18 did. The hint uses the vectors
+  the write just stored, so it embeds nothing and calls no model; without a model, on an
+  update, a dry run or for a client limited to some bereiche it stays silent. Notes created
+  within a minute of the new one are not named, because parts of a series are written
+  together and are not replacements. JSON and MCP carry it as `may_replace`.
+
 ## [0.12.0] - 2026-11-20
 
 Open findings of the review of 2026-11-19 (and 2026-11-10), second round. Read *Upgrading*

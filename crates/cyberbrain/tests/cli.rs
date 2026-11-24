@@ -6140,3 +6140,120 @@ fn the_record_and_the_configuration_are_this_accounts_alone() {
     assert!(out.status.success(), "{}", text(&out));
     assert_eq!(mode("cyberbrain.toml"), 0o600, "after a rewrite");
 }
+
+// ---------------------------------------------------------------------------------------
+// write: "may replace" hint (2026-11-24)
+
+/// Backdates a note's `created` by rewriting its head, then the caller scans.
+fn backdate(cb: &Cb, name: &str, to: &str) {
+    let p = cb.note_path("2", name);
+    let text = std::fs::read_to_string(&p).unwrap();
+    let mut out = String::new();
+    for line in text.lines() {
+        if line.starts_with("created:") {
+            out.push_str(&format!("created: {to}"));
+        } else {
+            out.push_str(line);
+        }
+        out.push('\n');
+    }
+    std::fs::write(&p, out).unwrap();
+}
+
+/// A new note close in content and name to an older note of the same kind names it, with the
+/// command that marks the replacement. Not named: an unrelated note, a note the write already
+/// says it supersedes, anything on an update, and everything without a model.
+/// Shown to fail before `may_replace` existed (the field was absent).
+#[test]
+fn a_new_note_names_an_older_note_it_may_replace() {
+    let cb = Cb::new();
+    cb.install_model(1);
+    cb.write(
+        "2",
+        "postgres-umzug-2026-10-01",
+        "postgres pgdata moved docker bind mount",
+    );
+    cb.write("2", "inode-notiz", "inode drift");
+    backdate(&cb, "postgres-umzug-2026-10-01", "2026-10-01T10:00:00Z");
+    backdate(&cb, "inode-notiz", "2026-10-01T10:00:00Z");
+    cb.ok(&["scan"]);
+
+    let w = cb.write(
+        "2",
+        "postgres-umzug-2026-11-24",
+        "postgres pgdata moved docker bind mount",
+    );
+    let named: Vec<&str> = w["may_replace"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no may_replace: {w:#}"))
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(named, ["postgres-umzug-2026-10-01"], "{w:#}");
+
+    // The text front end says what to run.
+    let out = cb.run(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "postgres-umzug-2026-11-25",
+        "--body",
+        "postgres pgdata moved docker bind mount",
+    ]);
+    let t = text_of(&out);
+    assert!(
+        t.contains(
+            "cyberbrain invalidate postgres-umzug-2026-10-01 --by postgres-umzug-2026-11-25"
+        ),
+        "{t}"
+    );
+
+    // Already said: nothing to ask.
+    let s = cb.ok(&[
+        "write",
+        "--ring",
+        "2",
+        "--kind",
+        "knowledge",
+        "--name",
+        "postgres-umzug-2026-11-26",
+        "--body",
+        "postgres pgdata moved docker bind mount",
+        "--supersedes",
+        "postgres-umzug-2026-10-01",
+        "--supersedes",
+        "postgres-umzug-2026-11-24",
+        "--supersedes",
+        "postgres-umzug-2026-11-25",
+    ]);
+    assert!(s.get("may_replace").is_none(), "{s:#}");
+
+    // An update is not a new note.
+    let u = cb.write(
+        "2",
+        "postgres-umzug-2026-11-24",
+        "postgres pgdata moved docker bind mount again",
+    );
+    assert!(u.get("may_replace").is_none(), "{u:#}");
+}
+
+#[test]
+fn without_a_model_a_write_names_nothing() {
+    let cb = Cb::new();
+    cb.write(
+        "2",
+        "postgres-umzug-2026-10-01",
+        "postgres pgdata moved docker bind mount",
+    );
+    backdate(&cb, "postgres-umzug-2026-10-01", "2026-10-01T10:00:00Z");
+    cb.ok(&["scan"]);
+    let w = cb.write(
+        "2",
+        "postgres-umzug-2026-11-24",
+        "postgres pgdata moved docker bind mount",
+    );
+    assert!(w.get("may_replace").is_none(), "{w:#}");
+}

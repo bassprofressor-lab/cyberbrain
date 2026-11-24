@@ -619,6 +619,96 @@ pub struct WrittenNote {
     pub index_failed: Option<String>,
     pub dry_run: bool,
     pub audit_preview: Vec<String>,
+    /// Older notes this one may replace: same ring and kind, close in content and in name.
+    /// A question for the writer, never acted on here; `--supersedes <name>` answers it.
+    /// Empty without an embedding model, on an update, a dry run and for a scoped client.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub may_replace: Vec<MayReplace>,
+}
+
+/// One older note a new note may replace. See [`WrittenNote::may_replace`].
+#[derive(Debug, Clone, Serialize)]
+pub struct MayReplace {
+    pub name: String,
+    pub created: String,
+    pub cosine: f32,
+}
+
+/// At most this many notes are named. Two is a question one can answer at a glance.
+pub const MAY_REPLACE_MAX: usize = 2;
+/// Content alone does not tell a replacement from a neighbour: measured on the orderflow
+/// store (2026-11-24, 3,399 notes, 768-dim model) a random note's nearest neighbour of the
+/// same kind sits at a median cosine of 0.76, and the 17 pairs marked `supersedes` ranged
+/// from 0.69 to 1.0. What the marked pairs shared was the name (`…-zip-…`/`…-live-…`,
+/// `uebergabe-…-abend`/`…-abend-2`). So a neighbour is named when it is close in content AND
+/// in name, or so close in content that it is nearly the same text.
+/// 0.65, not 0.70: a short note has little text to agree on, and in a trial on a copy of
+/// that store the true predecessors of two short notes sat at 0.698 and 0.656. On the
+/// measured sample 0.65 named a hint for 34 % of new notes instead of 30 %.
+pub const MAY_REPLACE_COSINE: f32 = 0.65;
+pub const MAY_REPLACE_NAME_OVERLAP: f32 = 0.5;
+pub const MAY_REPLACE_NEAR_COPY: f32 = 0.92;
+/// Notes created this close before the new one count as written together, not replaced.
+pub const MAY_REPLACE_SAME_MOMENT_SECS: i64 = 60;
+
+/// The words of a note name that carry its subject: split on `-`/`_`, longer than two
+/// characters, not a number. Dates and version numbers (`2026-11-24`, `0-4-7`) drop out, so
+/// two notes on the same subject written on different days share all of their words.
+fn name_words(name: &str) -> std::collections::BTreeSet<&str> {
+    name.split(['-', '_'])
+        .filter(|w| w.chars().count() > 2 && !w.chars().all(|c| c.is_ascii_digit()))
+        .collect()
+}
+
+/// Share of words two names have in common (Jaccard), 0 when neither has any.
+pub(crate) fn name_overlap(a: &str, b: &str) -> f32 {
+    let (a, b) = (name_words(a), name_words(b));
+    let union = a.union(&b).count();
+    if union == 0 {
+        return 0.0;
+    }
+    a.intersection(&b).count() as f32 / union as f32
+}
+
+/// The neighbours worth naming, best first. Pure, so the rule is tested without a model.
+pub(crate) fn may_replace(
+    name: &str,
+    kind: &str,
+    created: jiff::Timestamp,
+    already: &[String],
+    neighbours: Vec<cyberbrain_index::Neighbour>,
+) -> Vec<MayReplace> {
+    let mut keep: Vec<(f32, MayReplace)> = neighbours
+        .into_iter()
+        .filter(|n| n.kind == kind && n.superseded_by.is_none() && n.name != name)
+        .filter(|n| !already.iter().any(|a| a == &n.name))
+        // Older, and not from the same moment: parts of a series written in one go (an
+        // import, a split document) are created within a second of each other and are not
+        // replacements; the shortest gap between a marked pair in the orderflow store was 12 s.
+        .filter(|n| {
+            n.created
+                .parse::<jiff::Timestamp>()
+                .is_ok_and(|c| c.as_second() + MAY_REPLACE_SAME_MOMENT_SECS < created.as_second())
+        })
+        .filter_map(|n| {
+            let overlap = name_overlap(name, &n.name);
+            let named = (n.cosine >= MAY_REPLACE_COSINE && overlap >= MAY_REPLACE_NAME_OVERLAP)
+                || n.cosine >= MAY_REPLACE_NEAR_COPY;
+            named.then_some((
+                n.cosine + overlap,
+                MayReplace {
+                    name: n.name,
+                    created: n.created,
+                    cosine: n.cosine,
+                },
+            ))
+        })
+        .collect();
+    keep.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
+    keep.into_iter()
+        .take(MAY_REPLACE_MAX)
+        .map(|(_, m)| m)
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -3464,6 +3554,36 @@ impl App {
 
         // A write reindexes the note in the same request (§8.1).
         let step = self.index_written(&w, &note);
+        // Only for a new note in rings 2 and 3, written for real, with vectors, by a client
+        // that may see the whole store: a hint must not name a note its reader cannot open.
+        // The vectors are the ones just stored, so this embeds nothing.
+        let may_replace = if existing.is_none()
+            && !req.dry_run
+            && step.vectors > 0
+            && matches!(note.front.ring, Ring::Knowledge | Ring::Session)
+            && self.client_scope().is_none()
+        {
+            match w.index.neighbours_of(
+                &note.front.id,
+                note.front.ring,
+                12,
+                MAY_REPLACE_COSINE.min(MAY_REPLACE_NEAR_COPY) - 0.01,
+            ) {
+                Ok(n) => may_replace(
+                    &name,
+                    &kind_name(note.front.kind),
+                    note.front.created,
+                    &note.front.supersedes,
+                    n,
+                ),
+                Err(e) => {
+                    tracing::debug!("may-replace hint skipped: {e}");
+                    Vec::new()
+                }
+            }
+        } else {
+            Vec::new()
+        };
         Ok(WriteOutcome::Written(WrittenNote {
             id: note.front.id,
             name,
@@ -3482,6 +3602,7 @@ impl App {
             index_failed: step.index_failed,
             dry_run: req.dry_run,
             audit_preview: w.policy.preview(),
+            may_replace,
         }))
     }
 
@@ -8312,5 +8433,160 @@ mod parallel_propose_tests {
             .filter(|ok| *ok)
             .count();
         assert_eq!(ok, 1, "{ok} proposals reported success for one file");
+    }
+}
+
+#[cfg(test)]
+mod may_replace_rule {
+    use super::{MAY_REPLACE_MAX, may_replace, name_overlap};
+    use cyberbrain_index::Neighbour;
+
+    const NOW: &str = "2026-11-24T18:00:00Z";
+    fn n(name: &str, kind: &str, created: &str, cosine: f32) -> Neighbour {
+        Neighbour {
+            name: name.into(),
+            kind: kind.into(),
+            created: created.into(),
+            superseded_by: None,
+            cosine,
+        }
+    }
+    fn names(v: Vec<super::MayReplace>) -> Vec<String> {
+        v.into_iter().map(|m| m.name).collect()
+    }
+    fn run(new: &str, ns: Vec<Neighbour>, already: &[String]) -> Vec<String> {
+        names(may_replace(
+            new,
+            "knowledge",
+            NOW.parse().unwrap(),
+            already,
+            ns,
+        ))
+    }
+
+    #[test]
+    fn dates_and_versions_do_not_count_as_words() {
+        assert_eq!(
+            name_overlap(
+                "recyclopolis-0-4-7-bereit-2026-10-21",
+                "recyclopolis-0-4-4-bereit-2026-10-20"
+            ),
+            1.0
+        );
+        assert_eq!(
+            name_overlap(
+                "vektor-workshop-codes-2026-11-21",
+                "vektor-workshop-generaltest-2026-11-23"
+            ),
+            0.5
+        );
+        assert_eq!(name_overlap("12-07", "13-08"), 0.0);
+    }
+
+    #[test]
+    fn close_in_content_and_name_is_named() {
+        let v = run(
+            "recyclopolis-0-4-7-bereit-2026-10-21",
+            vec![n(
+                "recyclopolis-0-4-4-bereit-2026-10-20",
+                "knowledge",
+                "2026-10-20T10:00:00Z",
+                0.71,
+            )],
+            &[],
+        );
+        assert_eq!(v, ["recyclopolis-0-4-4-bereit-2026-10-20"]);
+    }
+
+    #[test]
+    fn close_in_content_only_is_not_named_unless_nearly_the_same_text() {
+        let far_name = n(
+            "patch-charge-d3-d4",
+            "knowledge",
+            "2026-08-27T10:00:00Z",
+            0.85,
+        );
+        assert!(run("abo-token-08-11-geloescht", vec![far_name.clone()], &[]).is_empty());
+        let copy = n(
+            "patch-charge-d3-d4",
+            "knowledge",
+            "2026-08-27T10:00:00Z",
+            0.95,
+        );
+        assert_eq!(
+            run("abo-token-08-11-geloescht", vec![copy], &[]),
+            ["patch-charge-d3-d4"]
+        );
+    }
+
+    #[test]
+    fn close_in_name_only_is_not_named() {
+        assert!(
+            run(
+                "uebergabe-24-11-abend",
+                vec![n(
+                    "uebergabe-23-11-abend",
+                    "knowledge",
+                    "2026-11-23T20:00:00Z",
+                    0.62
+                )],
+                &[]
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn other_kind_newer_same_moment_marked_or_already_listed_are_not_named() {
+        let mut marked = n("thema-alt", "knowledge", "2026-11-01T10:00:00Z", 0.99);
+        marked.superseded_by = Some("thema-mitte".into());
+        let v = run(
+            "thema-neu",
+            vec![
+                n("thema-andere-art", "decision", "2026-11-01T10:00:00Z", 0.99),
+                n("thema-spaeter", "knowledge", "2026-11-25T10:00:00Z", 0.99),
+                n("thema-teil-8", "knowledge", "2026-11-24T17:59:30Z", 0.99),
+                marked,
+                n("thema-gesagt", "knowledge", "2026-11-01T10:00:00Z", 0.99),
+            ],
+            &["thema-gesagt".to_string()],
+        );
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn at_most_two_best_first() {
+        let v = run(
+            "handoff-uebergabe-16-11-abend",
+            vec![
+                n(
+                    "handoff-uebergabe-10-11-abend",
+                    "knowledge",
+                    "2026-11-10T22:00:00Z",
+                    0.76,
+                ),
+                n(
+                    "handoff-uebergabe-15-11-abend",
+                    "knowledge",
+                    "2026-11-15T22:00:00Z",
+                    0.85,
+                ),
+                n(
+                    "handoff-uebergabe-13-11-abend",
+                    "knowledge",
+                    "2026-11-13T22:00:00Z",
+                    0.80,
+                ),
+            ],
+            &[],
+        );
+        assert_eq!(v.len(), MAY_REPLACE_MAX);
+        assert_eq!(
+            v,
+            [
+                "handoff-uebergabe-15-11-abend",
+                "handoff-uebergabe-13-11-abend"
+            ]
+        );
     }
 }
