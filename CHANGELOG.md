@@ -12,6 +12,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-11-25
+
 ### Added
 
 - **`write` asks whether a new note replaces an older one.** A new note in ring 2 or 3 names
@@ -23,6 +25,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
   update, a dry run or for a client limited to some bereiche it stays silent. Notes created
   within a minute of the new one are not named, because parts of a series are written
   together and are not replacements. JSON and MCP carry it as `may_replace`.
+
+### Security
+
+- **`url` 2.5.9** (RUSTSEC-2026-0592): a deeply nested `blob:` URL could overflow the stack in
+  `Url::origin()`. Updated from 2.5.8.
 
 ## [0.12.0] - 2026-11-20
 
@@ -2630,7 +2637,8 @@ Cited, trust-tiered, local-first memory for AI coding agents, as described in
 [`docs/SPEC.md`](docs/SPEC.md). Seven crates on crates.io; binaries follow from the release
 workflow when a tag is pushed.
 
-[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.12.0...HEAD
+[Unreleased]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.12.1...HEAD
+[0.12.1]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.12.0...v0.12.1
 [0.12.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.11.0...v0.12.0
 [0.11.0]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.7...v0.11.0
 [0.10.7]: https://github.com/bassprofressor-lab/cyberbrain/compare/v0.10.6...v0.10.7

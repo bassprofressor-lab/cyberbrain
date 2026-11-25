@@ -456,7 +456,7 @@ dem Netz.
 
 ## Stand
 
-**v0.12.0, und jung.** 1.271 Tests, 18 Browsertests, acht Pakete auf crates.io und dazu der
+**v0.12.1, und jung.** 1.279 Tests, 18 Browsertests, acht Pakete auf crates.io und dazu der
 Windows-Starter, clippy und rustfmt sauber. Am Release hängen Binärdateien für Linux,
 Windows und macOS (Apple-Chip) und ein Installationsprogramm daneben. Gelaufen ist es gegen
 den echten Korpus eines einzigen Betreibers, 1.086 Notizen über fünf Projekte, und sonst
