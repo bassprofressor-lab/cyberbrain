@@ -236,10 +236,19 @@ fn agent_from_env(var: impl Fn(&str) -> Option<String>) -> Option<Actor> {
     // Befehle, die sie ausführen. Vorher galt ein Codex- oder Gemini-Agent hier als Operator und bestand die
     // Ring-0/1-Prüfung. Codex: CODEX_THREAD_ID/CODEX_SESSION_ID (codex-rs/core/src/exec_env.rs), Gemini:
     // GEMINI_CLI=1 (docs/tools/shell.md).
-    let kurz = |v: String| -> String { v.chars().filter(char::is_ascii_alphanumeric).take(8).collect() };
+    let kurz = |v: String| -> String {
+        v.chars()
+            .filter(char::is_ascii_alphanumeric)
+            .take(8)
+            .collect()
+    };
     if let Some(id) = set("CODEX_THREAD_ID").or_else(|| set("CODEX_SESSION_ID")) {
         let id = kurz(id);
-        return Some(Actor::Agent(if id.is_empty() { "codex".to_string() } else { format!("codex:{id}") }));
+        return Some(Actor::Agent(if id.is_empty() {
+            "codex".to_string()
+        } else {
+            format!("codex:{id}")
+        }));
     }
     if set("GEMINI_CLI").is_some() {
         return Some(Actor::Agent("gemini-cli".to_string()));
@@ -3637,9 +3646,18 @@ mod tests {
         assert!(agent_from_env(env(&[])).is_none());
         assert!(agent_from_env(env(&[("CLAUDECODE", " "), ("CYBERBRAIN_AGENT", "")])).is_none());
         // 2026-11-28: Codex und Gemini CLI sind Agenten, nicht der Operator.
-        assert_eq!(agent_from_env(env(&[("CODEX_THREAD_ID", "019a-77f3-abcd-ef")])), Some(Actor::Agent("codex:019a77f3".into())));
-        assert_eq!(agent_from_env(env(&[("CODEX_SESSION_ID", "x")])), Some(Actor::Agent("codex:x".into())));
-        assert_eq!(agent_from_env(env(&[("GEMINI_CLI", "1")])), Some(Actor::Agent("gemini-cli".into())));
+        assert_eq!(
+            agent_from_env(env(&[("CODEX_THREAD_ID", "019a-77f3-abcd-ef")])),
+            Some(Actor::Agent("codex:019a77f3".into()))
+        );
+        assert_eq!(
+            agent_from_env(env(&[("CODEX_SESSION_ID", "x")])),
+            Some(Actor::Agent("codex:x".into()))
+        );
+        assert_eq!(
+            agent_from_env(env(&[("GEMINI_CLI", "1")])),
+            Some(Actor::Agent("gemini-cli".into()))
+        );
         assert!(agent_from_env(env(&[("GEMINI_CLI", " ")])).is_none());
     }
 

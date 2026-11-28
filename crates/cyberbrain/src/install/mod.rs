@@ -144,21 +144,34 @@ pub(crate) const EVENTS: [(&str, &[&str], &str); 7] = [
 /// `PreSkillShellCommand` (2.1.332): a skill's injected shell commands (`` !`cmd` ``) do not fire
 /// PreToolUse; same handler, same payload shape (`tool_name`, `tool_input.command`), and the
 /// PreToolUse output format is accepted there (hooks.md#preskillshellcommand).
-pub(crate) const OPTIONAL_EVENTS: [(&str, &[&str], &str, (u32, u32, u32)); 1] =
-    [("PreSkillShellCommand", &["pre-tool-use"], "Bash|PowerShell", (2, 1, 332))];
+/// (event, hook arguments, matcher, minimum Claude Code version)
+pub(crate) type OptionalEvent = (
+    &'static str,
+    &'static [&'static str],
+    &'static str,
+    (u32, u32, u32),
+);
+pub(crate) const OPTIONAL_EVENTS: [OptionalEvent; 1] = [(
+    "PreSkillShellCommand",
+    &["pre-tool-use"],
+    "Bash|PowerShell",
+    (2, 1, 332),
+)];
 
 /// The installed Claude Code's version from `claude --version` (`2.1.332 (Claude Code)`).
 /// Tests set it explicitly; `None` when it cannot be read, which writes no optional event.
+#[cfg(not(test))]
 pub(crate) fn claude_version() -> Option<(u32, u32, u32)> {
-    #[cfg(test)]
-    {
-        return TEST_CLAUDE_VERSION.with(|v| v.get());
-    }
-    #[cfg(not(test))]
-    {
-        let out = std::process::Command::new("claude").arg("--version").output().ok()?;
-        parse_version(&String::from_utf8_lossy(&out.stdout))
-    }
+    let out = std::process::Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()?;
+    parse_version(&String::from_utf8_lossy(&out.stdout))
+}
+
+#[cfg(test)]
+pub(crate) fn claude_version() -> Option<(u32, u32, u32)> {
+    TEST_CLAUDE_VERSION.with(|v| v.get())
 }
 
 #[cfg(test)]
@@ -186,7 +199,8 @@ const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// Read and Grep since 0.10.8: the audit log's signing key is refused to read (S4,
 /// `hook::events::pre_read`); every other read is allowed at once.
 /// PowerShell and WebSearch since 2026-11-28 (see `GOVERNED_TOOLS_DEFAULT`).
-const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|WebFetch|WebSearch|Read|Grep";
+const PRE_TOOL_MATCHER: &str =
+    "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|WebFetch|WebSearch|Read|Grep";
 
 /// The pre-tool-use matcher for a store whose `[governance] tools` may name more than the
 /// default (F3, 2026-11-04): the default, plus each extra entry as a pattern (`mcp__*` →

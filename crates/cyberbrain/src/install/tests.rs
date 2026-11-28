@@ -66,7 +66,10 @@ fn the_skill_shell_hook_follows_the_claude_code_version() {
     let v = read(&file);
     let e = &v["hooks"]["PreSkillShellCommand"][0];
     assert_eq!(e["matcher"], "Bash|PowerShell", "{v:#}");
-    assert_eq!(e["hooks"][0]["args"], serde_json::json!(["hook", "pre-tool-use"]));
+    assert_eq!(
+        e["hooks"][0]["args"],
+        serde_json::json!(["hook", "pre-tool-use"])
+    );
     assert_eq!(v["hooks"].as_object().unwrap().len(), 8);
 
     // Claude Code went back to an older version (or cannot be asked): ours goes, the rest stays.
@@ -76,7 +79,10 @@ fn the_skill_shell_hook_follows_the_claude_code_version() {
     assert!(v["hooks"].get("PreSkillShellCommand").is_none(), "{v:#}");
     assert_eq!(v["hooks"].as_object().unwrap().len(), 7);
     super::TEST_CLAUDE_VERSION.with(|v| v.set(None));
-    assert_eq!(super::parse_version("2.1.332 (Claude Code)"), Some((2, 1, 332)));
+    assert_eq!(
+        super::parse_version("2.1.332 (Claude Code)"),
+        Some((2, 1, 332))
+    );
     assert_eq!(super::parse_version("claude"), None);
 }
 

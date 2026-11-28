@@ -137,10 +137,13 @@ pub(crate) fn hook_drift(
     }
     // An optional event is drift only when ours is there and differs (2026-11-28).
     for (event, args, matcher, _) in install::OPTIONAL_EVENTS {
-        if let Some(e) = hooks.get(event).and_then(Value::as_array).and_then(|a| a.iter().find(ours)) {
-            if strip_command(e) != expected(args, matcher, fail_closed) {
-                changed.push(event.to_string());
-            }
+        if let Some(e) = hooks
+            .get(event)
+            .and_then(Value::as_array)
+            .and_then(|a| a.iter().find(ours))
+            && strip_command(e) != expected(args, matcher, fail_closed)
+        {
+            changed.push(event.to_string());
         }
     }
     if missing.is_empty() && changed.is_empty() && unused.is_empty() {

@@ -1265,8 +1265,14 @@ fn edits_in_place(prog: &str, arg: &str) -> bool {
 /// in PowerShell. Over-reading is fail-safe: it only matters next to a cyberbrain call.
 fn ps_drops_marker(cmd: &str) -> bool {
     let l = cmd.to_lowercase();
-    let assigns = l.match_indices("$env:claudecode").any(|(i, m)| l[i + m.len()..].trim_start().starts_with('='));
-    let removes = l.contains("env:claudecode") && (l.contains("remove-item") || l.contains("del ") || l.contains("ri ") || l.contains("clear-item"));
+    let assigns = l
+        .match_indices("$env:claudecode")
+        .any(|(i, m)| l[i + m.len()..].trim_start().starts_with('='));
+    let removes = l.contains("env:claudecode")
+        && (l.contains("remove-item")
+            || l.contains("del ")
+            || l.contains("ri ")
+            || l.contains("clear-item"));
     let sets = l.contains("setenvironmentvariable") && l.contains("claudecode");
     assigns || removes || sets
 }
@@ -1279,9 +1285,28 @@ fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
     // PowerShell cmdlets and their aliases (2026-11-28); case does not count there. Parameters
     // start with `-` like flags, so the paths are the other words, as for the Unix programs.
     match prog.to_ascii_lowercase().as_str() {
-        "remove-item" | "ri" | "del" | "erase" | "rd" | "set-content" | "add-content" | "ac" | "out-file"
-        | "clear-content" | "clc" | "new-item" | "ni" | "rename-item" | "rni" | "ren" | "move-item" | "mi"
-        | "move" | "set-itemproperty" | "new-itemproperty" | "remove-itemproperty" => return paths().collect(),
+        "remove-item"
+        | "ri"
+        | "del"
+        | "erase"
+        | "rd"
+        | "set-content"
+        | "add-content"
+        | "ac"
+        | "out-file"
+        | "clear-content"
+        | "clc"
+        | "new-item"
+        | "ni"
+        | "rename-item"
+        | "rni"
+        | "ren"
+        | "move-item"
+        | "mi"
+        | "move"
+        | "set-itemproperty"
+        | "new-itemproperty"
+        | "remove-itemproperty" => return paths().collect(),
         "copy-item" | "copy" | "cpi" => {
             let dest = args
                 .iter()
@@ -1996,7 +2021,10 @@ mod bash_tests {
             r"Copy-Item C:\tmp\x.md -Destination .cyberbrain\notes\r0\x.md",
             r"Move-Item x.md .CYBERBRAIN\NOTES\R1\x.md",
         ] {
-            assert!(bash_verdict_on(Platform::Windows, cmd).is_some_and(|v| v.decision == "deny"), "{cmd}");
+            assert!(
+                bash_verdict_on(Platform::Windows, cmd).is_some_and(|v| v.decision == "deny"),
+                "{cmd}"
+            );
         }
         for cmd in [
             "$env:CLAUDECODE = ''; cyberbrain write --ring 0 --kind decision --name x --body y",
@@ -2004,7 +2032,11 @@ mod bash_tests {
             "[Environment]::SetEnvironmentVariable('CLAUDECODE', $null); cyberbrain write --ring 0 --name x --body y",
         ] {
             let v = bash_verdict_on(Platform::Windows, cmd);
-            assert!(v.as_ref().is_some_and(|v| v.reason.contains("drops CLAUDECODE")), "{cmd}: {v:?}");
+            assert!(
+                v.as_ref()
+                    .is_some_and(|v| v.reason.contains("drops CLAUDECODE")),
+                "{cmd}: {v:?}"
+            );
         }
         // Lesen bleibt erlaubt, und die Markierung nur zu lesen ist kein Entfernen.
         for cmd in [

@@ -250,8 +250,16 @@ fn pre_compact_message_names_the_snapshot_only_when_the_mod_is_installed() {
     let without = run(Some(&app), HookEvent::PreCompact, &payload);
     // 2026-11-28: the line for the person goes to stderr (Claude Code discards systemMessage on
     // PreCompact); stdout carries the instructions for the summary.
-    assert!(without.stderr.contains("does not survive"), "{}", without.stderr);
-    assert!(without.stderr.contains("--compact-mod"), "{}", without.stderr);
+    assert!(
+        without.stderr.contains("does not survive"),
+        "{}",
+        without.stderr
+    );
+    assert!(
+        without.stderr.contains("--compact-mod"),
+        "{}",
+        without.stderr
+    );
     assert!(without.stdout.contains("verbatim"), "{}", without.stdout);
 
     let hooks = crate::install::compact_mod::folder(f.store.parent().unwrap()).join("hooks");

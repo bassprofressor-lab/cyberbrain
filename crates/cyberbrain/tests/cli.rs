@@ -5147,7 +5147,11 @@ fn the_governed_tools_are_the_stores_to_choose_and_default_to_the_old_list() {
     // way out for data; PowerShell is the Windows shell), so they are sent without being named.
     let out = pre_tool_use(&cb, "WebSearch", serde_json::json!({"query": "q"}));
     assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
-    let out = pre_tool_use(&cb, "PowerShell", serde_json::json!({"command": "Get-ChildItem"}));
+    let out = pre_tool_use(
+        &cb,
+        "PowerShell",
+        serde_json::json!({"command": "Get-ChildItem"}),
+    );
     assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
     seen.lock().unwrap().clear();
 
