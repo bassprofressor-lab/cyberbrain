@@ -248,23 +248,18 @@ fn pre_compact_message_names_the_snapshot_only_when_the_mod_is_installed() {
     let payload =
         f.payload(serde_json::json!({"hook_event_name": "PreCompact", "trigger": "manual"}));
     let without = run(Some(&app), HookEvent::PreCompact, &payload);
-    assert!(
-        without.stdout.contains("does not survive"),
-        "{}",
-        without.stdout
-    );
-    assert!(
-        without.stdout.contains("--compact-mod"),
-        "{}",
-        without.stdout
-    );
+    // 2026-11-28: the line for the person goes to stderr (Claude Code discards systemMessage on
+    // PreCompact); stdout carries the instructions for the summary.
+    assert!(without.stderr.contains("does not survive"), "{}", without.stderr);
+    assert!(without.stderr.contains("--compact-mod"), "{}", without.stderr);
+    assert!(without.stdout.contains("verbatim"), "{}", without.stdout);
 
     let hooks = crate::install::compact_mod::folder(f.store.parent().unwrap()).join("hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     std::fs::write(hooks.join("register.ts"), "// test\n").unwrap();
     let with = run(Some(&app), HookEvent::PreCompact, &payload);
-    assert!(with.stdout.contains("snapshot"), "{}", with.stdout);
-    assert!(!with.stdout.contains("does not survive"), "{}", with.stdout);
+    assert!(with.stderr.contains("snapshot"), "{}", with.stderr);
+    assert!(!with.stderr.contains("does not survive"), "{}", with.stderr);
 }
 
 /// N3/F8 (audit 2026-11-19): a snapshot whose personal data the hook redacted was stamped

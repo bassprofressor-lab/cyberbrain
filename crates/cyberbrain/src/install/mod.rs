@@ -138,6 +138,41 @@ pub(crate) const EVENTS: [(&str, &[&str], &str); 7] = [
     ("Stop", &["stop"], ""),
     ("PreCompact", &["pre-compact"], ""),
 ];
+/// Events written only when the installed Claude Code knows them (2026-11-28). An earlier version
+/// opens every interactive session with a warning dialog for an unknown event, so an unknown or
+/// older version gets none of these, and a later `install` adds them once Claude Code is updated.
+/// `PreSkillShellCommand` (2.1.332): a skill's injected shell commands (`` !`cmd` ``) do not fire
+/// PreToolUse; same handler, same payload shape (`tool_name`, `tool_input.command`), and the
+/// PreToolUse output format is accepted there (hooks.md#preskillshellcommand).
+pub(crate) const OPTIONAL_EVENTS: [(&str, &[&str], &str, (u32, u32, u32)); 1] =
+    [("PreSkillShellCommand", &["pre-tool-use"], "Bash|PowerShell", (2, 1, 332))];
+
+/// The installed Claude Code's version from `claude --version` (`2.1.332 (Claude Code)`).
+/// Tests set it explicitly; `None` when it cannot be read, which writes no optional event.
+pub(crate) fn claude_version() -> Option<(u32, u32, u32)> {
+    #[cfg(test)]
+    {
+        return TEST_CLAUDE_VERSION.with(|v| v.get());
+    }
+    #[cfg(not(test))]
+    {
+        let out = std::process::Command::new("claude").arg("--version").output().ok()?;
+        parse_version(&String::from_utf8_lossy(&out.stdout))
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Per test thread, so a test that sets it does not change what a parallel test installs.
+    pub(crate) static TEST_CLAUDE_VERSION: std::cell::Cell<Option<(u32, u32, u32)>> = const { std::cell::Cell::new(None) };
+}
+
+pub(crate) fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+    let v = s.split_whitespace().next()?;
+    let mut p = v.split('.').map(|x| x.parse::<u32>().ok());
+    Some((p.next()??, p.next()??, p.next()??))
+}
+
 /// Seconds before the harness gives up on a hook. Without one Claude Code waits 600 s: a hook
 /// stuck on a lock would hold every edit for ten minutes. The hooks answer in milliseconds
 /// (budget_ms); 30 s leaves room for a cold disk and a slow AgentGuard, which has its own
@@ -150,7 +185,8 @@ const TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit";
 /// WebFetch since the governance check (2026-09-25, `hook::governance::TOOLS`).
 /// Read and Grep since 0.10.8: the audit log's signing key is refused to read (S4,
 /// `hook::events::pre_read`); every other read is allowed at once.
-const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|WebFetch|Read|Grep";
+/// PowerShell and WebSearch since 2026-11-28 (see `GOVERNED_TOOLS_DEFAULT`).
+const PRE_TOOL_MATCHER: &str = "Edit|Write|MultiEdit|NotebookEdit|Bash|PowerShell|WebFetch|WebSearch|Read|Grep";
 
 /// The pre-tool-use matcher for a store whose `[governance] tools` may name more than the
 /// default (F3, 2026-11-04): the default, plus each extra entry as a pattern (`mcp__*` →
@@ -349,6 +385,25 @@ fn claude_code(opts: &Options, binary: &Path) -> Result<ClientReport> {
                         arg,
                         fail_closed && event == "PreToolUse",
                     );
+                    changed |= before.as_ref() != Some(&entry);
+                    touched = true;
+                    list.push(entry);
+                }
+                // Optional events: only for a Claude Code that knows them; otherwise ours go.
+                let version = claude_version();
+                for (event, arg, matcher, min) in OPTIONAL_EVENTS {
+                    let list = edit::array(hooks, event, whose)?;
+                    let ours =
+                        |v: &Value| v.get("_managedBy").and_then(Value::as_str) == Some(MANAGED_BY);
+                    let before = list.iter().find(|v| ours(v)).cloned();
+                    let had = before.is_some();
+                    list.retain(|v| !ours(v));
+                    if remove || version.is_none_or(|v| v < min) {
+                        touched |= had && remove;
+                        changed |= had && !remove;
+                        continue;
+                    }
+                    let entry = hook_entry(binary, matcher, arg, fail_closed);
                     changed |= before.as_ref() != Some(&entry);
                     touched = true;
                     list.push(entry);

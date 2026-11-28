@@ -33,7 +33,7 @@ use std::time::Duration;
 
 /// The tools whose calls are sent by default (`[governance] tools` widens or narrows it).
 /// The pre-tool-use matcher must name at least these.
-pub const TOOLS: [&str; 6] = cyberbrain_core::config::GOVERNED_TOOLS_DEFAULT;
+pub const TOOLS: [&str; 8] = cyberbrain_core::config::GOVERNED_TOOLS_DEFAULT;
 
 pub const KEY_ENV: &str = "CYBERBRAIN_AGENTGUARD_KEY";
 

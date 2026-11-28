@@ -5139,12 +5139,17 @@ fn the_governed_tools_are_the_stores_to_choose_and_default_to_the_old_list() {
     let mcp = serde_json::json!({"owner": "x", "repo": "y", "title": "z"});
     let out = pre_tool_use(&cb, "mcp__github__create_issue", mcp.clone());
     assert_eq!(decision(&out), None, "{out}");
-    let out = pre_tool_use(&cb, "WebSearch", serde_json::json!({"query": "q"}));
-    assert_eq!(decision(&out), None, "{out}");
     assert!(
         seen.lock().unwrap().is_empty(),
         "nothing was sent by default"
     );
+    // 2026-11-28: WebSearch and PowerShell belong to the default list now (a search query is a
+    // way out for data; PowerShell is the Windows shell), so they are sent without being named.
+    let out = pre_tool_use(&cb, "WebSearch", serde_json::json!({"query": "q"}));
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    let out = pre_tool_use(&cb, "PowerShell", serde_json::json!({"command": "Get-ChildItem"}));
+    assert_eq!(decision(&out).as_deref(), Some("deny"), "{out}");
+    seen.lock().unwrap().clear();
 
     let path = cb.store.join("cyberbrain.toml");
     let toml = std::fs::read_to_string(&path).unwrap().replacen(

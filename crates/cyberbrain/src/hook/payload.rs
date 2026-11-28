@@ -77,9 +77,11 @@ impl Payload {
 
     /// `file_path` (Edit, Write, MultiEdit) or `notebook_path` (NotebookEdit) of a
     /// file-editing tool; `None` for any other tool or a malformed input.
-    /// The command line of a `Bash` call; `None` for any other tool or an empty command.
+    /// The command line of a `Bash` or `PowerShell` call; `None` for any other tool or an empty
+    /// command. PowerShell since 2026-11-28: on Windows it is Claude Code's default shell, and
+    /// before that its commands passed every check a Bash command gets.
     pub fn bash_command(&self) -> Option<&str> {
-        if self.tool_name.as_deref()? != "Bash" {
+        if !matches!(self.tool_name.as_deref()?, "Bash" | "PowerShell") {
             return None;
         }
         self.tool_input

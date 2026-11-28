@@ -224,13 +224,17 @@ pub struct GovernanceConfig {
 }
 
 /// The tools sent to the governance service unless `[governance] tools` says otherwise.
-pub const GOVERNED_TOOLS_DEFAULT: [&str; 6] = [
+/// PowerShell and WebSearch since 2026-11-28 (Prüfung gegen Claude Code 2.1.332): PowerShell is the
+/// default shell on Windows, and a search query is a way out for data as much as a fetch is.
+pub const GOVERNED_TOOLS_DEFAULT: [&str; 8] = [
     "Bash",
+    "PowerShell",
     "Edit",
     "Write",
     "MultiEdit",
     "NotebookEdit",
     "WebFetch",
+    "WebSearch",
 ];
 
 impl Default for GovernanceConfig {

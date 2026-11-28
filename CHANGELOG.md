@@ -12,6 +12,39 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); ver
 
 ## [Unreleased]
 
+## [0.12.2] - unreleased (prepared 2026-11-28)
+
+### Security
+
+- **Codex and Gemini CLI are agents, not the operator.** The CLI told an agent from the operator
+  only by Claude Code's `CLAUDECODE` and by `CYBERBRAIN_AGENT`. A command run by OpenAI Codex
+  (which sets `CODEX_THREAD_ID`/`CODEX_SESSION_ID`) or the Gemini CLI (`GEMINI_CLI=1`) was
+  recorded as the operator and passed the ring 0/1 owner check. Both are now recognised.
+- **PowerShell gets the checks Bash gets.** On Windows, PowerShell is Claude Code's default shell
+  (Claude Code docs, 2.1.332). The pre-tool-use hook only matched `Bash`, so a PowerShell command
+  could write ring 0/1, the audit log or the signing key, or drop the agent marker, unchecked.
+  `PowerShell` is in the matcher and in the default governed tools; its cmdlets and aliases
+  (`Remove-Item`, `Set-Content`, `Out-File`, `Copy-Item -Destination` …) count as writes, and
+  `$env:CLAUDECODE = …`, `Remove-Item Env:CLAUDECODE` and `SetEnvironmentVariable` next to a
+  cyberbrain call are refused like `env -u CLAUDECODE`.
+- **Injected skill commands are checked.** Claude Code 2.1.332 added `PreSkillShellCommand` for the
+  shell commands a skill runs while it loads (`` !`cmd` ``); they never fired PreToolUse.
+  `install` writes it, with the pre-tool-use handler, when the installed Claude Code is 2.1.332
+  or later, and only then: earlier versions open every session with a warning for an unknown
+  event. Drift accepts it present or absent.
+
+### Changed
+
+- **WebSearch goes to AgentGuard by default.** A search query is a way out for data as much as a
+  fetch is. `[governance] tools` defaults to Bash, PowerShell, Edit, Write, MultiEdit,
+  NotebookEdit, WebFetch and WebSearch.
+- **Pre-compact writes instructions for the summary.** Claude Code discards `systemMessage` on
+  PreCompact and reads plain stdout as instructions for the compaction summary. The hook now
+  asks the summary to keep every citation verbatim and to list what was not saved with
+  `cyberbrain write`; the line for the person moved to the log, and session start after the
+  compaction still says so.
+- Dependencies updated within their versions (26 crates).
+
 ## [0.12.1] - 2026-11-25
 
 ### Added

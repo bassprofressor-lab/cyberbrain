@@ -52,6 +52,34 @@ fn only(report: &Report, client: Client) -> &ClientReport {
 // -----------------------------------------------------------------------------------
 // Claude Code
 
+/// 2026-11-28: `PreSkillShellCommand` only for Claude Code 2.1.332 and later; an older version
+/// would open every session with a warning dialog for an unknown event.
+#[test]
+fn the_skill_shell_hook_follows_the_claude_code_version() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut o = opts(tmp.path(), bare_env(tmp.path()));
+    o.clients = vec![Client::ClaudeCode];
+    let file = o.project.join(".claude").join("settings.json");
+
+    super::TEST_CLAUDE_VERSION.with(|v| v.set(Some((2, 1, 332))));
+    run(&o).unwrap();
+    let v = read(&file);
+    let e = &v["hooks"]["PreSkillShellCommand"][0];
+    assert_eq!(e["matcher"], "Bash|PowerShell", "{v:#}");
+    assert_eq!(e["hooks"][0]["args"], serde_json::json!(["hook", "pre-tool-use"]));
+    assert_eq!(v["hooks"].as_object().unwrap().len(), 8);
+
+    // Claude Code went back to an older version (or cannot be asked): ours goes, the rest stays.
+    super::TEST_CLAUDE_VERSION.with(|v| v.set(Some((2, 1, 331))));
+    run(&o).unwrap();
+    let v = read(&file);
+    assert!(v["hooks"].get("PreSkillShellCommand").is_none(), "{v:#}");
+    assert_eq!(v["hooks"].as_object().unwrap().len(), 7);
+    super::TEST_CLAUDE_VERSION.with(|v| v.set(None));
+    assert_eq!(super::parse_version("2.1.332 (Claude Code)"), Some((2, 1, 332)));
+    assert_eq!(super::parse_version("claude"), None);
+}
+
 #[test]
 fn the_hooks_land_in_the_project_and_come_back_out() {
     let tmp = tempfile::tempdir().unwrap();
@@ -670,11 +698,13 @@ fn the_pre_tool_matcher_widens_only_for_extra_governed_tools() {
     let mut gov = cyberbrain_core::config::GovernanceConfig::default();
     assert_eq!(super::pre_tool_matcher(&gov), super::PRE_TOOL_MATCHER);
     gov.tools.push("mcp__*".into());
-    gov.tools.push("WebSearch".into());
+    gov.tools.push("Task".into());
     gov.tools.push("Bash".into());
+    // WebSearch und PowerShell sind seit 2026-11-28 Standard: kein zweites Mal.
+    gov.tools.push("WebSearch".into());
     assert_eq!(
         super::pre_tool_matcher(&gov),
-        format!("{}|mcp__.*|WebSearch", super::PRE_TOOL_MATCHER)
+        format!("{}|mcp__.*|Task", super::PRE_TOOL_MATCHER)
     );
     assert_eq!(
         super::matcher_for("PostToolUse", "Edit|Write", &gov),

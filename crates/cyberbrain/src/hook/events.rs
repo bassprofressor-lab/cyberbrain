@@ -773,7 +773,7 @@ fn bash_verdict_on(platform: paths::Platform, cmd: &str) -> Option<BashVerdict> 
     // line, the name in a note's quoted body was refused as if it were dropped (C33,
     // 2026-10-31), and `grep '^CLAUDECODE='` before that. A quoted `sh -c` script is judged
     // as a command line of its own (`opaque_writes`).
-    let sheds = simple_commands(cmd).iter().any(|w| drops_marker(w));
+    let sheds = simple_commands(cmd).iter().any(|w| drops_marker(w)) || ps_drops_marker(cmd);
     let calls = words
         .iter()
         .any(|t| t.rsplit('/').next() == Some("cyberbrain"));
@@ -1260,11 +1260,38 @@ fn edits_in_place(prog: &str, arg: &str) -> bool {
 /// program. Removers and movers write every path they name; copiers only their last one,
 /// the destination; `sed -i`/`perl -i` their files; `dd` its `of=`; an extracting `tar`
 /// every path, since `-C` names where it writes. Anything else writes nothing we can see.
+/// PowerShell ways to drop the marker (2026-11-28): `$env:CLAUDECODE = ''`, `Remove-Item
+/// Env:CLAUDECODE`, `[Environment]::SetEnvironmentVariable('CLAUDECODE', …)`. Case does not count
+/// in PowerShell. Over-reading is fail-safe: it only matters next to a cyberbrain call.
+fn ps_drops_marker(cmd: &str) -> bool {
+    let l = cmd.to_lowercase();
+    let assigns = l.match_indices("$env:claudecode").any(|(i, m)| l[i + m.len()..].trim_start().starts_with('='));
+    let removes = l.contains("env:claudecode") && (l.contains("remove-item") || l.contains("del ") || l.contains("ri ") || l.contains("clear-item"));
+    let sets = l.contains("setenvironmentvariable") && l.contains("claudecode");
+    assigns || removes || sets
+}
+
 fn write_targets<'a>(words: &[&'a str]) -> Vec<&'a str> {
     let Some((prog, args)) = program(words) else {
         return Vec::new();
     };
     let paths = || args.iter().copied().filter(|a| !a.starts_with('-'));
+    // PowerShell cmdlets and their aliases (2026-11-28); case does not count there. Parameters
+    // start with `-` like flags, so the paths are the other words, as for the Unix programs.
+    match prog.to_ascii_lowercase().as_str() {
+        "remove-item" | "ri" | "del" | "erase" | "rd" | "set-content" | "add-content" | "ac" | "out-file"
+        | "clear-content" | "clc" | "new-item" | "ni" | "rename-item" | "rni" | "ren" | "move-item" | "mi"
+        | "move" | "set-itemproperty" | "new-itemproperty" | "remove-itemproperty" => return paths().collect(),
+        "copy-item" | "copy" | "cpi" => {
+            let dest = args
+                .iter()
+                .position(|a| a.eq_ignore_ascii_case("-destination"))
+                .and_then(|i| args.get(i + 1))
+                .copied();
+            return dest.or_else(|| paths().next_back()).into_iter().collect();
+        }
+        _ => {}
+    }
     // `-t DIR` names the destination of a copy wherever it stands (C7, 2026-10-31).
     let target_dir = args
         .iter()
@@ -1769,8 +1796,10 @@ fn pre_compact(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
     out.note(format!(
         "pre-compact: compaction #{count} ({trigger}) recorded"
     ));
-    // No channel to the model exists here (the harness documents stdout as debug-only for
-    // this event); the human gets one line, and session-start(compact) does the rest.
+    // 2026-11-28 (Claude Code 2.1.332, hooks.md#precompact): Claude Code discards `systemMessage`
+    // here and uses plain stdout as instructions for the compaction summary. So the summary
+    // gets the instruction that matters (keep the citations, name what is not saved), and the
+    // human hears about the compaction from session-start(compact), which says so and counts.
     // With the compaction mod in the project (store's project or the session's working
     // directory) the conversation is kept as a ring 3 snapshot and the citations stay in the
     // summary, so the old warning would be wrong there (13.11.2026).
@@ -1798,7 +1827,15 @@ fn pre_compact(ctx: &Ctx<'_>, out: &mut HookOutput) -> Result<()> {
              --client claude-code --compact-mod` keeps a snapshot first."
         )
     };
-    out.stdout = json!({ "systemMessage": message }).to_string();
+    let _ = &message; // kept for the journal line below; no channel to the human here
+    out.note(message);
+    out.stdout = format!(
+        "Instructions from cyberbrain (compaction #{count}, {trigger}) for this summary: keep every \
+         citation of the form r<ring>-<12 hex> verbatim, with what it was cited for. List the open \
+         tasks and the facts learned in this session that were NOT saved with `cyberbrain write`, \
+         so they can be saved after the compaction. Rings 0 and 1 are re-injected afterwards; \
+         do not repeat them."
+    );
     Ok(())
 }
 
@@ -1943,6 +1980,40 @@ mod bash_tests {
         }
         // Linux file systems keep case, and so does the guard there.
         assert!(bash_verdict_on(Platform::Unix, "rm .cyberbrain/Audit.db").is_none());
+    }
+
+    /// 2026-11-28 (Prüfung gegen Claude Code 2.1.332): PowerShell ist unter Windows die Standard-Shell.
+    /// Seine Cmdlets und Aliase schreiben genauso in den Store, und das Entfernen der Markierung sieht anders aus.
+    #[test]
+    fn powershell_cmdlets_are_judged_like_shell_commands() {
+        use super::{bash_verdict_on, paths::Platform};
+        for cmd in [
+            r"Remove-Item -Recurse -Force .cyberbrain\notes\r0",
+            r"Set-Content -Path .cyberbrain\notes\r1\x.md -Value 'x'",
+            r"Add-Content .cyberbrain\notes\r0\identity.md 'neu'",
+            r"'x' | Out-File -FilePath C:\P\.cyberbrain\notes\r0\x.md",
+            r"ri .cyberbrain\audit.db",
+            r"Copy-Item C:\tmp\x.md -Destination .cyberbrain\notes\r0\x.md",
+            r"Move-Item x.md .CYBERBRAIN\NOTES\R1\x.md",
+        ] {
+            assert!(bash_verdict_on(Platform::Windows, cmd).is_some_and(|v| v.decision == "deny"), "{cmd}");
+        }
+        for cmd in [
+            "$env:CLAUDECODE = ''; cyberbrain write --ring 0 --kind decision --name x --body y",
+            "Remove-Item Env:CLAUDECODE; cyberbrain write --ring 1 --name x --body y",
+            "[Environment]::SetEnvironmentVariable('CLAUDECODE', $null); cyberbrain write --ring 0 --name x --body y",
+        ] {
+            let v = bash_verdict_on(Platform::Windows, cmd);
+            assert!(v.as_ref().is_some_and(|v| v.reason.contains("drops CLAUDECODE")), "{cmd}: {v:?}");
+        }
+        // Lesen bleibt erlaubt, und die Markierung nur zu lesen ist kein Entfernen.
+        for cmd in [
+            r"Get-Content .cyberbrain\notes\r0\identity.md",
+            r"Copy-Item .cyberbrain\notes\r0\identity.md C:\tmp\x.md",
+            "echo $env:CLAUDECODE; cyberbrain recall x",
+        ] {
+            assert!(bash_verdict_on(Platform::Windows, cmd).is_none(), "{cmd}");
+        }
     }
 
     /// Windows file names do not care about case, so neither does the guard there.

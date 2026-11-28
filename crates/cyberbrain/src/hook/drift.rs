@@ -101,7 +101,11 @@ pub(crate) fn hook_drift(
 
     let mut found = 0usize;
     let (mut missing, mut changed, mut unused) = (Vec::new(), Vec::new(), Vec::new());
-    let known: BTreeSet<&str> = EVENTS.iter().map(|(e, _, _)| *e).collect();
+    let known: BTreeSet<&str> = EVENTS
+        .iter()
+        .map(|(e, _, _)| *e)
+        .chain(install::OPTIONAL_EVENTS.iter().map(|(e, _, _, _)| *e))
+        .collect();
     for (event, list) in hooks {
         let n = list.as_array().map_or(0, |a| a.iter().filter(ours).count());
         found += n;
@@ -128,6 +132,14 @@ pub(crate) fn hook_drift(
                 if strip_command(e) != want {
                     changed.push(event.to_string());
                 }
+            }
+        }
+    }
+    // An optional event is drift only when ours is there and differs (2026-11-28).
+    for (event, args, matcher, _) in install::OPTIONAL_EVENTS {
+        if let Some(e) = hooks.get(event).and_then(Value::as_array).and_then(|a| a.iter().find(ours)) {
+            if strip_command(e) != expected(args, matcher, fail_closed) {
+                changed.push(event.to_string());
             }
         }
     }

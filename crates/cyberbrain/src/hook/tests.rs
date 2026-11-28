@@ -315,13 +315,10 @@ fn session_start_after_compaction_says_so_and_counts() {
         &f.payload(serde_json::json!({"hook_event_name": "PreCompact", "trigger": "auto"})),
     );
     assert_eq!(pc.exit_code, 0);
-    let v: serde_json::Value = serde_json::from_str(&pc.stdout).unwrap();
-    assert!(
-        v["systemMessage"]
-            .as_str()
-            .unwrap()
-            .contains("compaction #1 (auto)")
-    );
+    // 2026-11-28: plain text, read by Claude Code as instructions for the summary (systemMessage
+    // is discarded on PreCompact).
+    assert!(serde_json::from_str::<serde_json::Value>(&pc.stdout).is_err(), "{}", pc.stdout);
+    assert!(pc.stdout.contains("compaction #1, auto") && pc.stdout.contains("verbatim"), "{}", pc.stdout);
     let out = session_start(&f, "compact");
     assert!(
         out.stdout
